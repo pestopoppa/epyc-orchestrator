@@ -185,9 +185,18 @@ class TestDefaultYamlRoundTrip:
         assert t.roles["architect_general"].instance_count == len(
             _prior_ports("architect_general")
         )
-        assert t.roles["ingest_long_context"].instance_count == len(
-            _prior_ports("ingest_long_context")
-        )
+        # 2026-09-26: ingest_long_context used to be its own fleet and this
+        # asserted its instance count. The operator-signed 2026-09-22 cutover
+        # (orchestrator 860b0b2d) made it an alias of architect_general's :8083
+        # GPU process, so the check is now: it aliases whichever host serves
+        # its prior ports, and THAT host realizes every prior port. Same for
+        # worker_general, which became an alias of frontdoor's :8070 CPU fleet
+        # (the multi-instance case that keeps the count check non-trivial).
+        for alias in ("ingest_long_context", "worker_general"):
+            host = _expected_alias_target(alias)
+            assert t.roles[alias].alias_to == host, alias
+            assert t.roles[host].instance_count == len(_prior_ports(alias)), alias
+        assert len(_prior_ports("worker_general")) >= 2, "expected a multi-instance host"
         embedder_roles = [
             "embedder",
             "embedder_1",

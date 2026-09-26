@@ -30,6 +30,43 @@ def _instances(role: str) -> list[tuple[str, int, int]]:
     return stack_numa.NUMA_CONFIG.get(role, {}).get("instances", [])
 
 
+def _registry_server_mode() -> dict:
+    return yaml.safe_load((ROOT / "orchestration" / "model_registry.yaml").read_text())[
+        "server_mode"
+    ]
+
+
+def _host_of(role: str) -> str:
+    """The registry row whose process serves ``role`` (shared_with / alias_of).
+
+    2026-09-26: the operator-signed 2026-09-22 lineup cutover (orchestrator
+    860b0b2d) made worker_general an alias of frontdoor's :8070 CPU fleet and
+    ingest_long_context an alias of architect_general's :8083 GPU process, and
+    deleted both NUMA_CONFIG entries. Aliases launch no process, so the thread
+    count that matters is their HOST's; it is read from the registry here.
+    """
+    server_mode = _registry_server_mode()
+    row = server_mode.get(role) or {}
+    if row.get("alias_of"):
+        return row["alias_of"]
+    for host, host_row in server_mode.items():
+        if host_row.get("alias_of"):
+            continue
+        if host == role or role in (host_row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host for {role!r}")
+
+
+def _assert_per_instance(role: str) -> int:
+    instances = _instances(role)
+    for idx, (_cpus, _port, expected_threads) in enumerate(instances):
+        resolved = orchestrator_stack._resolve_thread_count(role, idx)
+        assert int(resolved) == expected_threads, (
+            f"{role} instance[{idx}] expected -t {expected_threads}, got {resolved}"
+        )
+    return len(instances)
+
+
 def test_frontdoor_per_instance_thread_count() -> None:
     instances = _instances("frontdoor")
     assert len(instances) >= 2, "frontdoor should have a full instance + at least 1 quarter"
@@ -42,14 +79,16 @@ def test_frontdoor_per_instance_thread_count() -> None:
 
 def test_worker_general_per_instance_thread_count() -> None:
     """worker_general previously had a manual port-matching workaround; with the
-    generic fix it should give identical results without the workaround."""
-    instances = _instances("worker_general")
-    assert len(instances) >= 2
-    for idx, (_cpus, _port, expected_threads) in enumerate(instances):
-        resolved = orchestrator_stack._resolve_thread_count("worker_general", idx)
-        assert int(resolved) == expected_threads, (
-            f"worker_general instance[{idx}] expected -t {expected_threads}, got {resolved}"
-        )
+    generic fix it should give identical results without the workaround.
+
+    Since the 2026-09-22 cutover worker_general is an alias with no NUMA entry
+    of its own: the process launched for it is its registry host's (frontdoor's
+    full + halves), so that host's per-instance counts are what must resolve."""
+    assert "worker_general" not in stack_numa.NUMA_CONFIG, (
+        "worker_general regained a NUMA entry — it is a process again; test it directly"
+    )
+    host = _host_of("worker_general")
+    assert _assert_per_instance(host) >= 2, f"{host} should be full + at least 1 sibling"
 
 
 def test_single_instance_roles_use_first_entry() -> None:
@@ -76,17 +115,21 @@ def test_quartered_roles_per_instance_thread_count() -> None:
     (NUMA_Q1B, = NPS4 node3). The Phase-1b claim in the old docstring does not
     match `stack_numa.NUMA_CONFIG`; the config is the source of truth, so the
     role moved to its own shape assertion below.
+
+    Re-derived 2026-09-26: this named ``ingest_long_context`` as the quartered
+    role. The 2026-09-22 cutover made it an alias of architect_general's
+    single-instance :8083 GPU process (no NUMA entry of its own), so the set of
+    multi-instance roles is now DERIVED from NUMA_CONFIG, and ingest's host is
+    checked to resolve its own (single) instance's count.
     """
-    for role in ("ingest_long_context",):
-        instances = _instances(role)
-        assert len(instances) >= 2, (
-            f"{role} should have full + at least 1 quarter (got {len(instances)})"
-        )
-        for idx, (_cpus, _port, expected_threads) in enumerate(instances):
-            resolved = orchestrator_stack._resolve_thread_count(role, idx)
-            assert int(resolved) == expected_threads, (
-                f"{role} instance[{idx}] expected -t {expected_threads}, got {resolved}"
-            )
+    multi = sorted(r for r, c in stack_numa.NUMA_CONFIG.items() if len(c["instances"]) >= 2)
+    assert multi, "no multi-instance role in NUMA_CONFIG — nothing per-instance to check"
+    for role in multi:
+        assert _assert_per_instance(role) >= 2
+
+    assert "ingest_long_context" not in stack_numa.NUMA_CONFIG
+    ingest_host = _host_of("ingest_long_context")
+    assert _assert_per_instance(ingest_host) >= 1, ingest_host
 
 
 def test_vision_escalation_stays_single_instance() -> None:
@@ -195,7 +238,9 @@ def _nodes_spanned(cpuset: str) -> set[int]:
 #   architect_critic    :8074             -> interleave=all
 #   eval_batch_frontdoor:18070            -> interleave=0,1
 # so `offenders` is empty. The assertion below is unchanged and still has teeth: a
-# new straddling instance added without a policy fails it.
+# new straddling instance added without a policy fails it. (2026-09-26: the
+# ingest_long_context and worker_general rows above are historical — the
+# 2026-09-22 cutover made both aliases and deleted their NUMA entries.)
 def test_straddling_cpusets_declare_a_numa_policy() -> None:
     """Any instance whose cpuset spans more than one NPS4 node must declare a
     memory policy.

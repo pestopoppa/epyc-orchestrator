@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
+import yaml
 
 from scripts.server.stack_manifest import HOT_SERVERS, PORT_MAP
 from scripts.server.stack_numa import NUMA_CONFIG
@@ -16,6 +18,12 @@ from scripts.smoke import quarter_stack_smoke as smoke
 # worker_vision's :8086 process. The hand-maintained EXPECTED_CHAT_PORTS literal
 # still probed all seven until 2026-08-01.
 RETIRED_CHAT_PORTS = frozenset({8280, 8380, 8282, 8382, 8385, 8485, 8087})
+
+REGISTRY = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+
+
+def _registry_server_mode() -> dict:
+    return yaml.safe_load(REGISTRY.read_text(encoding="utf-8"))["server_mode"]
 
 
 class FakeResponse:
@@ -51,9 +59,33 @@ def test_derived_chat_ports_drop_retired_ports_and_pick_up_live_ones() -> None:
 
     assert derived & RETIRED_CHAT_PORTS == set()
     # Every NUMA-pinned chat instance the stack actually declares is probed.
-    for role in ("frontdoor", "worker_general", "ingest_long_context"):
+    # 2026-09-26: this named frontdoor / worker_general / ingest_long_context.
+    # The operator-signed 2026-09-22 cutover (orchestrator 860b0b2d) made the
+    # latter two ALIASES (of frontdoor's :8070 CPU fleet and architect_general's
+    # :8083 GPU process) and deleted their NUMA_CONFIG entries, so the host set
+    # is now DERIVED: every registry server_mode row that owns a process (no
+    # alias_of) and has a NUMA_CONFIG entry. (eval_batch_frontdoor is a NUMA
+    # role with no server_mode row — an eval-tower lane, not the HOT stack.)
+    server_mode = _registry_server_mode()
+    hosts = sorted(
+        role
+        for role, row in server_mode.items()
+        if isinstance(row, dict) and not row.get("alias_of") and role in NUMA_CONFIG
+    )
+    assert "frontdoor" in hosts and len(hosts) >= 3, hosts  # non-vacuity
+    probed = 0
+    for role in hosts:
         for _cpus, port, _threads in NUMA_CONFIG[role]["instances"]:
             assert port in derived, f"{role} instance on {port} is not probed"
+            probed += 1
+    assert probed > len(hosts), "expected at least one multi-instance host fleet"
+    # Aliases add no port: each resolves to its host's probed port.
+    aliases = {r: row["alias_of"] for r, row in server_mode.items() if row.get("alias_of")}
+    assert "ingest_long_context" in aliases, aliases
+    for alias, host in aliases.items():
+        if alias in PORT_MAP:
+            assert PORT_MAP[alias] == PORT_MAP[host] and PORT_MAP[alias] in derived, alias
+    assert PORT_MAP["worker_general"] in derived
     # architect_critic (:8074) went HOT on 2026-08-01; the literal never listed it.
     assert PORT_MAP["architect_critic"] in derived
     # Aliases share their host process's port rather than adding one.

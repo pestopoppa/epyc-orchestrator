@@ -76,9 +76,23 @@ def live_registry() -> dict:
     assert declaring, "no server_mode row declares numa_ports — fixture is not the real registry"
     assert declaring["frontdoor"] == [8080, 8180], declaring
     assert rows["frontdoor"]["port"] == 8070
-    assert rows["worker"]["model_role"] == "worker_general", "the model_role binding under test"
-    assert rows["worker"]["numa_ports"] == [8082, 8182]
+    # 2026-09-26: this fixture used to pin `worker.model_role == worker_general`
+    # and `worker.numa_ports == [8082, 8182]` — a separate worker fleet. The
+    # operator-signed 2026-09-22 cutover (orchestrator 860b0b2d) made `worker`
+    # an `alias_of: frontdoor` row with no fleet of its own and deleted the
+    # worker_general NUMA_CONFIG entry, so no live row binds by model_role any
+    # more. The model_role-binding test now builds its row from the live
+    # topology instead (see `_model_role_bound_row`). What the mutation tests
+    # DO need from the live file is a multi-instance fleet declaration:
+    assert any(len(ports) >= 2 for ports in declaring.values()), declaring
     return doc
+
+
+def _multi_instance_topology_role(numa_config: dict) -> str:
+    """A live topology role with a real multi-instance fleet (derived)."""
+    multi = sorted(r for r, c in numa_config.items() if len(c.get("instances") or []) > 1)
+    assert multi, f"no multi-instance role in topology; roles={sorted(numa_config)}"
+    return multi[0]
 
 
 def _write(tmp_path: Path, doc: dict, name: str = "model_registry.yaml") -> Path:
@@ -135,18 +149,34 @@ def test_numa_ports_disagreeing_with_topology_is_rejected(
 
 
 def test_numa_ports_drift_on_a_model_role_bound_row_is_rejected(
-    tmp_path: Path, live_registry: dict
+    tmp_path: Path, live_registry: dict, numa_config: dict
 ) -> None:
-    """`worker` binds to topology role `worker_general` via `model_role`.
+    """A row whose NAME is not a topology role binds via `model_role`.
 
-    A name-equality-only check would silently skip this row — which is half the
-    fleet.
+    A name-equality-only check would silently skip such a row. Until the
+    2026-09-22 cutover the live `worker` row was that row (model_role
+    worker_general); since then no live row binds by model_role, so the row is
+    built here from the live topology: a registry-only name whose model_role is
+    a real multi-instance topology role. The correctly-projected declaration is
+    the CONTROL (passes); one drifted port must then be rejected.
     """
+    topo_role = _multi_instance_topology_role(numa_config)
+    expected = rv._topology_fleet_ports(numa_config[topo_role])
+    assert len(expected) >= 1, (topo_role, expected)
+    row_name = "model_role_bound_row"
+    assert row_name not in numa_config and row_name not in live_registry["server_mode"]
+
     doc = copy.deepcopy(live_registry)
-    doc["server_mode"]["worker"]["numa_ports"] = [8082, 8183]
+    doc["server_mode"][row_name] = {"model_role": topo_role, "numa_ports": list(expected)}
+    assert rv._bind_role_to_topology(row_name, doc["server_mode"][row_name], numa_config) == topo_role
+    assert validate_all(_write(tmp_path, doc)) == [], "control: exact projection must pass"
+
+    drifted = list(expected)
+    drifted[-1] += 1
+    doc["server_mode"][row_name]["numa_ports"] = drifted
     errors = validate_all(_write(tmp_path, doc))
     assert any(
-        "'worker'" in e and "worker_general" in e and "disagrees" in e for e in errors
+        f"'{row_name}'" in e and topo_role in e and "disagrees" in e for e in errors
     ), errors
 
 
@@ -177,12 +207,25 @@ def test_phantom_fleet_for_an_unknown_role_is_rejected(
 def test_numa_instances_disagreeing_with_numa_ports_length_is_rejected(
     tmp_path: Path, live_registry: dict
 ) -> None:
+    # The row under test is derived: the first live row that declares a
+    # consistent multi-port fleet (it was ingest_long_context until the
+    # 2026-09-22 cutover made that an alias of architect_general's GPU process).
     doc = copy.deepcopy(live_registry)
-    assert doc["server_mode"]["ingest_long_context"]["numa_instances"] == 2
-    doc["server_mode"]["ingest_long_context"]["numa_instances"] = 4
+    rows = doc["server_mode"]
+    candidates = sorted(
+        r for r, c in rows.items()
+        if isinstance(c, dict)
+        and isinstance(c.get("numa_ports"), list)
+        and len(c["numa_ports"]) >= 2
+        and c.get("numa_instances") == len(c["numa_ports"])
+    )
+    assert candidates, "no live row declares a consistent multi-port fleet"
+    role = candidates[0]
+    wrong = len(rows[role]["numa_ports"]) + 2
+    rows[role]["numa_instances"] = wrong
     errors = validate_all(_write(tmp_path, doc))
     assert any(
-        "ingest_long_context" in e and "numa_instances=4" in e for e in errors
+        role in e and f"numa_instances={wrong}" in e for e in errors
     ), errors
 
 
@@ -269,12 +312,19 @@ def test_topology_projection_drops_only_the_full_instance(numa_config: dict) -> 
 
 def test_role_binding_precedence(numa_config: dict) -> None:
     bind = rv._bind_role_to_topology
+    # The model_role target is any live topology role other than frontdoor
+    # (it was worker_general, whose NUMA_CONFIG entry the 2026-09-22 cutover
+    # deleted). `worker` must NOT itself be a topology role, or the model_role
+    # branch would never be reached.
+    other = next((r for r in sorted(numa_config) if r != "frontdoor"), None)
+    assert other is not None, sorted(numa_config)
+    assert "worker" not in numa_config
     assert bind("frontdoor", {}, numa_config) == "frontdoor"
-    assert bind("worker", {"model_role": "worker_general"}, numa_config) == "worker_general"
+    assert bind("worker", {"model_role": other}, numa_config) == other
     assert bind("alias", {"shared_with": ["frontdoor"]}, numa_config) == "frontdoor"
     assert bind("nobody", {"model_role": "not_a_role"}, numa_config) is None
     # direct name outranks model_role, as in stack_manifest.master_server_row
-    assert bind("frontdoor", {"model_role": "worker_general"}, numa_config) == "frontdoor"
+    assert bind("frontdoor", {"model_role": other}, numa_config) == "frontdoor"
 
 
 # ---------------------------------------------------------------------------

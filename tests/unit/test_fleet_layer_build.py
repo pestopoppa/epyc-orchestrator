@@ -80,6 +80,24 @@ def _config_alias_names() -> set[str]:
     )
 
 
+def _real_host_fleet(server_mode: dict, role: str) -> str:
+    """The server_mode row that physically HOSTS ``role``.
+
+    2026-09-26: the operator-signed 2026-09-22 lineup cutover (orchestrator
+    860b0b2d) made worker_general / worker_math / toolrunner / worker_explore
+    aliases of frontdoor's :8070 CPU fleet, so there is no ``worker_general``
+    fleet any more. The case-1 tests used to name that fleet literally; they now
+    ask the registry which row hosts the worker roles (``shared_with`` on a
+    non-alias row), so the next lineup change moves the expectation with it.
+    """
+    for host, row in server_mode.items():
+        if not isinstance(row, dict) or row.get("alias_of"):
+            continue
+        if host == role or role in (row.get("shared_with") or []):
+            return host
+    raise AssertionError(f"registry declares no host fleet for {role!r}")
+
+
 def _real_priors_ports(role: str) -> list[int]:
     data = yaml.safe_load(REAL_PRIORS.read_text(encoding="utf-8"))
     return sorted(data["roles"][role]["serving"]["ports"])
@@ -202,7 +220,8 @@ def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
         priors_path=REAL_PRIORS,
     )
 
-    assert "worker_general" in fleets
+    worker_host = _real_host_fleet(server_mode, "worker_general")
+    assert worker_host in fleets
     assert "frontdoor" in fleets
 
     # Membership is exactly what the registry declares, for EVERY fleet.
@@ -227,11 +246,13 @@ def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
 
     # Non-vacuity: the collapse must actually collapse several roles onto one
     # fleet, or the loop above would pass over singletons.
+    # The worker roles collapse onto their registry-declared host (frontdoor's
+    # :8070 fleet since the 2026-09-22 cutover), whatever that host is.
     assert {"worker_general", "worker_math", "toolrunner"} <= set(
-        fleets["worker_general"].bound_roles
+        fleets[worker_host].bound_roles
     )
     assert "worker_summarize" in fleets["frontdoor"].bound_roles
-    assert resolve_binding("worker_explore", bindings).fleet_id == "worker_general"
+    assert resolve_binding("worker_explore", bindings).fleet_id == worker_host
 
     # W1 cutover: coder_escalation is declared `alias_of: architect_general`, so
     # it rides THAT process — it is neither a fleet of its own (the phantom the
@@ -245,7 +266,7 @@ def test_case1_real_registry_collapses_shared_roles_to_one_fleet():
 
     # worker_fast is a DISTINCT physical server, never a worker alias.
     wf = resolve_binding("worker_fast", bindings)
-    assert wf is None or wf.fleet_id != "worker_general"
+    assert wf is None or wf.fleet_id != worker_host
 
 
 def test_case1_real_worker_fleet_realizes_full_plus_quarters():
@@ -255,15 +276,23 @@ def test_case1_real_worker_fleet_realizes_full_plus_quarters():
     rather than restated — the literal that stood here pinned the 2026-07-23
     big+quarters lineup and survived the 2026-07-30 retirement of two of those
     ports. (The quarters-only shape stays covered by the synthetic case-3
-    fixtures.)"""
+    fixtures.)
+
+    Since the 2026-09-22 cutover the worker roles have no fleet of their own:
+    the fleet under test is the registry-declared HOST of worker_general, and
+    its NUMA_CONFIG entry is keyed by that host (the worker_general entry was
+    deleted)."""
     server_mode = _real_server_mode()
     fleets, _ = build_fleets_and_bindings(
         registry_server_mode=server_mode,
         priors_path=REAL_PRIORS,
     )
-    worker_fleet = fleets["worker_general"]
+    worker_host = _real_host_fleet(server_mode, "worker_general")
+    worker_fleet = fleets[worker_host]
+    # The priors carry a row for the ALIAS too; it must agree with its host's.
     expected_ports = _real_priors_ports("worker_general")
-    full_port, topology_ports = _real_topology_ports("worker_general")
+    assert expected_ports == _real_priors_ports(worker_host)
+    full_port, topology_ports = _real_topology_ports(worker_host)
 
     assert sorted(worker_fleet.ports) == expected_ports
     # The priors and the topology must describe the same machine.
@@ -422,8 +451,11 @@ def test_degraded_bootstrap_uses_per_fleet_literal(tmp_path):
         registry_server_mode=server_mode,
         priors_path=tmp_path / "missing.yaml",
     )
-    wf = fleets["worker_general"]
-    full_port, topology_ports = _real_topology_ports("worker_general")
+    # The worker roles' registry-declared host fleet (frontdoor since the
+    # 2026-09-22 cutover), not a literal fleet name.
+    worker_host = _real_host_fleet(server_mode, "worker_general")
+    wf = fleets[worker_host]
+    full_port, topology_ports = _real_topology_ports(worker_host)
     assert wf.degraded
     # `_derive_degraded_fallback_ports` reads NUMA_CONFIG (2026-07-30: "fleet.py
     # derives degraded-fallback ports instead of hardcoding retired ones"), so
@@ -432,11 +464,14 @@ def test_degraded_bootstrap_uses_per_fleet_literal(tmp_path):
     # that decoupled the fallback from the topology still fails here.
     assert sorted(wf.ports) == sorted(topology_ports)
     # The literal resolves through the same port→topology alignment: the idx-0
-    # port IS the true full for worker_general in the real NUMA_CONFIG.
+    # port IS the true full for the worker host in the real NUMA_CONFIG.
     assert wf.full_endpoint is not None and wf.full_endpoint.port == full_port
+    # Non-vacuity: the degraded literal must be a real multi-instance fleet.
+    assert len(topology_ports) >= 2
     # Shared roles reference the fleet — no per-role literals resurface.
-    assert resolve_binding("worker_math", bindings).fleet_id == "worker_general"
-    assert resolve_binding("toolrunner", bindings).fleet_id == "worker_general"
+    assert resolve_binding("worker_general", bindings).fleet_id == worker_host
+    assert resolve_binding("worker_math", bindings).fleet_id == worker_host
+    assert resolve_binding("toolrunner", bindings).fleet_id == worker_host
 
 
 # ── Cached accessor fail-safe ────────────────────────────────────────────────

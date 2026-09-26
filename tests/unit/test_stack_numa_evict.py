@@ -28,11 +28,32 @@ from scripts.server import stack_numa_evict as ev
 TARGET = 40
 GIB_MB = 1024
 
-CPU_LLAMA_SERVER_ROLES = {
-    "frontdoor", "eval_batch_frontdoor", "architect_critic",
-    "ingest_long_context", "worker_general",
-}
+# The EXACT role set is deliberately a decision list, not a derivation: adding
+# or removing a NUMA role must force someone to decide its numa_pre_evict_gib.
+# 2026-09-26: worker_general and ingest_long_context left this set with the
+# operator-signed 2026-09-22 lineup cutover (orchestrator 860b0b2d), which made
+# them ALIASES (of frontdoor's :8070 CPU fleet and architect_general's :8083
+# GPU process) and deleted their NUMA_CONFIG entries — an alias launches no
+# process, so it has no pre-evict decision of its own. The test below now
+# cross-checks that claim against the registry (every `alias_of` row is absent
+# from NUMA_CONFIG, and every host it names is present).
+CPU_LLAMA_SERVER_ROLES = {"frontdoor", "eval_batch_frontdoor", "architect_critic"}
 GPU_HOST_LANE_ROLES = {"architect_general", "worker_vision"}
+
+
+def _registry_alias_rows() -> dict[str, str]:
+    """``{alias: host}`` for every registry server_mode row declaring alias_of."""
+    from pathlib import Path
+
+    import yaml
+
+    registry = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+    server_mode = yaml.safe_load(registry.read_text(encoding="utf-8"))["server_mode"]
+    return {
+        role: row["alias_of"]
+        for role, row in server_mode.items()
+        if isinstance(row, dict) and row.get("alias_of")
+    }
 
 
 def teeth(fn):
@@ -107,6 +128,14 @@ def test_every_cpu_llama_server_role_is_enabled_and_no_gpu_role_is():
     for role in GPU_HOST_LANE_ROLES:
         assert effective[role] == 0, f"GPU host-lane role {role} must never pre-evict"
         assert "numa_pre_evict_gib" not in NUMA_CONFIG[role]
+
+    # Aliases launch nothing: none may carry a NUMA entry (and so a pre-evict
+    # decision) of its own, and each must ride a host this gate does cover.
+    aliases = _registry_alias_rows()
+    assert {"worker", "ingest_long_context"} <= set(aliases), aliases  # non-vacuity
+    for alias, host in aliases.items():
+        assert alias not in NUMA_CONFIG, f"alias {alias!r} has its own NUMA entry"
+        assert host in CPU_LLAMA_SERVER_ROLES | GPU_HOST_LANE_ROLES, (alias, host)
 
 
 def test_role_field_is_accepted_by_the_topology_allowlist():

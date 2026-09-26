@@ -40,18 +40,52 @@ from scripts.validate.default_template_topology_parity import (
     template_numa_to_shape,
 )
 
+REGISTRY_PATH = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+
+
+def _registry_host_fleets() -> frozenset[str]:
+    """Registry `server_mode` rows that own a llama-server process of their own.
+
+    A row is a host unless it declares `alias_of` (it rides another row's
+    process). This is a source INDEPENDENT of numa_config, so asserting every
+    host is compared is not a restatement of what the gate iterates.
+    """
+    doc = yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
+    server_mode = doc["server_mode"]
+    return frozenset(
+        role
+        for role, row in server_mode.items()
+        if isinstance(row, dict) and not row.get("alias_of")
+    )
+
+
 # Roles that must be covered. A floor, not the answer: if the fleet grows, the
 # role-set accounting in `check_parity` fails on the new role, not this list.
-REQUIRED_COVERED_ROLES = frozenset(
-    {
-        "frontdoor",
-        "worker_general",
-        "ingest_long_context",
-        "architect_general",
-        "architect_critic",
-        "worker_vision",
-    }
+#
+# 2026-09-26: this used to be a literal naming worker_general and
+# ingest_long_context as fleets. The operator-signed 2026-09-22 cutover
+# (orchestrator 860b0b2d) made them aliases (of frontdoor's :8070 CPU fleet and
+# architect_general's :8083 GPU process) and deleted their numa_config entries.
+# The set is now DERIVED from the registry's host rows, so the next lineup
+# change moves it with the registry.
+REQUIRED_COVERED_ROLES = _registry_host_fleets()
+assert "frontdoor" in REQUIRED_COVERED_ROLES and len(REQUIRED_COVERED_ROLES) >= 3, (
+    f"registry host-fleet derivation looks vacuous: {sorted(REQUIRED_COVERED_ROLES)}"
 )
+
+
+def _multi_instance_role(source) -> str:
+    """A sourced (non-excepted) role with a full + sibling fleet, derived from
+    numa_config -- the mutation target the literal worker_general /
+    ingest_long_context used to be."""
+    numa_config = source[0]
+    multi = sorted(
+        role
+        for role, cfg in numa_config.items()
+        if len(cfg.get("instances") or []) > 1 and role not in SOURCE_ROLES_NOT_IN_TEMPLATE
+    )
+    assert multi, f"no multi-instance sourced role; roles={sorted(numa_config)}"
+    return multi[0]
 
 
 @pytest.fixture(scope="module")
@@ -142,8 +176,9 @@ class TestGateIsGreenAndNotVacuous:
 
 class TestTemplateSideMutationsGoRed:
     def test_changed_port_fails(self, source, template_document):
+        role = _multi_instance_role(source)
         doc = _mutate_template(
-            template_document, lambda r: r["worker_general"]["full"].update(port=9999)
+            template_document, lambda r: r[role]["full"].update(port=9999)
         )
         report = _check(source, doc)
         assert not report.ok
@@ -189,10 +224,11 @@ class TestTemplateSideMutationsGoRed:
     def test_dropped_sibling_instance_fails(self, source, template_document):
         """A retired-lineup edit that removes a half must be caught."""
 
+        role = _multi_instance_role(source)
+        assert len(template_document["roles"][role]["quarters"]) >= 2, role
+
         def drop(roles):
-            roles["ingest_long_context"]["quarters"] = roles["ingest_long_context"][
-                "quarters"
-            ][:1]
+            roles[role]["quarters"] = roles[role]["quarters"][:1]
 
         report = _check(source, _mutate_template(template_document, drop))
         assert not report.ok
@@ -279,10 +315,15 @@ class TestSourceSideMutationsGoRed:
         assert any("8071" in p for p in report.problems)
 
     def test_source_threads_change_fails(self, source, template_document):
-        mutated = _mutate_source(source, "worker_general", 1, threads=24)
+        role = _multi_instance_role(source)
+        original = source[0][role]["instances"][1][2]
+        assert original != 24, "mutation must actually change the thread count"
+        mutated = _mutate_source(source, role, 1, threads=24)
         report = _check(mutated, template_document)
         assert not report.ok
-        assert any("threads is 48 in the template but 24" in p for p in report.problems)
+        assert any(
+            f"threads is {original} in the template but 24" in p for p in report.problems
+        )
 
     def test_source_shape_change_fails(self, source, template_document):
         mutated = _mutate_source(source, "frontdoor", 1, shape="NUMA_Q0A")

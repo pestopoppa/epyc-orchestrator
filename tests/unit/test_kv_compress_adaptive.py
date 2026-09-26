@@ -166,16 +166,41 @@ roles:
         assert _layer_count_for_role("frontdoor", priors) == MODEL_LAYER_COUNTS["frontdoor"]
 
     def test_production_ports_use_live_role_names(self):
+        """One entry per PHYSICAL server, keyed by the live host role name.
+
+        2026-09-26: this pinned ``ingest_long_context -> 8085``, its own fleet.
+        The operator-signed 2026-09-22 cutover (orchestrator 860b0b2d) made it
+        an alias of architect_general's :8083 GPU process (and worker_general
+        an alias of frontdoor's :8070 fleet), so like every other alias it must
+        NOT get its own compress-all entry. The expected hosts and ports are
+        now read from the registry's server_mode instead of restated.
+        """
+        from pathlib import Path
+
+        import yaml
+
+        registry = Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+        server_mode = yaml.safe_load(registry.read_text(encoding="utf-8"))["server_mode"]
+        aliases = {r for r, row in server_mode.items() if row.get("alias_of")}
+        assert {"ingest_long_context", "coder_escalation"} <= aliases, aliases  # non-vacuity
+
         assert "coder" not in PRODUCTION_PORTS
         assert "worker" not in PRODUCTION_PORTS
         assert LEGACY_ARCHITECT_ROLE not in PRODUCTION_PORTS
-        assert "coder_escalation" not in PRODUCTION_PORTS
-        assert PRODUCTION_PORTS["frontdoor"] == 8070
-        assert PRODUCTION_PORTS["architect_general"] == 8083
-        assert PRODUCTION_PORTS["ingest_long_context"] == 8085
+        for alias in aliases:
+            assert alias not in PRODUCTION_PORTS, f"alias {alias} got its own port"
+        # shared_with members ride their host too.
+        for row in server_mode.values():
+            for member in row.get("shared_with") or []:
+                assert member not in PRODUCTION_PORTS, member
         assert "worker_general" not in PRODUCTION_PORTS
         assert "worker_vision" not in PRODUCTION_PORTS
         assert "vision_escalation" not in PRODUCTION_PORTS
+        # Every entry is a registry HOST row, on the registry's own port.
+        assert {"frontdoor", "architect_general"} <= set(PRODUCTION_PORTS), PRODUCTION_PORTS
+        for role, port in PRODUCTION_PORTS.items():
+            assert role in server_mode and role not in aliases, role
+            assert port == server_mode[role]["port"], role
 
     def test_production_ports_from_stack_priors_use_primary_physical_ports(self, tmp_path):
         priors = tmp_path / "stack_priors.yaml"
