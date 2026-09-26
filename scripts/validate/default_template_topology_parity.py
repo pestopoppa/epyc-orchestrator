@@ -108,14 +108,45 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEMPLATE_PATH = REPO_ROOT / "stack_templates" / "default.yaml"
 
 # --- non-vacuity floors ----------------------------------------------------
-# Documented FLOORS, not the answer. The live fleet is 6 roles / 10 instances
-# (1x96t FULL + 2x48t HALF for each of frontdoor, worker_general and
-# ingest_long_context; a single instance for architect_critic,
-# architect_general and worker_vision). These floors exist so that a bug that
-# empties either side -- a renamed YAML key, a failed load, a filter that
-# matches nothing -- fails LOUD instead of reporting "0 mismatches".
-MIN_COMPARED_ROLES = 6
-MIN_COMPARED_INSTANCES = 10
+# These floors exist so that a bug that empties either side -- a renamed YAML
+# key, a failed load, a filter that matches nothing -- fails LOUD instead of
+# reporting "0 mismatches".
+#
+# They are DERIVED from the registry's `server_mode`, a source independent of
+# numa_config (deriving them from numa_config would let an emptied source
+# lower its own floor): one role per host row (a row without `alias_of` owns a
+# process), one instance per distinct port the row declares (`port` plus
+# `numa_ports`). They used to be the literals 6 / 10, describing the fleet
+# before the operator-signed 2026-09-22 lineup cutover (orchestrator 860b0b2d)
+# made worker_general and ingest_long_context aliases; against the 4-host /
+# 6-instance fleet that followed, the gate could only ever report VACUOUS.
+
+
+def _registry_lineup_floors(registry_path: Path | None = None) -> tuple[int, int]:
+    """``(host roles, instances)`` the registry's ``server_mode`` declares."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from src.registry.registry_loader import (  # noqa: PLC0415
+        load_server_mode,
+        serving_host_rows,
+    )
+
+    server_mode = load_server_mode(registry_path)
+    roles = 0
+    instances = 0
+    for host in serving_host_rows(server_mode):
+        row = server_mode[host]
+        if row.get("mode") == "embedding":
+            continue  # embedding-mode roles declare no NUMA placement
+        ports = {int(p) for p in [row.get("port"), *(row.get("numa_ports") or [])] if p}
+        if not ports:
+            continue
+        roles += 1
+        instances += len(ports)
+    return roles, instances
+
+
+MIN_COMPARED_ROLES, MIN_COMPARED_INSTANCES = _registry_lineup_floors()
 
 # Roles the single source declares that the steady-state template deliberately
 # does NOT carry. Each needs a reason; this is an exception list, not a skip

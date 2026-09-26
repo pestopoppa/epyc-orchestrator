@@ -967,6 +967,77 @@ def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
         return None
 
 
+# ── Serving-host resolution (server_mode) ────────────────────────────
+# A role either owns a llama-server process (a `server_mode` row without
+# `alias_of`) or rides one: it is listed in a host row's `shared_with`, or it
+# is an `alias_of` row. After the operator-signed 2026-09-22 lineup cutover
+# most roles ride another role's process, so any per-role fact that is really a
+# per-PROCESS fact (model, layer count, tier, fallback target) must be resolved
+# through this map instead of restated per role.
+
+
+def load_server_mode(registry_path: Path | str | None = None) -> dict[str, Any]:
+    """The ``server_mode`` section of the runtime registry.
+
+    Defaults to the configured registry path (the lean runtime view,
+    ``orchestration/model_registry.yaml``), falling back to
+    ``DEFAULT_LEAN_REGISTRY_PATH`` when config is unavailable. Raises
+    ``RegistryError`` if the file is missing or has no usable section.
+    """
+    if registry_path is None:
+        try:
+            from src.config import get_config
+
+            registry_path = get_config().paths.registry_path
+        except Exception:
+            registry_path = DEFAULT_LEAN_REGISTRY_PATH
+    path = Path(registry_path)
+    if not path.exists():
+        raise RegistryError(f"Registry not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    server_mode = raw.get("server_mode") if isinstance(raw, dict) else None
+    if not isinstance(server_mode, dict) or not server_mode:
+        raise RegistryError(f"registry {path} has no usable server_mode section")
+    return server_mode
+
+
+def serving_host_rows(server_mode: dict[str, Any]) -> list[str]:
+    """``server_mode`` rows that own a process of their own, in declaration order."""
+    return [
+        name
+        for name, row in server_mode.items()
+        if isinstance(row, dict) and not row.get("alias_of")
+    ]
+
+
+def serving_host_by_role(server_mode: dict[str, Any]) -> dict[str, str]:
+    """Map every role the registry binds to the host row whose process serves it.
+
+    Hosts map to themselves; ``shared_with`` members and ``alias_of`` rows map
+    to their host (``alias_of`` chains are followed). A role the registry does
+    not mention is absent from the result.
+    """
+    hosts = serving_host_rows(server_mode)
+    out: dict[str, str] = {host: host for host in hosts}
+    for host in hosts:
+        for member in server_mode[host].get("shared_with") or []:
+            out.setdefault(str(member), host)
+    for name, row in server_mode.items():
+        if not isinstance(row, dict) or not row.get("alias_of"):
+            continue
+        target, seen = str(row["alias_of"]), {name}
+        while target not in out and target not in seen:
+            seen.add(target)
+            nxt = server_mode.get(target)
+            if not isinstance(nxt, dict) or not nxt.get("alias_of"):
+                break
+            target = str(nxt["alias_of"])
+        if target in out:
+            out.setdefault(name, out[target])
+    return out
+
+
 if __name__ == "__main__":
     import sys
 
