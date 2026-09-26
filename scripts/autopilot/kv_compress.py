@@ -327,20 +327,50 @@ def compute_layer_adaptive_weights(
 # Keep this table conservative and degraded-only: unknown or recently swapped
 # roles should fall back to uniform compression until descriptors carry native
 # layer metadata.
-MODEL_LAYER_COUNTS = {
-    "frontdoor": 28,  # Qwen3.6/Qwen3.5 35B-A3B family
-    "architect_general": 64,  # Qwen3.5-122B-A10B
-    "ingest_long_context": 32,  # Qwen3-Next-80B-A3B (SSM layers excluded)
+#
+# Keyed by SERVING PROCESS (a registry server_mode host row): a layer count is a
+# property of the model a process serves, not of the roles riding it.
+_HOST_MODEL_LAYER_COUNTS = {
+    "frontdoor": 28,  # Qwen3.6-35B-A3B
+    "architect_general": 64,  # Qwen3.8-27B (MI210)
 }
 
-# Degraded fallback only (used when stack priors carry no layer metadata).
-# Each alias MUST name the role whose SERVER it actually shares — a stale entry
-# hands the alias the wrong layer count and builds a mis-sized weight vector.
-MODEL_LAYER_COUNT_ALIASES = {
-    # 2026-08-01 W1 cutover: coder_escalation moved off frontdoor's 35B and is
-    # now an alias on architect_general's :8083 122B (64 attention layers).
-    "coder_escalation": "architect_general",  # shared :8083 runtime
-    "worker_summarize": "frontdoor",  # shared :8070 runtime
+
+def _registry_layer_count_aliases(hosts: dict[str, int]) -> dict[str, str]:
+    """Role -> host for every role the registry puts on a host's process.
+
+    Derived from the registry's ``server_mode`` (``shared_with`` / ``alias_of``).
+    Empty when the registry is unreadable, so aliases then get uniform compression.
+    """
+    try:
+        from src.registry.registry_loader import load_server_mode, serving_host_by_role
+
+        host_by_role = serving_host_by_role(load_server_mode())
+    except Exception as exc:  # noqa: BLE001 — degraded path must not break import
+        log.warning("kv_compress: registry host resolution unavailable: %s", exc)
+        return {}
+    return {
+        role: host
+        for role, host in host_by_role.items()
+        if role != host and host in hosts
+    }
+
+
+# Degraded fallback only (used when stack priors carry no layer metadata). Each
+# alias resolves to the role whose SERVER it actually shares, read from the
+# registry rather than restated. The restated table went stale twice: at the
+# 2026-08-01 W1 cutover (coder_escalation) and at the operator-signed 2026-09-22
+# cutover (orchestrator 860b0b2d), after which ingest_long_context still claimed
+# 32 layers (the retired Qwen3-Next-80B) while it served on architect_general's
+# 64-layer :8083 process.
+MODEL_LAYER_COUNT_ALIASES = _registry_layer_count_aliases(_HOST_MODEL_LAYER_COUNTS)
+
+MODEL_LAYER_COUNTS = {
+    **_HOST_MODEL_LAYER_COUNTS,
+    **{
+        alias: _HOST_MODEL_LAYER_COUNTS[host]
+        for alias, host in MODEL_LAYER_COUNT_ALIASES.items()
+    },
 }
 
 
