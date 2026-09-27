@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-09-27T01:41:44Z'
+compiled_at: '2026-09-27T01:41:53Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: orchestration/model_registry.yaml
-    repo_commit: 074f5683
-    sha256: 399e4285bf97db291de1aba7ebeee6a6a10442d071c545573c3612e0443383d0
+    repo_commit: e2febde0
+    sha256: 512bf76696a98088f1dc1740ce7a816c572364fe3525630be7dcc7c558072451
   research:
-    path: /mnt/raid0/llm/worktrees/dar-lat-3h-v2-research-t96n-20260927/orchestration/model_registry.yaml
-    repo_commit: 48f7ebf6
-    sha256: db7eb851142c8779f77d0a9354bb6d7706445d22ad7cc7677f4d708a49827e78
+    path: /mnt/raid0/llm/worktrees/dar-lat-3h-v2-research-t48n-20260927/orchestration/model_registry.yaml
+    repo_commit: af4f5675
+    sha256: fda53a6dad3ceb7daf4ce4b91c36bf6481e42b438ff0ed6b8885def123175fe8
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name

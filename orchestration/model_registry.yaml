@@ -2,7 +2,7 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# registry at /mnt/raid0/llm/worktrees/dar-lat-3h-v2-research-t96n-20260927/orchestration/model_registry.yaml
+# registry at /mnt/raid0/llm/worktrees/dar-lat-3h-v2-research-t48n-20260927/orchestration/model_registry.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -10,8 +10,8 @@
 # temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-09-27T01:41:43+00:00
-# Cache key:   4807f4ac95687858...
+# Compiled at: 2026-09-27T01:41:53+00:00
+# Cache key:   05460dede8155969...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1900,8 +1900,8 @@ server_mode:
       recipe_id: qwen38-flash-next-cpu-mtp
       module: epyc-inference-research/scripts/lib/qwen38_flash_next_recipe.py
       surface: cpu-decode
-      threads: 96
-      cpu_shape: NUMA_FULL
+      threads: 48
+      cpu_shape: NUMA_FULL_T48
       no_mmap: true
       flash_attn: true
       env:

@@ -14,8 +14,9 @@
 #     freed — they must not be revived here.
 #   * architect_general and worker_vision are MI210 roles: the model is on the
 #     GPU and only 8 HOST threads are pinned, on GPU_HOST_LANE (184-191).
-#   * architect_critic (:8074) is the whole-machine 122B that vacated
-#     architect_general; coder_escalation now aliases architect_general, and
+#   * architect_critic (:8074) is the whole-machine CPU critic (Qwen3.8-Flash-Next since
+#     2026-09-22; the 122B it replaced is retired) on the full cpuset that
+#     architect_general vacated; coder_escalation now aliases architect_general, and
 #     vision_escalation aliases worker_vision (both are the SAME server process
 #     as their target, not a second instance).
 #
@@ -143,16 +144,18 @@ roles:
         p_split: 0
 
   architect_critic:
-    # 2026-07-31/08-01: the 122B that used to sit on architect_general. Whole
-    # machine, CPU-resident. Terminal rung of the escalation ladder.
-    model: Qwen3.8-Flash-Next-UD-IQ4_XS   # 2026-09-22: was Qwen3.5-122B-A10B (retired)
+    # Whole machine (0-95), CPU-resident. Terminal rung of the escalation ladder.
+    # 2026-09-22: Qwen3.8-Flash-Next replaced the retired Qwen3.5-122B-A10B.
+    # 2026-09-26 DAR-LAT-3h: numa/threads restate stack_topology.yaml (NUMA_FULL_T48);
+    # ram_gb 69 was the 122B, 90 is the registry's memory_gb for this model.
+    model: Qwen3.8-Flash-Next-UD-IQ4_XS
     quant: UD-IQ4_XS
     tier: HOT
-    ram_gb: 69
+    ram_gb: 90
     full:
       port: 8074
-      numa: FULL
-      threads: 96
+      numa: FULL_T48
+      threads: 48
 
   ingest_long_context:
     # 2026-09-22 lineup change: Qwen3-Next-80B-A3B retired. The role moved onto
