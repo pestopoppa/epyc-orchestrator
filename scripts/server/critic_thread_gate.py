@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""DAR-LAT-3h gate G1: architect_critic threads (48 vs 96) and the THP shim, decided independently.
+
+WHAT IT DECIDES
+---------------
+The live critic (:8074, Qwen3.8-Flash-Next UD-IQ4_XS) runs `-t 96` with the fleet's
+canonical env. Its codified recipe says `-t 48`, plus GGML knobs. After the 2026-09-26
+env audit (operator decision), the package carries only two of those knobs:
+  GGML_FUSED_DECODE_OFF=1    rides along in every candidate arm. Under MTP it should be
+                             inert (the fused path needs !embeddings_nextn); arm T96 vs L
+                             tests exactly that premise.
+  GGML_NOHUGEPAGE_PROCESS=1  (THP shim) has conflicting evidence: CHAMP-2 +5.23% vs v10
+                             common.cpp's CHAMPION-3 +1.48% with it OFF. Neither was taken
+                             on v10 at the served shape, so it gets its OWN factor here.
+  GGML_FA_SPLIT_KV=0         DROPPED. It needs a long-context decode arm at the served
+                             262144 ctx plus a numerics check: task DAR-LAT-3i.
+
+Five arms, each a fresh LAUNCH of the production argv on an experiment port:
+
+  L      -t 96, env copied from the live process       (the incumbent, exactly)
+  T96    -t 96, + FUSED_DECODE_OFF
+  T96N   -t 96, + FUSED_DECODE_OFF + NOHUGEPAGE_PROCESS
+  T48    -t 48, + FUSED_DECODE_OFF
+  T48N   -t 48, + FUSED_DECODE_OFF + NOHUGEPAGE_PROCESS
+
+The threads x shim arms form a 2x2, so each factor is judged with the other held fixed.
+The pre-registered rule is `decide`. It is frozen here and in the package's PACKAGE.md §4,
+and the operator signs the thresholds.
+
+WHY WALL TIME IS THE PRIMARY METRIC
+-----------------------------------
+The critic's cpuset is 0-95 in every arm, so it holds all four CPU region locks for the
+whole request whatever its thread count. No CPU role can be placed while it runs.
+Frontdoor's cost of a consult is therefore the critic's request WALL TIME. Decode tok/s
+and TTFT are reported beside it. The frontdoor co-run probe (W3) measures what the
+overlap costs if anything bypasses the lock.
+
+MECHANISM CHECK
+---------------
+Each launch records THP_enabled from /proc/<pid>/status. A shim arm must read 0 and a
+non-shim arm must read 1. A launch that disagrees is not clean and is re-queued, so the
+shim factor is never judged on a launch where the knob did not take effect.
+
+HOW TO RUN (by the session that owns the inference, after signature, in a quiet window)
+------------------------------------------------------------------------------------
+  scripts/region-lock run --cpu-list 0-191 -- \
+    .venv/bin/python scripts/server/critic_thread_gate.py run \
+      --live-pid <pid of :8074> --prompts <PACKAGE>/gate/prompts-24mix.json \
+      --out /mnt/raid0/llm/epyc-inference-research/data/dar-lat-3h-gate-<UTC>
+  .venv/bin/python scripts/server/critic_thread_gate.py summarize --out <same dir>
+
+`run` launches and kills ONLY the PIDs it spawns, and verifies each is dead. It sends
+HTTP to its own experiment port and, for W3 only, to frontdoor :8070 directly.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import statistics
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+EXPERIMENT_PORT = 18074
+FRONTDOOR_PORT = 8070
+LINEUP_PORTS = (8070, 8080, 8180, 8074, 8083, 8086)
+PREFIX = ["numactl", "--interleave=all", "--", "taskset", "-c", "0-95"]
+
+FUSED = {"GGML_FUSED_DECODE_OFF": "1"}
+SHIM = {"GGML_NOHUGEPAGE_PROCESS": "1"}
+# Keys an arm controls. Any live value of these is removed before an arm's own are added.
+CONTROLLED = ("GGML_FUSED_DECODE_OFF", "GGML_NOHUGEPAGE_PROCESS", "GGML_FA_SPLIT_KV")
+ARMS = {
+    "L": {"threads": 96, "env": {}},
+    "T96": {"threads": 96, "env": {**FUSED}},
+    "T96N": {"threads": 96, "env": {**FUSED, **SHIM}},
+    "T48": {"threads": 48, "env": {**FUSED}},
+    "T48N": {"threads": 48, "env": {**FUSED, **SHIM}},
+}
+# 15 launches, 3 per arm, in three blocks that each hold every arm once. The rotation
+# puts each arm in a different position in each block.
+SCHEDULE = [
+    "L", "T96", "T96N", "T48", "T48N",
+    "T48", "T48N", "L", "T96", "T96N",
+    "T96N", "T48", "T48N", "L", "T96",
+]
+MAX_REQUEUES = 2
+
+# Pre-registered thresholds (PACKAGE.md §4). Ratios are candidate / reference.
+WALL_MARGIN = 1.03   # non-inferiority: candidate mean per-launch median wall <= 1.03x reference
+TTFT_MARGIN = 1.10   # non-inferiority: candidate mean per-launch median TTFT <= 1.10x reference
+SHIM_GAIN = 0.98     # the shim is ADOPTED only if it is >= 2% faster in wall time (benefit required;
+                     # a default-off knob with conflicting evidence is not added at parity)
+MIN_LAUNCHES = 3     # an arm with fewer clean launches makes the verdict INCONCLUSIVE
+
+
+# ── pure helpers (unit-tested) ────────────────────────────────────────────────
+
+def rewrite_argv(live_argv: list[str], threads: int, port: int = EXPERIMENT_PORT) -> list[str]:
+    """Production argv with only -t and --port changed and the slot-save dir dropped.
+
+    Dropping --slot-save-path keeps an experiment arm from writing into the production
+    critic's slot directory. Nothing else is touched, so an arm IS the production launch.
+    """
+    out: list[str] = []
+    i = 0
+    seen_t = seen_port = False
+    while i < len(live_argv):
+        tok = live_argv[i]
+        if tok in ("-t", "--threads"):
+            out += [tok, str(threads)]
+            seen_t = True
+            i += 2
+        elif tok == "--port":
+            out += [tok, str(port)]
+            seen_port = True
+            i += 2
+        elif tok == "--slot-save-path":
+            i += 2
+        else:
+            out.append(tok)
+            i += 1
+    if not (seen_t and seen_port):
+        raise ValueError("live argv has no -t or no --port; refusing to guess the launch")
+    return out
+
+
+def arm_env(live_env: dict[str, str], arm: str) -> dict[str, str]:
+    env = dict(live_env)
+    for k in CONTROLLED:
+        env.pop(k, None)
+    env.update(ARMS[arm]["env"])
+    return env
+
+
+def expected_thp_enabled(arm: str) -> int:
+    """THP_enabled in /proc/<pid>/status: 0 when the shim (PR_SET_THP_DISABLE) took effect."""
+    return 0 if "GGML_NOHUGEPAGE_PROCESS" in ARMS[arm]["env"] else 1
+
+
+def coherent(text: str, finish: str | None) -> bool:
+    words = text.split()
+    if len(words) < 5:
+        return False
+    grams = [tuple(words[i:i + 4]) for i in range(max(1, len(words) - 3))]
+    return len(set(grams)) / len(grams) >= 0.3 and finish in ("stop", "length")
+
+
+def launch_stats(rows: list[dict]) -> dict:
+    ok = [r for r in rows if r.get("ok")]
+    return {
+        "n": len(rows),
+        "ok": len(ok),
+        "coherent": sum(1 for r in ok if r.get("coherent")),
+        "wall_s_median": statistics.median(r["wall_s"] for r in ok) if ok else None,
+        "ttft_ms_median": statistics.median(r["prompt_ms"] for r in ok) if ok else None,
+        "decode_tps_tokw": (sum(r["predicted_n"] for r in ok) / (sum(r["predicted_ms"] for r in ok) / 1000.0))
+        if ok and sum(r["predicted_ms"] for r in ok) > 0 else None,
+    }
+
+
+def decide(per_arm: dict[str, list[dict]]) -> dict:
+    """Apply the pre-registered rule to per-arm lists of clean launch stats.
+
+    1. PREMISE: T96 must be non-inferior to L. T96 differs from L only by
+       GGML_FUSED_DECODE_OFF=1, which should be inert under MTP. If it is not,
+       the verdict is INVALID-PREMISE and nothing is applied.
+    2. THREADS: 48 if T48 is non-inferior to T96 AND T48N to T96N, i.e. parity
+       at both shim levels (the consultant principle: at equal wall time, fewer
+       threads spinning over shared cores wins). Otherwise 96.
+    3. SHIM: at the chosen thread count t, adopt NOHUGEPAGE_PROCESS only if TtN
+       wall <= 0.98x Tt, and TtN is non-inferior to Tt on TTFT and coherence.
+    """
+    def mean(arm: str, key: str) -> float:
+        return statistics.fmean(s[key] for s in per_arm[arm])
+
+    short = [a for a in ARMS if len(per_arm.get(a, [])) < MIN_LAUNCHES]
+    if short:
+        return {"outcome": "INCONCLUSIVE", "reason": f"fewer than {MIN_LAUNCHES} clean launches: {short}"}
+    coh = {a: min(s["coherent"] for s in per_arm[a]) for a in ARMS}
+
+    def ratios(cand: str, ref: str) -> dict:
+        return {"wall_ratio": round(mean(cand, "wall_s_median") / mean(ref, "wall_s_median"), 4),
+                "ttft_ratio": round(mean(cand, "ttft_ms_median") / mean(ref, "ttft_ms_median"), 4),
+                "coherent_min": [coh[cand], coh[ref]]}
+
+    def non_inferior(r: dict) -> bool:
+        return (r["wall_ratio"] <= WALL_MARGIN and r["ttft_ratio"] <= TTFT_MARGIN
+                and r["coherent_min"][0] >= r["coherent_min"][1] - 1)
+
+    detail = {
+        "T96_vs_L": ratios("T96", "L"),
+        "T48_vs_T96": ratios("T48", "T96"),
+        "T48N_vs_T96N": ratios("T48N", "T96N"),
+        "T96N_vs_T96": ratios("T96N", "T96"),
+        "T48N_vs_T48": ratios("T48N", "T48"),
+        "decode_tps_mean": {a: round(mean(a, "decode_tps_tokw"), 3) for a in ARMS},
+    }
+    if not non_inferior(detail["T96_vs_L"]):
+        return {"outcome": "INVALID-PREMISE",
+                "reason": "GGML_FUSED_DECODE_OFF=1 was not inert (T96 inferior to L); apply nothing", **detail}
+    threads = 48 if (non_inferior(detail["T48_vs_T96"]) and non_inferior(detail["T48N_vs_T96N"])) else 96
+    shim = detail[f"T{threads}N_vs_T{threads}"]
+    adopt_shim = (shim["wall_ratio"] <= SHIM_GAIN and shim["ttft_ratio"] <= TTFT_MARGIN
+                  and shim["coherent_min"][0] >= shim["coherent_min"][1] - 1)
+    return {"outcome": f"T{threads}{'N' if adopt_shim else ''}", "threads": threads,
+            "shim_adopted": adopt_shim, **detail}
+
+
+# ── live helpers ──────────────────────────────────────────────────────────────
+
+def _http(port: int, path: str, body: dict | None = None, timeout: float = 1800) -> dict:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def _busy_ports() -> list[int]:
+    busy = []
+    for port in LINEUP_PORTS:
+        try:
+            slots = _http(port, "/slots", timeout=5)
+        except Exception:
+            continue
+        if any(s.get("is_processing") for s in slots if isinstance(s, dict)):
+            busy.append(port)
+    return busy
+
+
+def _read_proc(pid: int) -> tuple[list[str], dict[str, str]]:
+    argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+    env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    return ([a.decode() for a in argv if a],
+            dict(e.decode().split("=", 1) for e in env if b"=" in e))
+
+
+def _affinity(pid: int) -> dict:
+    per_task: dict[str, int] = {}
+    for task in Path(f"/proc/{pid}/task").iterdir():
+        for line in (task / "status").read_text().splitlines():
+            if line.startswith("Cpus_allowed_list:"):
+                key = line.split(":", 1)[1].strip()
+                per_task[key] = per_task.get(key, 0) + 1
+    return per_task
+
+
+def _thp_enabled(pid: int) -> int | None:
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith("THP_enabled:"):
+            return int(line.split(":", 1)[1])
+    return None
+
+
+def _chat(port: int, text: str, max_tokens: int, timeout: float = 1800) -> dict:
+    body = {"messages": [{"role": "user", "content": text}], "max_tokens": max_tokens,
+            "temperature": 0, "cache_prompt": False,
+            "chat_template_kwargs": {"enable_thinking": False}}
+    t0 = time.monotonic()
+    try:
+        r = _http(port, "/v1/chat/completions", body, timeout=timeout)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"ok": False, "error": repr(exc), "wall_s": time.monotonic() - t0}
+    wall = time.monotonic() - t0
+    tim = r.get("timings") or {}
+    choice = (r.get("choices") or [{}])[0]
+    text_out = (choice.get("message") or {}).get("content") or ""
+    return {"ok": True, "wall_s": wall, "prompt_ms": tim.get("prompt_ms"),
+            "predicted_ms": tim.get("predicted_ms"), "predicted_n": tim.get("predicted_n"),
+            "draft_n": tim.get("draft_n"), "draft_n_accepted": tim.get("draft_n_accepted"),
+            "finish": choice.get("finish_reason"), "coherent": coherent(text_out, choice.get("finish_reason")),
+            "head": text_out[:80]}
+
+
+def _workloads(prompts: list[dict]) -> list[tuple[str, str, int]]:
+    # W1: the 24-prompt production mix at the champion harness's shape (max_tokens 200).
+    w1 = [("W1", p["prompt"], 200) for p in prompts]
+    # W2: critique shape. The whole mix as a plan to critique, four rotations, ~4k-token prompts.
+    w2 = []
+    for k in range(4):
+        rot = prompts[k * 6:] + prompts[:k * 6]
+        plan = "\n\n".join(f"Step {i + 1}: {p['prompt']}" for i, p in enumerate(rot))
+        w2.append(("W2", "Critique this plan. Name its three weakest steps and why.\n\n" + plan, 400))
+    return w1 + w2
+
+
+def _stop(proc: subprocess.Popen) -> None:
+    if proc.poll() is None:
+        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=30)
+    if Path(f"/proc/{proc.pid}").exists():
+        raise SystemExit(f"arm pid {proc.pid} still present after SIGKILL; stop and investigate")
+
+
+def run(args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    prompts = json.loads(Path(args.prompts).read_text())
+    live_argv, live_env = _read_proc(args.live_pid)
+    if f"{args.live_port}" not in live_argv:
+        raise SystemExit(f"pid {args.live_pid} is not the :{args.live_port} server")
+    (out / "live.json").write_text(json.dumps({"argv": live_argv, "env_keys": sorted(live_env),
+                                                "affinity": _affinity(args.live_pid)}, indent=1))
+    queue = list(SCHEDULE)
+    requeues = 0
+    idx = 0
+    while queue:
+        arm = queue.pop(0)
+        idx += 1
+        tag = f"{idx:02d}-{arm}"
+        busy = _busy_ports()
+        if busy:
+            print(f"{tag}: lineup ports busy {busy}; waiting 60 s", flush=True)
+            time.sleep(60)
+            queue.insert(0, arm)
+            idx -= 1
+            continue
+        argv = PREFIX + rewrite_argv(live_argv, ARMS[arm]["threads"])
+        log = open(out / f"{tag}.server.log", "w")
+        proc = subprocess.Popen(argv, env=arm_env(live_env, arm), stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        rec = {"tag": tag, "arm": arm, "pid": proc.pid, "argv": argv, "started": time.time()}
+        try:
+            deadline = time.monotonic() + 900
+            while time.monotonic() < deadline:
+                try:
+                    if _http(EXPERIMENT_PORT, "/health", timeout=5).get("status") == "ok":
+                        break
+                except Exception:
+                    pass
+                if proc.poll() is not None:
+                    raise RuntimeError(f"arm exited during load (rc {proc.returncode})")
+                time.sleep(5)
+            else:
+                raise RuntimeError("arm not healthy within 900 s")
+            _, env_rb = _read_proc(proc.pid)
+            rec["env_readback"] = {k: env_rb.get(k) for k in CONTROLLED}
+            rec["affinity"] = _affinity(proc.pid)
+            rec["thp_enabled"] = _thp_enabled(proc.pid)
+            rec["thp_expected"] = expected_thp_enabled(arm)
+            _chat(EXPERIMENT_PORT, "Say ready.", 8)                      # warm-up, discarded
+            rows = []
+            with open(out / f"{tag}.rows.jsonl", "w") as fh:
+                for wl, text, mt in _workloads(prompts):
+                    row = {"workload": wl, **_chat(EXPERIMENT_PORT, text, mt)}
+                    rows.append(row)
+                    fh.write(json.dumps(row) + "\n")
+                    fh.flush()
+            # W3: frontdoor co-run probe. Frontdoor alone, then frontdoor while the arm decodes.
+            probe = "Summarise the causes of the French Revolution in three sentences."
+            rec["w3_frontdoor_solo"] = _chat(FRONTDOOR_PORT, probe, 64, timeout=300)
+            bg: dict = {}
+            t = threading.Thread(target=lambda: bg.update(_chat(EXPERIMENT_PORT, _workloads(prompts)[-1][1], 64, 600)))
+            t.start()
+            time.sleep(2)
+            rec["w3_frontdoor_corun"] = _chat(FRONTDOOR_PORT, probe, 64, timeout=300)
+            t.join()
+            rec["w3_arm_corun"] = bg
+            rec["busy_after"] = _busy_ports()
+            rec["stats"] = {w: launch_stats([r for r in rows if r["workload"] == w]) for w in ("W1", "W2")}
+            rec["clean"] = (not rec["busy_after"] and all(r.get("ok") for r in rows)
+                            and rec["thp_enabled"] == rec["thp_expected"])
+        except Exception as exc:                                          # recorded, re-queued
+            rec["error"] = repr(exc)
+            rec["clean"] = False
+        finally:
+            _stop(proc)
+            log.close()
+            rec["stopped"] = time.time()
+        (out / f"{tag}.launch.json").write_text(json.dumps(rec, indent=1))
+        print(json.dumps({k: rec.get(k) for k in ("tag", "clean", "error", "stats")}), flush=True)
+        if not rec["clean"] and requeues < MAX_REQUEUES * len(ARMS):
+            queue.append(arm)
+            requeues += 1
+    return 0
+
+
+def summarize(args: argparse.Namespace) -> int:
+    out = Path(args.out)
+    per_arm: dict[str, list[dict]] = {a: [] for a in ARMS}
+    for f in sorted(out.glob("*.launch.json")):
+        rec = json.loads(f.read_text())
+        if rec.get("clean"):
+            per_arm[rec["arm"]].append(rec["stats"]["W1"] | {"W2": rec["stats"]["W2"]})
+    verdict = decide(per_arm)
+    verdict["launches"] = {a: len(v) for a, v in per_arm.items()}
+    verdict["thresholds"] = {"wall_margin": WALL_MARGIN, "ttft_margin": TTFT_MARGIN,
+                             "shim_gain": SHIM_GAIN, "min_launches": MIN_LAUNCHES}
+    # W2 (critique shape) is reported with the same rule, as a second reading; W1 decides.
+    per_arm_w2 = {a: [s["W2"] for s in v] for a, v in per_arm.items()}
+    verdict["w2_reading"] = decide(per_arm_w2)
+    (out / "verdict.json").write_text(json.dumps(verdict, indent=1))
+    print(json.dumps(verdict, indent=1))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--live-pid", type=int, required=True)
+    r.add_argument("--live-port", type=int, default=8074)
+    r.add_argument("--prompts", required=True)
+    r.add_argument("--out", required=True)
+    s = sub.add_parser("summarize")
+    s.add_argument("--out", required=True)
+    args = ap.parse_args(argv)
+    return run(args) if args.cmd == "run" else summarize(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
