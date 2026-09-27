@@ -108,7 +108,16 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # critic is now Qwen3.8-Flash-Next, not the 122B the Probe-B tuning measured.
     # Re-porting the interleave is a kernel-lineage question (AutoKernel DS41 inbox
     # AK-H-NRI-1), not a stack_env setting.
-    "architect_critic": {},
+    # 2026-09-26 DAR-LAT-3h (PROPOSED; every G1 outcome except INVALID-PREMISE/INCONCLUSIVE):
+    # the codified recipe's serving env, i.e. master registry
+    # server_mode.architect_critic.recipe.env. test_stack_env_recipe_parity.py diffs the two, and
+    # stack_change_pipeline's declared_env_attestation checks the live process.
+    #   GGML_FUSED_DECODE_OFF=1   the recipe's graph path; inert while MTP serves.
+    # NOT here (recipe.env_not_serving): GGML_NOHUGEPAGE_PROCESS (its own G1 factor) and
+    # GGML_FA_SPLIT_KV (task DAR-LAT-3i: long-context decode + numerics check first).
+    "architect_critic": {
+        "GGML_FUSED_DECODE_OFF": "1",
+    },
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
     # Activate when a hybrid_ssm_dense model is rostered.
     # 2026-06-26 v6 cutover: removed GGML_CCD_POOLS / GGML_CCD_WORK_DIST /

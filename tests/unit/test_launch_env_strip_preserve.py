@@ -58,15 +58,25 @@ def _launch_role_names() -> set[str]:
     return names
 
 
+# Roles that DELIBERATELY declare GGML knobs, each through a signed stack-change package.
+# Adding a role here is the visible act that ends the quiet-correction guarantee for it.
+DELIBERATE_GGML_BLOCKS = {
+    "architect_critic": {"GGML_FUSED_DECODE_OFF"},   # DAR-LAT-3h (+ GGML_NOHUGEPAGE_PROCESS on an N outcome)
+}
+
+
 @pytest.mark.parametrize("role", sorted(_launch_role_names()))
 def test_neutral_today_every_role_resolves_no_ggml_beyond_iqk(role: str) -> None:
     """The QUIET-correction proof: `preserve` is empty for every role a launch branch can
-    name, so the strip removes exactly what it removed before this change."""
-    declared = {k for k in _role_env_overrides(role) if k.startswith("GGML_")}
-    assert declared <= {"GGML_IQK"}, f"{role} now declares {declared}; this landing is no longer neutral"
+    name, except the ones a signed package deliberately gave a block."""
+    declared = {k for k in _role_env_overrides(role) if k.startswith("GGML_")} - {"GGML_IQK"}
+    allowed = DELIBERATE_GGML_BLOCKS.get(role, set())
+    if role == "architect_critic":
+        allowed = allowed | {"GGML_NOHUGEPAGE_PROCESS"}
+    assert declared <= allowed, f"{role} declares {declared - allowed} without a DELIBERATE_GGML_BLOCKS entry"
 
 
-@pytest.mark.parametrize("role", sorted(_launch_role_names()))
+@pytest.mark.parametrize("role", sorted(_launch_role_names() - set(DELIBERATE_GGML_BLOCKS)))
 def test_neutral_today_launch_env_is_identical_with_and_without_preserve(role: str) -> None:
     ambient = {"GGML_AMBIENT_LEAK": "1", "PATH": "/usr/bin"}
     before = build_launch_env(role, dict(ambient))
