@@ -117,6 +117,9 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # GGML_FA_SPLIT_KV (task DAR-LAT-3i: long-context decode + numerics check first).
     "architect_critic": {
         "GGML_FUSED_DECODE_OFF": "1",
+        # G1 outcome T96N/T48N ONLY: the CHAMP-2 THP shim, adopted on a >= 2% wall-time gain
+        # at the chosen -t with THP_enabled 0 verified per launch (the G1 receipt).
+        "GGML_NOHUGEPAGE_PROCESS": "1",
     },
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
     # Activate when a hybrid_ssm_dense model is rostered.
