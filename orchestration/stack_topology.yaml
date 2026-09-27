@@ -222,8 +222,15 @@ numa_config:
   # Qwen3.8-Flash-Next UD-IQ4_XS on this instance (:8074) since 2026-09-22.
   # The 122B is retired from the lineup.
   architect_critic:
+    # 2026-09-26 DAR-LAT-3h (PROPOSED; only on gate G1 outcome T48 or T48N): NUMA_FULL ->
+    # NUMA_FULL_T48, completing lineup-change C3 (operator-ruled 2026-09-22). Same cpuset
+    # (0-95), same four-region lock, same interleave=all; -t 96 -> 48 to match the codified
+    # recipe (epyc-inference-research scripts/lib/qwen38_flash_next_recipe.py THREADS).
+    # The measurement that decides it is the package's G1 receipt. Changing -t changes
+    # topology_fingerprint, so the contention-matrix pairs naming :8074 must be re-benched
+    # (package gate G3).
     instances:
-      - {cpu_shape: NUMA_FULL, port: 8074}   # 1×96t physical cores, all 4 NUMA nodes
+      - {cpu_shape: NUMA_FULL_T48, port: 8074}   # 0-95 cpuset, 48 threads, all 4 NUMA nodes
     mlock: true
     numa_pre_evict_gib: 40   # INF-70/C7 CPU role: force even interleave (see header)
     numactl_policy: interleave=all   # wraps launch with `numactl --interleave=all --`
