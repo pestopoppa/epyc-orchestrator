@@ -116,6 +116,18 @@ def _write_logit_probe(prompt: str, first_token_probs: dict) -> None:
         logger.debug("logit_probe write failed", exc_info=True)
 
 
+def _apply_pinned_slot(payload: dict[str, Any], request: Any) -> None:
+    """Chat lane: forward ``slot_id`` as ``id_slot`` only on an explicit ``pin_slot`` opt-in.
+
+    llama-server's OAI shim copies unknown body keys into the completion params, so
+    ``id_slot`` works on /v1/chat/completions. Opt-in so a router-assigned slot never
+    starts pinning a production chat role (coherence judge, 2026-10-04).
+    """
+    slot = getattr(request, "slot_id", None)
+    if getattr(request, "pin_slot", False) and isinstance(slot, int) and not isinstance(slot, bool) and slot >= 0:
+        payload["id_slot"] = slot
+
+
 def _cache_prompt(request: Any) -> bool:
     """The request's ``cache_prompt`` override, else True (llama-server's own default).
 
@@ -765,6 +777,7 @@ class LlamaServerBackend(ModelBackend):
             # UFH14-B4: explicit, and the per-request override honoured on this lane too.
             "cache_prompt": _cache_prompt(request),
         }
+        _apply_pinned_slot(payload, request)
         if chat_payload is not None:
             if chat_payload.get("tools") is not None:
                 payload["tools"] = chat_payload["tools"]
@@ -1720,6 +1733,7 @@ class LlamaServerBackend(ModelBackend):
             "stream": True,
             "cache_prompt": _cache_prompt(request),
         }
+        _apply_pinned_slot(payload, request)
         self._apply_deterministic_sampling(payload, role_config, request)
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences

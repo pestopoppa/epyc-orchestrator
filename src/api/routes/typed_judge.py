@@ -7,14 +7,20 @@ calibration and safety are documented there). Localhost only, the same rule as
 Request::
 
     {"prompt": str, "base_output": str, "candidate_output": str,
-     "rubric": str | null, "backend": "local" | "cloud:<name>", "model": str | null,
+     "rubric": str | null,
+     "backend": "auto" (default) | "local" | "local:champion_sidecar" | "cloud:<name>",
+     "model": str | null,
      "scoring": "auto" | "native" | "json", "allow_uncalibrated": bool,
-     "caller": str | null}
+     "caller": str | null,
+     "divergence_offset": int | null,   # tier 0's UTF-8 byte offset of the first divergence
+     "max_judged_tokens": int | null}   # per-output cap; above it the output is excerpted
 
 200 -> the verdict object (``JudgeVerdict.to_dict``). Refusals carry
 ``{"error": {"type", "message", "retry_after_s", "detail"?}}``:
 
-* 503 ``measurement_window_held`` / ``role_parked`` / ``not_ready`` (+ Retry-After)
+* 503 ``measurement_window_held`` / ``role_parked`` / ``not_ready`` /
+  ``sidecar_unavailable`` (the message carries the sidecar launch command; this route
+  never starts it) / ``sidecar_not_champion`` (+ Retry-After)
 * 409 ``judge_uncalibrated``
 * 400 ``invalid_request`` / ``unknown_cloud_judge``; 403 non-local caller or
   ``cloud_disabled``
@@ -55,11 +61,13 @@ class CoherenceJudgeBody(BaseModel):
     base_output: str = Field(..., max_length=_MAX_TEXT)
     candidate_output: str = Field(..., max_length=_MAX_TEXT)
     rubric: str | None = Field(None, max_length=8000)
-    backend: str = "local"
+    backend: str = "auto"
     model: str | None = Field(None, max_length=200)
     scoring: str = "auto"
     allow_uncalibrated: bool = False
     caller: str | None = Field(None, max_length=200)
+    divergence_offset: int | None = Field(None, ge=0)
+    max_judged_tokens: int | None = Field(None, ge=64, le=32768)
 
 
 def _enabled() -> bool:

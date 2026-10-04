@@ -972,6 +972,9 @@ class InferenceMixin:
             "gen_ms": result.generation_ms,
             "overhead_ms": result.http_overhead_ms,
             "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
+            # The server's own prompt accounting (None = not reported; never estimated).
+            "server_prompt_tokens": getattr(result, "prompt_tokens", None),
+            "server_cache_n": getattr(result, "cached_prompt_tokens", None),
         })
         if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
             log.warning(
@@ -1587,6 +1590,10 @@ class InferenceMixin:
                 "completion_probabilities": list(
                     getattr(result, "completion_probabilities", []) or []
                 ),
+                # The server's own prompt accounting (None = not reported; never
+                # estimated): total prompt tokens and, of those, the KV-cache hits.
+                "server_prompt_tokens": getattr(result, "prompt_tokens", None),
+                "server_cache_n": getattr(result, "cached_prompt_tokens", None),
             }
             self._set_last_inference_meta(call_meta)
             _reasoning = getattr(result, "reasoning_content", None)

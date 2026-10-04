@@ -10,13 +10,16 @@ load it by PATH under ``python -I`` without importing the orchestrator package::
     cjc = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = cjc  # required before exec (dataclasses)
     spec.loader.exec_module(cjc)
-    judge_fn = cjc.make_judge_fn(backend="local")            # or backend="cloud:codex-luna-low"
+    judge_fn = cjc.make_judge_fn()  # backend="auto"; or "local:champion_sidecar", "local", "cloud:codex-luna-low"
     verdict = judge_fn({"prompt": p, "base_output": b, "candidate_output": c})
     verdict.passed, verdict.verdict, verdict.confidence, verdict.calibration_id
 
 ``item_pair`` may be a mapping or an object carrying ``prompt`` plus ``base_output`` /
 ``base`` / ``base_text`` and ``candidate_output`` / ``candidate`` / ``candidate_text``
-(optional ``rubric``), or a ``(prompt, base, candidate)`` tuple.
+(optional ``rubric``; optional ``divergence_offset`` / ``first_divergence_byte`` = tier 0's
+UTF-8 byte offset of the first divergence, which steers the excerpt of an output above
+``max_judged_tokens``), or a ``(prompt, base, candidate)`` tuple. ``Verdict.excerpted`` is
+True when the judge saw an excerpt; the spans are in ``Verdict.raw["excerpt"]``.
 
 Contract for the gate:
 
@@ -33,7 +36,12 @@ CLI (one pair; exit 0 = COHERENT_EQUIVALENT, 1 = any other verdict, 2 = unavaila
 uncalibrated, 64 = usage)::
 
     python -I scripts/coherence_judge_client.py --pair-json pair.json \
-        [--backend local|cloud:<name>] [--model M] [--allow-uncalibrated]
+        [--backend auto|local|local:champion_sidecar|cloud:<name>] [--model M] [--allow-uncalibrated]
+
+``auto`` (default) uses the champion sidecar with native scoring when it is up and serving
+the champion build, else the production role with JSON scoring (``Verdict.backend`` /
+``scoring_mode`` / ``build`` say which). A ``sidecar_unavailable`` refusal's message
+carries the sidecar launch command; neither the server nor this client starts it.
 """
 
 from __future__ import annotations
@@ -80,6 +88,9 @@ class Verdict:
     model: str
     judge_version: str
     call_id: str | None = None
+    scoring_mode: str | None = None
+    build: str | None = None
+    excerpted: bool = False
     raw: dict = field(default_factory=dict, compare=False, repr=False)
 
     def to_dict(self) -> dict:
@@ -128,7 +139,7 @@ def _default_post(url: str, body: dict, timeout_s: float) -> tuple[int, dict]:
 def make_judge_fn(
     *,
     url: str = DEFAULT_URL,
-    backend: str = "local",
+    backend: str = "auto",
     model: str | None = None,
     rubric: str | None = None,
     scoring: str = "auto",
@@ -136,6 +147,7 @@ def make_judge_fn(
     caller: str | None = None,
     timeout_s: float = 600.0,
     post: PostFn | None = None,
+    max_judged_tokens: int | None = None,
 ) -> Callable[[Any], Verdict]:
     """Build ``judge_fn(item_pair) -> Verdict`` bound to one judge identity."""
     endpoint = url.rstrip("/") + ENDPOINT
@@ -143,6 +155,9 @@ def make_judge_fn(
 
     def judge_fn(item_pair: Any) -> Verdict:
         prompt, base, candidate, pair_rubric = pair_fields(item_pair)
+        divergence = _pick(item_pair, ("divergence_offset", "first_divergence_byte")) if not isinstance(
+            item_pair, (tuple, list)
+        ) else None
         body = {
             "prompt": prompt,
             "base_output": base,
@@ -153,6 +168,8 @@ def make_judge_fn(
             "scoring": scoring,
             "allow_uncalibrated": allow_uncalibrated,
             "caller": caller,
+            "divergence_offset": int(divergence) if divergence is not None else None,
+            "max_judged_tokens": max_judged_tokens,
         }
         status, payload = send(endpoint, body, timeout_s)
         if status != 200:
@@ -179,6 +196,9 @@ def make_judge_fn(
             model=str(payload.get("model")),
             judge_version=str(payload.get("judge_version")),
             call_id=payload.get("call_id"),
+            scoring_mode=payload.get("scoring_mode"),
+            build=payload.get("build"),
+            excerpted=bool((payload.get("excerpt") or {}).get("excerpted")),
             raw=payload,
         )
 
@@ -189,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Judge one (prompt, base, candidate) pair.")
     parser.add_argument("--pair-json", required=True, help="JSON file: {prompt, base_output, candidate_output, rubric?}")
     parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--backend", default="local")
+    parser.add_argument("--backend", default="auto")
     parser.add_argument("--model", default=None)
     parser.add_argument("--scoring", default="auto", choices=("auto", "native", "json"))
     parser.add_argument("--allow-uncalibrated", action="store_true")
