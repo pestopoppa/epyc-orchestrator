@@ -1261,3 +1261,128 @@ def test_spec_files_live_under_the_scratch_root(monkeypatch) -> None:
     monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
     path = fk.hook_roots_file(kf.fence_roots())
     assert path.startswith(fk.SCRATCH_ROOT + "/epyc-eval-fence-")
+
+
+# ── cache eviction (disk-leak fix: _write_cached() had no eviction) ──────
+
+
+def _spec_dir(tmp_path: Path):
+    import os as _os
+
+    return tmp_path / f"epyc-eval-fence-{_os.getuid()}"
+
+
+def test_cache_eviction_removes_old_json(tmp_path: Path, monkeypatch) -> None:
+    import os as _os
+    import time as _time
+
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    spec_dir = _spec_dir(tmp_path)
+    spec_dir.mkdir(mode=0o700, parents=True)
+    stale = spec_dir / "spec-old-deadbeefdeadbeef.json"
+    stale.write_text("{}")
+    old = _time.time() - 4 * 86400  # older than the 3-day default
+    _os.utime(stale, (old, old))
+
+    fk._write_cached("payload", "spec-new")
+
+    assert not stale.exists()
+
+
+def test_cache_eviction_keeps_fresh_json(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    spec_dir = _spec_dir(tmp_path)
+    spec_dir.mkdir(mode=0o700, parents=True)
+    fresh = spec_dir / "spec-fresh-deadbeefdeadbeef.json"
+    fresh.write_text("{}")
+
+    fk._write_cached("payload", "spec-new")
+
+    assert fresh.exists()
+
+
+def test_cache_eviction_removes_stale_tmp(tmp_path: Path, monkeypatch) -> None:
+    import os as _os
+    import time as _time
+
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    spec_dir = _spec_dir(tmp_path)
+    spec_dir.mkdir(mode=0o700, parents=True)
+    stale_tmp = spec_dir / "spec-x.1234.5678.tmp"
+    stale_tmp.write_text("partial-write")
+    old = _time.time() - 7200  # older than the 1h stale-tmp age
+    _os.utime(stale_tmp, (old, old))
+
+    fk._write_cached("payload", "spec-new")
+
+    assert not stale_tmp.exists()
+
+
+def test_cache_max_age_env_override(tmp_path: Path, monkeypatch) -> None:
+    import os as _os
+    import time as _time
+
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    monkeypatch.setenv(fk.CACHE_MAX_AGE_ENV, "60")
+    fk.reset_caches()
+    spec_dir = _spec_dir(tmp_path)
+    spec_dir.mkdir(mode=0o700, parents=True)
+    stale = spec_dir / "spec-env-deadbeefdeadbeef.json"
+    stale.write_text("{}")
+    old = _time.time() - 120  # older than the 60s override, younger than the 3-day default
+    _os.utime(stale, (old, old))
+
+    fk._write_cached("payload", "spec-new")
+
+    assert not stale.exists()
+
+
+def test_cache_hit_refreshes_mtime(tmp_path: Path, monkeypatch) -> None:
+    import os as _os
+    import time as _time
+
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    path = Path(fk._write_cached("same-payload", "spec-hit"))
+    old = _time.time() - 2 * 86400  # within the 3-day default, but visibly "old"
+    _os.utime(path, (old, old))
+
+    fk._write_cached("same-payload", "spec-hit")  # identical payload -> same digest -> HIT
+
+    assert _time.time() - path.stat().st_mtime < 5
+
+
+def test_cache_eviction_is_rate_limited(tmp_path: Path, monkeypatch) -> None:
+    import os as _os
+    import time as _time
+
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    # First write primes the per-process eviction timer.
+    fk._write_cached("first", "spec-prime")
+    spec_dir = _spec_dir(tmp_path)
+    stale = spec_dir / "spec-y-staleafterprime0000.json"
+    stale.write_text("{}")
+    old = _time.time() - 4 * 86400
+    _os.utime(stale, (old, old))
+
+    # Second write lands inside the rate-limit window: eviction must not re-run.
+    fk._write_cached("second", "spec-next")
+
+    assert stale.exists()
+
+
+def test_evicted_cache_path_is_rebuilt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    roots = kf.fence_roots()
+    path1 = fk.hook_roots_file(roots)
+    Path(path1).unlink()  # simulate eviction removing the file from under the in-memory cache
+
+    path2 = fk.hook_roots_file(roots)
+
+    assert path2 == path1
+    assert Path(path2).is_file()

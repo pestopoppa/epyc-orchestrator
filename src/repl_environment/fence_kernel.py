@@ -56,6 +56,7 @@ import platform
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -65,6 +66,10 @@ LANDLOCK = "landlock"
 MOUNTNS = "mountns"
 HOOK_ONLY = "hook-only"
 ENFORCEMENT_ENV = "EPYC_EVAL_FENCE_ENFORCEMENT"  # tests / operator pin: landlock|mountns|hook-only
+CACHE_MAX_AGE_ENV = "EPYC_EVAL_FENCE_CACHE_MAX_AGE_S"  # eviction age for *.json spec files
+_CACHE_MAX_AGE_DEFAULT_S = 3 * 86400  # 3 days
+_CACHE_TMP_MAX_AGE_S = 3600  # stale *.tmp (crashed write) eviction age
+_CACHE_EVICTION_INTERVAL_S = 3600  # rate limit: at most once per hour per process
 
 KIND_FULL, KIND_DIR_ONLY, KIND_FILE = 1, 2, 3
 VOLATILE_DIRS = ("/dev/shm", "/tmp", "/run", "/var/tmp")
@@ -112,6 +117,7 @@ _lock = threading.Lock()
 _probe_cache: dict[str, str] = {}
 _spec_cache: dict[str, Any] = {"roots": None, "mode": None, "path": None}
 _roots_file_cache: dict[str, Any] = {}
+_last_cache_eviction_at: float | None = None  # monotonic clock, guarded by _lock
 
 
 # ── probing ──────────────────────────────────────────────────────────────
@@ -176,10 +182,12 @@ def probe_enforcement() -> str:
 
 
 def reset_caches() -> None:
+    global _last_cache_eviction_at
     with _lock:
         _probe_cache.clear()
         _spec_cache.update(roots=None, mode=None, path=None)
         _roots_file_cache.clear()
+        _last_cache_eviction_at = None
 
 
 # ── fenced set with mount aliases ────────────────────────────────────────
@@ -332,6 +340,57 @@ def hook_roots_file(roots: Any) -> str:
     return path
 
 
+def _maybe_evict_stale_cache_entries(spec_dir: Path) -> None:
+    """Age-based eviction of old cache files in ``spec_dir``.
+
+    Rate-limited to once per hour per process (tracked under ``_lock``) so a
+    hot path calling ``_write_cached`` repeatedly does not re-scan the
+    directory every call. Deletes ``*.json`` files older than
+    ``EPYC_EVAL_FENCE_CACHE_MAX_AGE_S`` (default 3 days) and stale ``*.tmp``
+    files (a crashed write that never reached ``os.replace``) older than 1 h.
+
+    Never follows symlinks and never touches a path outside ``spec_dir``.
+    Must never raise: a race with another process, or a permission error on
+    one file, is swallowed per-file so eviction can never fail the caller
+    that triggered it.
+    """
+    global _last_cache_eviction_at
+    now_monotonic = time.monotonic()
+    with _lock:
+        last = _last_cache_eviction_at
+        if last is not None and now_monotonic - last < _CACHE_EVICTION_INTERVAL_S:
+            return
+        _last_cache_eviction_at = now_monotonic
+    try:
+        max_age_s = float(os.environ.get(CACHE_MAX_AGE_ENV, _CACHE_MAX_AGE_DEFAULT_S))
+    except (TypeError, ValueError):
+        max_age_s = _CACHE_MAX_AGE_DEFAULT_S
+    now = time.time()
+    try:
+        entries = list(os.scandir(spec_dir))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_symlink():
+                continue
+            if entry.name.endswith(".json"):
+                max_age = max_age_s
+            elif entry.name.endswith(".tmp"):
+                max_age = _CACHE_TMP_MAX_AGE_S
+            else:
+                continue
+            mtime = entry.stat(follow_symlinks=False).st_mtime
+            if now - mtime <= max_age:
+                continue
+            os.unlink(entry.path)
+        except OSError:
+            # Another process may have raced us to the same file, or lacks
+            # permission; eviction is best-effort and must never fail the
+            # caller.
+            continue
+
+
 def _write_cached(payload: str, kind: str) -> str:
     digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
     # Pinned to /tmp, never tempfile.gettempdir(): the API runs with
@@ -340,8 +399,16 @@ def _write_cached(payload: str, kind: str) -> str:
     # restricted child. /tmp is volatile, never fenced, and granted in full.
     spec_dir = Path(SCRATCH_ROOT) / f"epyc-eval-fence-{os.getuid()}"
     spec_dir.mkdir(mode=0o700, exist_ok=True)
+    _maybe_evict_stale_cache_entries(spec_dir)
     path = spec_dir / f"{kind}-{digest}.json"
-    if not path.exists():
+    if path.exists():
+        # Cache HIT: refresh mtime so a file in active use never ages out from
+        # under a caller still holding its path.
+        try:
+            os.utime(path, None)
+        except OSError:
+            pass
+    else:
         tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
         tmp.write_text(payload, encoding="utf-8")
         os.replace(tmp, path)
