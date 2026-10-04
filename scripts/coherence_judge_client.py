@@ -20,6 +20,10 @@ load it by PATH under ``python -I`` without importing the orchestrator package::
 UTF-8 byte offset of the first divergence, which steers the excerpt of an output above
 ``max_judged_tokens``), or a ``(prompt, base, candidate)`` tuple. ``Verdict.excerpted`` is
 True when the judge saw an excerpt; the spans are in ``Verdict.raw["excerpt"]``.
+``excerpt_mode="embed_drift"`` asks for embedder-pool drift selection instead of the
+default ``head_tail_divergence``; ``Verdict.excerpt_mode`` is the mode actually USED (the
+server falls back to the default when the pool cannot embed, and says why in
+``raw["excerpt"]["fallback"]``).
 
 Contract for the gate:
 
@@ -91,6 +95,7 @@ class Verdict:
     scoring_mode: str | None = None
     build: str | None = None
     excerpted: bool = False
+    excerpt_mode: str | None = None
     raw: dict = field(default_factory=dict, compare=False, repr=False)
 
     def to_dict(self) -> dict:
@@ -148,6 +153,7 @@ def make_judge_fn(
     timeout_s: float = 600.0,
     post: PostFn | None = None,
     max_judged_tokens: int | None = None,
+    excerpt_mode: str = "head_tail_divergence",
 ) -> Callable[[Any], Verdict]:
     """Build ``judge_fn(item_pair) -> Verdict`` bound to one judge identity."""
     endpoint = url.rstrip("/") + ENDPOINT
@@ -170,6 +176,7 @@ def make_judge_fn(
             "caller": caller,
             "divergence_offset": int(divergence) if divergence is not None else None,
             "max_judged_tokens": max_judged_tokens,
+            "excerpt_mode": excerpt_mode,
         }
         status, payload = send(endpoint, body, timeout_s)
         if status != 200:
@@ -199,6 +206,7 @@ def make_judge_fn(
             scoring_mode=payload.get("scoring_mode"),
             build=payload.get("build"),
             excerpted=bool((payload.get("excerpt") or {}).get("excerpted")),
+            excerpt_mode=(payload.get("excerpt") or {}).get("mode_used"),
             raw=payload,
         )
 
@@ -215,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-uncalibrated", action="store_true")
     parser.add_argument("--caller", default="cli")
     parser.add_argument("--timeout-s", type=float, default=600.0)
+    parser.add_argument("--excerpt-mode", default="head_tail_divergence",
+                        choices=("head_tail_divergence", "embed_drift"))
     try:
         args = parser.parse_args(argv)
     except SystemExit:
@@ -229,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_uncalibrated=args.allow_uncalibrated,
         caller=args.caller,
         timeout_s=args.timeout_s,
+        excerpt_mode=args.excerpt_mode,
     )
     try:
         verdict = judge_fn(pair)

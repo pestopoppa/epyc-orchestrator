@@ -13,7 +13,10 @@ Request::
      "scoring": "auto" | "native" | "json", "allow_uncalibrated": bool,
      "caller": str | null,
      "divergence_offset": int | null,   # tier 0's UTF-8 byte offset of the first divergence
-     "max_judged_tokens": int | null}   # per-output cap; above it the output is excerpted
+     "max_judged_tokens": int | null,   # per-output cap; above it the output is excerpted
+     "excerpt_mode": "head_tail_divergence" (default) | "embed_drift"}
+                                         # embed_drift: embedder-pool drift selection; falls
+                                         # back to the default, recorded in excerpt.fallback
 
 200 -> the verdict object (``JudgeVerdict.to_dict``). Refusals carry
 ``{"error": {"type", "message", "retry_after_s", "detail"?}}``:
@@ -68,6 +71,7 @@ class CoherenceJudgeBody(BaseModel):
     caller: str | None = Field(None, max_length=200)
     divergence_offset: int | None = Field(None, ge=0)
     max_judged_tokens: int | None = Field(None, ge=64, le=32768)
+    excerpt_mode: str = Field("head_tail_divergence", max_length=64)
 
 
 def _enabled() -> bool:

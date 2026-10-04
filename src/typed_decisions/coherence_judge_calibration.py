@@ -65,6 +65,21 @@ excerpt counts, rolled up over the run.
         --backend local --model worker_general --scoring json [--dry-run]
     python -m src.typed_decisions.coherence_judge_calibration run --set <set.jsonl> \
         --backend local:champion_sidecar --scoring native --in-process
+
+Excerpt-mode A/B (``excerpt_mode`` is part of the judge key, so each arm seals its own
+record): run the SAME set twice with the same ``--max-judged-tokens``, once per
+``--excerpt-mode head_tail_divergence|embed_drift``, and compare ``accuracy_pass_fail``,
+``serving_rollup.judged_tokens_*``, ``prompt_ms_*``, ``prefix_reuse_rate`` (embed_drift's
+base excerpt depends on the candidate) and ``embed_ms_*``. An embed_drift row the server
+judged in the fallback mode is an ``identity_mismatch`` (never sealed under embed_drift);
+``serving_rollup.excerpt_fallbacks`` counts why. The light set's outputs are mostly under
+the default 1536-token cap (judged whole in both modes), so the A/B only discriminates
+with a low cap (its outputs are <= ~250 tokens: ``--max-judged-tokens 128``) or a
+long-output set.
+
+    python -m src.typed_decisions.coherence_judge_calibration run --set <set.jsonl> \
+        --backend local:champion_sidecar --scoring native --in-process \
+        --excerpt-mode embed_drift --max-judged-tokens 128   # in-process: REPL_EMBEDDING_POOL=1
 """
 
 from __future__ import annotations
@@ -85,6 +100,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 from src.typed_decisions.coherence_judge import (
     AUTO_BACKEND,
+    DEFAULT_EXCERPT_MODE,
+    EXCERPT_MODES,
     JUDGE_VERSION,
     PASS_VERDICT,
     SIDECAR_BACKEND,
@@ -333,7 +350,8 @@ JudgeCall = Callable[[Mapping[str, Any]], tuple[int, dict[str, Any]]]
 _ABORT_KINDS = ("measurement_window_held", "role_parked", "sidecar_unavailable", "sidecar_not_champion")
 
 
-def _request_body(item: Mapping[str, Any], *, backend: str, model: str | None, scoring: str, set_id: str) -> dict[str, Any]:
+def _request_body(item: Mapping[str, Any], *, backend: str, model: str | None, scoring: str, set_id: str,
+                  excerpt_mode: str = DEFAULT_EXCERPT_MODE, max_judged_tokens: int | None = None) -> dict[str, Any]:
     return {
         "prompt": item["prompt"],
         "base_output": item["base_output"],
@@ -343,14 +361,18 @@ def _request_body(item: Mapping[str, Any], *, backend: str, model: str | None, s
         "scoring": scoring,
         "allow_uncalibrated": True,
         "caller": f"calibration:{set_id}",
+        "excerpt_mode": excerpt_mode,
+        "max_judged_tokens": max_judged_tokens,
     }
 
 
-def http_judge_call(url: str, *, backend: str, model: str | None, scoring: str, set_id: str, timeout_s: float = 600.0) -> JudgeCall:
+def http_judge_call(url: str, *, backend: str, model: str | None, scoring: str, set_id: str, timeout_s: float = 600.0,
+                    excerpt_mode: str = DEFAULT_EXCERPT_MODE, max_judged_tokens: int | None = None) -> JudgeCall:
     endpoint = url.rstrip("/") + "/v1/typed/coherence_judge"
 
     def call(item: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
-        body = _request_body(item, backend=backend, model=model, scoring=scoring, set_id=set_id)
+        body = _request_body(item, backend=backend, model=model, scoring=scoring, set_id=set_id,
+                             excerpt_mode=excerpt_mode, max_judged_tokens=max_judged_tokens)
         request = urllib.request.Request(endpoint, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(request, timeout=timeout_s) as resp:
@@ -364,14 +386,17 @@ def http_judge_call(url: str, *, backend: str, model: str | None, scoring: str, 
     return call
 
 
-def in_process_judge_call(*, backend: str, model: str | None, scoring: str, set_id: str, judge: Any = None) -> JudgeCall:
+def in_process_judge_call(*, backend: str, model: str | None, scoring: str, set_id: str, judge: Any = None,
+                          excerpt_mode: str = DEFAULT_EXCERPT_MODE, max_judged_tokens: int | None = None) -> JudgeCall:
     from src.typed_decisions.coherence_judge import CoherenceJudge, JudgeFailed, JudgeRefused, JudgeRequest
 
     judge = judge or CoherenceJudge()
 
     def call(item: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
         try:
-            verdict = judge.judge(JudgeRequest(**_request_body(item, backend=backend, model=model, scoring=scoring, set_id=set_id)))
+            verdict = judge.judge(JudgeRequest(**_request_body(
+                item, backend=backend, model=model, scoring=scoring, set_id=set_id,
+                excerpt_mode=excerpt_mode, max_judged_tokens=max_judged_tokens)))
         except JudgeRefused as exc:
             return exc.status_code, {"error": exc.to_dict()}
         except JudgeFailed as exc:
@@ -404,6 +429,11 @@ def serving_rollup(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     prompt_ms, prompt_n, cache_n = nums("prompt_ms"), nums("prompt_n"), nums("cache_n")
     judged = [float((v.get("excerpt") or {})["judged_tokens"]) for v in verdicts
               if _is_num((v.get("excerpt") or {}).get("judged_tokens"))]
+    excerpts = [v.get("excerpt") or {} for v in verdicts]
+    embed_ms = [float(e["embed_ms"]) for e in excerpts if _is_num(e.get("embed_ms")) and e.get("embedded_chunks")]
+    # A/B of excerpt modes: identity-mismatch rows (an embed_drift request judged in the
+    # fallback mode) are not in ``rows``' verdicts, so count fallbacks from what came back.
+    returned = [(r.get("returned") or {}).get("excerpt") or {} for r in rows if r.get("returned")]
     total_prompt = sum(prompt_n) + sum(cache_n)
     return {
         "n_calls": len(verdicts),
@@ -417,6 +447,13 @@ def serving_rollup(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "judged_tokens_total": int(sum(judged)) if judged else None,
         "judged_tokens_mean": round(sum(judged) / len(judged), 1) if judged else None,
         "n_excerpted": sum(1 for v in verdicts if (v.get("excerpt") or {}).get("excerpted")),
+        "excerpt_modes_used": dict(Counter(str(e.get("mode_used") or DEFAULT_EXCERPT_MODE) for e in excerpts)),
+        "embedded_chunks_total": sum(int(e.get("embedded_chunks") or 0) for e in excerpts),
+        "embed_ms_total": round(sum(embed_ms), 3) if embed_ms else None,
+        "embed_ms_median": round(_median(embed_ms), 3) if embed_ms else None,
+        "excerpt_fallbacks": dict(Counter(
+            str((e.get("fallback") or {}).get("reason")) for e in excerpts + returned if e.get("fallback")
+        )),
     }
 
 
@@ -467,6 +504,7 @@ def run_calibration(
     backend: str,
     model: str | None,
     scoring: str,
+    excerpt_mode: str = DEFAULT_EXCERPT_MODE,
 ) -> dict[str, Any]:
     """Score every item once and persist each row; seal one record per judge_key."""
     if backend == AUTO_BACKEND:
@@ -481,10 +519,17 @@ def run_calibration(
             error = body.get("error") if isinstance(body, dict) else None
             if status == 200 and not error and isinstance(body, dict):
                 got = (body.get("backend"), body.get("scoring_mode"))
+                got_excerpt = (body.get("excerpt") or {}).get("mode_used") or DEFAULT_EXCERPT_MODE
                 if got != (backend, scoring):
                     # e.g. an auto native->json fallback: never sealed under the wrong identity.
                     error = {"type": "identity_mismatch",
                              "message": f"verdict on backend={got[0]} scoring={got[1]}, requested {backend}/{scoring}"}
+                elif got_excerpt != excerpt_mode:
+                    # an embed_drift request judged in the fallback mode (pool down/busy).
+                    fb = ((body.get("excerpt") or {}).get("fallback") or {}).get("reason")
+                    error = {"type": "identity_mismatch",
+                             "message": f"verdict judged with excerpt_mode={got_excerpt} (fallback: {fb}), "
+                                        f"requested {excerpt_mode}"}
             row = {
                 "id": item["id"],
                 "category": item["category"],
@@ -526,8 +571,9 @@ def run_calibration(
                     "served_model": sample.get("served_model"),
                     "build": sample.get("build"),
                     "scoring_mode": sample.get("scoring_mode"),
+                    "excerpt_mode": (sample.get("excerpt") or {}).get("mode_used") or DEFAULT_EXCERPT_MODE,
                 },
-                "requested": {"backend": backend, "model": model, "scoring": scoring},
+                "requested": {"backend": backend, "model": model, "scoring": scoring, "excerpt_mode": excerpt_mode},
                 "set": {"set_id": set_id, "sha256": set_sha256, "n": len(items)},
                 "rule": {"min_pass_fail_accuracy": MIN_PASS_FAIL_ACCURACY, "no_garbage_pass": list(GARBAGE_CATEGORIES)},
                 **result,
@@ -543,6 +589,7 @@ def run_calibration(
                 "judge_key": key,
                 "build": sample.get("build"),
                 "scoring_mode": sample.get("scoring_mode"),
+                "excerpt_mode": (sample.get("excerpt") or {}).get("mode_used") or DEFAULT_EXCERPT_MODE,
                 "passed": record["passed"],
                 "accuracy_pass_fail": record["metrics"]["accuracy_pass_fail"],
                 "path": str(path),
@@ -573,6 +620,12 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument("--in-process", action="store_true", help=f"cloud backends and {SIDECAR_BACKEND} only")
     r.add_argument("--out-dir", type=Path, default=None)
     r.add_argument("--dry-run", action="store_true")
+    r.add_argument("--excerpt-mode", choices=EXCERPT_MODES, default=DEFAULT_EXCERPT_MODE,
+                   help="A/B the excerpt modes: run once per mode on the same set; embed_drift rows judged "
+                        "in the fallback mode are identity_mismatch (never sealed) and counted in "
+                        "serving_rollup.excerpt_fallbacks. In-process embed_drift needs REPL_EMBEDDING_POOL=1.")
+    r.add_argument("--max-judged-tokens", type=int, default=None,
+                   help="per-output judged-token cap for every row (same value for both A/B arms)")
     return parser
 
 
@@ -595,7 +648,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         out = {"dry_run": True, "set_id": set_id, "set_sha256": set_sha, "n": len(items),
                "categories": dict(Counter(i["category"] for i in items)), "backend": args.backend,
-               "model": args.model, "scoring": args.scoring, "judge_version": JUDGE_VERSION,
+               "model": args.model, "scoring": args.scoring, "excerpt_mode": args.excerpt_mode,
+               "max_judged_tokens": args.max_judged_tokens, "judge_version": JUDGE_VERSION,
                "prompt_template_sha256": prompt_template_sha256()}
         if args.backend == SIDECAR_BACKEND:  # /health + /props only, no inference
             from src.typed_decisions.coherence_judge_sidecar import probe_sidecar
@@ -604,10 +658,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(out, indent=2))
         return 0
     out_dir = args.out_dir or DEFAULT_RUN_DIR / f"{set_id}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
-    kwargs = dict(backend=args.backend, model=args.model, scoring=args.scoring, set_id=set_id)
+    kwargs = dict(backend=args.backend, model=args.model, scoring=args.scoring, set_id=set_id,
+                  excerpt_mode=args.excerpt_mode, max_judged_tokens=args.max_judged_tokens)
     call = in_process_judge_call(**kwargs) if args.in_process else http_judge_call(args.url, **kwargs)
     summary = run_calibration(items, set_sha256=set_sha, set_id=set_id, call=call, out_dir=out_dir,
-                              backend=args.backend, model=args.model, scoring=args.scoring)
+                              backend=args.backend, model=args.model, scoring=args.scoring,
+                              excerpt_mode=args.excerpt_mode)
     print(json.dumps(summary, indent=2))
     if summary["aborted"]:
         return 3
