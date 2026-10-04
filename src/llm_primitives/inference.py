@@ -1138,6 +1138,9 @@ class InferenceMixin:
             "gen_ms": result.generation_ms,
             "overhead_ms": result.http_overhead_ms,
             "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
+            # The server's own prompt accounting (None = not reported; never estimated).
+            "server_prompt_tokens": getattr(result, "prompt_tokens", None),
+            "server_cache_n": getattr(result, "cached_prompt_tokens", None),
         }
         server_timings = getattr(result, "timings", None)
         if isinstance(server_timings, dict):
@@ -1814,6 +1817,10 @@ class InferenceMixin:
                 "completion_probabilities": list(
                     getattr(result, "completion_probabilities", []) or []
                 ),
+                # The server's own prompt accounting (None = not reported; never
+                # estimated): total prompt tokens and, of those, the KV-cache hits.
+                "server_prompt_tokens": getattr(result, "prompt_tokens", None),
+                "server_cache_n": getattr(result, "cached_prompt_tokens", None),
             }
             server_timings = getattr(result, "timings", None)
             if isinstance(server_timings, dict):
