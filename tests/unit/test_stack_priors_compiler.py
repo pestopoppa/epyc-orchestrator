@@ -1805,7 +1805,7 @@ def test_draft_kv_types_prior_reads_only_serving_shape(server_cfg, expected) -> 
 
 
 @pytest.fixture
-def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """Owned path metadata for pure compilation; no binary or store evidence."""
     import subprocess
     from src.registry import kernel_paths
@@ -1821,8 +1821,19 @@ def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             raise AssertionError(f"unexpected metadata backend: {backend!r}")
         return directories[backend]
 
+    original_popen = subprocess.Popen
+    provenance_children = []
+    expected_git = ["git", "-C", str(Path(__file__).resolve().parents[2]),
+                    "rev-parse", "--short", "HEAD"]
+    expected_options = {"text": True, "stderr": subprocess.DEVNULL,
+                        "stdout": subprocess.PIPE}
+
     def refuse_child(*args, **kwargs):
-        raise AssertionError("pure metadata fixture must not create a child process")
+        if len(args) != 1 or args[0] != expected_git or kwargs != expected_options:
+            raise AssertionError("pure metadata fixture permits only readonly Git provenance")
+        child = original_popen(*args, **kwargs)
+        provenance_children.append(child)
+        return child
 
     monkeypatch.setattr(kernel_paths, "backend_dir", declared_backend_dir)
     # Preserve real CPU [] and GPU vendor-path library policy.
@@ -1835,5 +1846,9 @@ def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(kernel_paths, "server_binary", declared_server_binary)
     yield directories
+    compiler_consumers = ('test_compile_default_does_not_probe_realized_fleet', 'test_compile_maps_model_role_server_binding', 'test_compile_prefers_server_mode_for_shared_role_memory_and_serving', 'test_compile_prefers_server_mode_launch_requirement_paths', 'test_compile_preserves_conflicts_as_gaps_when_allowed', 'test_compile_projects_ctx_model_max_and_policy_hints', 'test_compile_require_realized_mode_derives_quarter_lineup', 'test_compile_shared_aliases_use_runtime_descriptor', 'test_compile_uses_stack_manifest_when_server_mode_is_absent')
+    if request.node.originalname in compiler_consumers:
+        assert provenance_children, "compiler consumer did not capture readonly Git provenance"
+    assert all(child.poll() == 0 for child in provenance_children)
     for directory in directories.values():
         assert not list(directory.iterdir()), "metadata fixture acquired a binary or output"
