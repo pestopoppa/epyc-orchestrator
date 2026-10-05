@@ -603,6 +603,24 @@ def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         provenance_children.append(child)
         return child
 
+    # Observe the real compiler refusal before renderer degradation hides it.
+    import functools
+    import traceback
+    from src.registry import stack_priors
+    original_compile = stack_priors.compile_stack_priors
+
+    @functools.wraps(original_compile)
+    def record_compile_refusal(*args, **kwargs):
+        try:
+            return original_compile(*args, **kwargs)
+        except Exception:
+            diagnostic = traceback.format_exc()
+            (tmp_path / "original-compiler-refusal.txt").write_text(diagnostic)
+            print("NI68 ORIGINAL COMPILER REFUSAL\n" + diagnostic, file=sys.stderr)
+            raise
+
+    monkeypatch.setattr(stack_priors, "compile_stack_priors", record_compile_refusal)
+
     monkeypatch.setattr(kernel_paths, "backend_dir", declared_backend_dir)
     # Preserve real CPU [] and GPU vendor-path library policy.
     monkeypatch.setattr(subprocess, "Popen", refuse_child)
