@@ -588,12 +588,26 @@ def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             raise AssertionError(f"unexpected metadata backend: {backend!r}")
         return directories[backend]
 
+    original_popen = subprocess.Popen
+    provenance_children = []
+    expected_git = ["git", "-C", str(Path(__file__).resolve().parents[2]),
+                    "rev-parse", "--short", "HEAD"]
+    expected_options = {"text": True, "stderr": subprocess.DEVNULL,
+                        "stdout": subprocess.PIPE}
+
     def refuse_child(*args, **kwargs):
-        raise AssertionError("pure metadata fixture must not create a child process")
+        # Exact check_output contract: no executable/env/shell or creation flags.
+        if len(args) != 1 or args[0] != expected_git or kwargs != expected_options:
+            raise AssertionError("pure metadata fixture permits only readonly Git provenance")
+        child = original_popen(*args, **kwargs)
+        provenance_children.append(child)
+        return child
 
     monkeypatch.setattr(kernel_paths, "backend_dir", declared_backend_dir)
     # Preserve real CPU [] and GPU vendor-path library policy.
     monkeypatch.setattr(subprocess, "Popen", refuse_child)
     yield directories
+    assert provenance_children, "missing actual Git provenance read"
+    assert all(child.poll() == 0 for child in provenance_children)
     for directory in directories.values():
         assert not list(directory.iterdir()), "metadata fixture acquired a binary or output"
