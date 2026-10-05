@@ -1,0 +1,204 @@
+name: NI52 GitNexus dependency-lock preparation
+
+on:
+  push:
+    branches:
+      - codex/ni52-gitnexus-lock-prep-20261005
+    paths:
+      - .github/workflows/ni52-gitnexus-lock-prep.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ni52-gitnexus-lock-prep-20261005
+  cancel-in-progress: false
+
+jobs:
+  lock-prep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      NI52_SOURCE_SHA: c8851695cc6ae46845c06b9f60402e687f1698ec
+      NI52_WORKFLOW_PATH: .github/workflows/ni52-gitnexus-lock-prep.yml
+      NI52_WRAPPER_SHA256: ceffa0e215a363c49b74445ecd2db3818b0fbe6c4d9152f993196412ad57e894
+    steps:
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Pin Node and npm runtime
+        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 22.14.0
+          check-latest: false
+
+      - name: Establish isolated capture and verify exact source/recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          NI52_CAPTURE="$RUNNER_TEMP/ni52-gitnexus-lock-prep"
+          NI52_POSTCHECK="$RUNNER_TEMP/ni52-gitnexus-lock-postcheck"
+          NI52_BUS_ROOT="$RUNNER_TEMP/ni52-session-bus"
+          export NI52_CAPTURE NI52_POSTCHECK NI52_BUS_ROOT
+          printf 'NI52_CAPTURE=%s\nNI52_POSTCHECK=%s\nNI52_BUS_ROOT=%s\n' "$NI52_CAPTURE" "$NI52_POSTCHECK" "$NI52_BUS_ROOT" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD^)" = "$NI52_SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          wrapper_sha=$(sha256sum scripts/gitnexus-analyze.sh | cut -d' ' -f1)
+          test "$wrapper_sha" = "$NI52_WRAPPER_SHA256"
+          test -f "$NI52_WORKFLOW_PATH" && test ! -L "$NI52_WORKFLOW_PATH"
+          workflow_sha=$(sha256sum "$NI52_WORKFLOW_PATH" | cut -d' ' -f1)
+          test ! -e "$NI52_CAPTURE" && test ! -L "$NI52_CAPTURE"
+          mkdir -m 700 "$NI52_CAPTURE"
+          test ! -e "$NI52_BUS_ROOT" && test ! -L "$NI52_BUS_ROOT"
+          test "$(node --version)" = v22.14.0
+          test "$(npm --version)" = 10.9.2
+          cat > "$NI52_CAPTURE/context.json" <<JSON
+          {"schema":"ni52.lock_prep_context.v1","source_sha":"$NI52_SOURCE_SHA","wrapper_path":"scripts/gitnexus-analyze.sh","wrapper_sha256":"$wrapper_sha","recipe_sha":"$GITHUB_SHA","workflow_path":"$NI52_WORKFLOW_PATH","workflow_sha256":"$workflow_sha","node_version":"$(node --version)","npm_version":"$(npm --version)","operation":"package-lock-only; no package installation, lifecycle scripts, GitNexus CLI, index, status, or impact","bus_access":"none","bus_path":"$NI52_BUS_ROOT","bus_precheck_absent":true}
+          JSON
+          cp "$NI52_WORKFLOW_PATH" "$NI52_CAPTURE/workflow.yml"
+          cp scripts/gitnexus-analyze.sh "$NI52_CAPTURE/gitnexus-analyze.sh"
+          git status --porcelain=v1 --untracked-files=all > "$NI52_CAPTURE/source-status-before.txt"
+          git rev-parse HEAD > "$NI52_CAPTURE/source-head-before.txt"
+          node --version > "$NI52_CAPTURE/node-version.txt"
+          npm --version > "$NI52_CAPTURE/npm-version.txt"
+          cat /etc/os-release > "$NI52_CAPTURE/os-release.txt"
+          git --version > "$NI52_CAPTURE/git-version.txt"
+
+      - name: Resolve exact npm package graph without installing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/ni52-lock-work"
+          test ! -e "$work" && test ! -L "$work"
+          mkdir -m 700 "$work"
+          cat > "$work/package.json" <<'JSON'
+          {"name":"ni52-gitnexus-lock-prep","version":"1.0.0","private":true,"dependencies":{"gitnexus":"1.6.8"}}
+          JSON
+          cat > "$work/.npmrc" <<'NPMRC'
+          registry=https://registry.npmjs.org/
+          ignore-scripts=true
+          audit=false
+          fund=false
+          NPMRC
+          export NPM_CONFIG_USERCONFIG="$work/.npmrc"
+          cp "$work/package.json" "$NI52_CAPTURE/package.json"
+          cp "$work/.npmrc" "$NI52_CAPTURE/npmrc"
+          curl --fail --silent --show-error --max-time 30 \
+            https://registry.npmjs.org/gitnexus/1.6.8 \
+            --output "$NI52_CAPTURE/gitnexus-1.6.8-registry.json"
+          tarball_url=$(node --input-type=module - "$NI52_CAPTURE/gitnexus-1.6.8-registry.json" <<'NODE'
+          import fs from 'node:fs';
+          const metadata = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (metadata.name !== 'gitnexus' || metadata.version !== '1.6.8') throw new Error('unexpected npm package identity');
+          if (metadata.dist.tarball !== 'https://registry.npmjs.org/gitnexus/-/gitnexus-1.6.8.tgz') throw new Error('unexpected npm tarball URL');
+          if (metadata.dist.integrity !== 'sha512-1PTqr70qfrXP43Z6S7oiD+x4nHLaSEk6YoyYurs+H1Z/Y1Ga4P5D+Ib3M2XnwXYhMjaPqmyq8wgUvx8GTOA2rQ==') throw new Error('npm tarball SRI differs from reviewed registry identity');
+          process.stdout.write(metadata.dist.tarball);
+          NODE
+          )
+          curl --fail --silent --show-error --location --max-time 120 \
+            "$tarball_url" --output "$NI52_CAPTURE/gitnexus-1.6.8.tgz"
+          actual_sri="sha512-$(openssl dgst -sha512 -binary "$NI52_CAPTURE/gitnexus-1.6.8.tgz" | openssl base64 -A)"
+          expected_sri=$(node --input-type=module - "$NI52_CAPTURE/gitnexus-1.6.8-registry.json" <<'NODE'
+          import fs from 'node:fs';
+          const metadata = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          process.stdout.write(metadata.dist.integrity);
+          NODE
+          )
+          test "$actual_sri" = "$expected_sri"
+          tarball_sha256=$(sha256sum "$NI52_CAPTURE/gitnexus-1.6.8.tgz" | cut -d' ' -f1)
+          test "$tarball_sha256" = 9c90be3532671e6f4a94f949816113389798a26c604e61f7953dadaa405ecdd6
+          printf '%s  %s\n' "$tarball_sha256" gitnexus-1.6.8.tgz > "$NI52_CAPTURE/tarball-sha256.txt"
+          printf '%s\n' "$actual_sri" > "$NI52_CAPTURE/tarball-sha512-sri.txt"
+          node --input-type=module - "$work" > "$NI52_CAPTURE/resolver-argv.json" <<'NODE'
+          const prefix = process.argv[2];
+          const timeoutArgv = ['timeout', '--signal=TERM', '--kill-after=15s', '300s', 'npm', 'install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--lockfile-version=3', '--prefix', prefix];
+          const childArgv = ['npm', 'install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--lockfile-version=3', '--prefix', prefix];
+          console.log(JSON.stringify({timeout_argv: timeoutArgv, npm_child_argv: childArgv}));
+          NODE
+          set +e
+          timeout --signal=TERM --kill-after=15s 300s \
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund \
+              --lockfile-version=3 --prefix "$work" \
+              > "$NI52_CAPTURE/npm-lock-generation.stdout" \
+              2> "$NI52_CAPTURE/npm-lock-generation.stderr"
+          resolver_rc=$?
+          set -e
+          package_lock_present=false
+          if [ -f "$work/package-lock.json" ] && [ ! -L "$work/package-lock.json" ]; then
+            cp "$work/package-lock.json" "$NI52_CAPTURE/package-lock.json"
+            package_lock_present=true
+          fi
+          printf '{"schema":"ni52.lock_resolver_status.v1","exit_code":%s,"package_lock_present":%s,"timeout_inner_seconds":300,"timeout_kill_after_seconds":15}\n' \
+            "$resolver_rc" "$package_lock_present" > "$NI52_CAPTURE/resolver-status.json"
+          if [ "$resolver_rc" -ne 0 ]; then
+            exit "$resolver_rc"
+          fi
+          node --input-type=module - "$NI52_CAPTURE/package-lock.json" <<'NODE'
+          import fs from 'node:fs';
+          const lock = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (lock.lockfileVersion !== 3) throw new Error('lockfileVersion must be 3');
+          if (lock.packages?.['']?.dependencies?.gitnexus !== '1.6.8') throw new Error('gitnexus root pin mismatch');
+          const entries = Object.entries(lock.packages ?? {}).filter(([path]) => path !== '');
+          if (!entries.length) throw new Error('empty dependency graph');
+          for (const [path, pkg] of entries) {
+            if (!pkg.resolved || !pkg.resolved.startsWith('https://registry.npmjs.org/')) throw new Error(`unapproved resolution: ${path}`);
+            if (!/^sha512-/.test(pkg.integrity ?? '')) throw new Error(`missing sha512 integrity: ${path}`);
+            if (pkg.link || pkg.inBundle) throw new Error(`linked/bundled dependency not accepted: ${path}`);
+          }
+          console.log(JSON.stringify({lockfileVersion: lock.lockfileVersion, packages: entries.length, allRegistryResolved: true, allSha512Pinned: true}));
+          NODE
+          node --input-type=module - "$NI52_CAPTURE/gitnexus-1.6.8-registry.json" "$NI52_CAPTURE/package-lock.json" > "$NI52_CAPTURE/lock-comparison.json" <<'NODE'
+          import fs from 'node:fs';
+          const metadata = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const lock = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          const gitnexus = lock.packages['node_modules/gitnexus'];
+          if (metadata.version !== '1.6.8') throw new Error('registry package version mismatch');
+          if (metadata.dist.integrity !== gitnexus.integrity) throw new Error('registry/lock integrity mismatch');
+          if (metadata.dist.tarball !== gitnexus.resolved) throw new Error('registry/lock tarball mismatch');
+          console.log(JSON.stringify({name: metadata.name, version: metadata.version, registryIntegrity: metadata.dist.integrity, lockIntegrity: gitnexus.integrity, tarball: metadata.dist.tarball}));
+          NODE
+          sha256sum "$NI52_CAPTURE/package.json" "$NI52_CAPTURE/package-lock.json" \
+            "$NI52_CAPTURE/gitnexus-1.6.8-registry.json" > "$NI52_CAPTURE/sha256sums.txt"
+
+      - name: Upload original lock resolver prefix immediately
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ni52-gitnexus-lock-originals-${{ github.run_id }}
+          path: ${{ runner.temp }}/ni52-gitnexus-lock-prep/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Independently record source and bus postchecks
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$NI52_POSTCHECK" && test ! -L "$NI52_POSTCHECK"
+          mkdir -m 700 "$NI52_POSTCHECK"
+          status=$(git status --porcelain=v1 --untracked-files=all)
+          head=$(git rev-parse HEAD)
+          printf '%s\n' "$status" > "$NI52_POSTCHECK/source-status-after.txt"
+          printf '%s\n' "$head" > "$NI52_POSTCHECK/source-head-after.txt"
+          if [ -e "$NI52_BUS_ROOT" ] || [ -L "$NI52_BUS_ROOT" ]; then
+              printf '{"schema":"ni52.lock_prep_bus_postcheck.v1","bus_absent":false,"bus_not_symlink":%s,"passed":false}\n' "$(test ! -L "$NI52_BUS_ROOT" && echo true || echo false)" > "$NI52_POSTCHECK/bus-postcheck.json"
+              exit 1
+          fi
+          printf '{"schema":"ni52.lock_prep_bus_postcheck.v1","bus_absent":true,"bus_not_symlink":true,"passed":true}\n' > "$NI52_POSTCHECK/bus-postcheck.json"
+          test "$head" = "$GITHUB_SHA"
+          test -z "$status"
+
+      - name: Upload independent lock-prep postchecks
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ni52-gitnexus-lock-postcheck-${{ github.run_id }}
+          path: ${{ runner.temp }}/ni52-gitnexus-lock-postcheck/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
