@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 45
     env:
       NI52_SOURCE_SHA: c8851695cc6ae46845c06b9f60402e687f1698ec
+      NI52_PRIOR_RECIPE_SHA: 3af14cb8dd8cab3d8f9f5594ae678fc7dd7639b4
       NI52_LOCK_RUN_ID: '37352714514'
       NI52_LOCK_ARTIFACT: ni52-gitnexus-lock-originals-37352714514
       NI52_LOCK_SHA256: 734c187820f8e972354dec7aa7519ce37bf0b688530ef83623d8baeb645b448c
@@ -66,7 +67,9 @@ jobs:
           printf 'NI52_CAPTURE=%s\nNI52_NATIVE=%s\nNI52_INDEX=%s\nNI52_POSTCHECK=%s\nNI52_LOCK_DIR=%s\nNI52_PROJECT=%s\nNI52_SOURCE_DIR=%s\nGITNEXUS_HOME=%s\nNI52_BUS_ROOT=%s\n' \
             "$NI52_CAPTURE" "$NI52_NATIVE" "$NI52_INDEX" "$NI52_POSTCHECK" "$NI52_LOCK_DIR" "$NI52_PROJECT" "$NI52_SOURCE_DIR" "$GITNEXUS_HOME" "$NI52_BUS_ROOT" >> "$GITHUB_ENV"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = "$NI52_SOURCE_SHA"
+          test "$(git rev-parse HEAD^)" = "$NI52_PRIOR_RECIPE_SHA"
+          test "$(git rev-parse HEAD^^)" = "$NI52_SOURCE_SHA"
+          test "$(git rev-list --count "$NI52_SOURCE_SHA..HEAD")" = 2
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           test "$(node --version)" = v22.14.0
           test "$(npm --version)" = 10.9.2
@@ -76,6 +79,14 @@ jobs:
           done
           mkdir -m 700 "$NI52_CAPTURE"
           mkdir -m 700 "$NI52_NATIVE" "$NI52_INDEX" "$NI52_PROJECT"
+          git rev-list --reverse "$NI52_SOURCE_SHA..HEAD" > "$NI52_CAPTURE/recipe-commit-chain.txt"
+          while IFS= read -r recipe_commit; do
+            changed_paths=$(git diff-tree --no-commit-id --name-only -r "$recipe_commit" | paste -sd, -)
+            recipe_parent=$(git show -s --format=%P "$recipe_commit")
+            printf '%s\t%s\t%s\n' "$recipe_commit" "$recipe_parent" "$changed_paths" >> "$NI52_CAPTURE/recipe-commit-manifest.tsv"
+            test "$changed_paths" = .github/workflows/ni52-gitnexus-index.yml
+          done < "$NI52_CAPTURE/recipe-commit-chain.txt"
+          git diff --quiet "$NI52_SOURCE_SHA" HEAD -- . ':(exclude).github/workflows/ni52-gitnexus-index.yml'
           git worktree add --detach "$NI52_SOURCE_DIR" "$NI52_SOURCE_SHA" > "$NI52_CAPTURE/source-worktree.stdout" 2> "$NI52_CAPTURE/source-worktree.stderr"
           test "$(git -C "$NI52_SOURCE_DIR" rev-parse HEAD)" = "$NI52_SOURCE_SHA"
           test -z "$(git -C "$NI52_SOURCE_DIR" status --porcelain=v1 --untracked-files=all)"
@@ -83,7 +94,7 @@ jobs:
           wrapper_sha=$(sha256sum "$NI52_SOURCE_DIR/scripts/gitnexus-analyze.sh" | cut -d' ' -f1)
           test "$wrapper_sha" = "$NI52_WRAPPER_SHA256"
           cat > "$NI52_CAPTURE/context.json" <<JSON
-          {"schema":"ni52.index_context.v1","scope":"offline static index of immutable historical source snapshot; not a claim about current origin/main","source_sha":"$NI52_SOURCE_SHA","recipe_sha":"$GITHUB_SHA","recipe_path":".github/workflows/ni52-gitnexus-index.yml","recipe_sha256":"$workflow_sha","wrapper_sha256":"$wrapper_sha","lock_run_id":"$NI52_LOCK_RUN_ID","lock_artifact":"$NI52_LOCK_ARTIFACT","lock_sha256":"$NI52_LOCK_SHA256","registry_metadata_sha256":"$NI52_REGISTRY_METADATA_SHA256","gitnexus_tarball_sha256":"$NI52_GITNEXUS_TARBALL_SHA256","gitnexus_tarball_integrity":"$NI52_GITNEXUS_INTEGRITY","gitnexus_package_json_sha256":"$NI52_GITNEXUS_PACKAGE_JSON_SHA256","gitnexus_cli_sha256":"$NI52_GITNEXUS_CLI_SHA256","gitnexus_repo_manager_sha256":"$NI52_GITNEXUS_REPO_MANAGER_SHA256","node_version":"$(node --version)","npm_version":"$(npm --version)","registry_alias":"$NI52_REGISTRY_ALIAS","GITNEXUS_HOME":"$GITNEXUS_HOME","embeddings":false,"wiki":false,"LLM":false,"host_bus_access":"none","live_process_or_API_observation":false,"index_bundle_uploaded":false,"index_bundle_reason":"bounded outputs are status, metadata, and impacts; exact index is reproducible from pinned source and dependencies"}
+          {"schema":"ni52.index_context.v1","scope":"offline static index of immutable historical source snapshot; not a claim about current origin/main","source_sha":"$NI52_SOURCE_SHA","recipe_sha":"$GITHUB_SHA","prior_recipe_sha":"$NI52_PRIOR_RECIPE_SHA","recipe_history_count":2,"recipe_path":".github/workflows/ni52-gitnexus-index.yml","recipe_sha256":"$workflow_sha","wrapper_sha256":"$wrapper_sha","lock_run_id":"$NI52_LOCK_RUN_ID","lock_artifact":"$NI52_LOCK_ARTIFACT","lock_sha256":"$NI52_LOCK_SHA256","registry_metadata_sha256":"$NI52_REGISTRY_METADATA_SHA256","gitnexus_tarball_sha256":"$NI52_GITNEXUS_TARBALL_SHA256","gitnexus_tarball_integrity":"$NI52_GITNEXUS_INTEGRITY","gitnexus_package_json_sha256":"$NI52_GITNEXUS_PACKAGE_JSON_SHA256","gitnexus_cli_sha256":"$NI52_GITNEXUS_CLI_SHA256","gitnexus_repo_manager_sha256":"$NI52_GITNEXUS_REPO_MANAGER_SHA256","node_version":"$(node --version)","npm_version":"$(npm --version)","registry_alias":"$NI52_REGISTRY_ALIAS","GITNEXUS_HOME":"$GITNEXUS_HOME","embeddings":false,"wiki":false,"LLM":false,"host_bus_access":"none","live_process_or_API_observation":false,"index_bundle_uploaded":false,"index_bundle_reason":"bounded outputs are status, metadata, and impacts; exact index is reproducible from pinned source and dependencies"}
           JSON
           cp .github/workflows/ni52-gitnexus-index.yml "$NI52_CAPTURE/workflow.yml"
           cp "$NI52_SOURCE_DIR/scripts/gitnexus-analyze.sh" "$NI52_CAPTURE/gitnexus-analyze.sh"
@@ -315,7 +326,7 @@ jobs:
           printf '%s\n' '["bash","scripts/gitnexus-analyze.sh","--index-only","--name","ni52-orch-c8851695-20261005","--workers","2"]' > "$NI52_INDEX/analyze-argv.json"
           printf '%s\n' '["<NI52_PROJECT>/node_modules/.bin/gitnexus","status"]' > "$NI52_INDEX/status-argv.json"
           printf '%s\n' '["<NI52_PROJECT>/node_modules/.bin/gitnexus","impact","build_strategy_projection_report","--direction","upstream","--repo","ni52-orch-c8851695-20261005","--depth","3","--limit","100"]' > "$NI52_INDEX/impact-build-strategy-argv.json"
-          printf '%s\n' '["<NI52_PROJECT>/node_modules/.bin/gitnexus","impact","OpenAIChatRequest","--direction","upstream","--repo","ni52-orch-c8851695-20261005","--kind","Class","--depth","3","--limit","100"]' > "$NI52_INDEX/impact-openai-request-argv.json"
+          printf '%s\n' '["<NI52_PROJECT>/node_modules/.bin/gitnexus","impact","--direction","upstream","--repo","ni52-orch-c8851695-20261005","--uid","Class:src/api/models/openai.py:OpenAIChatRequest","--depth","3","--limit","100"]' > "$NI52_INDEX/impact-openai-request-argv.json"
           set +e
           timeout --signal=TERM --kill-after=30s 1200s bash scripts/gitnexus-analyze.sh \
             --index-only --name "$NI52_REGISTRY_ALIAS" --workers 2 \
@@ -328,10 +339,22 @@ jobs:
             --direction upstream --repo "$NI52_REGISTRY_ALIAS" --depth 3 --limit 100 \
             > "$NI52_INDEX/impact-build-strategy.stdout" 2> "$NI52_INDEX/impact-build-strategy.stderr"
           impact_strategy_rc=$?
-          timeout --signal=TERM --kill-after=15s 120s "$cli" impact OpenAIChatRequest \
-            --direction upstream --repo "$NI52_REGISTRY_ALIAS" --kind Class --depth 3 --limit 100 \
+          timeout --signal=TERM --kill-after=15s 120s "$cli" impact \
+            --direction upstream --repo "$NI52_REGISTRY_ALIAS" --uid 'Class:src/api/models/openai.py:OpenAIChatRequest' --depth 3 --limit 100 \
             > "$NI52_INDEX/impact-openai-request.stdout" 2> "$NI52_INDEX/impact-openai-request.stderr"
           impact_request_rc=$?
+          set -e
+          set +e
+          timeout --signal=TERM --kill-after=15s 30s node --input-type=module -e \
+            'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const expected = process.argv[2]; if (["ambiguous", "not_found", "not-found"].includes(result.status)) throw new Error(`impact status is ${result.status}`); if (result.target?.id !== expected) throw new Error(`target mismatch: ${result.target?.id ?? "<missing>"}`); if (result.direction !== "upstream" || result.epistemic !== "exact") throw new Error(`unqualified impact: direction=${result.direction}, epistemic=${result.epistemic}`); process.stdout.write(JSON.stringify({target_id: result.target.id, direction: result.direction, epistemic: result.epistemic, risk: result.risk}) + String.fromCharCode(10));' \
+            "$NI52_INDEX/impact-build-strategy.stdout" 'Function:scripts/autopilot/strategy_projection_report.py:build_strategy_projection_report' \
+            > "$NI52_INDEX/impact-build-strategy-validation.stdout" 2> "$NI52_INDEX/impact-build-strategy-validation.stderr"
+          impact_strategy_validation_rc=$?
+          timeout --signal=TERM --kill-after=15s 30s node --input-type=module -e \
+            'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const expected = process.argv[2]; if (["ambiguous", "not_found", "not-found"].includes(result.status)) throw new Error(`impact status is ${result.status}`); if (result.target?.id !== expected) throw new Error(`target mismatch: ${result.target?.id ?? "<missing>"}`); if (result.direction !== "upstream" || result.epistemic !== "exact") throw new Error(`unqualified impact: direction=${result.direction}, epistemic=${result.epistemic}`); process.stdout.write(JSON.stringify({target_id: result.target.id, direction: result.direction, epistemic: result.epistemic, risk: result.risk}) + String.fromCharCode(10));' \
+            "$NI52_INDEX/impact-openai-request.stdout" 'Class:src/api/models/openai.py:OpenAIChatRequest' \
+            > "$NI52_INDEX/impact-openai-request-validation.stdout" 2> "$NI52_INDEX/impact-openai-request-validation.stderr"
+          impact_request_validation_rc=$?
           set -e
           if [ -f .gitnexus/meta.json ] && [ ! -L .gitnexus/meta.json ]; then cp .gitnexus/meta.json "$NI52_INDEX/meta.json"; fi
           if [ -f "$GITNEXUS_HOME/registry.json" ] && [ ! -L "$GITNEXUS_HOME/registry.json" ]; then cp "$GITNEXUS_HOME/registry.json" "$NI52_INDEX/registry.json"; fi
@@ -364,20 +387,19 @@ jobs:
           meta_rc=10
           if [ -f .gitnexus/meta.json ] && [ ! -L .gitnexus/meta.json ]; then
             set +e
-            timeout --signal=TERM --kill-after=15s 30s node --input-type=module - .gitnexus/meta.json "$NI52_SOURCE_SHA" <<'NODE'
-            import fs from 'node:fs';
-            const meta = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-            const expected = process.argv[3];
-            if (meta.lastCommit !== expected) throw new Error(`index commit mismatch: ${meta.lastCommit}`);
-            console.log(JSON.stringify({lastCommit: meta.lastCommit, indexedAt: meta.indexedAt, stats: meta.stats ?? null}));
-            NODE
+            timeout --signal=TERM --kill-after=15s 30s node --input-type=module -e \
+              'import fs from "node:fs"; const meta = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const expected = process.argv[2]; if (meta.lastCommit !== expected) throw new Error(`index commit mismatch: ${meta.lastCommit}`); process.stdout.write(JSON.stringify({lastCommit: meta.lastCommit, indexedAt: meta.indexedAt, stats: meta.stats ?? null}));' \
+              .gitnexus/meta.json "$NI52_SOURCE_SHA" > "$NI52_INDEX/meta-validation.stdout" 2> "$NI52_INDEX/meta-validation.stderr"
             meta_rc=$?
             set -e
           fi
-          printf '{"schema":"ni52.index_command_status.v1","gitnexus_version":%s,"gitnexus_version_validation":%s,"analyze":%s,"status":%s,"impact_build_strategy_projection_report":%s,"impact_OpenAIChatRequest":%s,"meta_validation":%s,"analyze_timeout_seconds":1200,"analyze_kill_after_seconds":30,"embeddings_flag_passed":false,"wiki_command_run":false}\n' \
-            "$version_rc" "$version_validation_rc" "$analyze_rc" "$status_rc" "$impact_strategy_rc" "$impact_request_rc" "$meta_rc" > "$NI52_INDEX/command-status.json"
+          printf '{"schema":"ni52.index_command_status.v1","gitnexus_version":%s,"gitnexus_version_validation":%s,"analyze":%s,"status":%s,"impact_build_strategy_projection_report":%s,"impact_build_strategy_validation":%s,"impact_OpenAIChatRequest":%s,"impact_OpenAIChatRequest_validation":%s,"meta_validation":%s,"analyze_timeout_seconds":1200,"analyze_kill_after_seconds":30,"embeddings_flag_passed":false,"wiki_command_run":false}\n' \
+            "$version_rc" "$version_validation_rc" "$analyze_rc" "$status_rc" "$impact_strategy_rc" "$impact_strategy_validation_rc" \
+            "$impact_request_rc" "$impact_request_validation_rc" "$meta_rc" > "$NI52_INDEX/command-status.json"
           sha256sum "$NI52_INDEX"/* > "$NI52_INDEX/sha256sums.txt"
-          if [ "$version_rc" -ne 0 ] || [ "$version_validation_rc" -ne 0 ] || [ "$analyze_rc" -ne 0 ] || [ "$status_rc" -ne 0 ] || [ "$impact_strategy_rc" -ne 0 ] || [ "$impact_request_rc" -ne 0 ] || [ "$meta_rc" -ne 0 ] || [ "$lock_after_index_rc" -ne 0 ] || [ "$tool_attestation_rc" -ne 0 ]; then exit 1; fi
+          if [ "$version_rc" -ne 0 ] || [ "$version_validation_rc" -ne 0 ] || [ "$analyze_rc" -ne 0 ] || [ "$status_rc" -ne 0 ] || \
+             [ "$impact_strategy_rc" -ne 0 ] || [ "$impact_strategy_validation_rc" -ne 0 ] || [ "$impact_request_rc" -ne 0 ] || \
+             [ "$impact_request_validation_rc" -ne 0 ] || [ "$meta_rc" -ne 0 ] || [ "$lock_after_index_rc" -ne 0 ] || [ "$tool_attestation_rc" -ne 0 ]; then exit 1; fi
 
       - name: Upload untouched GitNexus analysis originals immediately
         if: always()
