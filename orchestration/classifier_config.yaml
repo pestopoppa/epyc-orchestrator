@@ -107,10 +107,10 @@ routing_classifiers:
       - grep for
       - explore the
       - scan the
-    use_memrl: true  # MemRL-backed mode classification
+    use_memrl: false  # RI-19 branch-only comparison against keyword fallback
 
   specialist_routing:
-    use_memrl: true  # MemRL-backed specialist routing
+    use_memrl: false  # RI-19 branch-only comparison against keyword fallback
     categories:
       coder_escalation:
         keywords:
