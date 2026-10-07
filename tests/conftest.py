@@ -27,10 +27,19 @@ See also:
 
 import json
 import os
+import tempfile
 import warnings
 from unittest.mock import MagicMock
 
 import pytest
+
+# This conftest is loaded before test modules. Set the construction-time logger
+# override before application imports so test-time default loggers stay isolated.
+# Keep this as a literal to avoid importing application modules during pytest setup.
+_PROGRESS_LOG_DIR_ENV = "ORCHESTRATOR_PROGRESS_LOG_DIR"
+_PREVIOUS_PROGRESS_LOG_DIR = os.environ.get(_PROGRESS_LOG_DIR_ENV)
+_TEST_PROGRESS_LOG_TEMP = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-progress-")
+os.environ[_PROGRESS_LOG_DIR_ENV] = _TEST_PROGRESS_LOG_TEMP.name
 
 from src.config import reset_config
 from src.api.state import AppState
@@ -111,6 +120,16 @@ def pytest_configure(config):
                 "psutil not installed - cannot check memory. Install with: pip install psutil",
                 UserWarning,
             )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _restore_progress_log_override_after_suite():
+    """Keep every default ProgressLogger inside this pytest run's temp directory."""
+    yield _TEST_PROGRESS_LOG_TEMP.name
+    if _PREVIOUS_PROGRESS_LOG_DIR is None:
+        os.environ.pop(_PROGRESS_LOG_DIR_ENV, None)
+    else:
+        os.environ[_PROGRESS_LOG_DIR_ENV] = _PREVIOUS_PROGRESS_LOG_DIR
 
 
 @pytest.fixture(scope="session", autouse=True)
