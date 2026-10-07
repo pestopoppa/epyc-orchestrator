@@ -65,6 +65,8 @@ def snapshot(root:Path):
             names=sorted(os.listdir(directory_fd))
             for name in names:
                 rel=f'{prefix}/{name}' if prefix else name
+                if not prefix and name=='run-root-inventory.json':
+                    continue
                 info=os.stat(name,dir_fd=directory_fd,follow_symlinks=False)
                 if stat.S_ISLNK(info.st_mode):
                     target=os.readlink(name,dir_fd=directory_fd)
@@ -295,7 +297,12 @@ def main():
         if junit_present:
             jr=ET.fromstring(read_regular_bytes(junit_path))
             actual={(x.get('classname',''),x.get('name','')) for x in jr.iter('testcase')}
-        expected={(x['classname'],x['name']) for x in cases['cases']}; counts=receipt.get('summary',{}).get('counts') or {}
+        summary=receipt.get('summary')
+        if summary is not None and not isinstance(summary,dict): raise RuntimeError('native receipt summary is not a mapping or NULL')
+        counts=None if summary is None else summary.get('counts')
+        if counts is not None and not isinstance(counts,dict): raise RuntimeError('native receipt summary counts are not a mapping or NULL')
+        counts=counts or {}
+        expected={(x['classname'],x['name']) for x in cases['cases']}
         exact_case_set=None if actual is None else actual==expected and len(actual)==case_count and counts.get('collected')==case_count
         junit_all_passed=None if not counts else counts.get('executed')==case_count and counts.get('passed')==case_count and counts.get('skipped')==0 and counts.get('failure')==0 and counts.get('error')==0
         all_passed=None if outcome is None or exact_case_set is None or junit_all_passed is None else exact_case_set and junit_all_passed
