@@ -1078,8 +1078,21 @@
     }
   ],
   "et13_commit": "034c9f972ce74d7011c481693b1048e3d3bc3d70",
+  "prospective_source_binding": {
+    "vidya_task": "VB-ET13-ROUTING-CONFORMANCE",
+    "parent_task": "ET-13 honest routing buckets (E5 remaining LOWs sweep), handoffs/active/eval-tower-architecture-audit-2026-07-20.md",
+    "source_table_context": "published ET13-ROUTING-SOURCE row in scripts/vidya/adapters/README.md at the bound ROOT commit",
+    "current_table_row_status": "actual ET13 task/source row is published and bound in the exact ROOT context; carrier registry remains the existing ci-fixture-conformance source",
+    "current_carrier_row": {
+      "name": "ci-fixture-conformance",
+      "module": "ci_conformance",
+      "natives": "native_rows",
+      "project": "project_ci_conformance",
+      "task": "VB-CI-CONFORMANCE"
+    }
+  },
   "risk": "ET13 intentionally maps unrecognized/empty/model route IDs to unknown; BSV route-path fingerprint may change. Safety gate thresholds/architect fraction logic unchanged.",
-  "root_carrier": "3de6a10fbadacd346570e5a714708bbf8a094e55",
+  "root_carrier": "72a0d06a251667fe6dc1cdf05ab19313e03f9736",
   "root_context": [
     {
       "git_blob": "d2d7bd90f86cffa23c51db803288641c5c6fe461",
@@ -1110,25 +1123,25 @@
       "size_bytes": 40447
     },
     {
-      "git_blob": "1d444850ce84b429351c0884769bae0b0023d5a5",
+      "git_blob": "aca54a965046c09b7669ee7485e7b101fa16f330",
       "git_mode": "100644",
       "path": "scripts/vidya/ingest_sources.py",
-      "sha256": "a5df8ea9e1bec516f32fa2548e7b9bf71c8c068e041771b7fc226cec3cc0a2a7",
-      "size_bytes": 25488
+      "sha256": "62e2f6ce95ecc92adfe549c8183a8dc4930d0678e976823215191dffd142230d",
+      "size_bytes": 25878
     },
     {
-      "git_blob": "b9e5324995f18d321b798fecff3a26e5434b3b78",
+      "git_blob": "5bea5a7991e6394d6ea711a778c37cbeee68d846",
       "git_mode": "100644",
       "path": "scripts/vidya/adapters/README.md",
-      "sha256": "cb068721ad9cff25725bfc1399d58e78cb7180b3d8562f7a3305665ef0164287",
-      "size_bytes": 254503
+      "sha256": "743ad79d89a1af35d526444fbf32aafe9bbd9755fc17d4a1ec10d68d66eb0bb7",
+      "size_bytes": 266063
     },
     {
-      "git_blob": "f7197f5c7be7bb4942b1a19a03d964e05a6b3171",
+      "git_blob": "fbe4911c9e7c296869dac478e7e47bc4f3408d8a",
       "git_mode": "100644",
       "path": "handoffs/active/vidya-belief-substrate-program.md",
-      "sha256": "7c4da9d7c4adda0126d8599d6fc6f30d67f716e5c06ff1ec653dc2fb3d4afa26",
-      "size_bytes": 343531
+      "sha256": "fecd43e52913efa2cca83c91a2388607ed81b03e23f3eed95417a3244e21c16f",
+      "size_bytes": 361221
     },
     {
       "git_blob": "d0963239a623be8b9e15e52eeb2c5f3c2da9413b",
@@ -1136,6 +1149,34 @@
       "path": "tests/vidya/test_ci_conformance.py",
       "sha256": "f1678e74534c39fa8261d412f9fd02ff28fd8b17029ee8c3b02ede4bb97fd115",
       "size_bytes": 17570
+    },
+    {
+      "git_blob": "de0f8cf3d4e3e9c27238e6311622b63c7f8edd01",
+      "git_mode": "100644",
+      "path": "scripts/vidya/lattice.py",
+      "sha256": "a889442eecf1887f5d5a4a1193dc0d7760efb668cf31cda21e1d226ec8b24da2",
+      "size_bytes": 8539
+    },
+    {
+      "git_blob": "47e485d913271b72c9aaf1d9dfb526294ef0fd14",
+      "git_mode": "100644",
+      "path": "scripts/vidya/frames.py",
+      "sha256": "f47f148218ae99d54c51b322bf4f3b0632d4458e49572843f5ed4aa424d15749",
+      "size_bytes": 10240
+    },
+    {
+      "git_blob": "e7c93a39804c3e1cf8107f7801c8c32a23f0b45b",
+      "git_mode": "100644",
+      "path": "scripts/vidya/canonical.py",
+      "sha256": "cda6809d24382cbbfa80308c9f8df4eca353f458039816753b1c20156adf1434",
+      "size_bytes": 5909
+    },
+    {
+      "git_blob": "5617fcc04ed2c41d6a312f500b746571b36726f7",
+      "git_mode": "100644",
+      "path": "handoffs/active/eval-tower-architecture-audit-2026-07-20.md",
+      "sha256": "b5d030d953666c7d66845819a661d28448e150c9cfcfd68b4d14794440e32bf6",
+      "size_bytes": 83176
     }
   ],
   "root_context_files": [
@@ -1146,7 +1187,11 @@
     "scripts/vidya/ingest_sources.py",
     "scripts/vidya/adapters/README.md",
     "handoffs/active/vidya-belief-substrate-program.md",
-    "tests/vidya/test_ci_conformance.py"
+    "tests/vidya/test_ci_conformance.py",
+    "scripts/vidya/lattice.py",
+    "scripts/vidya/frames.py",
+    "scripts/vidya/canonical.py",
+    "handoffs/active/eval-tower-architecture-audit-2026-07-20.md"
   ],
   "runtime_data": [
     "orchestration/model_registry.yaml",

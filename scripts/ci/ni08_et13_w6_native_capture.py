@@ -7,8 +7,8 @@ import xml.etree.ElementTree as ET
 W6_PIN = "ce48ed2c386c2f69d23ad87289e384d7942ee7a5"
 BASE_PIN = W6_PIN  # fresh candidate source is W6 plus the reviewed ET13 two-file patch
 SOURCE_PIN = "73a3f746d152ea983768f938522a944053a5762c"
-ROOT_PIN = "3de6a10fbadacd346570e5a714708bbf8a094e55"
-ROOT_CONTEXT_FILES = ["scripts/ci/native_conformance.py", "scripts/vidya/adapters/__init__.py", "scripts/vidya/adapters/ci_conformance.py", "scripts/vidya/claim_tuple.py", "scripts/vidya/ingest_sources.py", "scripts/vidya/adapters/README.md", "handoffs/active/vidya-belief-substrate-program.md", "tests/vidya/test_ci_conformance.py"]
+ROOT_PIN = "72a0d06a251667fe6dc1cdf05ab19313e03f9736"
+ROOT_CONTEXT_FILES = ["scripts/ci/native_conformance.py", "scripts/vidya/adapters/__init__.py", "scripts/vidya/adapters/ci_conformance.py", "scripts/vidya/claim_tuple.py", "scripts/vidya/ingest_sources.py", "scripts/vidya/adapters/README.md", "handoffs/active/vidya-belief-substrate-program.md", "tests/vidya/test_ci_conformance.py", "scripts/vidya/lattice.py", "scripts/vidya/frames.py", "scripts/vidya/canonical.py", "handoffs/active/eval-tower-architecture-audit-2026-07-20.md"]
 PY_PIN = "3.13.15"
 REQUIREMENT_SEEDS = ["httpx", "math-verify", "pytest", "pyyaml"]
 ENV = {"PYTEST_DISABLE_PLUGIN_AUTOLOAD":"1", "PYTHONDONTWRITEBYTECODE":"1", "PYTHONHASHSEED":"0",
@@ -101,6 +101,9 @@ def main():
         case_count=cases.get('case_count')
         if cases.get('base_commit')!=BASE_PIN or cases.get('w6_commit')!=W6_PIN or cases.get('source_commit')!=SOURCE_PIN or len(cases['cases'])!=case_count: raise RuntimeError('case/source manifest pin/count mismatch')
         if cases.get('root_carrier')!=ROOT_PIN or cases.get('root_context_files')!=ROOT_CONTEXT_FILES: raise RuntimeError('ROOT context identity mismatch')
+        binding=cases.get('prospective_source_binding',{})
+        if binding.get('vidya_task')!='VB-ET13-ROUTING-CONFORMANCE' or binding.get('parent_task')!='ET-13 honest routing buckets (E5 remaining LOWs sweep), handoffs/active/eval-tower-architecture-audit-2026-07-20.md': raise RuntimeError('ET13 owning task binding mismatch')
+        if binding.get('current_table_row_status')!='actual ET13 task/source row is published and bound in the exact ROOT context; carrier registry remains the existing ci-fixture-conformance source': raise RuntimeError('ET13 prospective source-table approval gate missing')
         if git(app,'rev-parse',BASE_PIN+'^{tree}')!=cases.get('base_tree') or subprocess.run(['git','-C',str(app),'merge-base','--is-ancestor',BASE_PIN,'HEAD']).returncode!=0: raise RuntimeError('tested APP is not descended from exact reviewed W6 source')
         if git(app,'rev-parse',SOURCE_PIN+'^{tree}')!=cases.get('source_tree') or subprocess.run(['git','-C',str(app),'merge-base','--is-ancestor',SOURCE_PIN,'HEAD']).returncode!=0: raise RuntimeError('tested APP is not descended from exact reviewed ET13 source')
         inputs=[]
@@ -189,6 +192,7 @@ def main():
             if Path(registry_module.__file__).resolve()!=(carrier/'scripts/vidya/ingest_sources.py').resolve(): raise RuntimeError('ROOT source registry import escaped pinned carrier')
             source=registry_module.SOURCES.get('ci-fixture-conformance')
             if source is None or source.task!='VB-CI-CONFORMANCE' or source.module!='ci_conformance' or source.natives!='native_rows' or source.project!='project_ci_conformance': raise RuntimeError('ROOT CI-conformance registry row differs from the bound VB source')
+            if binding['current_carrier_row']!={'name':source.name,'module':source.module,'natives':source.natives,'project':source.project,'task':source.task}: raise RuntimeError('actual ROOT carrier row differs from prebound source-table context')
             adapter=source.load()
             native_reader=getattr(adapter,source.natives); projector=getattr(adapter,source.project)
             if Path(adapter.__file__).resolve()!=(carrier/'scripts/vidya/adapters/ci_conformance.py').resolve() or Path(claim_tuple_module.__file__).resolve()!=(carrier/'scripts/vidya/claim_tuple.py').resolve(): raise RuntimeError('shared grader import escaped pinned ROOT carrier')
