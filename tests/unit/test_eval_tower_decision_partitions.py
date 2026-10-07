@@ -43,7 +43,13 @@ def test_aggregate_routing_distribution_keeps_unrecognized_routes_unknown() -> N
     ]
     rows = [
         _result_for_question(
-            {"id": f"q{index}", "suite": "math", "route_used": route},
+            {
+                "id": f"q{index}",
+                "suite": "math",
+                "prompt": "2+2?",
+                "expected": "4",
+                "route_used": route,
+            },
             correct=True,
         )
         for index, route in enumerate(routes)
