@@ -48,6 +48,15 @@ class DiscoveredHit:
     score: float = 0.0
 
 
+def _finite_score_or_zero(value) -> float:
+    """Convert one score to a finite float, preserving the existing neutral fallback."""
+    try:
+        score = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return 0.0
+    return score if math.isfinite(score) else 0.0
+
+
 # ─── DCP-2 pass 1: discovery (cheap metadata, no body reads) ─────────────────────
 
 
@@ -77,13 +86,9 @@ def parse_colgrep_json(payload: str | list) -> list[DiscoveredHit]:
         if isinstance(start, int) and isinstance(end, int) and start >= 1 and end >= start:
             ranges = [LineRange(start, end)]
         score = item.get("score", item.get("relevance", item.get("rank_score", 0.0)))
-        try:
-            score = float(score)
-        except (OverflowError, TypeError, ValueError):
-            score = 0.0
-        if not math.isfinite(score):
-            score = 0.0
-        hits.append(DiscoveredHit(path=path, line_ranges=ranges, score=score))
+        hits.append(
+            DiscoveredHit(path=path, line_ranges=ranges, score=_finite_score_or_zero(score))
+        )
     return hits
 
 
@@ -108,14 +113,15 @@ def discover_candidates(
     for h in hits:
         if exclude_by_policy and default_exclusion_reason(h.path) is not None:
             continue
+        score = _finite_score_or_zero(h.score)
         cur = by_path.get(h.path)
         if cur is None:
             by_path[h.path] = DiscoveredHit(
-                path=h.path, line_ranges=list(h.line_ranges), score=h.score
+                path=h.path, line_ranges=list(h.line_ranges), score=score
             )
         else:
             cur.line_ranges.extend(h.line_ranges)
-            cur.score = max(cur.score, h.score)
+            cur.score = max(cur.score, score)
     for h in by_path.values():
         h.line_ranges = merge_line_ranges(h.line_ranges)
     ranked = sorted(by_path.values(), key=lambda h: (-h.score, h.path))

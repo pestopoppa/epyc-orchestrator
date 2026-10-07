@@ -65,6 +65,33 @@ def test_parse_colgrep_json_normalizes_non_finite_or_overflowing_scores(score) -
     assert [hit.path for hit in ranked] == ["ordinary.py", "bad-score.py"]
 
 
+@pytest.mark.parametrize(
+    "score",
+    [float("nan"), float("inf"), float("-inf"), 10**1000],
+    ids=("nan", "positive_infinity", "negative_infinity", "large_integer_overflow"),
+)
+def test_discover_normalizes_non_finite_direct_hits_without_mutating_inputs(score) -> None:
+    bad = DiscoveredHit("same.py", [LineRange(1, 2)], score)
+    finite_duplicate = DiscoveredHit("same.py", [LineRange(5, 6)], 0.1)
+    ordinary = DiscoveredHit("ordinary.py", [LineRange(3, 3)], 0.25)
+    original_hits = (bad, finite_duplicate, ordinary)
+    original_scores = tuple(hit.score for hit in original_hits)
+    original_ranges = tuple(hit.line_ranges for hit in original_hits)
+    original_range_values = tuple(tuple(hit.line_ranges) for hit in original_hits)
+
+    ranked = discover_candidates(
+        "q", code_search_fn=lambda _query, _limit: list(original_hits), max_files=2
+    )
+
+    assert [hit.path for hit in ranked] == ["ordinary.py", "same.py"]
+    same = ranked[1]
+    assert same.score == 0.1
+    assert same.line_ranges == [LineRange(1, 2), LineRange(5, 6)]
+    assert all(hit.score is original for hit, original in zip(original_hits, original_scores))
+    assert all(hit.line_ranges is original for hit, original in zip(original_hits, original_ranges))
+    assert tuple(tuple(hit.line_ranges) for hit in original_hits) == original_range_values
+
+
 # ─── discovery (pass 1) ──────────────────────────────────────────────────────────
 
 
