@@ -792,7 +792,13 @@ class REPLEnvironment(
                 tail_budget = ctx_budget
                 if self._last_spill_summary:
                     # Reserve space for previous summary context
-                    prev_ctx = f"Previous summary:\n{self._last_spill_summary}\n\nNew output (tail):\n"
+                    previous_label = "Previous summary:\n"
+                    output_label = "\n\nNew output (tail):\n"
+                    # An oversized worker reply must not consume or exceed the next
+                    # request's existing context budget. Keep at least one new tail char.
+                    previous_budget = ctx_budget - len(previous_label) - len(output_label) - 1
+                    previous = self._last_spill_summary[:previous_budget]
+                    prev_ctx = previous_label + previous + output_label
                     tail_budget = ctx_budget - len(prev_ctx)
                     ctx = prev_ctx + output[-tail_budget:]
                     prompt = (

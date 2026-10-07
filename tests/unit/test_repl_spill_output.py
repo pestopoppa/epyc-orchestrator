@@ -215,3 +215,36 @@ class TestSpillFooterCallsReadSpillFile:
         assert out.output.strip() == "True"
 
         shutil.rmtree(repl.config.spill_dir, ignore_errors=True)
+
+
+class TestSpillWorkerContextBudget:
+    def test_exact_boundary_previous_summary_does_not_resend_whole_output(self, tmp_path):
+        worker = MagicMock()
+        worker.llm_call.return_value = "updated"
+        repl = _make_repl(output_cap=100, llm_primitives=worker, spill_dir=str(tmp_path))
+        labels = len("Previous summary:\n\nNew output (tail):\n")
+        repl._last_spill_summary = "p" * (4000 - labels)
+        output = "x" * 9000 + "Z"
+        repl._spill_output(output)
+        context = worker.llm_call.call_args.kwargs["context_slice"]
+        assert len(context) == 4000
+        assert context.endswith("Z")
+        assert output not in context
+        assert next((tmp_path / repl._session_id).glob("turn_*.txt")).read_text() == output
+
+    def test_oversized_previous_worker_reply_stays_within_budget(self, tmp_path):
+        worker = MagicMock()
+        worker.llm_call.side_effect = ["p" * 9000, "updated"]
+        repl = _make_repl(output_cap=100, llm_primitives=worker, spill_dir=str(tmp_path))
+        repl._spill_output("a" * 5000)
+        assert repl._last_spill_summary == "p" * 9000
+        output = "b" * 8000 + "Z"
+        repl._spill_output(output)
+        context = worker.llm_call.call_args.kwargs["context_slice"]
+        assert len(context) == 4000
+        assert context.startswith("Previous summary:\n")
+        assert "\n\nNew output (tail):\n" in context
+        assert context.endswith("Z")
+        spills = sorted((tmp_path / repl._session_id).glob("turn_*.txt"))
+        assert spills[0].read_text() == "a" * 5000
+        assert spills[1].read_text() == output
