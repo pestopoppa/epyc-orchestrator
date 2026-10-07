@@ -19,12 +19,45 @@ def _result_for_question(q: dict, *, correct: bool) -> QuestionResult:
         prompt=q["prompt"],
         expected=q["expected"],
         correct=correct,
+        route_used=q.get("route_used", ""),
         tokens_generated=100,
         elapsed_s=1.0,
         eval_concurrency=2,
         eval_wall_s=10.0,
         eval_partition=q.get("eval_partition", "core"),
     )
+
+
+def test_aggregate_routing_distribution_keeps_unrecognized_routes_unknown() -> None:
+    routes = [
+        "frontdoor",
+        " FrontDoor ",
+        "worker_coder",
+        "architect_general",
+        "architect_worker",
+        "qwen3-coder",
+        "",
+        "custom-model",
+        "frontdoor_fallback",
+        "unknown-route",
+    ]
+    rows = [
+        _result_for_question(
+            {"id": f"q{index}", "suite": "math", "route_used": route},
+            correct=True,
+        )
+        for index, route in enumerate(routes)
+    ]
+
+    aggregated = EvalTower()._aggregate(rows, tier=1)
+
+    assert aggregated.routing_distribution == {
+        "frontdoor": 0.2,
+        "worker": 0.1,
+        "architect": 0.2,
+        "unknown": 0.5,
+    }
+    assert [row.route_used for row in rows] == routes
 
 
 def test_t1_excludes_tool_sentinel_from_decision_metrics(monkeypatch) -> None:
