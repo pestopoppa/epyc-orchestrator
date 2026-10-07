@@ -351,7 +351,12 @@ def test_mocked_gui_cli_routes_by_typed_value_not_confidence(confidence: float):
     assert primitives.calls[0]["temperature"] == 0.0
     assert record["worker_error_category"] == ErrorCategory.CODE.value
     assert record["gate_action"] == "WORKER_THINK_HARDER"
-    assert record["q_cat_confidence_recorded_only"] == confidence
+    # The real reader records the categorical margin above uniform, rather
+    # than the emission's top probability or its untrusted confidence field.
+    uniform = 1.0 / len(CATEGORY_OPTIONS)
+    expected_margin = (confidence - uniform) / (1.0 - uniform)
+    assert record["q_cat_confidence_recorded_only"] == pytest.approx(expected_margin)
+    assert record["q_cat_confidence_recorded_only"] != confidence
     assert record["workflow_path"] == [
         ["C0", "F1"], ["F1", "G1"], ["G1", "WORKER"],
         ["WORKER", "V1"], ["V1", "End_success"],
