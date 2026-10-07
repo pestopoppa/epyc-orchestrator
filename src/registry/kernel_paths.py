@@ -20,7 +20,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-KERNEL_ROOT = Path("/mnt/raid0/llm/kernels")
+# ``ORCHESTRATOR_PATHS_KERNEL_ROOT`` names a DIFFERENT store explicitly (read once at
+# import; unset in production). It follows the other ``ORCHESTRATOR_PATHS_*``
+# overrides: an explicit path, never a fallback — a store that does not resolve
+# still raises ``KernelPathError``. Its consumer is the test suite on a machine
+# without the production store (tests/conftest.py).
+KERNEL_ROOT = Path(os.environ.get("ORCHESTRATOR_PATHS_KERNEL_ROOT", "/mnt/raid0/llm/kernels"))
 PRODUCTION_ROOT = KERNEL_ROOT / "production"
 
 # backend -> the server binary that backend provides
