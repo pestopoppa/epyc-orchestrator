@@ -149,13 +149,26 @@ def _filter_verdicts(
     verdicts: list[dict[str, Any]],
     records_by_run: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    return [
+    selected = [
         row
         for row in verdicts
         if row.get("job_id") == job_id
         and _stage_for(row, records_by_run) == stage
         and _is_scored(row)
     ]
+    # The ladder counts logged runs, never repeated verdict rows for one run.
+    # Refuse ambiguous originals rather than picking a first/last verdict.
+    seen: set[str] = set()
+    for row in selected:
+        run_id = row.get("run_id")
+        if not isinstance(run_id, str) or not run_id.strip():
+            raise PromotionError(f"{job_id} {stage} verdict lacks a valid run_id")
+        if run_id in seen:
+            raise PromotionError(f"{job_id} {stage} has duplicate verdicts for run {run_id}")
+        if run_id not in records_by_run:
+            raise PromotionError(f"task_record not found for {job_id}/{run_id}")
+        seen.add(run_id)
+    return selected
 
 
 def _accept_rate(rows: list[dict[str, Any]]) -> float:
