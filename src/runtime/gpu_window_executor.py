@@ -6,7 +6,8 @@ to the coordinator-daemon, holds the ``gpu_device.mi210_0`` flock while it runs,
 releases by dropping that flock. This module runs the sequence, nothing else:
 
 ``open``  (stack-owner session, or an operator token — never a bus message alone)
-    1. refuse unless: expected_end <= now + 60 min; no stack change pending
+    1. refuse unless: expected_end fits the entry's approval and the 3-hour ceiling;
+       no stack change pending
        (machine-readable marker); holder == production and no open lease (one
        window at a time); a valid schedule entry covers the window; the AK device
        flock is free.
@@ -89,7 +90,8 @@ logger = logging.getLogger(__name__)
 MAX_WINDOW_S = 3600
 # Standing approval (operator, 2026-10-06/07): scheduled entries from approved consumers may run
 # up to the policy's max_window_s without a per-entry operator_approved. The code ceiling below
-# bounds whatever the policy file says; anything longer still needs operator_approved + token.
+# bounds every open request; above an entry's cap needs literal operator_approved plus
+# the normal stack-owner-with-grant or operator-token authority.
 STANDING_CEILING_S = 10800
 POLICY_ENV = "ORCHESTRATOR_GPU_WINDOW_POLICY"
 RESTORE_GRACE_S = 600
@@ -803,7 +805,7 @@ class Executor:
                                     f"state={lease.get('state')}")
             entry = resolve_schedule_entry(schedule_path(self.window), schedule_ref, now, end)
             cap = entry_cap_s(entry)
-            if end - now > cap + 5:
+            if end - now > cap + 5 and entry.get("operator_approved") is not True:
                 raise WindowRefused("window_too_long",
                                     f"{end - now:.0f}s > {cap}s for entry {schedule_ref!r}; "
                                     "longer needs the operator")
