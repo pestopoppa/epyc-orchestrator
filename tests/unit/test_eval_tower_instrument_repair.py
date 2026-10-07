@@ -7,6 +7,8 @@ import random
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
@@ -753,9 +755,12 @@ def test_instrument_transition_message_keeps_dataset_drift_loud() -> None:
     assert "old-sha" in message and "new-sha" in message
 
 
-def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
-    tmp_path,
-    monkeypatch,
+@pytest.mark.parametrize(
+    ("core_correct", "audit_correct", "expected_gap"),
+    [(True, False, 3.0), (False, True, -3.0), (True, True, 0.0), (False, False, 0.0)],
+)
+def test_eval_t1_w6_audit_block_reports_core_minus_fresh_without_changing_objective(
+    tmp_path, monkeypatch, core_correct, audit_correct, expected_gap
 ) -> None:
     core_path = tmp_path / "core_v2.jsonl"
     rows = [
@@ -773,6 +778,8 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
     monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
     _authorize_core(monkeypatch, tmp_path)
     tower = EvalTower()
     tower._pool = {
@@ -806,7 +813,7 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
                 suite=q["suite"],
                 prompt=q["prompt"],
                 expected=q["expected"],
-                correct=q["eval_partition"] == "core",
+                correct=core_correct if q["eval_partition"] == "core" else audit_correct,
                 tokens_generated=1,
                 elapsed_s=1.0,
                 eval_partition=q["eval_partition"],
@@ -825,7 +832,7 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
     ]
     assert result.core_id == "core_v2"
     assert result.n_questions == 1
-    assert result.quality == 3.0
+    assert result.quality == (3.0 if core_correct else 0.0)
     assert result.details["base_core_questions"] == 1
     assert result.details["base_audit_questions"] == 2
     assert result.details["audit_policy"]["active"] is True
@@ -836,7 +843,32 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
     assert result.details["audit_shadow_total_n_questions"] == 3
     assert result.details["audit_shadow_decision_n_questions"] == 1
     assert result.details["partition_counts"] == {"core": 1, "audit": 2}
-    assert result.details["partition_quality"] == {"core": 3.0, "audit": 0.0}
+    expected_core = 3.0 if core_correct else 0.0
+    expected_fresh = 3.0 if audit_correct else 0.0
+    assert result.details["partition_quality"] == {
+        "core": expected_core,
+        "audit": expected_fresh,
+    }
+    assert result.details["w6_generalization"] == {
+        "status": "measured",
+        "reason": None,
+        "core_quality": expected_core,
+        "fresh_quality": expected_fresh,
+        "core_quality_denominator_n": 1,
+        "fresh_quality_denominator_n": 2,
+        "quality_denominator_policy": (
+            "scored_and_task_failed; task_failed_scores_zero; "
+            "infra_and_scoring_failures_excluded"
+        ),
+        "core_minus_fresh_quality": expected_gap,
+        "scale": "mean_question_accuracy_0_to_3",
+        "positive_means": "core quality exceeds fresh-audit quality",
+        "comparison_scope": (
+            "descriptive partition difference; core and fresh may have "
+            "different question and suite mixes; not a matched causal "
+            "overfitting estimate"
+        ),
+    }
     assert len(result.question_results) == 3
     audit_rows = [row for row in result.question_results if row["partition"] == "audit"]
     assert {row["suite"] for row in audit_rows} == {"math", "coder"}
@@ -911,7 +943,13 @@ def test_eval_t1_w6_audit_block_can_count_audit_in_decision_metrics(
     assert "audit_shadow_only" not in result.details
 
 
-def test_eval_t1_w6_audit_block_honors_cadence(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("audit_enabled", "expected_reason"),
+    [(True, "trial_not_on_audit_cadence"), (False, "w6_audit_disabled")],
+)
+def test_eval_t1_w6_audit_block_honors_cadence_and_reports_unavailable_reason(
+    tmp_path, monkeypatch, audit_enabled, expected_reason
+) -> None:
     core_path = tmp_path / "core_v2.jsonl"
     rows = [
         {"__core_metadata__": True, "core_id": "core_v2"},
@@ -926,9 +964,15 @@ def test_eval_t1_w6_audit_block_honors_cadence(tmp_path, monkeypatch) -> None:
     core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
     monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
-    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
-    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
-    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", "2")
+    monkeypatch.delenv("AUTOPILOT_W6_AUDIT_BLOCK", raising=False)
+    monkeypatch.delenv("AUTOPILOT_W6_AUDIT_N", raising=False)
+    monkeypatch.delenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", raising=False)
+    monkeypatch.delenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", raising=False)
+    if audit_enabled:
+        monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
+        monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
+        monkeypatch.setenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", "2")
+        monkeypatch.setenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
     _authorize_core(monkeypatch, tmp_path)
 
     captured = []
@@ -956,7 +1000,131 @@ def test_eval_t1_w6_audit_block_honors_cadence(tmp_path, monkeypatch) -> None:
     assert captured == [("core-a", "core")]
     assert result.details["base_audit_questions"] == 0
     assert result.details["audit_policy"]["active"] is False
-    assert result.details["audit_policy"]["skip_reason"] == "trial_not_on_audit_cadence"
+    if audit_enabled:
+        assert result.details["audit_policy"]["skip_reason"] == expected_reason
+    assert result.details["w6_generalization"]["status"] == "unavailable"
+    assert result.details["w6_generalization"]["reason"] == expected_reason
+    assert result.details["w6_generalization"]["core_quality"] == 3.0
+    assert result.details["w6_generalization"]["fresh_quality"] is None
+    assert result.details["w6_generalization"]["core_minus_fresh_quality"] is None
+
+
+def test_eval_t1_w6_audit_block_does_not_promote_empty_fresh_partition_to_zero(
+    tmp_path, monkeypatch
+) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "core_v2"},
+        {
+            "id": "core-a",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+        },
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
+    _authorize_core(monkeypatch, tmp_path)
+    tower = EvalTower()
+    tower._pool = {"math": []}
+    monkeypatch.setattr(tower, "_load_audit_block", lambda *_args: ([], 123))
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+                eval_partition=q["eval_partition"],
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+    result = tower.eval_t1(n=999, seed=123, trial_id=18)
+
+    report = result.details["w6_generalization"]
+    assert result.quality == 3.0
+    assert report["status"] == "unavailable"
+    assert report["reason"] == "fresh_unscored"
+    assert report["core_quality_denominator_n"] == 1
+    assert report["fresh_quality_denominator_n"] == 0
+    assert report["fresh_quality"] is None
+    assert report["core_minus_fresh_quality"] is None
+
+
+def test_eval_t1_w6_audit_block_does_not_promote_unscored_core_to_zero_gap(
+    tmp_path, monkeypatch
+) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "core_v2"},
+        {
+            "id": "core-a",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+        },
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
+    _authorize_core(monkeypatch, tmp_path)
+    tower = EvalTower()
+    tower._pool = {"math": []}
+    audit_question = {
+        "id": "audit-a",
+        "suite": "math",
+        "prompt": "3+4?",
+        "expected": "7",
+        "scoring_method": "exact_match",
+    }
+    monkeypatch.setattr(tower, "_load_audit_block", lambda *_args: ([audit_question], 123))
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=q["eval_partition"] == "audit",
+                error="synthetic transport failure" if q["eval_partition"] == "core" else "",
+                disposition=("infra_failed" if q["eval_partition"] == "core" else "scored"),
+                tokens_generated=1,
+                elapsed_s=1.0,
+                eval_partition=q["eval_partition"],
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+    result = tower.eval_t1(n=999, seed=123, trial_id=18)
+
+    report = result.details["w6_generalization"]
+    assert result.details["quality_measured"] is False
+    assert report["status"] == "unavailable"
+    assert report["reason"] == "core_unscored"
+    assert report["core_quality_denominator_n"] == 0
+    assert report["fresh_quality_denominator_n"] == 1
+    assert report["core_quality"] is None
+    assert report["fresh_quality"] == 3.0
+    assert report["core_minus_fresh_quality"] is None
 
 
 def test_eval_t1_w6_audit_block_requires_trial_id(tmp_path, monkeypatch) -> None:
