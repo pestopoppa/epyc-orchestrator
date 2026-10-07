@@ -31,18 +31,45 @@ from scripts.server.bench_core_claim import (
     BenchClaim,
     BenchObservationError,
     BenchPlacementRefusal,
-    decide_placement,
+    decide_placement as _decide_placement,
     detect_running_cpu_bench,
-    enforce_placement,
+    enforce_placement as _enforce_placement,
     format_cpu_list,
     host_core_set,
     is_bench_process,
     parse_cpu_list,
-    placement_overlaps,
+    placement_overlaps as _placement_overlaps,
+    read_sibling_map,
     read_bench_claim,
 )
 
 BENCH_PROC = ((4242, "python laguna_q4_cpu_bench_runner.py --run"),)
+
+
+def _test_sibling_map() -> dict[int, frozenset[int]]:
+    """Synthetic 2-way topology fixture; production reads kernel sysfs rows."""
+    return {
+        cpu: frozenset({cpu, cpu + 96}) if cpu < 96
+        else frozenset({cpu - 96, cpu})
+        for cpu in range(192)
+    }
+
+
+_TEST_SIBLINGS = _test_sibling_map()
+
+
+def decide_placement(*args, **kwargs):
+    kwargs.setdefault("siblings_by_cpu", _TEST_SIBLINGS)
+    return _decide_placement(*args, **kwargs)
+
+
+def enforce_placement(*args, **kwargs):
+    kwargs.setdefault("siblings_by_cpu", _TEST_SIBLINGS)
+    return _enforce_placement(*args, **kwargs)
+
+
+def placement_overlaps(placement, claimed):
+    return _placement_overlaps(placement, claimed, _TEST_SIBLINGS)
 
 
 def _claim(*ranges: tuple[int, int], unobservable: bool = False) -> BenchClaim:
@@ -118,12 +145,55 @@ def test_format_cpu_list_full_range() -> None:
 
 def test_placement_overlaps_detects_intersection() -> None:
     assert placement_overlaps("48-95", set(range(96)))
-    assert not placement_overlaps("96-191", set(range(96)))
+    assert placement_overlaps("96-191", set(range(96)))
+    assert not placement_overlaps("48-95", set(range(48)))
 
 
 def test_placement_overlaps_refuses_malformed_placement() -> None:
     with pytest.raises(BenchObservationError):
         placement_overlaps("bogus", set(range(96)))
+
+
+def test_sibling_map_reads_symmetric_groups_from_injected_sysfs(tmp_path: Path) -> None:
+    for cpu, siblings in ((0, "0,96"), (96, "0,96"), (1, "1,97"), (97, "1,97")):
+        path = tmp_path / f"cpu{cpu}" / "topology" / "thread_siblings_list"
+        path.parent.mkdir(parents=True)
+        path.write_text(siblings)
+    assert read_sibling_map({0, 1}, tmp_path) == {
+        0: frozenset({0, 96}), 96: frozenset({0, 96}),
+        1: frozenset({1, 97}), 97: frozenset({1, 97}),
+    }
+
+
+def test_sibling_map_rejects_missing_or_asymmetric_sysfs(tmp_path: Path) -> None:
+    cpu0 = tmp_path / "cpu0" / "topology" / "thread_siblings_list"
+    cpu0.parent.mkdir(parents=True)
+    cpu0.write_text("0,96")
+    with pytest.raises(BenchObservationError, match="cannot read SMT sibling"):
+        read_sibling_map({0}, tmp_path)
+    cpu96 = tmp_path / "cpu96" / "topology" / "thread_siblings_list"
+    cpu96.parent.mkdir(parents=True)
+    cpu96.write_text("96")
+    with pytest.raises(BenchObservationError, match="asymmetric"):
+        read_sibling_map({0}, tmp_path)
+
+
+def test_sibling_map_rejects_malformed_sysfs(tmp_path: Path) -> None:
+    path = tmp_path / "cpu0" / "topology" / "thread_siblings_list"
+    path.parent.mkdir(parents=True)
+    path.write_text("0,bogus")
+    with pytest.raises(BenchObservationError, match="cannot read SMT sibling"):
+        read_sibling_map({0}, tmp_path)
+
+
+def test_default_affinity_rejects_incomplete_candidate_topology() -> None:
+    incomplete = {cpu: _TEST_SIBLINGS[cpu] for cpu in range(96)}
+    kind, effective, reason = _decide_placement(
+        None, force=False, claim=_claim((0, 47)),
+        host_cores=frozenset(range(192)), siblings_by_cpu=incomplete,
+    )
+    assert (kind, effective) == ("refuse", None)
+    assert "SMT sibling topology missing CPU" in reason
 
 
 # --------------------------------------------------------------------------- #
@@ -280,9 +350,9 @@ def test_bench_claiming_0_95_refuses_placement_48_95() -> None:
     assert "0-95" in reason
 
 
-def test_bench_claiming_0_95_allows_placement_96_191() -> None:
+def test_bench_claiming_0_95_refuses_smt_sibling_placement_96_191() -> None:
     kind, effective, _reason = decide_placement("96-191", force=False, claim=_claim((0, 95)))
-    assert (kind, effective) == ("proceed", None)
+    assert (kind, effective) == ("refuse", None)
 
 
 def test_bench_claiming_0_95_refuses_whole_host_placement() -> None:
@@ -316,7 +386,7 @@ def test_unobservable_claim_bypasses_with_force() -> None:
 def test_malformed_declared_placement_refuses() -> None:
     kind, _effective, reason = decide_placement("bogus", force=False, claim=_claim((0, 95)))
     assert kind == "refuse"
-    assert "cannot be parsed" in reason
+    assert "invalid Cpus_allowed_list" in reason
 
 
 def test_malformed_declared_placement_bypasses_with_force() -> None:
@@ -324,24 +394,24 @@ def test_malformed_declared_placement_bypasses_with_force() -> None:
     assert (kind, effective) == ("proceed", None)
 
 
-def test_default_affinity_pins_off_claim() -> None:
+def test_default_affinity_refuses_when_claim_covers_all_physical_cores() -> None:
     kind, effective, _reason = decide_placement(
         None,
         force=False,
         claim=_claim((0, 95)),
         host_cores=frozenset(range(192)),
     )
-    assert (kind, effective) == ("pin", "96-191")
+    assert (kind, effective) == ("refuse", None)
 
 
 def test_default_affinity_pins_off_partial_claim() -> None:
     kind, effective, _reason = decide_placement(
         None,
         force=False,
-        claim=_claim((48, 143)),
+        claim=_claim((0, 47)),
         host_cores=frozenset(range(192)),
     )
-    assert (kind, effective) == ("pin", "0-47,144-191")
+    assert (kind, effective) == ("pin", "48-95,144-191")
 
 
 def test_default_affinity_refuses_when_bench_claims_every_host_core() -> None:
@@ -367,7 +437,7 @@ def test_default_affinity_pins_even_with_force() -> None:
         claim=_claim((0, 95)),
         host_cores=frozenset(range(192)),
     )
-    assert (kind, effective) == ("pin", "96-191")
+    assert (kind, effective) == ("proceed", None)
 
 
 def test_default_affinity_no_fallback_bypasses_with_force() -> None:
@@ -403,16 +473,28 @@ def test_enforce_placement_unobservable_prints_and_raises(capsys) -> None:
     assert "REFUSING to spawn sidecar" in capsys.readouterr().out
 
 
-def test_enforce_placement_pins_default_affinity_off_claim(capsys) -> None:
+def test_enforce_placement_pins_default_affinity_off_physical_claim(capsys) -> None:
     pinned = enforce_placement(
         None,
         force=False,
         label="orchestrator API (uvicorn)",
-        claim=_claim((0, 95)),
+        claim=_claim((0, 47)),
         host_cores=frozenset(range(192)),
     )
-    assert pinned == "96-191"
-    assert "Pinning orchestrator API (uvicorn) to cores 96-191" in capsys.readouterr().out
+    assert pinned == "48-95,144-191"
+    assert "Pinning orchestrator API (uvicorn) to cores 48-95,144-191" in capsys.readouterr().out
+
+
+def test_enforce_placement_refuses_when_bench_claims_all_physical_cores(capsys) -> None:
+    with pytest.raises(BenchPlacementRefusal):
+        enforce_placement(
+            None,
+            force=False,
+            label="orchestrator API (uvicorn)",
+            claim=_claim((0, 95)),
+            host_cores=frozenset(range(192)),
+        )
+    assert "no non-overlapping placement exists" in capsys.readouterr().out
 
 
 def test_enforce_placement_refuses_when_host_set_unreadable(capsys, tmp_path: Path) -> None:

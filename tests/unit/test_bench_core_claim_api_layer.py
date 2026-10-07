@@ -47,6 +47,16 @@ from src.services.worker_pool import (
 BENCH_PROC = ((4242, "python laguna_q4_cpu_bench_runner.py --run"),)
 
 HOST_CORES = frozenset(range(192))
+TEST_SIBLINGS = {
+    cpu: frozenset({cpu, cpu + 96}) if cpu < 96
+    else frozenset({cpu - 96, cpu})
+    for cpu in range(192)
+}
+
+
+def _wire_topology(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bcc, "host_core_set", lambda *_a, **_k: HOST_CORES)
+    monkeypatch.setattr(bcc, "read_sibling_map", lambda cpus, *_a, **_k: TEST_SIBLINGS)
 
 
 def _fake_proc_tree(tmp_path: Path, pid: int, main: str, threads: dict[str, str]) -> Path:
@@ -106,7 +116,7 @@ def _wire_seams(
     the /sys seam; Popen is the spawn seam (nothing is ever executed).
     """
     if not claim.empty:
-        monkeypatch.setattr(bcc, "host_core_set", lambda *_a, **_k: HOST_CORES)
+        _wire_topology(monkeypatch)
     monkeypatch.setattr(bcc, "read_bench_claim", lambda *_a, **_k: claim)
     monkeypatch.setattr(
         "src.services.worker_pool.shutil.which",
@@ -171,32 +181,43 @@ async def test_no_bench_spawn_unchanged_without_numactl(
 
 
 @pytest.mark.asyncio
-async def test_bench_claiming_0_95_pins_worker_to_host_minus_claim(
+async def test_bench_claiming_partial_physical_range_pins_worker_smt_safe(
     monkeypatch, tmp_path: Path, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
-    """Bench claims 0-95 on a 192-core host -> worker pinned to 96-191."""
+    """Bench claims 0-47 -> worker excludes both logical siblings of those cores."""
     monkeypatch.delenv(API_BENCH_ALLOW_ENV, raising=False)
-    claim = _claim_from_fake_proc(tmp_path, "0-95")
+    claim = _claim_from_fake_proc(tmp_path, "0-47")
     popen = _wire_seams(monkeypatch, pool_manager, claim=claim)
     expected_cmd = pool_manager._build_launch_command(worker.config)
 
     assert await pool_manager._start_worker(worker) is True
 
-    assert _spawn_argv(popen) == ["taskset", "-c", "96-191", *expected_cmd]
+    assert _spawn_argv(popen) == ["taskset", "-c", "48-95,144-191", *expected_cmd]
+
+
+@pytest.mark.asyncio
+async def test_bench_claiming_all_physical_cores_refuses_worker_spawn(
+    monkeypatch, tmp_path: Path, pool_manager: WorkerPoolManager, worker: WorkerInstance
+) -> None:
+    monkeypatch.delenv(API_BENCH_ALLOW_ENV, raising=False)
+    claim = _claim_from_fake_proc(tmp_path, "0-95")
+    popen = _wire_seams(monkeypatch, pool_manager, claim=claim)
+    assert await pool_manager._start_worker(worker) is False
+    assert popen.call_count == 0
 
 
 @pytest.mark.asyncio
 async def test_bench_claiming_middle_range_pins_to_complement(
     monkeypatch, tmp_path: Path, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
-    """Bench claims 48-95 -> pinned to the folded complement 0-47,96-191."""
+    """Bench claims 48-95 -> both sibling ranges are excluded."""
     monkeypatch.delenv(API_BENCH_ALLOW_ENV, raising=False)
     claim = _claim_from_fake_proc(tmp_path, "48-95")
     popen = _wire_seams(monkeypatch, pool_manager, claim=claim)
 
     assert await pool_manager._start_worker(worker) is True
 
-    assert _spawn_argv(popen)[:3] == ["taskset", "-c", "0-47,96-191"]
+    assert _spawn_argv(popen)[:3] == ["taskset", "-c", "0-47,96-143"]
 
 
 @pytest.mark.asyncio
@@ -272,15 +293,13 @@ def test_llamacppbackend_cmd_pinned_off_bench_claim(monkeypatch) -> None:
     off a live bench claim instead of tripping its continuity gate."""
     from src.inference.model_server import LlamaCppBackend
 
-    monkeypatch.setattr(
-        bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(cores=frozenset(range(96)))
-    )
-    monkeypatch.setattr(bcc, "host_core_set", lambda *_a, **_k: HOST_CORES)
+    _wire_topology(monkeypatch)
+    monkeypatch.setattr(bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(cores=frozenset(range(48))))
     backend = LlamaCppBackend(_FakeRegistry())
     cmd = backend._build_command(
         _FakeRoleConfig(), _FakeRequest(timeout=60)
     )
-    assert "taskset -c" in cmd
+    assert "taskset -c 48-95,144-191" in cmd
     assert "numactl" not in cmd
 
 
@@ -313,13 +332,13 @@ async def test_lightonocr_spawn_pinned_off_bench_claim(monkeypatch, tmp_path: Pa
     import src.services.lightonocr_llama_server as ocr_mod
 
     monkeypatch.setattr(
-        bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(cores=frozenset(range(96)))
+        bcc, "read_bench_claim", lambda proc_root=Path("/proc"): BenchClaim(cores=frozenset(range(48)))
     )
+    _wire_topology(monkeypatch)
     configured_cli = Path(tmp_path) / "ni18-unavailable-mtmd-bin" / "llama-mtmd-cli"
     assert configured_cli.name == "llama-mtmd-cli"
     assert not configured_cli.exists() and not configured_cli.is_symlink()
     monkeypatch.setattr(ocr_mod, "CLI_PATH", str(configured_cli))
-    monkeypatch.setattr(bcc, "host_core_set", lambda *_a, **_k: HOST_CORES)
     captured: list[list[str]] = []
 
     async def fake_exec(*cmd, **kw):
@@ -330,7 +349,7 @@ async def test_lightonocr_spawn_pinned_off_bench_claim(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(ocr_mod.asyncio, "create_subprocess_exec", fake_exec)
     worker = ocr_mod.LlamaOCRWorker(worker_id=1, threads=8)
     await worker._run_inference("/tmp/fake.png")
-    assert captured and captured[0][:3] == ["taskset", "-c", "96-191"]
+    assert captured and captured[0][:3] == ["taskset", "-c", "48-95,144-191"]
     assert captured[0][3] == str(configured_cli)
 
 

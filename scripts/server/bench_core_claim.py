@@ -33,7 +33,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -174,13 +174,66 @@ def format_cpu_list(cores) -> str:
     return ",".join(ranges)
 
 
-def placement_overlaps(placement: str, claimed: set[int]) -> bool:
-    """True when an explicit placement intersects a claimed core set.
+def _sibling_closure(cpus: set[int] | frozenset[int],
+                     siblings_by_cpu: Mapping[int, frozenset[int]]) -> set[int]:
+    """Return the physical-core sibling closure; incomplete/asymmetric maps refuse."""
+    closure: set[int] = set()
+    for cpu in cpus:
+        group = siblings_by_cpu.get(cpu)
+        if not group or cpu not in group:
+            raise BenchObservationError(f"SMT sibling topology missing CPU {cpu}")
+        if any(siblings_by_cpu.get(peer) != group for peer in group):
+            raise BenchObservationError(f"SMT sibling topology is asymmetric for CPU {cpu}")
+        closure.update(group)
+    return closure
+
+
+def read_sibling_map(
+    cpus: set[int] | frozenset[int],
+    topology_root: Path = Path("/sys/devices/system/cpu"),
+) -> dict[int, frozenset[int]]:
+    """Read a complete, symmetric Linux thread-sibling map for the requested CPUs.
+
+    Every member discovered from ``thread_siblings_list`` is read back too. A
+    missing, malformed, or asymmetric sysfs view is not evidence that logical
+    CPUs are physically disjoint, so callers fail closed.
+    """
+    pending = set(cpus)
+    result: dict[int, frozenset[int]] = {}
+    while pending:
+        cpu = min(pending)
+        pending.remove(cpu)
+        if cpu in result:
+            continue
+        path = topology_root / f"cpu{cpu}" / "topology" / "thread_siblings_list"
+        try:
+            group = frozenset(parse_cpu_list(path.read_text().strip()))
+        except (OSError, BenchObservationError) as exc:
+            raise BenchObservationError(f"cannot read SMT sibling topology at {path}: {exc}") from exc
+        if cpu not in group:
+            raise BenchObservationError(f"SMT sibling topology at {path} omits CPU {cpu}")
+        result[cpu] = group
+        pending.update(group - result.keys())
+    _sibling_closure(set(cpus), result)
+    return result
+
+
+def placement_overlaps(
+    placement: str,
+    claimed: set[int],
+    siblings_by_cpu: Mapping[int, frozenset[int]],
+) -> bool:
+    """True when an explicit placement shares a physical core with the claim.
 
     Raises BenchObservationError on a malformed placement — a placement we
-    cannot parse cannot be proven disjoint, so the caller treats it as overlap.
+    cannot parse or whose SMT topology is incomplete cannot be proven disjoint,
+    so the caller treats it as overlap.
     """
-    return bool(parse_cpu_list(placement) & claimed)
+    requested = set(parse_cpu_list(placement))
+    return bool(
+        _sibling_closure(requested, siblings_by_cpu)
+        & _sibling_closure(claimed, siblings_by_cpu)
+    )
 
 
 def _status_cpu_allowed_list(status_path: Path) -> str:
@@ -292,6 +345,7 @@ def decide_placement(
     force: bool,
     claim: BenchClaim,
     host_cores: frozenset[int] | None = None,
+    siblings_by_cpu: Mapping[int, frozenset[int]] | None = None,
 ) -> tuple[str, str | None, str | None]:
     """Decide a spawn placement against a bench claim. PURE — no IO, no printing.
 
@@ -302,6 +356,9 @@ def decide_placement(
         claim: the bench's live core claim (EMPTY_BENCH_CLAIM when no bench).
         host_cores: all host cpu ids, needed only when `placement` is None and
             the claim is non-empty. None means the host set is unknown.
+        siblings_by_cpu: symmetric sysfs-derived physical-core map for all CPUs
+            that may be placed or claimed. None is unknown topology, not proof
+            that disjoint logical ids are disjoint physical cores.
 
     Returns (kind, effective, reason):
         ("proceed", None, None)      — spawn as requested (claim empty, or
@@ -324,15 +381,17 @@ def decide_placement(
         )
     if placement is not None:
         try:
-            overlap = placement_overlaps(placement, set(claim.cores))
-        except BenchObservationError:
+            if siblings_by_cpu is None:
+                raise BenchObservationError("SMT sibling topology is unknown")
+            overlap = placement_overlaps(placement, set(claim.cores), siblings_by_cpu)
+        except BenchObservationError as exc:
             # A declared placement we cannot parse cannot be proven disjoint.
             if force:
                 return ("proceed", None, None)
             return (
                 "refuse",
                 None,
-                f"declared placement {placement!r} cannot be parsed",
+                f"declared placement {placement!r} cannot be proven physically disjoint: {exc}",
             )
         if overlap:
             if force:
@@ -355,7 +414,19 @@ def decide_placement(
             None,
             "cannot determine a non-overlapping placement (host core set unknown)",
         )
-    fallback = host_cores - set(claim.cores)
+    if siblings_by_cpu is None:
+        if force:
+            return ("proceed", None, None)
+        return ("refuse", None, "cannot determine SMT sibling topology (unknown must mean busy)")
+    try:
+        # Verify every candidate CPU too; a partial map cannot establish that
+        # an apparently-free logical CPU has no sibling in the claim.
+        _sibling_closure(set(host_cores), siblings_by_cpu)
+        fallback = set(host_cores) - _sibling_closure(set(claim.cores), siblings_by_cpu)
+    except BenchObservationError as exc:
+        if force:
+            return ("proceed", None, None)
+        return ("refuse", None, f"cannot determine SMT sibling topology: {exc}")
     if not fallback:
         if force:
             return ("proceed", None, None)
@@ -400,6 +471,8 @@ def enforce_placement(
     host_cores: frozenset[int] | None = None,
     proc_root: Path = Path("/proc"),
     online_path: Path = Path("/sys/devices/system/cpu/online"),
+    topology_root: Path = Path("/sys/devices/system/cpu"),
+    siblings_by_cpu: Mapping[int, frozenset[int]] | None = None,
 ) -> str | None:
     """Guarded spawn placement — the launcher-facing entry point.
 
@@ -415,8 +488,22 @@ def enforce_placement(
         if host_cores is not None
         else (host_core_set(online_path) if needs_host else None)
     )
+    topology = siblings_by_cpu
+    if topology is None and not claim_used.empty:
+        try:
+            if placement is None:
+                if host is None:
+                    topology = None
+                else:
+                    topology = read_sibling_map(set(host) | set(claim_used.cores), topology_root)
+            else:
+                requested = set(parse_cpu_list(placement))
+                topology = read_sibling_map(requested | set(claim_used.cores), topology_root)
+        except BenchObservationError:
+            topology = None
     kind, effective, reason = decide_placement(
-        placement, force=force, claim=claim_used, host_cores=host
+        placement, force=force, claim=claim_used, host_cores=host,
+        siblings_by_cpu=topology,
     )
     if kind == "refuse":
         print(refusal_message(label, placement, claim_used, reason))
@@ -443,6 +530,8 @@ def api_enforce_placement(
     host_cores: frozenset[int] | None = None,
     proc_root: Path = Path("/proc"),
     online_path: Path = Path("/sys/devices/system/cpu/online"),
+    topology_root: Path = Path("/sys/devices/system/cpu"),
+    siblings_by_cpu: Mapping[int, frozenset[int]] | None = None,
 ) -> str | None:
     """SS-BENCH-GATE-c — placement guard for the running API's own spawns.
 
@@ -477,4 +566,6 @@ def api_enforce_placement(
         host_cores=host_cores,
         proc_root=proc_root,
         online_path=online_path,
+        topology_root=topology_root,
+        siblings_by_cpu=siblings_by_cpu,
     )
