@@ -80,6 +80,13 @@ def _is_empty_long_generation(output: str, elapsed_s: float) -> bool:
     return threshold > 0 and not (output or "").strip() and elapsed_s >= threshold
 
 
+def _server_count(value: Any) -> int | None:
+    """A nonnegative integer count actually supplied by llama-server."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def _write_logit_probe(prompt: str, first_token_probs: dict) -> None:
     """Append first-token log-probabilities to JSONL for routing classifier P1.5.
 
@@ -647,7 +654,15 @@ class LlamaServerBackend(ModelBackend):
                     "empty_generation" if empty_generation else completion_reason
                 ),
                 completion_probabilities=list(result_data.get("completion_probabilities") or []),
-                prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
+                prompt_tokens=(
+                    prompt_n + cache_n
+                    if isinstance(timings, dict)
+                    and (prompt_n := _server_count(timings.get("prompt_n"))) is not None
+                    and (cache_n := _server_count(timings.get("cache_n"))) is not None
+                    else None
+                ),
+                cached_prompt_tokens=_server_count(timings.get("cache_n")),
+                timings=dict(timings) if isinstance(timings, dict) else {},
             )
 
         except httpx.TimeoutException:
@@ -1336,7 +1351,15 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason=(
                     "empty_generation" if empty_generation else completion_reason
                 ),
-                prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
+                prompt_tokens=(
+                    prompt_n + cache_n
+                    if isinstance(timings, dict)
+                    and (prompt_n := _server_count(timings.get("prompt_n"))) is not None
+                    and (cache_n := _server_count(timings.get("cache_n"))) is not None
+                    else None
+                ),
+                cached_prompt_tokens=_server_count(timings.get("cache_n")),
+                timings=dict(timings) if isinstance(timings, dict) else {},
             )
 
         except httpx.HTTPStatusError as e:

@@ -1,6 +1,7 @@
 """Unit tests for llama_server backend."""
 
 import json
+import math
 from unittest.mock import Mock, patch
 
 import httpx
@@ -296,6 +297,7 @@ class TestLlamaServerBackend:
                 "prompt_ms": 100.0,
                 "predicted_ms": 50.0,
                 "predicted_per_second": 33.0,
+                "prompt_n": 7,
                 # v9: cache_n is the true KV-reuse hit count (tokens_cached is
                 # the total slot occupancy — counting it as hits inflated
                 # cache_hits on every request).
@@ -315,7 +317,32 @@ class TestLlamaServerBackend:
         assert result.prompt_eval_ms == 100.0
         assert result.generation_ms == 50.0
         assert result.predicted_per_second == 33.0
+        assert result.prompt_tokens == 10
+        assert result.cached_prompt_tokens == 3
+        assert result.timings["prompt_n"] == 7
+        assert result.timings["cache_n"] == 3
+        assert result.timings["prompt_ms"] == 100.0
         assert backend.cache_stats.cache_hits == 1  # cache_n > 0
+
+    def test_infer_missing_or_malformed_raw_prefill_timings_stay_unknown(self, role_config):
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", n_tokens=8)
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "content": "ok", "tokens_predicted": 1, "tokens_evaluated": 99,
+            "tokens_cached": 80,
+            "timings": {"prompt_n": -1, "cache_n": 1.5, "prompt_ms": float("nan")},
+        }
+
+        with patch.object(backend.client, "post", return_value=response):
+            result = backend.infer(role_config, request)
+
+        assert result.prompt_tokens is None
+        assert result.cached_prompt_tokens is None
+        assert result.timings["prompt_n"] == -1
+        assert result.timings["cache_n"] == 1.5
+        assert math.isnan(result.timings["prompt_ms"])
 
     def test_infer_returns_completion_probabilities_when_present(self, role_config):
         backend = LlamaServerBackend(base_url="http://test:8080")
@@ -840,6 +867,43 @@ class TestEarlyStopTiming:
         assert result.tokens_generated == 4  # chunks before stop
         assert result.generation_ms > 0, "Early-stop should still produce timing"
         assert result.predicted_per_second > 0, "Early-stop should still produce TPS"
+        assert result.prompt_tokens is None
+        assert result.cached_prompt_tokens is None
+        assert "prompt_n" not in result.timings
+        assert "cache_n" not in result.timings
+        assert "prompt_ms" not in result.timings
+
+
+class TestCompletionStreamPrefillTimings:
+    def test_stream_carries_server_prefill_counts_including_zero_cache(self, role_config):
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test_role", prompt="test", n_tokens=8, timeout=30)
+
+        class FakeResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"content":"ok"}'
+                yield ('data: {"content":"","stop":true,"tokens_predicted":1,'
+                       '"tokens_evaluated":99,"timings":{"prompt_n":7,"cache_n":0,"prompt_ms":0}}')
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(backend.client, "stream", return_value=FakeResponse()):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.prompt_tokens == 7
+        assert result.cached_prompt_tokens == 0
+        assert result.timings["prompt_n"] == 7
+        assert result.timings["cache_n"] == 0
+        assert result.timings["prompt_ms"] == 0
 
 
 class TestChatCompletionsLogprobs:

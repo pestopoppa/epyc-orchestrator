@@ -36,6 +36,7 @@ serially, and the meta getter is per-context anyway.
 from __future__ import annotations
 
 import contextlib
+import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,22 +61,54 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+def _raw_count(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _raw_duration(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric < 0:
+        return None
+    return numeric
+
+
 def _call_record(meta: Mapping[str, Any] | None) -> dict[str, Any]:
     meta = meta or {}
-    prompt_tokens = _number(meta.get("prompt_tokens"))
-    cache_n = _number(meta.get("cached_prompt_tokens"))
-    prompt_n = (
-        max(0.0, prompt_tokens - cache_n)
-        if prompt_tokens is not None and cache_n is not None
-        else None
-    )
+    has_raw_counts = "prompt_n" in meta or "cache_n" in meta
+    number = _raw_count if has_raw_counts else _number
+    prompt_tokens = number(meta.get("prompt_tokens"))
+    if has_raw_counts:
+        cache_n = _raw_count(meta.get("cache_n")) if "cache_n" in meta else None
+        prompt_n = _raw_count(meta.get("prompt_n")) if "prompt_n" in meta else None
+    else:
+        cache_n = _number(meta.get("cache_n", meta.get("cached_prompt_tokens")))
+        prompt_n = (
+            max(0.0, prompt_tokens - cache_n)
+            if prompt_tokens is not None and cache_n is not None
+            else None
+        )
     reason = meta.get("completion_reason")
     return {
         "tokens": _number(meta.get("tokens")),
         "prompt_tokens": prompt_tokens,
         "cache_n": cache_n,
         "prompt_n": prompt_n,
-        "prompt_ms": _number(meta.get("prompt_ms")),
+        "prompt_ms": (
+            _raw_duration(meta.get("prompt_ms"))
+            if has_raw_counts
+            else _number(meta.get("prompt_ms"))
+        ),
         "gen_ms": _number(meta.get("gen_ms")),
         "elapsed_ms": _number(meta.get("elapsed_ms")),
         "completion_reason": reason if isinstance(reason, str) else None,

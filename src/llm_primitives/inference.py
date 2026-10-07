@@ -5,6 +5,7 @@ import contextlib
 import contextvars
 import json
 import logging
+import math
 import os
 import time
 import uuid
@@ -18,6 +19,22 @@ from src.scheduling import gate_observation
 from .types import LLMResult
 
 log = logging.getLogger(__name__)
+
+
+def _server_count(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _server_duration(value: Any) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) and numeric >= 0 else None
 
 
 def _prefix_index_kwargs(request: Any) -> dict[str, Any]:
@@ -1635,6 +1652,25 @@ class InferenceMixin:
                     getattr(result, "completion_probabilities", []) or []
                 ),
             }
+            server_timings = getattr(result, "timings", None)
+            if isinstance(server_timings, dict):
+                # Raw /completion telemetry is authoritative; missing or
+                # malformed fields stay unknown instead of being estimated.
+                prompt_n = _server_count(server_timings.get("prompt_n"))
+                cache_n = _server_count(server_timings.get("cache_n"))
+                call_meta.update(
+                    {
+                        "prompt_n": prompt_n,
+                        "cache_n": cache_n,
+                        "prompt_ms": _server_duration(server_timings.get("prompt_ms")),
+                        "prompt_tokens": (
+                            prompt_n + cache_n
+                            if prompt_n is not None and cache_n is not None
+                            else None
+                        ),
+                        "cached_prompt_tokens": cache_n,
+                    }
+                )
             self._set_last_inference_meta(call_meta)
             _reasoning = getattr(result, "reasoning_content", None)
             if isinstance(_reasoning, str) and _reasoning:

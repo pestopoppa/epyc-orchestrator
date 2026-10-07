@@ -190,6 +190,10 @@ class InferenceResult:
     # returned none (every /completion call, thinking-off chat calls). Deliberately NOT
     # in to_dict(): surfaced through the primitives' inference meta instead.
     reasoning_content: str | None = None
+    # Raw llama-server `/completion` timings. Keep server-reported values
+    # distinct from legacy estimates/defaults so callers preserve unknowns. Last
+    # to preserve the positional order of the existing public dataclass fields.
+    timings: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
