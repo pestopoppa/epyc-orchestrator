@@ -1,0 +1,1166 @@
+{
+  "base_commit": "ce48ed2c386c2f69d23ad87289e384d7942ee7a5",
+  "base_tree": "26ad0173a987ff4df03211146896a03e59f163ce",
+  "bound_files": [
+    {
+      "git_blob": "4a6987b8a56549f76e48ead9fccaf20ca6c9b1da",
+      "git_mode": "100644",
+      "path": "orchestration/model_registry.yaml",
+      "sha256": "dd81678d5bd7d097b4168f41a97e97f1d85a292dd560a029ba3b908b9598eba5",
+      "size_bytes": 149161
+    },
+    {
+      "git_blob": "bdeee9b07655c33dbc6f286de22bb03183e86112",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/architect_investigate.md",
+      "sha256": "82dcf9d0cdece2e22f621ba9fe181001e6524a11f7dc2bb7e23f7414da902090",
+      "size_bytes": 2374
+    },
+    {
+      "git_blob": "1fa36355401023ca59881d7e3d5fc8677687bf89",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/architect_synthesis.md",
+      "sha256": "a94dca740627fb4ddd21d22132c93d609f918c65c4d7b035372375e46dba1184",
+      "size_bytes": 1103
+    },
+    {
+      "git_blob": "313dc848c6f9c42347bbc729608fc61876d50496",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/compaction_index.md",
+      "sha256": "f6cfbd58a2aa8e6aca5e854319690b41d61c6731af3cc0869c86a3c4da923583",
+      "size_bytes": 1722
+    },
+    {
+      "git_blob": "94afe43943096c6a183f0741c7bdad93e864b22a",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/debugger_system.md",
+      "sha256": "d260548af8757c2f6c719bf27a47a081b21b638b37d731e3493b271e25d81113",
+      "size_bytes": 10899
+    },
+    {
+      "git_blob": "ae8653d0c0391376416bd64dc225249b1be18c0c",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/deep_search_agent.md",
+      "sha256": "241d3e9d10168d73deea35cb65d840e74f9f15d544fb40fc605aa4f7d48e5c63",
+      "size_bytes": 1797
+    },
+    {
+      "git_blob": "2f139e5887dc6eb11606be682fbdf9c1f1c6b3f8",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/formalizer.md",
+      "sha256": "bb3f759b8c3f74b7b1121b977a40d4b209811befedee65ff7561e0bd882713f0",
+      "size_bytes": 1217
+    },
+    {
+      "git_blob": "bbadc41b5c01a966215625a1ad3955bab408706c",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/frontdoor.md",
+      "sha256": "537857deb461fd38a9aa6a9da36e8ff2086cb25a8bef81db4a4a2c5ff2b00aaf",
+      "size_bytes": 1805
+    },
+    {
+      "git_blob": "3ba239f6bddd18b383ba63196b16072a702551c3",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/meta_agent_reflect.md",
+      "sha256": "e14a0fbebc430f00e9a5a1de3a6389280243c9d9c87ede7c5d3d89a3d599d4e8",
+      "size_bytes": 1765
+    },
+    {
+      "git_blob": "d56be0b3820b72017997142eaf8e2a185ca2ef6a",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/plan_review.md",
+      "sha256": "17def93c58e80daf7ed996b79a11f3cef03a7588f84dc58cf8f9db0cc48e3127",
+      "size_bytes": 399
+    },
+    {
+      "git_blob": "ced0de1c98d83158a98d04e81a3dbf2063ae4553",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/planning_agent.md",
+      "sha256": "043b0dc36f466e4552b1460c87927c14643ae45a1ba1939a3c32b1a0ad89e945",
+      "size_bytes": 1758
+    },
+    {
+      "git_blob": "3848f43fb38cb8f070afe6f034c566527ab37bd2",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/report_agent.md",
+      "sha256": "ecffa61257312d012dd32503b803b1bea2397625c598c2e3c27490e789008115",
+      "size_bytes": 1662
+    },
+    {
+      "git_blob": "41b5fe44ebeae34f130e7ddca3ab49dd61078260",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/architect_coding.md",
+      "sha256": "f11899b7b991388d947174253c6691b19025810fdb3c21f25b3d3398bba193ca",
+      "size_bytes": 437
+    },
+    {
+      "git_blob": "f868fdd6374516b8e61f3cc549a8d6ec5c4053ca",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/architect_general.md",
+      "sha256": "7f2e05fe4a4fb8962d195e5033f52ae1858f6db956c7a5d6f3815fdf017fc6e6",
+      "size_bytes": 430
+    },
+    {
+      "git_blob": "c9349d55dafa8541b646478d62bd6d9c967af75d",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/coder_escalation.md",
+      "sha256": "bcfb941cb15d254d97a03681fa5ccb3e8ef1ea639db30e9dee632a2846208bb4",
+      "size_bytes": 497
+    },
+    {
+      "git_blob": "b6f3dcb5bb455c3dfda73166a1c03df8c18eaf9e",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/coder_primary.md",
+      "sha256": "ea5b9e54940ef4502d0640d9a0b656f9427d6f6e1104bebee15e677c06279379",
+      "size_bytes": 243
+    },
+    {
+      "git_blob": "785ebaba596f9ee6ef2218ab47a16a2bbbf9a2dd",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/frontdoor.md",
+      "sha256": "2ba52a889f9c632c3d6baefceac2c895a0ca923cc948e5176800bbe60b87e234",
+      "size_bytes": 1612
+    },
+    {
+      "git_blob": "eba9e766fdcd8bd094959c62c1fc60dad36ad6bc",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/ingest_long_context.md",
+      "sha256": "a1e24bcd31eded6cc39eb9cee627d80f865ac02e845ab3355b7c7031145147db",
+      "size_bytes": 122
+    },
+    {
+      "git_blob": "5b6c194fb9a1609cca8036723c35cd751c286cf4",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/worker_explore.md",
+      "sha256": "a920272aa5333e1df5183b7d255443a1216863f3aa195a33358d04a04f41fbae",
+      "size_bytes": 661
+    },
+    {
+      "git_blob": "d0bba7360900fa66e020e2ca99126380312e2aea",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/worker_general.md",
+      "sha256": "ac3659ed7e31b6f001d1eeefe643db7640083a858f754c15064ac841bdc2c3af",
+      "size_bytes": 393
+    },
+    {
+      "git_blob": "7d35df1faf2b86f8f086bdc125276d4cbe208583",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/worker_math.md",
+      "sha256": "e0e4caa3ce8e65e61a7ea3837fca9afd210f314d20969a8b6e11577c23361b57",
+      "size_bytes": 206
+    },
+    {
+      "git_blob": "b7fa0f99ecb0d03b51d3d914b0ea1a13f347cd49",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/roles/worker_vision.md",
+      "sha256": "2930f9d621c0da606491d043e64146a74c20dcb8bd254df248be41184294004b",
+      "size_bytes": 54
+    },
+    {
+      "git_blob": "57320c9b44df0b36c9733ee4e4a983534bdd8050",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/root_lm_system.md",
+      "sha256": "07ee95a143edde00cca053d86cdad80d2980729613c552adb7f15e8d54767628",
+      "size_bytes": 576
+    },
+    {
+      "git_blob": "f9f0808dcd30532834f5b6fd2f73cc0d6fe2c6e8",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/root_lm_system.s4_omega.md",
+      "sha256": "9f1ee3a408eea6e781255e4a9b682f99562a185a584bedc53e29da39af568143",
+      "size_bytes": 2627
+    },
+    {
+      "git_blob": "9d9e7372ba23acba5e24239c811d2afaabc23308",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/rules.md",
+      "sha256": "18f8ea018234605002459cd98e59a9aaeddec235d8e022ff59f6ebd67766d607",
+      "size_bytes": 7149
+    },
+    {
+      "git_blob": "6164bd57caf6c76589585f21f351fe2a463d14ff",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/task_decomposition.md",
+      "sha256": "9b436cd0ca94027ba97718ff9292aeb6738c25d8cf3359775e2dc71792118c6a",
+      "size_bytes": 578
+    },
+    {
+      "git_blob": "a3a29af539ba34abd3fe1c91bae16e1458ac79e5",
+      "git_mode": "100644",
+      "path": "orchestration/prompts/tools.md",
+      "sha256": "39a9184faa54ea24035875c256395b69a409396e1ba123282b8b9f9b1dfe4c06",
+      "size_bytes": 1708
+    },
+    {
+      "git_blob": "a115c9e686529da23ecdc8ff8e1864affdec4109",
+      "git_mode": "100644",
+      "path": "scripts/autopilot/bsv_observe.py",
+      "sha256": "3359af4ef777ec614323de3fa2c4d024464a060e4930b3f97a658d693bb412be",
+      "size_bytes": 22747
+    },
+    {
+      "git_blob": "2a6ea74af6d508697dfbbeef0df9e5c2634f7bba",
+      "git_mode": "100644",
+      "path": "scripts/autopilot/eval_tower.py",
+      "sha256": "cf72ee13046287d6dc7f2437e70aab42b7912f287e8a510f7d811da375c22971",
+      "size_bytes": 362682
+    },
+    {
+      "git_blob": "c2d091a89e31ee7e3372f9aae46fd6a681f86ad6",
+      "git_mode": "100644",
+      "path": "tests/unit/test_bsv_observe.py",
+      "sha256": "42134031c6d3188366cd50d669469750203dc7b27e8488ae702bbf7c37653c46",
+      "size_bytes": 16111
+    },
+    {
+      "git_blob": "6cda4050ee924966b6c720610ec2af467ec024ac",
+      "git_mode": "100644",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py",
+      "sha256": "366982859b7d4fe0be50cf2346d127f31870f4796ccf40dbca92a0ac25854b9b",
+      "size_bytes": 91327
+    },
+    {
+      "git_blob": "3eaf283ed10297aef86ecb824d04b23ef2fb5920",
+      "git_mode": "100644",
+      "path": "tests/unit/test_eval_tower_decision_partitions.py",
+      "sha256": "c6a08c39f2121777e5ffde5fb7257edef3c30d49ee510d51655a5d41109ebd9b",
+      "size_bytes": 7449
+    },
+    {
+      "git_blob": "cf2bcd7c30ae4498b3d80431d71238975c1e9a41",
+      "git_mode": "100644",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py",
+      "sha256": "259a8adef0e37f7633da3fc3629735be7d2b63fe2419418d942015e3137be782",
+      "size_bytes": 51174
+    }
+  ],
+  "case_count": 140,
+  "cases": [
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_code_execution_requires_executable_oracle",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_dataset_content_sha256_includes_suite_and_scoring_oracle",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_durable_instrument_ledger_detects_execution_scheduler_drift",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_empty_expected_still_blocks_plain_exact_match",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_empty_expected_text_scorer_is_not_scoreable",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_instrument_stamp_warns_on_core_id_drift",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_question_records_chat_response_routed_to",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_sample_globally_backfills_when_suite_underfills",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_core_path_without_core_id_fails_closed",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_designed_core_can_reference_question_pool_ids",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_designed_core_rejects_metadata_mismatch",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_designed_core_rejects_unscoreable_rows",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_designed_core_requires_matching_instrument_era",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_legacy_sampling_records_core_id",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_missing_designed_core_fails_closed",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_uses_designed_core_when_enabled",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_can_count_audit_in_decision_metrics",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_does_not_promote_empty_fresh_partition_to_zero",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_does_not_promote_unscored_core_to_zero_gap",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_honors_cadence_and_reports_unavailable_reason[False-w6_audit_disabled]",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_honors_cadence_and_reports_unavailable_reason[True-trial_not_on_audit_cadence]",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_reports_core_minus_fresh_without_changing_objective[False-False-0.0]",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_reports_core_minus_fresh_without_changing_objective[False-True--3.0]",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_reports_core_minus_fresh_without_changing_objective[True-False-3.0]",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_reports_core_minus_fresh_without_changing_objective[True-True-0.0]",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t1_w6_audit_block_requires_trial_id",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t2_non_promotion_excludes_legacy_t1_core_qids",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t2_nonpromotion_excludes_t1_core_and_caller_qids",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t2_nonpromotion_fails_closed_when_t1_core_exhausts_pool",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t2_promotion_eval_fails_closed_without_trial_id",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_eval_t2_promotion_eval_uses_trial_seed_and_excludes_recent_qids",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_instruction_route_labels_map_to_runtime_roles",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_instruction_token_accounting_uses_active_prompts_not_prompt_library",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_instrument_transition_message_keeps_dataset_drift_loud",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_instrument_transition_message_names_policy_axis_not_stable_dataset",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_programmatic_scorer_runs_with_empty_expected",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_sampling_replaces_unscoreable_items_from_same_suite",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_instrument_repair",
+      "name": "test_t0_sentinel_suites_are_namespaced_without_mutating_source",
+      "nodeid": "tests/unit/test_eval_tower_instrument_repair.py::{name}",
+      "path": "tests/unit/test_eval_tower_instrument_repair.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_decision_partitions",
+      "name": "test_aggregate_routing_distribution_keeps_unrecognized_routes_unknown",
+      "nodeid": "tests/unit/test_eval_tower_decision_partitions.py::test_aggregate_routing_distribution_keeps_unrecognized_routes_unknown",
+      "path": "tests/unit/test_eval_tower_decision_partitions.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_decision_partitions",
+      "name": "test_t1_audit_shadow_keeps_decision_dataset_identity",
+      "nodeid": "tests/unit/test_eval_tower_decision_partitions.py::{name}",
+      "path": "tests/unit/test_eval_tower_decision_partitions.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_decision_partitions",
+      "name": "test_t1_excludes_tool_sentinel_from_decision_metrics",
+      "nodeid": "tests/unit/test_eval_tower_decision_partitions.py::{name}",
+      "path": "tests/unit/test_eval_tower_decision_partitions.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_decision_partitions",
+      "name": "test_t2_excludes_tool_sentinel_from_decision_metrics",
+      "nodeid": "tests/unit/test_eval_tower_decision_partitions.py::{name}",
+      "path": "tests/unit/test_eval_tower_decision_partitions.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_confidence_is_real_fails_closed_on_mixed_proxy_batch",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_emits_compact_stable_question_results",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_emits_rubric_process_means",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_emits_speed_analytics_and_host_covariate_summary",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_emits_truthy_question_provenance_flags",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_quality_denominator_excludes_error_rows",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_surfaces_abandoned_eval_request_contamination",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_aggregate_uses_batch_throughput_for_concurrent_objective",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_api_lifecycle_drain_accepts_history_only_degradation",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_api_lifecycle_drain_refuses_absent_batch_after_possible_reload",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_api_lifecycle_drain_refuses_degraded_reducer",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_api_lifecycle_drain_refuses_history_loss_with_incomplete_coverage",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_api_lifecycle_drain_refuses_per_worker_sequence_reset",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_api_lifecycle_drain_waits_for_same_batch_handler_exit",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_backend_drain_waits_for_stable_idle_after_busy_slot",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_combined_quiescence_requires_lifecycle_before_slots",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_compact_question_result_includes_bounded_host_covariates",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_configured_eval_backend_urls_include_numa_ports_and_dedupe_aliases",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_deep_research_expected_contains_items_are_scoreable",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_derive_question_confidence_code_execution_geomean_when_probs_present",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_derive_question_confidence_code_execution_ignores_pass_rate",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_derive_question_confidence_rubric_unchanged_by_esc7",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_drains_split_cohort_before_full_exclusive_request",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_fails_remaining_questions_after_no_progress_timeout",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_fake_transport_errors_split_by_disposition_etr1",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_never_overlaps_different_native_cpu_process_cohorts",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_progress_callback_reports_each_completed_question",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_stamps_shared_eval_batch_id",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_uses_certified_native_lanes_for_forced_cpu_roles",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_batch_worker_exception_becomes_error_result",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_allows_stale_global_matrix_with_fresh_role_cert",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_can_exceed_full_first_cap_in_quarter_mode",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_env_override_still_wins",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_falls_back_to_serial_when_matrix_blocks",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_falls_back_to_serial_when_matrix_stale",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_rejects_role_cert_when_live_ports_drift",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_uses_min_cap_across_forced_roles",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_concurrency_uses_topology_cap_when_matrix_allows",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_code_execution_confidence_is_binary_not_pass_rate",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_code_execution_confidence_uses_geomean_when_probs_present",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_fake_transport_error_paths[http_503-backend down]",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_fake_transport_error_paths[payload_error-backend busy]",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_fake_transport_error_paths[timeout-timed out]",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_forwards_native_tool_schema_when_present",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_forwards_prompt_root_when_present",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_null_scoring_config_does_not_error",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_omits_native_tool_schema_by_default",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_populates_deterministic_rubric_scores",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_stamps_eval_batch_request_metadata",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_stamps_rubric_source_heuristic_fallback",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_uses_completion_probabilities_for_confidence",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_question_uses_configured_local_rubric_judge",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_resource_lane_weights_near_full_context_prompt",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_resource_lanes_collapse_gpu_alias_and_use_native_width",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_resource_lanes_compute_prompt_load_per_question",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_resource_lanes_group_overlapping_full_cpu_process_cohorts",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_eval_result_grep_lines_include_concurrency_metrics",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_explicit_giant_placement_override_still_wins",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_giant_full_request_excludes_mixed_split_work",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_giant_router_owned_question_uses_full_native_placement",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_live_safe_concurrency_can_be_disabled_for_diagnostics",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_live_safe_concurrency_falls_back_when_manifest_is_phantom",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_live_safe_concurrency_uses_quarter_mode_live_ports",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_model_scoring_is_serial_per_physical_cohort",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_parse_rubric_judge_scores_accepts_fenced_json",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_parse_rubric_judge_scores_rejects_out_of_range_not_clamp",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_question_result_has_host_covariates_default_factory",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_router_owned_eval_uses_mixed_split_backlog_lane",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_rubric_threshold_source_marks_undeclared_default",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_rubric_threshold_source_serializes_into_detail_row",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_runtime_facts_stack_numa_mode_consumes_wellformed_quarter_manifest",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_runtime_facts_stack_numa_mode_rejects_phantom_manifest",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_safety_gate_uses_effective_speed_not_raw_median_for_concurrent_eval",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_serial_eval_batch_fails_remaining_after_wall_budget",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_serial_eval_batch_no_progress_marks_orphan_contamination",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_eval_tower_concurrency_metrics",
+      "name": "test_serial_eval_keeps_median_request_speed_as_objective",
+      "nodeid": "tests/unit/test_eval_tower_concurrency_metrics.py::{name}",
+      "path": "tests/unit/test_eval_tower_concurrency_metrics.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_archive_member_identity_overrides_species_name",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_conflict_report_flags_shared_subsystem_and_file",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_conflict_report_ignores_disjoint_mutations",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_conflict_report_skips_same_trial_archive_member_duplicate",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_diagnostics_are_named_not_fake_signature_ids",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_graceful_on_empty_eval_result",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_identical_partial_signature_is_watch_not_benign",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_legacy_tool_name_counts_are_signed_when_question_rows_absent",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_mutation_dependency_entry_extracts_bsv3_keys",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_no_incumbent_has_no_severity",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_question_answer_hashes_skip_raw_answer_and_malformed_rows",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_question_outcomes_use_bsv_vocab_and_skip_malformed_rows",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_question_result_answer_hashes_are_included_without_raw_answers",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_question_result_process_signals_are_signed",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_question_results_are_preferred_over_suite_proxy",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_routing_change_flags_at_least_watch",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_routing_weight_drift_flags_change",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_suite_outcomes_proxy_uses_bsv_vocab",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_suite_proxy_remains_fallback_when_question_results_absent",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_suite_regression_is_blocking",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    },
+    {
+      "classname": "tests.unit.test_bsv_observe",
+      "name": "test_tool_and_latency_drift_flags_watch_or_blocking",
+      "nodeid": "tests/unit/test_bsv_observe.py::{name}",
+      "path": "tests/unit/test_bsv_observe.py"
+    }
+  ],
+  "et13_commit": "034c9f972ce74d7011c481693b1048e3d3bc3d70",
+  "risk": "ET13 intentionally maps unrecognized/empty/model route IDs to unknown; BSV route-path fingerprint may change. Safety gate thresholds/architect fraction logic unchanged.",
+  "root_carrier": "3de6a10fbadacd346570e5a714708bbf8a094e55",
+  "root_context": [
+    {
+      "git_blob": "d2d7bd90f86cffa23c51db803288641c5c6fe461",
+      "git_mode": "100644",
+      "path": "scripts/ci/native_conformance.py",
+      "sha256": "2b8c63121e1472d10849224911ee8f4035b7f758ce1aefca7c766e2de263aa0e",
+      "size_bytes": 19249
+    },
+    {
+      "git_blob": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "git_mode": "100644",
+      "path": "scripts/vidya/adapters/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size_bytes": 0
+    },
+    {
+      "git_blob": "b5a521ef4debe7ad105830f5fa27bbf9c2168dcd",
+      "git_mode": "100644",
+      "path": "scripts/vidya/adapters/ci_conformance.py",
+      "sha256": "aceba149c1b3386e2edd0f8ce5b0bd6bb1d4489d0fe3b3275f8984050aeeb19c",
+      "size_bytes": 2260
+    },
+    {
+      "git_blob": "309af769e45245fd1452482eb2e0592a86a4a79f",
+      "git_mode": "100644",
+      "path": "scripts/vidya/claim_tuple.py",
+      "sha256": "058749d2a1ce3487672e85cc5a18fd352b6f17e741a47d7f48bb55be278f4bfe",
+      "size_bytes": 40447
+    },
+    {
+      "git_blob": "1d444850ce84b429351c0884769bae0b0023d5a5",
+      "git_mode": "100644",
+      "path": "scripts/vidya/ingest_sources.py",
+      "sha256": "a5df8ea9e1bec516f32fa2548e7b9bf71c8c068e041771b7fc226cec3cc0a2a7",
+      "size_bytes": 25488
+    },
+    {
+      "git_blob": "b9e5324995f18d321b798fecff3a26e5434b3b78",
+      "git_mode": "100644",
+      "path": "scripts/vidya/adapters/README.md",
+      "sha256": "cb068721ad9cff25725bfc1399d58e78cb7180b3d8562f7a3305665ef0164287",
+      "size_bytes": 254503
+    },
+    {
+      "git_blob": "f7197f5c7be7bb4942b1a19a03d964e05a6b3171",
+      "git_mode": "100644",
+      "path": "handoffs/active/vidya-belief-substrate-program.md",
+      "sha256": "7c4da9d7c4adda0126d8599d6fc6f30d67f716e5c06ff1ec653dc2fb3d4afa26",
+      "size_bytes": 343531
+    },
+    {
+      "git_blob": "d0963239a623be8b9e15e52eeb2c5f3c2da9413b",
+      "git_mode": "100644",
+      "path": "tests/vidya/test_ci_conformance.py",
+      "sha256": "f1678e74534c39fa8261d412f9fd02ff28fd8b17029ee8c3b02ede4bb97fd115",
+      "size_bytes": 17570
+    }
+  ],
+  "root_context_files": [
+    "scripts/ci/native_conformance.py",
+    "scripts/vidya/adapters/__init__.py",
+    "scripts/vidya/adapters/ci_conformance.py",
+    "scripts/vidya/claim_tuple.py",
+    "scripts/vidya/ingest_sources.py",
+    "scripts/vidya/adapters/README.md",
+    "handoffs/active/vidya-belief-substrate-program.md",
+    "tests/vidya/test_ci_conformance.py"
+  ],
+  "runtime_data": [
+    "orchestration/model_registry.yaml",
+    "orchestration/prompts/**/*.md"
+  ],
+  "schema": "epyc.ni08.et13_w6.cases.v1",
+  "source_commit": "73a3f746d152ea983768f938522a944053a5762c",
+  "source_tree": "6e79a868d4b7e0eff01b06e3a8849a2c88f6f9ed",
+  "uv_lock_blob": "ef2306018773ff9a1e80389970d92f66fcf8d5b7",
+  "w6_commit": "ce48ed2c386c2f69d23ad87289e384d7942ee7a5",
+  "whole_test_modules": [
+    "tests/unit/test_eval_tower_instrument_repair.py",
+    "tests/unit/test_eval_tower_decision_partitions.py",
+    "tests/unit/test_eval_tower_concurrency_metrics.py",
+    "tests/unit/test_bsv_observe.py"
+  ]
+}
