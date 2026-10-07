@@ -159,6 +159,7 @@ def main():
         stage='outer_native_capture'
         status.update(state='running',case_count=case_count,fixture_execution_conformant=None,native_outcome_kind='not_captured',shared_grade_state='not_started'); status_path.write_text(json.dumps(status,sort_keys=True)+'\n')
         receipt=api.capture_fixture_execution(argv=argv,cwd=app,junit=junit,output=result/'native',repositories={'app':app,'carrier':carrier},read_paths=context,selections=selections)
+        if git(app,'status','--porcelain','--untracked-files=all') or git(carrier,'status','--porcelain','--untracked-files=all'): raise RuntimeError('APP or ROOT checkout changed during selected-module capture')
         after=snapshot(result)
         junit_bytes=(result/'native'/'original-junit.xml').read_bytes(); jr=ET.fromstring(junit_bytes)
         actual={(x.get('classname',''),x.get('name','')) for x in jr.iter('testcase')}
@@ -199,6 +200,7 @@ def main():
             quality,traceability,reasons=shared_grade(tuple_value)
             hashes_after={row['path']:sha(carrier/row['path']) for row in root_inputs}
             if hashes_after!=grade_source_hashes: raise RuntimeError('ROOT grader/readset changed during shared grading')
+            if git(app,'status','--porcelain','--untracked-files=all') or git(carrier,'status','--porcelain','--untracked-files=all'): raise RuntimeError('APP or ROOT checkout changed during shared grading')
             grade_result={'state':'graded','native_outcome_kind':outcome_kind,'fixture_execution_conformant':outcome,'adapter_id':'vidya.adapters.ci_conformance/v1','registry_source':'ci-fixture-conformance','registry_task':'VB-CI-CONFORMANCE','measurement_id':tuple_value.measurement_id,'metric':tuple_value.metric,'value':tuple_value.value,'claim':tuple_value.claim,'quality':quality,'traceability':traceability,'reasons':reasons,'expected_ceiling_match':(quality,traceability)==('Judged','Located'),'shared_grade_source_hashes':hashes_after,'journal_record_grade':'not_in_scope','promotion_or_release_acceptance':None}
         (result/'shared-grade-custody.json').write_text(json.dumps(grade_result,sort_keys=True,indent=2)+'\n')
         inventory['after_shared_grade']=snapshot(result)
