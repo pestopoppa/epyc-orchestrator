@@ -189,7 +189,9 @@ def test_sibling_map_rejects_malformed_sysfs(tmp_path: Path) -> None:
 
 
 def test_default_affinity_rejects_incomplete_candidate_topology() -> None:
-    incomplete = {cpu: _TEST_SIBLINGS[cpu] for cpu in range(96)}
+    # Omit one complete physical sibling group; retained groups stay symmetric.
+    incomplete = {cpu: group for cpu, group in _TEST_SIBLINGS.items()
+                  if cpu not in {0, 96}}
     kind, effective, reason = _decide_placement(
         None, force=False, claim=_claim((0, 47)),
         host_cores=frozenset(range(192)), siblings_by_cpu=incomplete,
