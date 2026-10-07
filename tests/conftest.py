@@ -25,10 +25,13 @@ See also:
     - research/ESCALATION_FLOW.md for memory pool architecture
 """
 
+import atexit
 import json
 import os
+import shutil
 import tempfile
 import warnings
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,8 +44,79 @@ _PREVIOUS_PROGRESS_LOG_DIR = os.environ.get(_PROGRESS_LOG_DIR_ENV)
 _TEST_PROGRESS_LOG_TEMP = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-progress-")
 os.environ[_PROGRESS_LOG_DIR_ENV] = _TEST_PROGRESS_LOG_TEMP.name
 
-from src.config import reset_config
-from src.api.state import AppState
+_PRODUCTION_KERNEL_STORE_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
+
+
+def _install_hermetic_kernel_store() -> None:
+    """Give the suite a stub kernel store when the production one is absent.
+
+    `src.config` resolves `src.registry.kernel_paths.backend_dir()` in dataclass
+    default factories, and `src.api` builds a config at import — so without the
+    store at `/mnt/raid0/llm/kernels/production/<backend>` this conftest could not
+    even be imported, and no test ran anywhere but the production host.
+
+    Only acts when the production store is missing and no store was named
+    explicitly, so a run on the production host is unchanged. The stubs are inert
+    executables: nothing in mock mode launches them.
+    """
+    if os.environ.get("ORCHESTRATOR_PATHS_KERNEL_ROOT") or _PRODUCTION_KERNEL_STORE_CPU.is_dir():
+        return
+    root = Path(tempfile.mkdtemp(prefix="orchestrator-test-kernels-"))
+    atexit.register(shutil.rmtree, root, ignore_errors=True)
+    os.environ["ORCHESTRATOR_PATHS_KERNEL_ROOT"] = str(root)
+
+    from src.registry import kernel_paths
+
+    for backend, binary in kernel_paths.BACKEND_BINARIES.items():
+        backend_dir = kernel_paths.PRODUCTION_ROOT / backend
+        backend_dir.mkdir(parents=True)
+        stub = backend_dir / binary
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+
+
+def _import_stack_manifest_off_serving_host() -> None:
+    """Import `scripts.server.stack_manifest` on a machine smaller than the serving host.
+
+    The module validates the declared lineup against THIS machine's MemTotal at
+    import (a deliberate fail-fast for `orchestrator_stack.py`). On a test box that
+    leg can only fail: it measures the wrong machine. If the host-RAM leg is the
+    ONLY failure, re-import with /proc/meminfo unreadable, which the module already
+    reports as host leg UNGATED ("capacity unknown", not "capacity fine"). Every
+    other failure — the GPU leg, role classification, declaration parity — is left
+    to surface in the tests that import the module, exactly as before.
+    """
+    try:
+        import scripts.server.stack_manifest  # noqa: F401
+        return
+    except ValueError as exc:
+        message = str(exc)
+        if "device host (CPU RAM) OVERSUBSCRIBED" not in message or "device ROCm0" in message:
+            return
+    except Exception:
+        return
+
+    real_read_text = Path.read_text
+
+    def read_text_without_meminfo(self, *args, **kwargs):
+        if str(self) == "/proc/meminfo":
+            raise OSError("hidden by tests/conftest.py: this box is not the serving host")
+        return real_read_text(self, *args, **kwargs)
+
+    Path.read_text = read_text_without_meminfo
+    try:
+        import scripts.server.stack_manifest  # noqa: F401
+    except Exception:
+        pass
+    finally:
+        Path.read_text = real_read_text
+
+
+_install_hermetic_kernel_store()
+_import_stack_manifest_off_serving_host()
+
+from src.config import reset_config  # noqa: E402
+from src.api.state import AppState  # noqa: E402
 
 
 # Memory threshold in GB (fail if less available)
