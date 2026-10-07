@@ -28,6 +28,8 @@ from tests.unit.test_stack_change_pipeline_simulated_fixtures import (
     _pin_realized_compile_mode,
 )
 
+from tests.unit.test_stack_change_guard import _synthetic_stack_manifest_inputs
+
 
 def _capture_report(report, capture_root: Path, label: str):
     capture_root.mkdir(parents=True, exist_ok=True)
@@ -42,7 +44,9 @@ def _scenario_helpers():
     return importlib.import_module("tests.unit.test_stack_change_pipeline_simulated_fixtures")
 
 
-def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(tmp_path: Path) -> None:
+def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(
+    tmp_path: Path, _synthetic_stack_manifest_inputs
+) -> None:
     scenario = _scenario_helpers()
     worlds = (
         ("frontdoor", {"frontdoor", "worker_summarize"},
@@ -142,7 +146,9 @@ def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(tmp_p
     )
 
 
-def test_real_promotion_gate_does_not_run_after_a_bad_temporary_world(tmp_path: Path) -> None:
+def test_real_promotion_gate_does_not_run_after_a_bad_temporary_world(
+    tmp_path: Path, _synthetic_stack_manifest_inputs
+) -> None:
     scenario = _scenario_helpers()
     config = scenario._config(tmp_path, mode="update", roles={"frontdoor", "worker_summarize"})
     scenario._base_frontdoor_registry(config.lean_registry)
