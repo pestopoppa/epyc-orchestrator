@@ -45,6 +45,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: app
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
