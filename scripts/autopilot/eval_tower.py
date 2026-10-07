@@ -6142,14 +6142,17 @@ class EvalTower:
         # Routing distribution
         route_counts: dict[str, int] = {}
         for r in results:
-            route = r.route_used or "unknown"
-            # Simplify to tier
-            if "architect" in route.lower():
+            route = str(getattr(r, "route_used", "") or "").strip().lower()
+            # Only explicit frontdoor labels are frontdoor. Model IDs, empty values, and any
+            # other unrecognized route remain visible as unknown instead of inflating frontdoor.
+            if "architect" in route:
                 tier_name = "architect"
-            elif "worker" in route.lower():
+            elif "worker" in route:
                 tier_name = "worker"
-            else:
+            elif route == "frontdoor":
                 tier_name = "frontdoor"
+            else:
+                tier_name = "unknown"
             route_counts[tier_name] = route_counts.get(tier_name, 0) + 1
         total_routed = sum(route_counts.values()) or 1
         routing_dist = {k: v / total_routed for k, v in route_counts.items()}
