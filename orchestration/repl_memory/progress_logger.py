@@ -13,6 +13,7 @@ import atexit
 import hashlib
 import json
 import logging
+import os
 import threading
 import time
 import weakref
@@ -61,6 +62,9 @@ _WORKSPACE_LOG_PATH = Path("/workspace/logs/progress")
 
 # Use RAID path if available, otherwise fallback to workspace
 DEFAULT_LOG_PATH = _RAID_LOG_PATH if _RAID_LOG_PATH.parent.exists() else _WORKSPACE_LOG_PATH
+# Explicit per-process override. Tests set this before constructing API loggers;
+# ordinary runtime keeps DEFAULT_LOG_PATH unless an operator opts in.
+LOG_DIR_ENV = "ORCHESTRATOR_PROGRESS_LOG_DIR"
 
 TASK_RECORD_SCHEMA_VERSION = "task_record.v1"
 _TASK_RECORD_CACHE_LIMIT = 10_000
@@ -210,11 +214,19 @@ class ProgressLogger:
 
     def __init__(
         self,
-        log_dir: Path = DEFAULT_LOG_PATH,
+        log_dir: Path | None = None,
         buffer_size: int = 10,  # Flush after N entries
         max_buffer_age_s: float = DEFAULT_MAX_BUFFER_AGE_S,
     ):
-        self.log_dir = log_dir
+        # Resolve the environment override at construction time, not as a
+        # default-argument value at import time. Explicit caller arguments win.
+        configured_log_dir = os.environ.get(LOG_DIR_ENV)
+        if log_dir is not None:
+            self.log_dir = Path(log_dir)
+        elif configured_log_dir:
+            self.log_dir = Path(configured_log_dir)
+        else:
+            self.log_dir = DEFAULT_LOG_PATH
         self.buffer_size = buffer_size
         self.max_buffer_age_s = max_buffer_age_s
         self._buffer: List[ProgressEntry] = []
