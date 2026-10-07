@@ -125,6 +125,8 @@ def test_parse_cpu_list_single_cpu() -> None:
         " 0-5",
         "0-5 ",
     ],
+    ids=["empty", "letters", "trailing-comma", "missing-end", "descending",
+         "bad-member", "multiple-separators", "leading-space", "trailing-space"],
 )
 def test_parse_cpu_list_refuses_malformed(bad: str) -> None:
     with pytest.raises(BenchObservationError):
