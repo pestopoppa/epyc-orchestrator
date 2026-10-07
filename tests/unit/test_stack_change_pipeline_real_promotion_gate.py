@@ -35,7 +35,7 @@ def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(tmp_p
         ("ingest", scenario.INGEST_PROCESS_ROLES,
          scenario._ingest_registry, scenario._swapped_ingest_registry),
     )
-    capture_root = Path(os.environ["W4_PROMOTION_GATE_CAPTURE_DIR"])
+    capture_root = Path(os.environ.get("W4_PROMOTION_GATE_CAPTURE_DIR", tmp_path / "capture"))
     capture_root.mkdir(parents=True, exist_ok=True)
     worlds_summary = []
     for name, roles, prepare_base, prepare_swap in worlds:
@@ -76,14 +76,24 @@ def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(tmp_p
         suite = ET.parse(inner_junit).getroot()
         suite_rows = list(suite.iter("testsuite"))
         assert suite_rows, name
-        assert sum(int(row.attrib.get("tests", "0")) for row in suite_rows) > 0, name
-        assert sum(int(row.attrib.get("failures", "0")) for row in suite_rows) == 0, name
-        assert sum(int(row.attrib.get("errors", "0")) for row in suite_rows) == 0, name
-        assert sum(int(row.attrib.get("skipped", "0")) for row in suite_rows) == 0, name
-        cases = []
-        for row in suite.iter("testcase"):
-            cases.append({"classname": row.attrib.get("classname"), "name": row.attrib.get("name")})
+        nodes = list(suite.iter("testcase"))
+        assert nodes, name
+        assert all(not any(row.find(tag) is not None for tag in ("failure", "error", "skipped"))
+                   for row in nodes), name
+        assert sum(int(row.attrib.get("tests", "0")) for row in suite_rows) == len(nodes), name
+        cases = [{"classname": row.attrib.get("classname"), "name": row.attrib.get("name")}
+                 for row in nodes]
         assert cases, name
+        expected_modules = {
+            ".".join(Path(target).with_suffix("").parts)
+            for target in pipeline.PROMOTION_GATE_TARGETS
+        }
+        observed_modules = {
+            module for module in expected_modules
+            if any(case["classname"] == module or case["classname"].startswith(module + ".")
+                   for case in cases)
+        }
+        assert observed_modules == expected_modules, name
         worlds_summary.append(
             {
                 "world": name,
@@ -127,7 +137,8 @@ def test_real_promotion_gate_does_not_run_after_a_bad_temporary_world(tmp_path: 
     gate = next(step for step in report.steps if step.name == "promotion_gate")
     assert not report.ok
     assert gate.status == "skipped"
-    capture_root = Path(os.environ["W4_PROMOTION_GATE_CAPTURE_DIR"])
+    capture_root = Path(os.environ.get("W4_PROMOTION_GATE_CAPTURE_DIR", tmp_path / "capture"))
+    capture_root.mkdir(parents=True, exist_ok=True)
     (capture_root / "refusal.json").write_text(
         json.dumps({"invalid_world": True, "report_ok": report.ok,
                     "gate_status": gate.status, "gate_warnings": gate.warnings,
