@@ -6,6 +6,7 @@ that exact suite, so including itself would recurse.
 from __future__ import annotations
 
 import importlib
+from dataclasses import asdict
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,24 @@ from scripts.registry.stack_change_pipeline import (
     StackChangePipelineConfig,
     run_stack_change_pipeline,
 )
+
+
+# Imported pytest fixtures are enrolled in this module's outer cases too.
+# Merely importing the scenario helpers inside a test does not apply their
+# hermetic runtime-attestation and realized-NUMA fixtures.
+from tests.unit.test_stack_change_pipeline_simulated_fixtures import (
+    _clean_runtime_attestation,
+    _pin_realized_compile_mode,
+)
+
+
+def _capture_report(report, capture_root: Path, label: str):
+    capture_root.mkdir(parents=True, exist_ok=True)
+    (capture_root / f"{label}.pipeline.json").write_text(
+        json.dumps(asdict(report), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return report
 
 
 def _scenario_helpers():
@@ -43,13 +62,13 @@ def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(tmp_p
         world.mkdir()
         config = scenario._config(world, mode="update", roles=set(roles))
         prepare_base(config.lean_registry)
-        assert run_stack_change_pipeline(config).ok
+        assert _capture_report(run_stack_change_pipeline(config), capture_root, f"{name}-base").ok
 
         prepare_swap(config.lean_registry)
         approved = StackChangePipelineConfig(
             **{**config.__dict__, "allow_descriptor_model_removal": True}
         )
-        assert run_stack_change_pipeline(approved).ok
+        assert _capture_report(run_stack_change_pipeline(approved), capture_root, f"{name}-swap").ok
 
         checked = StackChangePipelineConfig(
             **{**approved.__dict__, "mode": "check", "run_promotion_gate": True}
@@ -69,6 +88,7 @@ def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(tmp_p
                 os.environ.pop("PYTEST_ADDOPTS", None)
             else:
                 os.environ["PYTEST_ADDOPTS"] = prior_addopts
+        _capture_report(report, capture_root, f"{name}-check")
         gate = next(step for step in report.steps if step.name == "promotion_gate")
         assert report.ok, name
         assert gate.status == "ok", name
@@ -126,7 +146,8 @@ def test_real_promotion_gate_does_not_run_after_a_bad_temporary_world(tmp_path: 
     scenario = _scenario_helpers()
     config = scenario._config(tmp_path, mode="update", roles={"frontdoor", "worker_summarize"})
     scenario._base_frontdoor_registry(config.lean_registry)
-    assert run_stack_change_pipeline(config).ok
+    capture_root = Path(os.environ.get("W4_PROMOTION_GATE_CAPTURE_DIR", tmp_path / "capture"))
+    assert _capture_report(run_stack_change_pipeline(config), capture_root, "refusal-base").ok
     # The registry remains parseable, but the already-generated descriptor and
     # priors no longer describe it. The gate must be skipped on that real error.
     scenario._base_frontdoor_registry(config.lean_registry, throughput=99.0)
@@ -134,6 +155,7 @@ def test_real_promotion_gate_does_not_run_after_a_bad_temporary_world(tmp_path: 
         **{**config.__dict__, "mode": "check", "run_promotion_gate": True}
     )
     report = run_stack_change_pipeline(checked)
+    _capture_report(report, capture_root, "refusal-check")
     gate = next(step for step in report.steps if step.name == "promotion_gate")
     assert not report.ok
     assert gate.status == "skipped"
