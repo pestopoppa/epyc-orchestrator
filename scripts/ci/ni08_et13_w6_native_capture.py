@@ -10,7 +10,7 @@ SOURCE_PIN = "73a3f746d152ea983768f938522a944053a5762c"
 ROOT_PIN = "72a0d06a251667fe6dc1cdf05ab19313e03f9736"
 ROOT_CONTEXT_FILES = ["scripts/ci/native_conformance.py", "scripts/vidya/adapters/__init__.py", "scripts/vidya/adapters/ci_conformance.py", "scripts/vidya/claim_tuple.py", "scripts/vidya/ingest_sources.py", "scripts/vidya/adapters/README.md", "handoffs/active/vidya-belief-substrate-program.md", "tests/vidya/test_ci_conformance.py", "scripts/vidya/lattice.py", "scripts/vidya/frames.py", "scripts/vidya/canonical.py", "handoffs/active/eval-tower-architecture-audit-2026-07-20.md"]
 PY_PIN = "3.13.15"
-REQUIREMENT_SEEDS = ["httpx", "math-verify", "pytest", "pyyaml"]
+REQUIREMENT_SEEDS = ["httpx", "jsonschema", "math-verify", "pydantic", "pydantic-settings", "pytest", "pyyaml"]
 ENV = {"PYTEST_DISABLE_PLUGIN_AUTOLOAD":"1", "PYTHONDONTWRITEBYTECODE":"1", "PYTHONHASHSEED":"0",
        "PYTHONUNBUFFERED":"1", "PYTEST_ADDOPTS":"", "PYTEST_PLUGINS":"", "ORCHESTRATOR_MOCK_MODE":"1",
        "ORCHESTRATOR_IGNORE_RUNTIME_STACK_FACTS":"1"}
