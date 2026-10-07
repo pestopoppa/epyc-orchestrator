@@ -5,8 +5,8 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 W6_PIN = "ce48ed2c386c2f69d23ad87289e384d7942ee7a5"
-BASE_PIN = W6_PIN  # fresh candidate source is W6 plus the reviewed ET13 two-file patch
-SOURCE_PIN = "73a3f746d152ea983768f938522a944053a5762c"
+BASE_PIN = W6_PIN  # fresh candidate source remains descended from the reviewed W6 base
+SOURCE_PIN = "14a2c3a1469cd44a7f7a9017c7f3a44c361b1464"
 ROOT_PIN = "72a0d06a251667fe6dc1cdf05ab19313e03f9736"
 ROOT_CONTEXT_FILES = ["scripts/ci/native_conformance.py", "scripts/vidya/adapters/__init__.py", "scripts/vidya/adapters/ci_conformance.py", "scripts/vidya/claim_tuple.py", "scripts/vidya/ingest_sources.py", "scripts/vidya/adapters/README.md", "handoffs/active/vidya-belief-substrate-program.md", "tests/vidya/test_ci_conformance.py", "scripts/vidya/lattice.py", "scripts/vidya/frames.py", "scripts/vidya/canonical.py", "handoffs/active/eval-tower-architecture-audit-2026-07-20.md"]
 PY_PIN = "3.13.15"
