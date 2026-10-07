@@ -1195,7 +1195,18 @@ def _reasoning_effort_certifications_step(config: StackChangePipelineConfig) -> 
 
 
 def _promotion_gate_command() -> list[str]:
-    return ["uv", "run", "pytest", "-q", *PROMOTION_GATE_TARGETS]
+    # The pipeline can validate a fully isolated temporary stack world, where
+    # ``config.repo_root`` is not a Python project. Run the unchanged gate suite
+    # from this source checkout explicitly while keeping the caller's temp world
+    # as the subprocess cwd.
+    # Reuse the already-running project interpreter. Calling ``uv run`` here
+    # can synchronize the full application dependency graph as a side effect;
+    # a missing test dependency should fail visibly instead of triggering an
+    # implicit install.
+    return [sys.executable, "-m", "pytest", "-q",
+            "-c", str(REPO_ROOT / "pyproject.toml"), f"--rootdir={REPO_ROOT}",
+            "-o", "addopts=", "-p", "no:cacheprovider",
+            *(str(REPO_ROOT / target) for target in PROMOTION_GATE_TARGETS)]
 
 
 def _runtime_attestation_warnings() -> list[str]:
@@ -1421,9 +1432,13 @@ def _promotion_gate_step(config: StackChangePipelineConfig, *, prior_ok: bool) -
             warnings=["skipped because earlier stack-change checks failed"],
         )
     try:
+        test_env = os.environ.copy()
+        test_env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        test_env["PYTHONDONTWRITEBYTECODE"] = "1"
         result = subprocess.run(
             command,
             cwd=config.repo_root,
+            env=test_env,
             text=True,
             capture_output=True,
             check=False,
