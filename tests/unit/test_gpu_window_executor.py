@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -195,6 +195,73 @@ def test_standing_approval_keeps_busy_checks(env, monkeypatch):
     with pytest.raises(gwe.WindowRefused):
         _open(env, minutes=165, drain_timeout_s=1)
     assert not env.window.exists()
+
+
+def _operator_schedule(env, approval=True, *, seconds=10800):
+    data = json.loads(env.schedule.read_text())
+    data["entries"][0].update(
+        start=_iso(env.clock[0]), end=_iso(env.clock[0] + seconds),
+        consumer="nonstanding-consumer", operator_approved=approval)
+    env.schedule.write_text(json.dumps(data))
+
+
+@pytest.mark.parametrize("seconds", [7200, 10800, 10805])
+def test_operator_approved_nonstanding_window_opens_within_absolute_cap(env, seconds):
+    # A broad approved reservation may cover several separately bounded windows.
+    _operator_schedule(env, seconds=14400)
+    lease = _open(env, expected_end=_iso(env.clock[0] + seconds))
+    assert lease["state"] == "open"
+    assert lease["authority"] == env.auth.record()
+    assert lease["schedule_entry"]["operator_approved"] is True
+    assert ("stop", "server_8083") in env.fake.calls
+
+
+@pytest.mark.parametrize("approval", [False, "true", 1])
+def test_nonliteral_operator_approval_does_not_extend_nonstanding_cap(env, approval):
+    _operator_schedule(env, approval)
+    with pytest.raises(gwe.WindowRefused) as exc:
+        _open(env, minutes=120)
+    assert exc.value.reason == "schedule_invalid"
+    assert not env.window.exists() and env.fake.calls == []
+
+
+def test_unapproved_nonstanding_one_hour_window_is_unchanged(env):
+    _operator_schedule(env, False, seconds=3600)
+    assert _open(env, minutes=60)["state"] == "open"
+
+
+def test_operator_approved_window_above_absolute_cap_refuses_before_park(env):
+    _operator_schedule(env, seconds=14400)
+    with pytest.raises(gwe.WindowRefused) as exc:
+        _open(env, expected_end=_iso(env.clock[0] + 10806))
+    assert exc.value.reason == "window_too_long"
+    assert not env.window.exists() and env.fake.calls == []
+
+
+@pytest.mark.parametrize("blocker", ["device", "pending", "drain"])
+def test_operator_approved_nonstanding_window_keeps_admission_checks(env, blocker):
+    _operator_schedule(env)
+    if blocker == "device":
+        env.fake.device_held = True
+    elif blocker == "pending":
+        gwe.set_pending("change", "bring-up", by="test")
+    else:
+        env.fake.busy = 1
+    with pytest.raises(gwe.WindowRefused) as exc:
+        _open(env, minutes=120, drain_timeout_s=1)
+    assert exc.value.reason == {"device": "device_busy", "pending": "stack_change_pending",
+                                "drain": "drain_timeout"}[blocker]
+    assert not any(call[0] == "stop" for call in env.fake.calls)
+    assert not env.window.exists() or _window(env)["holder"] == "production"
+
+
+def test_operator_approved_schedule_does_not_replace_cli_authority(env, monkeypatch):
+    _operator_schedule(env)
+    monkeypatch.setattr(gwe, "live_ops", env.fake.ops)
+    assert gwe.main(["open", "--roles", "architect_critic", "--ports", str(PORT),
+                     "--expected-end", "+2h", "--schedule-ref", "s1",
+                     "--campaign-id", "ak"]) == 3
+    assert not env.window.exists() and env.fake.calls == []
 
 
 def test_repo_policy_file_is_valid():
