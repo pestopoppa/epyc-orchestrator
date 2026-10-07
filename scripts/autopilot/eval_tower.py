@@ -6142,14 +6142,17 @@ class EvalTower:
         # Routing distribution
         route_counts: dict[str, int] = {}
         for r in results:
-            route = r.route_used or "unknown"
-            # Simplify to tier
-            if "architect" in route.lower():
+            route = str(getattr(r, "route_used", "") or "").strip().lower()
+            # Only explicit frontdoor labels are frontdoor. Model IDs, empty values, and any
+            # other unrecognized route remain visible as unknown instead of inflating frontdoor.
+            if "architect" in route:
                 tier_name = "architect"
-            elif "worker" in route.lower():
+            elif "worker" in route:
                 tier_name = "worker"
-            else:
+            elif route == "frontdoor":
                 tier_name = "frontdoor"
+            else:
+                tier_name = "unknown"
             route_counts[tier_name] = route_counts.get(tier_name, 0) + 1
         total_routed = sum(route_counts.values()) or 1
         routing_dist = {k: v / total_routed for k, v in route_counts.items()}
@@ -6961,6 +6964,54 @@ class EvalTower:
             excluded_partitions=excluded_partitions,
             exclusion_reasons=exclusion_reasons,
         )
+        partition_quality = result.details.get("partition_quality", {})
+        partition_counts = result.details.get("partition_counts", {})
+        core_n = int(partition_counts.get("core", 0) or 0)
+        fresh_n = int(partition_counts.get("audit", 0) or 0)
+        core_quality = partition_quality.get("core") if core_n else None
+        fresh_quality = partition_quality.get("audit") if fresh_n else None
+        if not audit_policy["enabled"]:
+            generalization_status = "unavailable"
+            generalization_reason = "w6_audit_disabled"
+        elif not audit_policy["active"]:
+            generalization_status = "unavailable"
+            generalization_reason = audit_policy.get("skip_reason", "w6_audit_inactive")
+        elif not core_n and not fresh_n:
+            generalization_status = "unavailable"
+            generalization_reason = "core_and_fresh_unscored"
+        elif not core_n:
+            generalization_status = "unavailable"
+            generalization_reason = "core_unscored"
+        elif not fresh_n:
+            generalization_status = "unavailable"
+            generalization_reason = "fresh_unscored"
+        else:
+            generalization_status = "measured"
+            generalization_reason = None
+        result.details["w6_generalization"] = {
+            "status": generalization_status,
+            "reason": generalization_reason,
+            "core_quality": core_quality,
+            "fresh_quality": fresh_quality,
+            "core_quality_denominator_n": core_n,
+            "fresh_quality_denominator_n": fresh_n,
+            "quality_denominator_policy": (
+                "scored_and_task_failed; task_failed_scores_zero; "
+                "infra_and_scoring_failures_excluded"
+            ),
+            "core_minus_fresh_quality": (
+                core_quality - fresh_quality
+                if generalization_status == "measured"
+                else None
+            ),
+            "scale": "mean_question_accuracy_0_to_3",
+            "positive_means": "core quality exceeds fresh-audit quality",
+            "comparison_scope": (
+                "descriptive partition difference; core and fresh may have "
+                "different question and suite mixes; not a matched causal "
+                "overfitting estimate"
+            ),
+        }
         if audit_policy["active"] and audit_policy["shadow_only"]:
             result.details.update(
                 {
