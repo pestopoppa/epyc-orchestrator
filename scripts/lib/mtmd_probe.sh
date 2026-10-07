@@ -25,7 +25,7 @@ candidate_dir=$(cd -- "$candidate_dir" 2>/dev/null && pwd -P) || exit 126
 # copies of that same directory while preserving the order of every other entry.
 probe_ld_path=$candidate_dir
 if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
-  IFS=: read -r -a inherited_dirs <<< "$LD_LIBRARY_PATH"
+  IFS=: read -r -a inherited_dirs <<<"$LD_LIBRARY_PATH"
   for inherited_dir in "${inherited_dirs[@]}"; do
     [[ -n "$inherited_dir" && "$inherited_dir" != "$candidate_dir" ]] || continue
     probe_ld_path+=":${inherited_dir}"
