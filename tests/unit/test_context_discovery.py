@@ -45,6 +45,26 @@ def test_parse_colgrep_json_string_and_garbage() -> None:
     assert parse_colgrep_json({"results": [{"path": "y.py"}]})[0].path == "y.py"  # nested
 
 
+@pytest.mark.parametrize(
+    "score",
+    [float("nan"), float("inf"), float("-inf"), 10**1000],
+    ids=("nan", "positive_infinity", "negative_infinity", "large_integer_overflow"),
+)
+def test_parse_colgrep_json_normalizes_non_finite_or_overflowing_scores(score) -> None:
+    hits = parse_colgrep_json(
+        [
+            {"path": "bad-score.py", "score": score},
+            {"path": "ordinary.py", "score": 0.25},
+        ]
+    )
+
+    assert [hit.score for hit in hits] == [0.0, 0.25]
+    ranked = discover_candidates(
+        "q", code_search_fn=lambda _query, _limit: hits, max_files=2
+    )
+    assert [hit.path for hit in ranked] == ["ordinary.py", "bad-score.py"]
+
+
 # ─── discovery (pass 1) ──────────────────────────────────────────────────────────
 
 

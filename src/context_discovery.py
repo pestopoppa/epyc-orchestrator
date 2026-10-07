@@ -24,6 +24,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 
 from src.context_assembly import (
@@ -78,7 +79,9 @@ def parse_colgrep_json(payload: str | list) -> list[DiscoveredHit]:
         score = item.get("score", item.get("relevance", item.get("rank_score", 0.0)))
         try:
             score = float(score)
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
+            score = 0.0
+        if not math.isfinite(score):
             score = 0.0
         hits.append(DiscoveredHit(path=path, line_ranges=ranges, score=score))
     return hits
