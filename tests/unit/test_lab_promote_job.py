@@ -260,3 +260,83 @@ def test_gold_tuple_paths_must_exist_when_queue_dir_is_known(tmp_path: Path) -> 
 
     assert not decision.eligible
     assert "existing F3 gold tuple files" in decision.reason
+
+
+@pytest.mark.parametrize("stage,target,repeats", [("shadow", "reviewed", 10),
+                                                ("reviewed", "autonomous", 20)])
+def test_repeated_verdicts_cannot_substitute_for_distinct_runs(
+    tmp_path: Path, stage: str, target: str, repeats: int
+) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file, stage=stage)
+    before = jobs_file.read_bytes()
+    originals = _verdicts(stage, ["accept"], cloud=stage == "shadow")
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records(stage, 1))
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", originals * repeats)
+    _write_gold_tuple_files(tmp_path / "queue", originals)
+    with pytest.raises(promote_job.PromotionError, match="duplicate verdicts"):
+        promote_job.run_from_args(_args(
+            tmp_path, jobs_file, target_stage=target, apply=True,
+            confirm_job_id="sample_job"
+        ))
+    assert jobs_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("run_id", [None, "", "   "])
+def test_invalid_selected_run_identity_refuses_apply(tmp_path: Path, run_id) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    before = jobs_file.read_bytes()
+    rows = _verdicts("shadow", ["accept"] * 10)
+    _write_gold_tuple_files(tmp_path / "queue", rows)
+    if run_id is None:
+        rows[0].pop("run_id")
+    else:
+        rows[0]["run_id"] = run_id
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("shadow", 10))
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", rows)
+    with pytest.raises(promote_job.PromotionError, match="valid run_id"):
+        promote_job.run_from_args(_args(tmp_path, jobs_file, apply=True,
+                                      confirm_job_id="sample_job"))
+    assert jobs_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("records_kind", ["absent", "other-job"])
+def test_selected_verdict_requires_its_logged_run_before_apply(
+    tmp_path: Path, records_kind: str
+) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    before = jobs_file.read_bytes()
+    rows = _verdicts("shadow", ["accept"] * 10)
+    records = _records("shadow", 10)
+    if records_kind == "absent":
+        records.pop(0)
+    else:
+        records[0]["job_id"] = "another_job"
+    _write_gold_tuple_files(tmp_path / "queue", rows)
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", records)
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", rows)
+    with pytest.raises(promote_job.PromotionError, match="task_record not found"):
+        promote_job.run_from_args(_args(tmp_path, jobs_file, apply=True,
+                                      confirm_job_id="sample_job"))
+    assert jobs_file.read_bytes() == before
+
+
+def test_unselected_and_unscored_rows_do_not_require_run_identity(tmp_path: Path) -> None:
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+    before = jobs_file.read_bytes()
+    rows = _verdicts("shadow", ["accept"] * 10)
+    _write_gold_tuple_files(tmp_path / "queue", rows)
+    rows += [
+        {"job_id": "sample_job", "stage": "reviewed", "verdict": "accept"},
+        {"job_id": "sample_job", "stage": "shadow", "verdict": "pending"},
+        {"job_id": "another_job", "stage": "shadow", "verdict": "accept"},
+    ]
+    _write_jsonl(tmp_path / "queue" / "task_records.jsonl", _records("shadow", 10))
+    _write_jsonl(tmp_path / "queue" / "review_verdicts.jsonl", rows)
+    decision = promote_job.run_from_args(_args(tmp_path, jobs_file))
+    assert decision.eligible
+    assert decision.counts["shadow_scored"] == 10
+    assert jobs_file.read_bytes() == before
