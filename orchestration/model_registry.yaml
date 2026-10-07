@@ -2,17 +2,19 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# registry at /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/worktrees/stackchg8083-orch-20261005T044423Z/orchestration/stack_topology.yaml
+# noncanonical master input at /home/runner/work/epyc-root/epyc-root/research/orchestration/model_registry.yaml
+# canonical source of truth: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
+# with drafter selection from /home/runner/work/epyc-root/epyc-root/app/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
 # changes by cache-key mismatch and regenerates this lean runtime view. To
-# temporarily skip the compile (e.g. during a master schema change), set
+# edit registry data, change the master source; this generated view is disposable.
+# To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-05T04:58:10+00:00
-# Cache key:   50c56ac0f21f21d8...
+# Compiled at: 2026-10-07T14:31:55+00:00
+# Cache key:   66f4d64c9033823d...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1673,7 +1675,9 @@ speculative_decoding_policy:
       '
   retired_fields:
     ngram_candidate_spec_type: 'RETIRED 2026-07-31. This field previously carried `ngram-mod,draft-mtp` while `spec_type` carried `draft-mtp`, which read as "the real one is elsewhere" and directly caused
-      mis-launched measurement runs. The composed recipe is now the value of `spec_type` itself. Any surviving occurrence of this key is stale and MUST be deleted, not consulted.
+      mis-launched measurement runs. Composition moved into `spec_type` on 2026-07-31; operator receipt `RATIFY-STACKCHG-DFLASH2-20261003` superseded that policy on 2026-10-03. Current drafter eligibility
+      lives in `roles.<model_role>.drafters` and the actual per-server choice lives in orchestrator `stack_topology.yaml` (`drafter_selection`). `default_spec_type` documents legacy rows only; it is not
+      a selector for roles with `drafters`. This retired-field entry is historical documentation, not a live selector. Remove the key from active configuration and do not consult it.
 
       '
 server_mode:
