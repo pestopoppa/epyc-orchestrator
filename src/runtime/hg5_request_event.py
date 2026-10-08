@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import time
 import uuid
@@ -16,6 +17,9 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "hg5.request_intervention.v1"
+SCHEMA_V2 = "hg5.request_intervention.v2"
+CATEGORIES = frozenset({"OPTIMUM", "BASELINE", "CANDIDATE"})
+DIRECTIONS = frozenset({"higher_better", "lower_better"})
 COUNTERS = {
     "calls": "total_calls",
     "prompt_tokens": "total_prompt_tokens_reported",
@@ -65,6 +69,33 @@ def record_step(capture: dict, owner: Any, *, trigger: str, initial_role: str,
                              "before": before, "after": after, "delta": delta})
 
 
+def strict_json_pairs(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("duplicate source context key")
+        result[key] = value
+    return result
+
+
+def projection_declaration(value: Any) -> bytes:
+    """Validate explicit pre-capture labels; never infer direction or a protocol."""
+    if not isinstance(value, dict) or set(value) != {"category", "metric_direction", "protocol_id"}:
+        raise ValueError("projection declaration needs exactly category/directions/protocol_id")
+    if not isinstance(value["category"], str) or value["category"] not in CATEGORIES:
+        raise ValueError("unsupported explicitly declared category")
+    directions = value["metric_direction"]
+    if not isinstance(directions, dict) or set(directions) != set(COUNTERS) or any(
+            not isinstance(direction, str) or direction not in DIRECTIONS for direction in directions.values()):
+        raise ValueError("each supported cost metric needs an explicit valid direction")
+    protocol = value["protocol_id"]
+    # The empty string is an explicit absence declaration, not an invented citation.
+    # A nonempty source citation is not human ratification or runtime authorization.
+    if not isinstance(protocol, str) or (protocol != "" and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,127}", protocol) is None):
+        raise ValueError("invalid explicitly declared protocol identity")
+    return canonical(value)
+
+
 def begin_capture() -> dict | None:
     """Capture prospective context only when this independent writer is explicitly enabled."""
     destination = os.environ.get("HG5_REQUEST_EVENT_DIRECTORY", "")
@@ -72,20 +103,24 @@ def begin_capture() -> dict | None:
         return None
     context_raw = os.environ.get("HG5_REQUEST_EVENT_SOURCE_CONTEXT", "")
     source = {"origin": "unknown", "commit": None, "tree": None, "producer_sha256": None}
+    declaration = None
     if context_raw:
-        context = json.loads(context_raw)
-        if not isinstance(context, dict) or set(context) != {"commit", "tree", "producer_sha256"}:
-            raise ValueError("source context must contain exactly commit/tree/producer_sha256")
+        context = json.loads(context_raw, object_pairs_hook=strict_json_pairs)
+        if not isinstance(context, dict) or set(context) not in ({"commit", "tree", "producer_sha256"}, {"commit", "tree", "producer_sha256", "projection"}):
+            raise ValueError("source context must contain commit/tree/producer_sha256 with optional projection only")
         for key, length in (("commit", 40), ("tree", 40), ("producer_sha256", 64)):
             value = context[key]
             if not isinstance(value, str) or len(value) != length or any(c not in "0123456789abcdef" for c in value):
                 raise ValueError("invalid source context identity")
         if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != context["producer_sha256"]:
             raise ValueError("producer bytes differ from source-authored run context")
-        source = {"origin": "source_authored_run_context", **context}
+        source = {"origin": "source_authored_run_context", **{key: context[key] for key in ("commit", "tree", "producer_sha256")}}
+        if "projection" in context:
+            declaration = projection_declaration(context["projection"])
     return {"destination": destination, "event_id": uuid.uuid4().hex,
             "start_utc_ns": time.time_ns(), "start_monotonic_ns": time.monotonic_ns(),
-            "source": source, "steps": [], "stage": None}
+            "source": source, "steps": [], "stage": None,
+            "projection_canonical_at_start": declaration}
 
 
 def finish_capture(capture: dict | None, *, request_id: str, plan: Any, counters: dict,
@@ -118,6 +153,20 @@ def finish_capture(capture: dict | None, *, request_id: str, plan: Any, counters
                     "message": None},
         "claim_scope": "intervention_and_actual_counter_facts_only",
     }
+    declaration = capture.get("projection_canonical_at_start")
+    if declaration is not None:
+        if not isinstance(declaration, bytes):
+            raise ValueError("pre-capture declaration custody changed")
+        labels = json.loads(declaration, object_pairs_hook=strict_json_pairs)
+        if projection_declaration(labels) != declaration:
+            raise ValueError("pre-capture declaration bytes changed")
+        if body["source"]["origin"] != "source_authored_run_context":
+            raise ValueError("version2 labels require captured source-authored context")
+        body["schema"] = SCHEMA_V2
+        body["projection"] = {"declaration": labels,
+                              "declaration_sha256": hashlib.sha256(declaration).hexdigest(),
+                              "binding": "source_authored_pre_capture_context",
+                              "human_ratification": "not_asserted"}
     raw = canonical(body)
     sealed = canonical({"body": body, "body_sha256": hashlib.sha256(raw).hexdigest()}) + b"\n"
     directory = Path(capture["destination"])
