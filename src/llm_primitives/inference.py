@@ -1009,7 +1009,7 @@ class InferenceMixin:
         serving_calls.clear_staged()
         req_elapsed_ms = (time.perf_counter() - req_started) * 1000
         _raise_if_context_overflow(result, role, (self.server_urls or {}).get(role, "") if hasattr(self, "server_urls") else "")
-        self._set_last_inference_meta({
+        call_meta: dict[str, Any] = {
             "role": role,
             "transport": "model_server",
             "elapsed_ms": req_elapsed_ms,
@@ -1021,7 +1021,27 @@ class InferenceMixin:
             "gen_ms": result.generation_ms,
             "overhead_ms": result.http_overhead_ms,
             "completion_probabilities": list(getattr(result, "completion_probabilities", []) or []),
-        })
+        }
+        server_timings = getattr(result, "timings", None)
+        if isinstance(server_timings, dict):
+            # Preserve validated raw /completion counts for the call recorder;
+            # missing or malformed values remain unknown, never estimated.
+            prompt_n = _server_count(server_timings.get("prompt_n"))
+            cache_n = _server_count(server_timings.get("cache_n"))
+            call_meta.update(
+                {
+                    "prompt_n": prompt_n,
+                    "cache_n": cache_n,
+                    "prompt_ms": _server_duration(server_timings.get("prompt_ms")),
+                    "prompt_tokens": (
+                        prompt_n + cache_n
+                        if prompt_n is not None and cache_n is not None
+                        else None
+                    ),
+                    "cached_prompt_tokens": cache_n,
+                }
+            )
+        self._set_last_inference_meta(call_meta)
         if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
             log.warning(
                 "Frontdoor inference telemetry: transport=model_server elapsed_ms=%.1f "

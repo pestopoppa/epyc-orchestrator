@@ -445,10 +445,14 @@ class TestLlamaServerBackend:
             "stop": True,
         }
 
+        clock_values = iter((100.0, 140.0))
         with (
             patch.object(backend.client, "post", return_value=mock_response),
             patch("src.backends.serving_calls.log_path", return_value=None),
-            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0]),
+            patch(
+                "src.backends.llama_server.time.time",
+                side_effect=lambda: next(clock_values, 140.0),
+            ),
             patch("src.backends.llama_server.time.perf_counter", side_effect=[0.0, 40.0]),
         ):
             result = backend.infer(role_config, request)
@@ -607,10 +611,14 @@ class TestLlamaServerBackend:
                     '"tokens_evaluated":10,"timings":{"predicted_ms":40000.0}}'
                 )
 
+        clock_values = iter((100.0, 140.0))
         with (
             patch.object(backend.client, "stream", return_value=_StreamResponse()),
             patch("src.backends.serving_calls.log_path", return_value=None),
-            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0]),
+            patch(
+                "src.backends.llama_server.time.time",
+                side_effect=lambda: next(clock_values, 140.0),
+            ),
             patch("src.backends.llama_server.time.perf_counter", side_effect=[0.0, 40.0]),
         ):
             result = backend.infer_stream_text(role_config, request)
