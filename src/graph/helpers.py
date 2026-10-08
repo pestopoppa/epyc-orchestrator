@@ -164,8 +164,33 @@ def _tap_write_repl_result(
     _tap_write_repl_result_impl(output, error, is_final, turn)
 
 
+def _trace_announced_action(
+    output: object, *, complete: bool, eligible: bool,
+    retry_attempted: bool, retry_failed: bool,
+) -> tuple[bool | None, str, str]:
+    """Classify only text retained by the legacy trace; no retry-body inference."""
+    if not eligible:
+        return None, "not_generated_output", "unknown"
+    if retry_attempted and not retry_failed:
+        return None, "retry_output_not_retained", "retry"
+    value, status = _classify_announced_action(output, complete=complete)
+    return value, status, "primary"
+
+
 def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None = None,
-                    prompt: str | None = None, repeat_count: object = None) -> None:
+                    prompt: str | None = None, repeat_count: object = None,
+                    primary_meta: dict[str, Any] | None = None,
+                    retry_meta: dict[str, Any] | None = None,
+                    retry_attempted: bool = False,
+                    retry_failed: bool = False,
+                    requested_output_cap: object = None,
+                    processed_output_chars: object = None,
+                    processed_output_truncated: object = None,
+                    post_extract_executable_code: object = None,
+                    action_source_output: object = None,
+                    action_source_eligible: bool = True,
+                    nudge_branch: str | None = None,
+                    task_id: object = None) -> None:
     """Flag-gated per-turn observability for BEP OFF-arm (interleaved) debugging.
 
     Captures exactly what the model emits each turn + whether it calls the file-write tool vs
@@ -185,8 +210,70 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
         except Exception:
             path = "/mnt/raid0/llm/tmp/bep_turn_trace.jsonl"
         _p = prompt or ""
+        _primary = primary_meta if isinstance(primary_meta, dict) else {}
+        _retry = retry_meta if isinstance(retry_meta, dict) else {}
+        _error_reasons = {"exception", "error", "timeout", "read_timeout", "read_timeout_partial",
+                          "request_error", "http_error", "server_error"}
+        def _reason(meta: dict[str, Any], *, attempted: bool = True) -> str:
+            value = meta.get("completion_reason")
+            if not isinstance(value, str) or not value:
+                return "missing" if attempted else "not_attempted"
+            if value == "length":
+                return "length"
+            if value == "stop":
+                return "stop"
+            if value in _error_reasons:
+                return "error"
+            return "unknown"
+        def _transport(meta: dict[str, Any], *, attempted: bool = True) -> str:
+            value = meta.get("transport")
+            if not attempted:
+                return "not_attempted"
+            return value if isinstance(value, str) and value in {"model_server", "mock"} else "unknown"
+        _cap = requested_output_cap
+        _cap = _cap if isinstance(_cap, int) and not isinstance(_cap, bool) else None
+        _processed_chars = processed_output_chars
+        _processed_chars = _processed_chars if isinstance(_processed_chars, int) and not isinstance(_processed_chars, bool) else None
+        _processed_truncated = processed_output_truncated if isinstance(processed_output_truncated, bool) else None
+        _post_extract_exec = post_extract_executable_code if isinstance(post_extract_executable_code, bool) else None
+        _branch_known_before_exec = nudge_branch in {"comment_only", "comment_ratio"}
+        _action_output = action_source_output if isinstance(action_source_output, str) else None
+        (
+            _announced_action, _announced_action_status, _announced_action_source,
+        ) = _trace_announced_action(
+            _action_output, complete=_action_output is not None,
+            eligible=action_source_eligible, retry_attempted=retry_attempted,
+            retry_failed=retry_failed,
+        )
         rec = {
-            "ts": _dt.now().isoformat(), "turn": turn, "role": str(role),
+            "trace_schema": "bep_turn_v2", "producer_id": "epyc-orchestrator:src/graph/helpers.py",
+            # A path identifies the producer class, not the loaded source revision.
+            "runtime_producer_revision": None,
+            "runtime_producer_revision_status": "unknown_not_captured",
+            "ts": _dt.now().isoformat(), "turn": turn, "role": str(role), "task_id": task_id,
+            "native_inference_transport": _transport(_primary),
+            "native_completion_reason_primary": _reason(_primary),
+            "native_inference_transport_retry": _transport(_retry, attempted=retry_attempted),
+            "native_completion_reason_retry": _reason(_retry, attempted=retry_attempted),
+            "retry_attempted": bool(retry_attempted), "retry_failed": bool(retry_failed),
+            "completion_tokens": None,
+            "completion_tokens_status": "unsupported_unattested_backend_basis",
+            "requested_output_cap": _cap,
+            "effective_output_cap": None,
+            "effective_output_cap_status": "not_exposed_by_call_metadata",
+            "raw_output_chars": len(raw), "raw_output_truncated": len(raw) > 4000,
+            "processed_output_chars": _processed_chars,
+            "processed_output_truncated": _processed_truncated,
+            "processed_output_attempt": "retry" if retry_attempted and not retry_failed else "primary",
+            "post_extract_executable_code": _post_extract_exec,
+            "post_extract_known": _post_extract_exec is not None,
+            "dsl_call_substring_signal": bool(_CALL_STOP_RE.search(raw)),
+            "nudge_branch": nudge_branch,
+            "nudge_branch_status": "known_pre_execution" if _branch_known_before_exec else "unknown_post_execution",
+            "announced_action_predicate_version": _ANNOUNCED_ACTION_VERSION,
+            "announced_action": _announced_action,
+            "announced_action_status": _announced_action_status,
+            "announced_action_source": _announced_action_source,
             "calls_file_write_safe": "file_write_safe" in raw,
             "calls_open": "open(" in raw,
             "has_final": "FINAL(" in raw,
@@ -408,6 +495,142 @@ _CALL_STOP_RE = re.compile(
     r'CALL\s*\(\s*"[^"]+"\s*(?:,\s*\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|\d+|True|False|None))*\s*\)',
 )
 
+_ANNOUNCED_ACTION_VERSION = "announced_action.lex-v1"
+_ANNOUNCED_ACTION_ADVERBS = {"now", "first", "next", "then", "briefly", "carefully"}
+_ANNOUNCED_ACTION_VERBS = (
+    "inspect", "read", "check", "search", "open", "modify", "edit", "write",
+    "add", "remove", "run", "execute", "test", "verify", "implement", "patch", "update",
+)
+_ANNOUNCED_ACTION_COMMITMENT = re.compile(
+    r"^(?:now\s+i\s+will|next\s+i'll|i\s+will|i'll|i\s+am\s+going\s+to|i'm\s+going\s+to|let\s+me)\b",
+    re.IGNORECASE,
+)
+_ANNOUNCED_ACTION_POSITIVE = re.compile(
+    r"^(?:now\s+i\s+will|next\s+i'll|i\s+will|i'll|i\s+am\s+going\s+to|i'm\s+going\s+to|let\s+me)"
+    r"(?:\s+(?:now|first|next|then|briefly|carefully)){0,3}\s+"
+    r"(?:inspect|read|check|search|open|modify|edit|write|add|remove|run|execute|test|verify|implement|patch|update)\b"
+    r"\s+(?P<object>\w[\w'-]*(?:\s+[^\s].*)?)\s*[.!;:]?$",
+    re.IGNORECASE,
+)
+_ANNOUNCED_ACTION_NEAR = re.compile(
+    r"^(?:now\s+i\s+will|next\s+i'll|i\s+will|i'll|i\s+am\s+going\s+to|i'm\s+going\s+to|let\s+me)"
+    r"(?:\s+[\w'-]+){0,5}\s+"
+    r"(?:inspect|read|check|search|open|modify|edit|write|add|remove|run|execute|test|verify|implement|patch|update)\b",
+    re.IGNORECASE,
+)
+_ANNOUNCED_ACTION_MODAL = re.compile(
+    r"\b(?:might|could|should|would|may|can|won't|wouldn't|shouldn't|mustn't|"
+    r"never|not|if|unless|maybe|perhaps|possibly|probably|depending)\b",
+    re.IGNORECASE,
+)
+
+def _announced_action_plain_line(line: str) -> tuple[str | None, str | None]:
+    """Remove quoted and inline-code regions; return (plain text, reason if ambiguous)."""
+    chars = list(line)
+    i = 0
+    while i < len(chars):
+        if chars[i] == "`":
+            j = i + 1
+            while j < len(chars) and chars[j] != "`":
+                j += 1
+            if j >= len(chars):
+                return None, "unmatched_inline_code"
+            for k in range(i, j + 1):
+                chars[k] = " "
+            i = j + 1
+            continue
+        i += 1
+    text = "".join(chars)
+    chars = list(text)
+    i = 0
+    while i < len(chars):
+        opener = chars[i]
+        if opener in ("\'", '"', "“", "‘") and (opener != "\'" or i == 0 or not (chars[i - 1].isalnum() or chars[i - 1] == "_")):
+            closer = {"“": "”", "‘": "’"}.get(opener, opener)
+            j = i + 1
+            while j < len(chars) and chars[j] != closer:
+                j += 1
+            if j >= len(chars):
+                return None, "unmatched_quote"
+            for k in range(i, j + 1):
+                chars[k] = " "
+            i = j + 1
+            continue
+        i += 1
+    return "".join(chars), None
+
+def _classify_announced_action(
+    output: object, *, complete: bool, version: str = _ANNOUNCED_ACTION_VERSION,
+) -> tuple[bool | None, str]:
+    """Conservative, versioned lexical signal; never asserts intent or execution."""
+    if version != _ANNOUNCED_ACTION_VERSION:
+        return None, "unsupported_version"
+    if not isinstance(output, str):
+        return None, "missing_output"
+    if not complete or len(output) > 4000:
+        return None, "incomplete_or_truncated"
+    fenced = False
+    fence_char = ""
+    fence_len = 0
+    positive = False
+    ambiguous = False
+    for line in output.splitlines():
+        fence = re.match(r"^\s{0,3}(`{3,}|~{3,})", line)
+        if fence:
+            token = fence.group(1)
+            if not fenced:
+                fenced, fence_char, fence_len = True, token[0], len(token)
+            elif token[0] == fence_char and len(token) >= fence_len:
+                fenced, fence_char, fence_len = False, "", 0
+            continue
+        if fenced:
+            continue
+        plain, error = _announced_action_plain_line(line)
+        if error:
+            return None, error
+        assert plain is not None
+        stripped = plain.strip()
+        if not stripped or stripped.startswith(("#", ">")):
+            continue
+        stripped = re.sub(r"^(?:[-*+]\s+|\d+[.)]\s+)", "", stripped)
+        match = _ANNOUNCED_ACTION_POSITIVE.fullmatch(stripped)
+        if match:
+            # Modal/conditional qualifiers anywhere in the same clause make it ambiguous.
+            action_start = _ANNOUNCED_ACTION_COMMITMENT.match(stripped)
+            tail = stripped[action_start.end():] if action_start else stripped
+            if _ANNOUNCED_ACTION_MODAL.search(tail) or stripped.endswith("?"):
+                ambiguous = True
+            else:
+                positive = True
+            continue
+        if _ANNOUNCED_ACTION_COMMITMENT.match(stripped) and _ANNOUNCED_ACTION_NEAR.match(stripped):
+            ambiguous = True
+            continue
+        if _ANNOUNCED_ACTION_MODAL.search(stripped) and re.search(
+            r"\b(?:inspect|read|check|search|open|modify|edit|write|add|remove|run|execute|test|verify|implement|patch|update)\b",
+            stripped, re.IGNORECASE,
+        ):
+            ambiguous = True
+            continue
+        # A commitment/action phrase embedded in a conditional or other clause is not anchored.
+        if _ANNOUNCED_ACTION_NEAR.search(stripped) or (
+            re.search(
+                r"(?:\bnow\s+i\s+will\b|\bnext\s+i'll\b|\bi\s+will\b|\bi'll\b|"
+                r"\bi\s+am\s+going\s+to\b|\bi'm\s+going\s+to\b|\blet\s+me\b)",
+                stripped, re.IGNORECASE,
+            ) and re.search(
+                r"\b(?:inspect|read|check|search|open|modify|edit|write|add|remove|run|execute|test|verify|implement|patch|update)\b",
+                stripped, re.IGNORECASE,
+            )
+        ):
+            ambiguous = True
+    if fenced:
+        return None, "unmatched_fence"
+    if ambiguous:
+        return None, "ambiguous_candidate"
+    if positive:
+        return True, "explicit_anchored_commitment"
+    return False, "no_candidate"
 
 def _is_comment_only(code: str) -> bool:
     """Return True if code has no executable lines (all comments/blank)."""
@@ -1187,6 +1410,12 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         if deps.primitives is not None:
             deps.primitives._early_stop_check = None
 
+    _primary_llm_output = code
+    _primary_call_meta = dict(_turn_call_meta)
+    _reasoning_retry_meta: dict[str, Any] | None = None
+    _reasoning_retry_attempted = False
+    _reasoning_retry_failed = False
+
     if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
         elapsed_ms = (asyncio.get_event_loop().time() - llm_started) * 1000
         log.warning(
@@ -1224,10 +1453,36 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Save raw LLM output for FINAL() rescue before code extraction
     raw_llm_output = code
-    # Observability-first (BEP OFF-arm debug): record exactly what the model emitted this turn,
-    # before any extraction/rescue can alter it. Flag-gated default-off (no-op in production).
-    _bep_turn_trace(state.turns, role, raw_llm_output, prompt=prompt,
-                    repeat_count=getattr(state, "repl_noprogress_count", None))
+    # The trace is emitted once before REPL execution, after the final extraction/rescue branch.
+    # The stored raw_output remains the original attempt (legacy payload meaning); post-retry
+    # processing is represented only by scalar length/truncation/outcome fields.
+    _bep_trace_emitted = False
+
+    def _emit_bep_trace(
+        post_extract_exec: bool | None = None,
+        nudge_branch: str | None = None,
+        *,
+        action_source_eligible: bool = True,
+    ) -> None:
+        nonlocal _bep_trace_emitted
+        if _bep_trace_emitted:
+            return
+        _processed_raw = raw_llm_output or ""
+        _bep_turn_trace(
+            state.turns, role, _primary_llm_output or "", prompt=prompt,
+            repeat_count=getattr(state, "repl_noprogress_count", None),
+            primary_meta=_primary_call_meta, retry_meta=_reasoning_retry_meta,
+            retry_attempted=_reasoning_retry_attempted,
+            retry_failed=_reasoning_retry_failed,
+            requested_output_cap=llm_kwargs.get("n_tokens"),
+            processed_output_chars=len(_processed_raw),
+            processed_output_truncated=len(_processed_raw) > 4000,
+            post_extract_executable_code=post_extract_exec,
+            action_source_output=_processed_raw,
+            action_source_eligible=action_source_eligible,
+            nudge_branch=nudge_branch, task_id=getattr(state, "task_id", None),
+        )
+        _bep_trace_emitted = True
 
     # Backend/infra denial masquerading as model output (INC-20260924-repl-
     # backend-error-masking): `llm_call` never raises for a placement/admission
@@ -1250,6 +1505,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # `graph/langgraph/nodes.py`.
     _infra_sentinel = _backend_infra_sentinel(raw_llm_output)
     if _infra_sentinel is not None:
+        _emit_bep_trace(action_source_eligible=False)
         log.warning(
             "REPL turn %d (role=%s) received an in-band backend/infra sentinel "
             "instead of model output -- ending as infra failure, no nudge: %s",
@@ -1262,6 +1518,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # 1.5× band budget, retry once with a conciseness nudge.
     if _check_reasoning_length_alarm(raw_llm_output, getattr(state, "difficulty_band", ""), _completion_tokens):
         if not getattr(state, "_alarm_retried", False):
+            _reasoning_retry_attempted = True
             state._alarm_retried = True  # type: ignore[attr-defined]
             log.info(
                 "Reasoning length alarm: completion_tokens=%d exceeds %.0f× budget for band=%s, retrying with conciseness nudge",
@@ -1282,14 +1539,17 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     _retry_prompt, role=str(role), stop_sequences=["\n```\n"],
                     skip_suffix=True, **llm_kwargs,
                 )
+                _reasoning_retry_meta = dict(_turn_call_meta)
                 raw_llm_output = code
             except Exception as e:
+                _reasoning_retry_failed = True
                 log.warning("Reasoning length alarm retry failed: %s", e)
 
     # BEP (J8): flag-gated batched-edit divergence. No-op (returns None → fall through)
     # when batch_edit_mode is off or the model emitted no ```patchset block.
     _batch_edit_result = await _maybe_batch_edit_turn(ctx, role, raw_llm_output)
     if _batch_edit_result is not None:
+        _emit_bep_trace(nudge_branch="batch_edit_pre_extract")
         return _batch_edit_result
 
     # Extract and wrap code
@@ -1352,6 +1612,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         else:
             log.info("Comment-only code detected (turn %d), nudging model", state.turns)
             nudge = _no_executable_code_nudge(state)
+            _emit_bep_trace(False, "comment_only")
             _record_session_turn(state, role=str(role), code=code, nudge=nudge)
             return "", None, False, {"_nudge": nudge}
 
@@ -1382,6 +1643,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     ratio * 100, state.turns,
                 )
                 nudge = _no_executable_code_nudge(state, comment_ratio=ratio)
+                _emit_bep_trace(True, "comment_ratio")
                 _record_session_turn(state, role=str(role), code=code, nudge=nudge)
                 return "", None, False, {"_nudge": nudge}
 
@@ -1421,6 +1683,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             _exploration_baseline = len(elog.events)
     except Exception:
         pass
+
+    # Emit before execution so REPL timeout/exception paths retain the model turn.
+    # Post-execution nudge branch is not observed yet and remains explicitly unknown.
+    _emit_bep_trace(not _is_comment_only(code), None)
 
     # Write code to inference tap so the TUI shows what's being executed
     _tap_write_repl_exec(code, state.turns)
