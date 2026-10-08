@@ -392,6 +392,236 @@ def test_streaming_client_mode_streams_the_escalated_answer_and_usage(env):
     assert [c["role"] for c in holder["fake"].calls] == ["frontdoor", "architect_general"]
 
 
+
+
+def test_force_architect_general_reanswers_clean_direct_answer_once(env):
+    """The explicit force mode bypasses only the quality trigger, not eligibility."""
+    env.monkeypatch.setenv("ORCHESTRATOR_GENERATION_MONITOR", "0")
+    reset_features()
+    import src.api.routes.chat_pipeline.stages as stages
+    env.monkeypatch.setattr(
+        stages, "_detect_output_quality_issue",
+        lambda _answer: pytest.fail("force mode must not run the quality detector"),
+    )
+    holder = _install(env, answers={"architect_general": QUALITY_ANSWER})
+    r = env.client.post(
+        "/v1/chat/completions", json=_body(x_escalation="force_architect_general")
+    )
+    assert r.status_code == 200, r.text
+    fake = holder["fake"]
+    assert [c["role"] for c in fake.calls] == ["frontdoor", "architect_general"]
+    assert r.json()["choices"][0]["message"]["content"] == QUALITY_ANSWER
+    call = fake.calls[1]
+    assert call["trace"]["escalation_trigger"] == "caller_forced"
+    assert call["kwargs"] == {"n_tokens": 2048, "skip_suffix": True}
+    receipt = r.json()["x_orchestrator_metadata"]["escalation"]
+    assert receipt["requested"] == "force_architect_general"
+    assert receipt["target_role"] == "architect_general" and receipt["fired"] is True
+    (step,) = receipt["steps"]
+    assert (step["trigger"], step["to_role"], step["outcome"]) == (
+        "caller_forced", "architect_general", "adopted"
+    )
+    assert (step["calls"], step["tokens"], step["prompt_tokens"]) == (1, 12, 300)
+    assert r.json()["usage"]["completion_tokens"] == 17 + 12
+    assert r.json()["usage"]["prompt_tokens"] == 91 + 300
+
+
+def test_force_architect_general_runs_on_x_disable_repl_direct_stage(env):
+    holder = _install(
+        env, answers={"frontdoor": FRONTDOOR_ANSWER, "architect_general": QUALITY_ANSWER}
+    )
+    body = _body(x_escalation="force_architect_general", x_disable_repl=True)
+    body.pop("x_tool_mode")
+    body.pop("tools")
+    r = env.client.post("/v1/chat/completions", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["choices"][0]["message"]["content"] == QUALITY_ANSWER
+    assert [c["role"] for c in holder["fake"].calls] == ["frontdoor", "architect_general"]
+    (step,) = r.json()["x_orchestrator_metadata"]["escalation"]["steps"]
+    assert step["trigger"] == "caller_forced" and step["to_role"] == "architect_general"
+
+
+def test_force_architect_general_stream_emits_only_final_answer_and_usage(env):
+    """The forced second answer replaces, rather than leaks after, the first stream."""
+    holder = _install(env, answers={"architect_general": QUALITY_ANSWER})
+    r = env.client.post(
+        "/v1/chat/completions",
+        json=_body(
+            x_escalation="force_architect_general", stream=True,
+            stream_options={"include_usage": True},
+        ),
+    )
+    assert r.status_code == 200
+    events = [
+        json.loads(line[6:]) for line in r.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    content = "".join(
+        e["choices"][0]["delta"].get("content") or ""
+        for e in events if e["choices"]
+    )
+    assert content == QUALITY_ANSWER
+    assert FRONTDOOR_ANSWER not in content
+    final = next(e for e in events if e["choices"] and e["choices"][0]["finish_reason"])
+    assert final["x_orchestrator_metadata"]["escalation"]["steps"][0]["trigger"] == "caller_forced"
+    assert events[-1]["usage"]["completion_tokens"] == 17 + 12
+    assert events[-1]["usage"]["prompt_tokens"] == 91 + 300
+    assert [c["role"] for c in holder["fake"].calls] == ["frontdoor", "architect_general"]
+
+
+def test_force_architect_general_request_respects_flag_off(env):
+    env.monkeypatch.setenv("ORCHESTRATOR_V1_ESCALATION", "0")
+    reset_features()
+    holder = _install(env)
+    r = env.client.post(
+        "/v1/chat/completions", json=_body(x_escalation="force_architect_general")
+    )
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == FRONTDOOR_ANSWER
+    receipt = r.json()["x_orchestrator_metadata"]["escalation"]
+    assert receipt["enabled"] is False and receipt["disabled_reason"] == "flag_off"
+    assert [c["role"] for c in holder["fake"].calls] == ["frontdoor"]
+
+
+@pytest.mark.parametrize("consultant_answer", ["", " \n\t"])
+def test_force_architect_general_empty_consultant_keeps_original_and_records_call(
+    env, consultant_answer
+):
+    holder = _install(env, answers={"architect_general": consultant_answer})
+    r = env.client.post(
+        "/v1/chat/completions", json=_body(x_escalation="force_architect_general")
+    )
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == FRONTDOOR_ANSWER
+    receipt = r.json()["x_orchestrator_metadata"]["escalation"]
+    (step,) = receipt["steps"]
+    assert step["trigger"] == "caller_forced" and step["calls"] == 1
+    assert step["outcome"] == "not_adopted"
+    assert receipt["final_answer_role"] == "frontdoor"
+    assert [c["role"] for c in holder["fake"].calls] == ["frontdoor", "architect_general"]
+
+
+def test_force_architect_general_llm_exception_records_failed_attempt_and_falls_back(env):
+    def _boom(_prompt):
+        raise RuntimeError("simulated consultant transport detail")
+
+    holder = _install(env, answers={"architect_general": _boom})
+    r = env.client.post(
+        "/v1/chat/completions", json=_body(x_escalation="force_architect_general")
+    )
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == FRONTDOOR_ANSWER
+    receipt = r.json()["x_orchestrator_metadata"]["escalation"]
+    assert receipt["error"] == "RuntimeError: forced consultant call failed"
+    assert receipt["fired"] is True
+    (step,) = receipt["steps"]
+    assert step["trigger"] == "caller_forced" and step["outcome"] == "failed"
+    assert step["calls"] == 1 and step["tokens"] == 12 and step["prompt_tokens"] == 300
+    assert step["completion_reason"] is None
+    assert step["prompt_ms"] == 1250.0 and step["gen_ms"] == 3750.5
+    assert step["device_seconds"] == pytest.approx(5.0005)
+    assert step["server_url"] == get_config().server_urls.as_dict()["architect_general"]
+    assert holder["fake"].calls[1]["trace"]["escalation_trigger"] == "caller_forced"
+    assert r.json()["usage"]["completion_tokens"] == 17 + 12
+    assert r.json()["usage"]["prompt_tokens"] == 91 + 300
+    assert receipt["consultant_device_seconds"] == pytest.approx(5.0005)
+    assert receipt["request_device_seconds"] == pytest.approx(5.2005)
+    assert holder["fake"].total_calls == 2
+    assert holder["fake"].get_request_trace_keys() == {}
+    assert "simulated consultant transport detail" not in receipt["error"]
+
+
+@pytest.mark.parametrize(
+    "consultant_answer", ["[ERROR: simulated timeout]", " \n[ERROR: simulated timeout]"]
+)
+def test_force_architect_general_inband_error_reply_preserves_frontdoor(
+    env, consultant_answer
+):
+    holder = _install(env, answers={"architect_general": consultant_answer})
+    r = env.client.post(
+        "/v1/chat/completions", json=_body(x_escalation="force_architect_general")
+    )
+    assert r.status_code == 200
+    assert r.json()["choices"][0]["message"]["content"] == FRONTDOOR_ANSWER
+    receipt = r.json()["x_orchestrator_metadata"]["escalation"]
+    assert receipt["error"] == "RuntimeError: forced consultant call failed"
+    (step,) = receipt["steps"]
+    assert step["outcome"] == "failed" and step["calls"] == 1
+    assert step["completion_reason"] is None
+    assert step["prompt_ms"] == 1250.0 and step["gen_ms"] == 3750.5
+    assert step["device_seconds"] == pytest.approx(5.0005)
+    assert receipt["consultant_device_seconds"] == pytest.approx(5.0005)
+    assert receipt["request_device_seconds"] == pytest.approx(5.2005)
+    assert holder["fake"].total_calls == 2
+    assert holder["fake"].get_request_trace_keys() == {}
+    assert "simulated timeout" not in receipt["error"]
+    assert [c["role"] for c in holder["fake"].calls] == ["frontdoor", "architect_general"]
+
+
+@pytest.mark.parametrize(
+    ("case", "disabled_reason"),
+    [
+        ("default_repl", "force_requires_direct_stage"),
+        ("tool_call", "force_requires_completed_direct_answer"),
+        ("empty_answer", "force_requires_completed_direct_answer"),
+        ("whitespace_answer", "force_requires_completed_direct_answer"),
+        ("initial_error", "force_requires_completed_direct_answer"),
+        ("leading_initial_error", "force_requires_completed_direct_answer"),
+    ],
+)
+def test_force_architect_general_never_runs_outside_a_completed_direct_answer(
+    env, case, disabled_reason
+):
+    body = _body(x_escalation="force_architect_general")
+    if case == "default_repl":
+        body.pop("x_tool_mode")
+        body.pop("tools")
+        holder = _install(env, answers={"frontdoor": '"' + FRONTDOOR_ANSWER + '"'})
+    elif case == "tool_call":
+        holder = _install(
+            env,
+            client_result={
+                "content": "", "tool_calls": [TOOL_CALL], "finish_reason": "tool_calls"
+            },
+        )
+    else:
+        content = {
+            "empty_answer": "",
+            "whitespace_answer": " \n\t",
+            "initial_error": "[ERROR: frontdoor timeout]",
+            "leading_initial_error": " \n[ERROR: frontdoor timeout]",
+        }[case]
+        holder = _install(
+            env, client_result={"content": content, "tool_calls": [], "finish_reason": "stop"}
+        )
+    r = env.client.post("/v1/chat/completions", json=body)
+    assert r.status_code == 200, r.text
+    if case not in ("default_repl", "tool_call"):
+        assert r.json()["choices"][0]["message"]["content"] == content
+    receipt = r.json()["x_orchestrator_metadata"]["escalation"]
+    assert receipt["enabled"] is False and receipt["disabled_reason"] == disabled_reason
+    assert receipt["fired"] is False and receipt["steps"] == []
+    assert [c["role"] for c in holder["fake"].calls] == ["frontdoor"]
+
+
+def test_force_architect_general_plan_keeps_flag_and_role_eligibility_guards():
+    from src.api.routes.v1_escalation import plan_v1_escalation
+
+    cases = [
+        (False, "frontdoor", False, False, "flag_off"),
+        (True, "frontdoor", True, False, "role_override"),
+        (True, "worker_general", False, False, "not_frontdoor"),
+        (True, "frontdoor", False, True, "image_input"),
+    ]
+    for flag_on, role, role_override, image_input, reason in cases:
+        plan = plan_v1_escalation(
+            flag_on=flag_on, requested="force_architect_general", role=role,
+            role_override=role_override, image_input=image_input,
+        )
+        assert plan is not None and plan.enabled is False
+        assert plan.disabled_reason == reason
+        assert plan.target_role == "architect_general" and plan.force is True
+
 # ── default REPL bridge and x_disable_repl ──────────────────────────────────
 
 

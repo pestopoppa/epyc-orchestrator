@@ -263,22 +263,23 @@ class OpenAIChatRequest(BaseModel):
         "is on (see x_escalation).",
     )
     # TE-1 (UFH-13) — per-request escalation switch, read only with flag v1_escalation.
-    x_escalation: Literal["auto", "off", "architect_general"] | None = Field(
+    x_escalation: Literal[
+        "auto", "off", "architect_general", "force_architect_general"
+    ] | None = Field(
         default=None,
-        description="Escalation switch (TE-1; flag v1_escalation, default off). With the flag "
-        "ON, a frontdoor answer passes the SAME post-answer hooks /chat applies. Client tool "
-        "mode and x_disable_repl (a turn with no tool calls) get /chat's direct-stage chain: "
-        "quality escalation (generation_monitor flag) then the MemRL review gate "
-        "(architect_general verdict, worker_general revision on WRONG). The default REPL "
-        "mode gets /chat's REPL-stage hook, the review gate, on a FINAL answer. OPT-IN: "
-        "absent means no escalation and no receipt, flag on or off (so enabling the flag "
-        "changes no unkeyed traffic). 'auto' keeps /chat's targets (quality escalation "
-        "-> coder_escalation). 'architect_general' keeps the triggers but pins every "
-        "consultant call to architect_general. 'off' serves the answer exactly as the "
-        "flag-off route does, with a disabled receipt. Never applied to a role-overridden request (x_force_role / "
-        "x_force_model / x_orchestrator_role), a non-frontdoor role or image input. With the "
-        "flag OFF the value is validated and recorded (request_keys, metadata "
-        "escalation.disabled_reason='flag_off') and nothing escalates.",
+        description="Escalation switch (TE-1; flag v1_escalation, default off). Opt in per "
+        "request: 'auto' enables the existing direct-stage quality trigger and keeps its "
+        "default target (coder_escalation); 'architect_general' enables that same trigger "
+        "and pins its target to architect_general. 'force_architect_general' requests one "
+        "direct-stage architect_general re-answer without the quality trigger. These "
+        "three modes require the flag ON and a completed frontdoor answer in client-tool "
+        "mode or with x_disable_repl=true; the default REPL stage has no post-answer hook "
+        "after RI-18c. The force mode is not a typed reviewer decision or critique. 'off' "
+        "suppresses the hook. An absent key never runs or records escalation, even with "
+        "the flag ON. Role overrides (x_force_role / x_force_model / "
+        "x_orchestrator_role), non-frontdoor roles, and image input disable the hook. "
+        "With the flag OFF an explicit value is validated and recorded as flag_off. "
+        "The receipt is written to the tap; x_show_routing controls response metadata.",
     )
     # HS-19a stage 1 — harness subagent tree. Typed Any on purpose: they are read
     # ONLY when the v1_subagent_link flag is on, and then validated (422) by

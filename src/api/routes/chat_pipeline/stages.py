@@ -53,28 +53,36 @@ def _quality_escalate(
     *,
     allow_escalation: bool = True,
     escalation_role: Role = Role.CODER_ESCALATION,
+    force: bool = False,
 ) -> tuple[str, "Role"]:
-    """Detect quality issue and escalate to coder_escalation if needed.
+    """Run the existing quality re-answer, or explicit v1 force mode, when eligible.
 
     Returns (answer, role) — either unchanged or with escalated answer and role.
     ``escalation_role`` is the role that re-answers; /chat always uses the
-    default. /v1 (TE-1, ``x_escalation=architect_general``) pins the consultant
-    here so the trigger is /chat's while the target is the one the caller named.
+    default. /v1 (TE-1) may pin a caller-selected target. ``force`` is reserved
+    for the explicit /v1 force mode and bypasses only the detector/monitor gate.
     """
     if not allow_escalation:
         return answer, initial_role
-    if not (answer and not answer.startswith("[ERROR") and features().generation_monitor):
+    if not (answer and not answer.startswith("[ERROR")):
         return answer, initial_role
-    quality_issue = _detect_output_quality_issue(answer)
+    if not force and not features().generation_monitor:
+        return answer, initial_role
+    quality_issue = force or _detect_output_quality_issue(answer)
     if not quality_issue:
         return answer, initial_role
     try:
         escalated = primitives.llm_call(
             prompt, role=str(escalation_role), n_tokens=2048, skip_suffix=True,
         )
-        if escalated.strip():
-            return escalated.strip(), escalation_role
+        normalized_escalated = escalated.strip()
+        if normalized_escalated:
+            if force and normalized_escalated.startswith("[ERROR"):
+                raise RuntimeError("forced consultant returned an in-band error")
+            return normalized_escalated, escalation_role
     except Exception as exc:
+        if force:
+            raise
         log.debug("Quality escalation failed: %s", exc)
     return answer, initial_role
 

@@ -712,6 +712,23 @@ def _normalise_client_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[
     return normalised
 
 
+def _clear_request_trace_keys(primitives: Any, request_keys: dict[str, Any]) -> None:
+    """Release matching request-owned keys; retain unrelated or rebound trace fields."""
+    setter = getattr(primitives, "set_request_trace_keys", None)
+    getter = getattr(primitives, "get_request_trace_keys", None)
+    if not callable(setter) or not callable(getter):
+        return
+    current = getter()
+    if not isinstance(current, dict):
+        return
+    remaining = {
+        key: value for key, value in current.items()
+        if key not in request_keys or value != request_keys[key]
+    }
+    if remaining != current:
+        setter(remaining)
+
+
 def _run_client_tool_completion(
     primitives: Any,
     request: OpenAIChatRequest,
@@ -1008,6 +1025,16 @@ async def _escalate_v1_answer(
     chat_id: str,
 ) -> str:
     """Run /chat's post-answer hooks off the event loop; no-op when not enabled."""
+    if plan is not None and plan.enabled and plan.force:
+        if not answer.strip() or answer.lstrip().startswith("[ERROR"):
+            plan.enabled = False
+            plan.disabled_reason = "force_requires_completed_direct_answer"
+        elif stage is None:
+            plan.enabled = False
+            plan.disabled_reason = "force_requires_completed_direct_answer"
+        elif stage != STAGE_DIRECT:
+            plan.enabled = False
+            plan.disabled_reason = "force_requires_direct_stage"
     if plan is None or not plan.enabled or stage is None or primitives is None:
         return answer
     return await asyncio.to_thread(
@@ -1970,7 +1997,10 @@ async def openai_chat_completions(
         try:
             first = await anext(stream, None)
         except BaseException:
-            await stream.aclose()
+            try:
+                await stream.aclose()
+            finally:
+                _clear_request_trace_keys(primitives, request_keys)
             raise
         if first is not None and first.startswith("data: "):
             event = json.loads(first[6:])
@@ -1978,7 +2008,10 @@ async def openai_chat_completions(
             if error.get("code") == 503 and error.get("type") in {
                 "admission_denied", "contention_denied", "context_overflow"
             }:
-                await stream.aclose()
+                try:
+                    await stream.aclose()
+                finally:
+                    _clear_request_trace_keys(primitives, request_keys)
                 return JSONResponse(
                     status_code=503,
                     content={"error": error, "detail": error["message"]},
@@ -1992,7 +2025,10 @@ async def openai_chat_completions(
                 async for event in stream:
                     yield event
             finally:
-                await stream.aclose()
+                try:
+                    await stream.aclose()
+                finally:
+                    _clear_request_trace_keys(primitives, request_keys)
 
         return StreamingResponse(
             replay_stream(),
@@ -2184,6 +2220,8 @@ async def openai_chat_completions(
                 raise HTTPException(
                     status_code=502, detail=f"Backend failed: {e}"
                 ) from e
+            finally:
+                _clear_request_trace_keys(primitives, request_keys)
 
         elapsed = time.perf_counter() - start_time
         escalation_receipt = record_escalation(

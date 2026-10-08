@@ -1,24 +1,11 @@
 #!/usr/bin/env python3
-"""HS-4 P0.1(b) — the default /v1 tool mode stays byte-identical.
+"""Strict public62 baseline contract; historical golden JSON remains unchanged.
 
-The golden fixture was captured from the route BEFORE client-executed tool mode
-existed (origin/main 09bdb998). Each case records two things:
-
-* the exact arguments the route passed to ``LLMPrimitives.llm_call`` (the
-  prompt is where the REPL bridge rewrites client tools into ``CALL()`` text),
-* the exact response body (JSON, or the raw SSE stream), with only the
-  per-request volatile fields (``id``, ``created``, ``elapsed_seconds``)
-  normalised.
-
-Regenerate ONLY when a default-mode change is intended:
-``HS4_REGEN_GOLDEN=1 pytest tests/unit/test_openai_compat_default_golden.py``.
-The ``*_include_usage`` cases were added by HS-4 P0.4; the pre-existing cases
-were not regenerated. 2026-09-28 (intended): the ``direct_*`` cases' ``llm_call``
-now carries ``skip_suffix=True`` — the x_disable_repl direct call follows /chat's
-direct-stage prompt contract (tests/unit/test_openai_direct_prompt_contract.py);
-the response bytes did not change. HS-OD-6 (2026-10-05) intentionally changes the
-three direct-with-tools cases: they now return a 422 before inference because the
-disabled REPL cannot execute the tool instructions.
+Baseline: 62ee3ba69eed64d8f17268a18b39c131aea90760. Backend streaming uses
+callbacks and emits one complete buffered answer when no chunk source exists.
+Escalation OFF and ON with no request key must match the same exact fixture.
+Only per-request volatile identity/timing and the verified callback address are
+normalized; call arguments and complete JSON/SSE remain strict expectations.
 """
 
 from __future__ import annotations
@@ -37,7 +24,7 @@ from src.api import app
 from src.api.state import get_state, reset_state
 from src.features import reset_features
 
-GOLDEN = Path(__file__).parent / "fixtures" / "openai_compat_default_golden.json"
+GOLDEN = Path(__file__).parent / "fixtures" / "openai_compat_default_golden-public62-stream-contract.json"
 
 _TOOLS = [
     {
