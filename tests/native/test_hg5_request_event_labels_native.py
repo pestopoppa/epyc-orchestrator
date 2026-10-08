@@ -31,7 +31,7 @@ class LabelControls(unittest.TestCase):
  def test_missing_category_direction_protocol_each_refuse_before_write(self):
   for key in ('category','metric_direction','protocol_id'):
    context=json.loads(json.dumps(self.context));context['projection'].pop(key)
-   with self.subTest(label=key),self.assertRaises(ValueError):self.begin(context)
+   with self.assertRaises(ValueError):self.begin(context)
   self.assertEqual(list(self.directory.iterdir()),[])
  def test_invalid_category_and_direction_are_not_guessed(self):
   context=json.loads(json.dumps(self.context));context['projection']['category']='unknown'
