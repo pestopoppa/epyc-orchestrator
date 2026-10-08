@@ -1025,6 +1025,8 @@ async def _escalate_v1_answer(
     chat_id: str,
 ) -> str:
     """Run /chat's post-answer hooks off the event loop; no-op when not enabled."""
+    if plan is not None and plan.strict_capture is not None:
+        plan.strict_capture["stage"] = stage
     if plan is not None and plan.enabled and plan.force:
         if not answer.strip() or answer.lstrip().startswith("[ERROR"):
             plan.enabled = False

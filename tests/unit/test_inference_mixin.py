@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.llm_primitives import LLMPrimitives
+from src.typed_decisions.call_recorder import record_llm_calls
 from src.llm_primitives.backend import _certified_native_batch_width
 from src.llm_primitives.inference import _extract_port, _primary_url, _sampling_cache_key
 from src.config import reset_config
@@ -260,6 +261,78 @@ class TestInferenceMixinRealCall:
         assert meta["prompt_ms"] == 11.0
         assert meta["gen_ms"] == 22.0
         assert meta["completion_reason"] == "unknown"
+
+    def test_raw_prefill_timings_reach_call_recorder_through_primitives(
+        self, mock_model_server
+    ):
+        prims = LLMPrimitives(mock_mode=False, model_server=mock_model_server)
+        mock_model_server.infer.side_effect = [
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": 7, "cache_n": 3, "prompt_ms": 12.5},
+            ),
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": 0, "cache_n": 0, "prompt_ms": 0},
+            ),
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": 4, "prompt_ms": 1},
+            ),
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": -1, "cache_n": 1.5, "prompt_ms": float("inf")},
+            ),
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"predicted_ms": 8},  # early-stop-style local decode timing only
+            ),
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={},
+            ),
+            InferenceResult(
+                role="coder_escalation", output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": True, "cache_n": 0, "prompt_ms": True},
+            ),
+        ]
+
+        with record_llm_calls(prims) as log:
+            for _ in range(7):
+                prims.llm_call("fixed fixture prompt", role="coder_escalation")
+
+        assert log.calls[0]["prompt_tokens"] == 10.0
+        assert log.calls[0]["prompt_n"] == 7.0
+        assert log.calls[0]["cache_n"] == 3.0
+        assert log.calls[0]["prompt_ms"] == 12.5
+        assert log.calls[1]["prompt_tokens"] == 0.0
+        assert log.calls[1]["prompt_n"] == 0.0
+        assert log.calls[1]["cache_n"] == 0.0
+        assert log.calls[1]["prompt_ms"] == 0.0
+        assert log.calls[2]["prompt_tokens"] is None
+        assert log.calls[2]["prompt_n"] == 4.0
+        assert log.calls[2]["cache_n"] is None
+        assert log.calls[3]["prompt_tokens"] is None
+        assert log.calls[3]["prompt_n"] is None
+        assert log.calls[3]["cache_n"] is None
+        assert log.calls[3]["prompt_ms"] is None
+        assert log.calls[4]["prompt_n"] is None
+        assert log.calls[4]["cache_n"] is None
+        assert log.calls[4]["prompt_ms"] is None
+        assert log.calls[5]["prompt_n"] is None
+        assert log.calls[5]["cache_n"] is None
+        assert log.calls[5]["prompt_ms"] is None
+        assert log.calls[6]["prompt_n"] is None
+        assert log.calls[6]["cache_n"] == 0.0
+        assert log.calls[6]["prompt_tokens"] is None
+        assert log.calls[6]["prompt_ms"] is None
 
     def test_real_call_no_backend_raises_error(self):
         """Test _real_call raises error when no backend configured."""

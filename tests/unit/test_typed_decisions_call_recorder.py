@@ -96,6 +96,83 @@ class TestRecordLlmCalls:
         assert log.calls[0]["cache_n"] is None
         assert log.calls[0]["prompt_n"] is None
 
+    def test_server_prefill_timings_are_used_verbatim_and_zero_is_known(self):
+        primitives = _Primitives([{
+            "tokens": 2,
+            "prompt_tokens": 7,
+            "prompt_n": 7,
+            "cache_n": 0,
+            "cached_prompt_tokens": 0,
+            "prompt_ms": 0,
+        }])
+
+        with record_llm_calls(primitives) as log:
+            primitives.llm_call("a")
+
+        assert log.calls[0]["prompt_n"] == 7.0
+        assert log.calls[0]["cache_n"] == 0.0
+        assert log.calls[0]["prompt_ms"] == 0.0
+
+    def test_malformed_direct_server_timings_remain_unknown(self):
+        primitives = _Primitives([{
+            "tokens": 2,
+            "prompt_tokens": -2,
+            "prompt_n": -1,
+            "cache_n": 1.5,
+            "prompt_ms": float("nan"),
+        }])
+
+        with record_llm_calls(primitives) as log:
+            primitives.llm_call("a")
+
+        assert log.calls[0]["prompt_tokens"] is None
+        assert log.calls[0]["prompt_n"] is None
+        assert log.calls[0]["cache_n"] is None
+        assert log.calls[0]["prompt_ms"] is None
+
+    def test_partial_raw_counts_do_not_fall_back_to_legacy_fields(self):
+        primitives = _Primitives([
+            {
+                "tokens": 2,
+                "prompt_tokens": 10,
+                "cached_prompt_tokens": 3,
+                "cache_n": 3,
+            },
+            {
+                "tokens": 2,
+                "prompt_tokens": 10,
+                "cached_prompt_tokens": 3,
+                "prompt_n": 7,
+            },
+        ])
+
+        with record_llm_calls(primitives) as log:
+            primitives.llm_call("a")
+            primitives.llm_call("b")
+
+        assert log.calls[0]["prompt_tokens"] == 10.0
+        assert log.calls[0]["cache_n"] == 3.0
+        assert log.calls[0]["prompt_n"] is None
+        assert log.calls[1]["prompt_tokens"] == 10.0
+        assert log.calls[1]["cache_n"] is None
+        assert log.calls[1]["prompt_n"] == 7.0
+
+    def test_oversized_raw_integer_does_not_break_call_recording(self):
+        huge = 10**10000
+        primitives = _Primitives([{
+            "tokens": 2,
+            "prompt_tokens": huge,
+            "prompt_n": huge,
+            "cache_n": 0,
+        }])
+
+        with record_llm_calls(primitives) as log:
+            primitives.llm_call("a")
+
+        assert log.calls[0]["prompt_tokens"] is None
+        assert log.calls[0]["prompt_n"] is None
+        assert log.calls[0]["cache_n"] == 0.0
+
     def test_wrapper_is_removed_and_class_method_restored(self):
         primitives = _Primitives([_meta(1), _meta(2)])
 

@@ -166,6 +166,8 @@ class V1EscalationPlan:
     final_answer_role: str = ""
     consultant_url: str | None = None
     error: str | None = None
+    # Independent default-off immutable writer; legacy receipt fields stay unchanged.
+    strict_capture: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def fired(self) -> bool:
@@ -246,7 +248,7 @@ def plan_v1_escalation(
     target_role = requested if requested in PINNED_TARGETS else None
     if requested == FORCE_MODE:
         target_role = CONSULTANT_ROLE
-    return V1EscalationPlan(
+    plan = V1EscalationPlan(
         requested=requested,
         enabled=reason is None,
         disabled_reason=reason,
@@ -254,6 +256,15 @@ def plan_v1_escalation(
         target_role=target_role,
         final_answer_role=from_role,
     )
+    try:
+        from src.runtime.hg5_request_event import begin_capture
+
+        plan.strict_capture = begin_capture()
+        if plan.strict_capture is not None:
+            plan.strict_capture["feature_enabled"] = flag_on
+    except Exception as exc:
+        log.debug("HG5 strict event capture unavailable: %s", type(exc).__name__)
+    return plan
 
 
 @contextmanager
@@ -289,6 +300,14 @@ def _record_step(
     before: dict[str, float],
     outcome: str,
 ) -> dict[str, Any] | None:
+    if plan.strict_capture is not None:
+        try:
+            from src.runtime.hg5_request_event import record_step
+
+            record_step(plan.strict_capture, primitives, trigger=trigger,
+                        initial_role=from_role, target_role=to_role, outcome=outcome)
+        except Exception as exc:
+            log.debug("HG5 strict step emitter failed: %s", type(exc).__name__)
     after = _counters(primitives)
     calls = int(after["calls"] - before["calls"])
     if calls <= 0:
@@ -322,6 +341,25 @@ def _record_step(
     return step
 
 
+def _finish_strict_capture(plan: V1EscalationPlan | None, *, request_id: str,
+                           primitives: Any, failure_type: str | None = None,
+                           failure_status: str | None = None) -> None:
+    if plan is None or plan.strict_capture is None:
+        return
+    capture = plan.strict_capture
+    try:
+        from src.runtime.hg5_request_event import finish_capture, snapshot
+
+        finish_capture(capture, request_id=request_id, plan=plan,
+                       counters=snapshot(primitives), failure_type=failure_type,
+                       failure_status=failure_status)
+    except Exception as exc:
+        log.debug("HG5 strict native event write failed: %s", type(exc).__name__)
+    finally:
+        # One request owns one attempt; a failure is not retried from a later renderer.
+        plan.strict_capture = None
+
+
 def escalate_answer(
     plan: V1EscalationPlan | None,
     *,
@@ -331,16 +369,27 @@ def escalate_answer(
     direct_prompt: str,
     primitives: Any,
     state: Any,
-    task_id: str,
+    task_id: str | None = None,
+    chat_id: str | None = None,
 ) -> str:
     """Run /chat's post-answer escalation hooks on a /v1 answer; return the answer.
 
     ``stage`` is ``direct`` (client tool mode, ``x_disable_repl``) or ``repl``
     (a FINAL answer of the REPL bridge). A no-op unless ``plan.enabled``.
     """
-    if plan is None or not plan.enabled or not answer:
+    if plan is None:
         return answer
+    if plan.strict_capture is not None:
+        try:
+            plan.strict_capture["stage"] = stage if stage in {STAGE_DIRECT, STAGE_REPL} else None
+        except Exception as exc:
+            log.debug("HG5 strict stage capture failed: %s", type(exc).__name__)
+    request_id = chat_id or task_id or ""
+    failure_type = None
+    failure_status = None
     try:
+        if not plan.enabled or not answer:
+            return answer
         return _escalate_answer(
             plan,
             stage=stage,
@@ -349,17 +398,23 @@ def escalate_answer(
             direct_prompt=direct_prompt,
             primitives=primitives,
             state=state,
-            task_id=task_id,
+            task_id=request_id,
         )
     except Exception as exc:
         # /chat's hooks never block an answer (each helper already swallows its
         # own backend failure); anything else is recorded in the receipt, not hidden.
-        log.warning(
-            "v1 escalation failed (%s: %s); serving the unescalated answer", type(exc).__name__, exc
-        )
+        log.warning("v1 escalation failed (%s); serving the unescalated answer", type(exc).__name__)
         plan.error = f"{type(exc).__name__}: {exc}"
         plan.final_answer_role = plan.from_role
+        failure_type = type(exc).__name__
+        failure_status = "request_failed"
         return answer
+    finally:
+        if plan.strict_capture is not None:
+            failure_type = failure_type or plan.strict_capture.get("failure_type")
+            failure_status = failure_status or plan.strict_capture.get("failure_status")
+        _finish_strict_capture(plan, request_id=request_id, primitives=primitives,
+                               failure_type=failure_type, failure_status=failure_status)
 
 
 def _escalate_answer(
@@ -385,6 +440,14 @@ def _escalate_answer(
         force_kwargs = {"force": True} if plan.force else {}
         try:
             with _tagged_trace(plan, primitives, trigger, role, quality_role):
+                if plan.strict_capture is not None:
+                    try:
+                        from src.runtime.hg5_request_event import snapshot
+
+                        plan.strict_capture["step_before"] = snapshot(primitives)
+                    except Exception as exc:
+                        log.debug("HG5 strict before-snapshot failed: %s", type(exc).__name__)
+                        plan.strict_capture["step_before"] = {key: None for key in ("calls", "prompt_tokens", "completion_tokens", "prompt_ms", "generation_ms")}
                 new_answer, new_role = chat_stages._quality_escalate(
                     answer,
                     direct_prompt,
@@ -396,6 +459,14 @@ def _escalate_answer(
                 )
         except Exception as exc:
             if not plan.force:
+                if plan.strict_capture is not None:
+                    try:
+                        from src.runtime.hg5_request_event import record_step
+
+                        record_step(plan.strict_capture, primitives, trigger=trigger,
+                                    initial_role=role, target_role=quality_role, outcome="failed")
+                    except Exception as emitter_exc:
+                        log.debug("HG5 strict failure-step emitter failed: %s", type(emitter_exc).__name__)
                 raise
             failed_step = _record_step(
                 plan,
@@ -410,6 +481,9 @@ def _escalate_answer(
                 failed_step["completion_reason"] = None
             plan.error = f"{type(exc).__name__[:80]}: forced consultant call failed"
             plan.final_answer_role = role
+            if plan.strict_capture is not None:
+                plan.strict_capture["failure_type"] = type(exc).__name__[:80]
+                plan.strict_capture["failure_status"] = "request_failed"
             return answer
         adopted = _role_name(new_role) != role
         _record_step(
@@ -440,6 +514,8 @@ def record_escalation(
         return None
     if plan.consultant_url is None and primitives is not None:
         plan.consultant_url = _server_url(primitives, plan.consultant_role)
+    if plan.strict_capture is not None:
+        _finish_strict_capture(plan, request_id=chat_id, primitives=primitives)
     receipt = plan.receipt()
     if primitives is not None:
         # Whole-request llama-server time (frontdoor + every escalation call),
