@@ -1,24 +1,24 @@
 """TE-1 (UFH-13) / HS-4 P4 subset — /v1 escalation parity with /chat.
 
 Flag ``v1_escalation`` (default OFF) plus the per-request key ``x_escalation``
-(``auto`` | ``off`` | ``architect_general``). Escalation is OPT-IN per request:
-with the key absent nothing here runs and the route is byte-identical whether
-the flag is on or off (golden-pinned both ways), so turning the flag on for an
-experiment never changes other /v1 traffic. Only an explicit ``auto`` or
-``architect_general`` escalates, and only with the flag on.
+(``auto`` | ``off`` | ``architect_general`` | ``force_architect_general``).
+Escalation is OPT-IN per request: with the key absent nothing here runs and the
+route is byte-identical whether the flag is on or off (golden-pinned both ways).
+``auto`` uses /chat's quality trigger and default target; ``architect_general``
+uses that same trigger and pins the target. ``force_architect_general`` requests
+one explicit direct-stage consultant re-answer without the quality detector.
+All values still require the flag and the existing eligible frontdoor path.
 
-``auto`` keeps /chat's targets verbatim (quality escalation -> coder_escalation).
-``architect_general`` keeps /chat's
-TRIGGERS but pins every consultant call to that role: after the pending role
-swap coder_escalation stays on the 27B while architect_general becomes
-Flash-Next, so an arm that must measure Flash-Next as the consultant (UFH-13
-A2) names it instead of inheriting frontdoor's default chain.
+The force mode does not create a reviewer/critique path. It reuses the existing
+consultant call contract after a completed direct-stage answer; the default REPL
+stage has no post-answer hook after RI-18c.
 
 WHICH ESCALATION, AND WHY THESE TRIGGERS
 ========================================
-This module adds no policy. It applies /chat's OWN post-answer escalation hooks
-to a /v1 frontdoor answer, by calling the very functions /chat calls, in the
-order /chat calls them:
+This module keeps /chat's existing quality-trigger policy for ``auto`` and
+``architect_general``. The explicit force value is the one caller-requested
+exception and reuses the same bounded re-answer helper; it adds no shared
+review policy or typed reviewer-plane invocation.
 
 * ``direct`` stage — client tool mode (the mode OpenCode uses) and
   ``x_disable_repl``. A client-mode backend call is one direct completion, so
@@ -88,13 +88,15 @@ CONSULTANT_ROLE = str(Role.ARCHITECT_GENERAL)
 QUALITY_ESCALATION_ROLE = str(Role.CODER_ESCALATION)
 
 TRIGGER_QUALITY = "quality_escalation"
+TRIGGER_FORCED = "caller_forced"
+FORCE_MODE = "force_architect_general"
 
 STAGE_DIRECT = "direct"
 STAGE_REPL = "repl"
 
 TAP_EVENT = "v1_escalation"
 
-# x_escalation values that NAME the consultant (pin every escalation call to it).
+# Explicit target pin and force-mode mapping for the consultant role.
 PINNED_TARGETS = frozenset({CONSULTANT_ROLE})
 
 
@@ -156,8 +158,8 @@ class V1EscalationPlan:
     enabled: bool
     disabled_reason: str | None
     from_role: str
-    # The consultant role the caller pinned (x_escalation=<role>), or None for
-    # /chat's own targets (auto).
+    # The consultant role pinned by the request, or None for /chat's target.
+    # The force enum is fixed to CONSULTANT_ROLE (architect_general).
     target_role: str | None = None
     base_trace_keys: dict[str, Any] = field(default_factory=dict)
     steps: list[dict[str, Any]] = field(default_factory=list)
@@ -176,6 +178,10 @@ class V1EscalationPlan:
     @property
     def quality_escalation_role(self) -> str:
         return self.target_role or QUALITY_ESCALATION_ROLE
+
+    @property
+    def force(self) -> bool:
+        return self.requested == FORCE_MODE
 
     @property
     def consultant_device_seconds(self) -> float:
@@ -218,11 +224,10 @@ def plan_v1_escalation(
 ) -> V1EscalationPlan | None:
     """Decide eligibility. ``None`` = no key sent: touch nothing, flag on or off.
 
-    Opt-in: only an explicit ``auto`` / ``architect_general`` can escalate, and
-    only with the flag on. An explicit ``off`` gets a disabled receipt (the
-    experiment's no-escalation arm proves it was off). Flag off + key sent is
-    recorded as disabled (``flag_off``) so a run that believes it is escalating
-    can see that it is not.
+    Opt-in: explicit ``auto`` / ``architect_general`` uses the quality trigger;
+    ``force_architect_general`` requests the one force re-answer. All require the
+    flag on and the same role/image eligibility checks. An explicit ``off`` gets
+    a disabled receipt. Flag off + key sent is recorded as disabled (``flag_off``).
     """
     if requested is None:
         return None
@@ -238,12 +243,15 @@ def plan_v1_escalation(
         reason = "not_frontdoor"
     elif image_input:
         reason = "image_input"
+    target_role = requested if requested in PINNED_TARGETS else None
+    if requested == FORCE_MODE:
+        target_role = CONSULTANT_ROLE
     return V1EscalationPlan(
         requested=requested,
         enabled=reason is None,
         disabled_reason=reason,
         from_role=from_role,
-        target_role=requested if requested in PINNED_TARGETS else None,
+        target_role=target_role,
         final_answer_role=from_role,
     )
 
@@ -373,20 +381,41 @@ def _escalate_answer(
     if stage == STAGE_DIRECT:
         quality_role = plan.quality_escalation_role
         before = _counters(primitives)
-        with _tagged_trace(plan, primitives, TRIGGER_QUALITY, role, quality_role):
-            new_answer, new_role = chat_stages._quality_escalate(
-                answer,
-                direct_prompt,
+        trigger = TRIGGER_FORCED if plan.force else TRIGGER_QUALITY
+        force_kwargs = {"force": True} if plan.force else {}
+        try:
+            with _tagged_trace(plan, primitives, trigger, role, quality_role):
+                new_answer, new_role = chat_stages._quality_escalate(
+                    answer,
+                    direct_prompt,
+                    primitives,
+                    role,
+                    allow_escalation=True,
+                    escalation_role=Role(quality_role),
+                    **force_kwargs,
+                )
+        except Exception as exc:
+            if not plan.force:
+                raise
+            failed_step = _record_step(
+                plan,
                 primitives,
-                role,
-                allow_escalation=True,
-                escalation_role=Role(quality_role),
+                trigger=trigger,
+                from_role=role,
+                to_role=quality_role,
+                before=before,
+                outcome="failed",
             )
+            if failed_step is not None:
+                failed_step["completion_reason"] = None
+            plan.error = f"{type(exc).__name__[:80]}: forced consultant call failed"
+            plan.final_answer_role = role
+            return answer
         adopted = _role_name(new_role) != role
         _record_step(
             plan,
             primitives,
-            trigger=TRIGGER_QUALITY,
+            trigger=trigger,
             from_role=role,
             to_role=quality_role,
             before=before,

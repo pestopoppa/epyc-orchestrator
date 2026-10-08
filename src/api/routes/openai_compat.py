@@ -1008,6 +1008,16 @@ async def _escalate_v1_answer(
     chat_id: str,
 ) -> str:
     """Run /chat's post-answer hooks off the event loop; no-op when not enabled."""
+    if plan is not None and plan.enabled and plan.force:
+        if not answer.strip() or answer.lstrip().startswith("[ERROR"):
+            plan.enabled = False
+            plan.disabled_reason = "force_requires_completed_direct_answer"
+        elif stage is None:
+            plan.enabled = False
+            plan.disabled_reason = "force_requires_completed_direct_answer"
+        elif stage != STAGE_DIRECT:
+            plan.enabled = False
+            plan.disabled_reason = "force_requires_direct_stage"
     if plan is None or not plan.enabled or stage is None or primitives is None:
         return answer
     return await asyncio.to_thread(
