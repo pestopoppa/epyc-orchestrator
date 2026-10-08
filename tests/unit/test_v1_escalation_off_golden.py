@@ -1,20 +1,11 @@
 #!/usr/bin/env python3
-"""TE-1 (UFH-13) — without an explicit x_escalation, client tool mode stays byte-identical.
+"""Strict public62 baseline contract; historical golden JSON remains unchanged.
 
-Every case runs twice: flag ``v1_escalation`` off, and flag ON with the key
-absent (escalation is opt-in per request). Both must match the same golden.
-
-The fixture was captured from the route BEFORE ``v1_escalation`` existed
-(origin/main b020a1a8). The default REPL/direct modes are pinned by
-``test_openai_compat_default_golden.py``; this file pins the client tool mode,
-which is the mode OpenCode (and therefore the UFH-13 thesis experiment) uses.
-
-Each case records the exact ``chat_completion_call`` arguments, every
-``llm_call`` (there must be none), and the response body with only the
-per-request volatile fields normalised.
-
-Regenerate ONLY when a flag-off change is intended:
-``TE1_REGEN_GOLDEN=1 pytest tests/unit/test_v1_escalation_off_golden.py``.
+Baseline: 62ee3ba69eed64d8f17268a18b39c131aea90760. Backend streaming uses
+callbacks and emits one complete buffered answer when no chunk source exists.
+Escalation OFF and ON with no request key must match the same exact fixture.
+Only per-request volatile identity/timing and the verified callback address are
+normalized; call arguments and complete JSON/SSE remain strict expectations.
 """
 
 from __future__ import annotations
@@ -33,7 +24,7 @@ from src.api import app
 from src.api.state import get_state, reset_state
 from src.features import reset_features
 
-GOLDEN = Path(__file__).parent / "fixtures" / "v1_escalation_off_golden.json"
+GOLDEN = Path(__file__).parent / "fixtures" / "v1_escalation_off_golden-public62-stream-contract.json"
 
 _TOOLS = [
     {
@@ -149,10 +140,19 @@ def _normalise_sse(text: str) -> str:
 
 
 def _calls(mock: MagicMock) -> list[dict[str, Any]]:
+    def stable_kwargs(call):
+        kwargs = dict(sorted(call.kwargs.items()))
+        if kwargs.get("on_chunk") is not None:
+            callback = kwargs["on_chunk"]
+            assert callable(callback)
+            assert callback.__qualname__ == "_iter_thread_call_chunks.<locals>.on_chunk"
+            kwargs["on_chunk"] = "<backend-stream-callback>"
+        return kwargs
+
     return [
         {
             "args": json.loads(json.dumps(list(c.args), default=str)),
-            "kwargs": json.loads(json.dumps(dict(sorted(c.kwargs.items())), default=str)),
+            "kwargs": json.loads(json.dumps(stable_kwargs(c), default=str)),
         }
         for c in mock.call_args_list
     ]
