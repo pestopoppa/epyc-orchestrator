@@ -59,6 +59,8 @@ LANE_BINARY_COMMIT = "67a433bf4"
 # First tenant candidate (program D2). Proposal default only: at activation the
 # master-registry role block (tenancy as data) is the source of truth.
 TENANT_CANDIDATE_ID = "qwen36_27b_stock_q8"
+# 2026-10-20: this GGUF was DELETED (operator-approved disk reclaim); the default
+# names a missing file until program D2 picks a new first tenant.
 TENANT_CANDIDATE_MODEL = "/mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf"
 
 DEFAULT_NP_CEILING_POLICY_PATH = (

@@ -124,6 +124,7 @@ tenants:
   qwen36_27b_ff_q8:
     evidence_arm: A3_ff_fable_non_mtp_q8
     evidence_basis: measured  # these cells were taken on THIS model
+    # 2026-10-20: GGUF DELETED (operator-approved disk reclaim, DS41-1017 swap prep). Not activatable until re-downloaded or the tenant is replaced; see the research registry deprecated_models row.
     model_path: /mnt/raid0/llm/models/Qwen3.6-27B-Fable-Fusion-711-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q8_0.gguf
     model_bytes: 29787701792
     model_sha256: 2fff409d4a22e0cb11fb0ecfafed1c669b9808f7e6bc499036c6e85297f14f4d
@@ -178,6 +179,7 @@ tenants:
     evidence_arm: A3_ff_fable_mtp_q8
     evidence_basis: measured
     paired_with: qwen36_27b_ff_q8  # same base weights; the D6 mode comparison
+    # 2026-10-20: GGUF DELETED (operator-approved disk reclaim, DS41-1017 swap prep). Not activatable until re-downloaded or the tenant is replaced; see the research registry deprecated_models row.
     model_path: /mnt/raid0/llm/models/Qwen3.6-27B-Fable-Fusion-711-GGUF/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-Q8_0.gguf
     model_bytes: 30239022560
     model_sha256: 041c175f03b76adb70077ba470258f6b916ec4f5f066077377ef96396c3dd1d0
@@ -224,6 +226,7 @@ tenants:
       Do not transfer stock -> FF, and do not cite these cells as stock
       throughput measurements: throughput is NOT transferable, only capacity.
     registry_catalogue_id: qwen36_27b_q8  # the master-registry model id
+    # 2026-10-20: GGUF DELETED (operator-approved disk reclaim, DS41-1017 swap prep). Not activatable until re-downloaded or the tenant is replaced; see the research registry deprecated_models row.
     model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf
     model_bytes: 28665067072
     # P2-1: sha256 pin for the preflight's streamed tenant-identity check.

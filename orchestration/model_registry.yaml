@@ -13,8 +13,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-20T14:00:01+00:00
-# Cache key:   2be38b302c1cae07...
+# Compiled at: 2026-10-20T15:34:30+00:00
+# Cache key:   0a490e0b829f4fe3...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -803,7 +803,7 @@ deprecated_models:
   path_was: /mnt/raid0/llm/models/unsloth/Qwen3.5-35B-A3B-GGUF/
   size_gb: 19
   reason: 'OP-31 disk reclaim (operator-approved minimal set, 2026-08-31). Superseded as frontdoor 2026-05-04. Zero lean-registry references verified pre-deletion. NOTE: a complete FP16 safetensors copy
-    of Qwen3.5-35B-A3B remains in the live HF cache (67 GB, Tier E of the OP-31 menu).'
+    of Qwen3.5-35B-A3B remained in the live HF cache (67 GB, Tier E of the OP-31 menu); that copy was deleted 2026-10-20 (see its own row below).'
   deleted: 2026-08-31
 - model: Qwable-v1-GGUF (IQ4_XS) — re-execution
   path_was: /mnt/raid0/llm/models/Qwable-v1-GGUF/
@@ -1021,6 +1021,101 @@ deprecated_models:
   size_gb: 0
   reason: NIB2-65 safe set (2026-08-23 census). Verified empty (4-8K directory metadata only, no weight files) before removal. Disk-pressure reclaim (96% full, 2026-09-15).
   deleted: 2026-09-15
+- model: Qwen3.5-35B-A3B (HF cache, FP16 safetensors)
+  path_was: /mnt/raid0/llm/cache/huggingface/models--Qwen--Qwen3.5-35B-A3B/
+  size_gb: 66.98
+  reason: Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). No roles.*, server_mode, template or recipe names this cache path. This is the FP16 copy that the OP-31 row "Qwen3.5-35B-A3B-GGUF
+    (unsloth)" (2026-08-31) recorded as remaining; that note was amended.
+  deleted: 2026-10-20
+- model: Ring-mini-linear-2.0 (hf_models dir; Q4_K_M + BF16 GGUF + HF source)
+  path_was: /mnt/raid0/llm/hf_models/Ring-mini-linear-2.0/
+  size_gb: 70.55
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Tier-C research candidate, never in the served lineup (Lightning-Attention bailingmoe-linear; drafter-for-Coder NO-GO). Files:
+    Ring-mini-linear-2.0-Q4_K_M.gguf, Ring-mini-linear-2.0-BF16.gguf. roles.ring_mini_linear_q4km and roles.ring_mini_linear_bf16 deprecated in the same commit.'
+  deleted: 2026-10-20
+- model: DeepSeek-R1-Distill-Qwen-32B-GGUF (bartowski)
+  path_was: /mnt/raid0/llm/models/bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF/
+  size_gb: 25.04
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Catalogue-only thinking model. File: DeepSeek-R1-Distill-Qwen-32B-Q6_K.gguf. roles.thinking_deepseek_r1_distill_qwen_32b deprecated
+    in the same commit. Stale tooling: bench_tree_speculation_server.sh PAIR_TARGETS.'
+  deleted: 2026-10-20
+- model: Qwen3-32B-GGUF (lmstudio-community; Q4_K_M)
+  path_was: /mnt/raid0/llm/models/lmstudio-community/Qwen3-32B-GGUF/
+  size_gb: 18.4
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Superseded dense-32B general/ingest candidate. File: Qwen3-32B-Q4_K_M.gguf. roles.general_qwen3_32b and roles.ingest_qwen3_32b
+    (same GGUF) deprecated in the same commit. Stale tooling: bench_hispec_external.sh, bench_hsd_ab.sh, full_optimization_benchmark.sh.'
+  deleted: 2026-10-20
+- model: DeepSeek-R1-Distill-Qwen-14B-GGUF (bartowski Q6_K_L)
+  path_was: /mnt/raid0/llm/models/bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF/
+  size_gb: 11.64
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). The bartowski copy that the lmstudio-community row (2026-08-31) recorded as retained. File: DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf.
+    roles.thinking_deepseek_r1_distill_qwen_14b_q6kl deprecated and the stale "retained" reason on roles.thinking_deepseek_r1_distill_qwen_14b amended in the same commit.'
+  deleted: 2026-10-20
+- model: gemma-4-e4b-it-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/gemma-4-e4b-it-Q8_0.gguf
+  size_gb: 7.48
+  reason: Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Zero references in the master registry, orchestrator, recipes or scripts.
+  deleted: 2026-10-20
+- model: gemma-4-e2b-it-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/gemma-4-e2b-it-Q8_0.gguf
+  size_gb: 4.63
+  reason: Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Zero references in the master registry, orchestrator, recipes or scripts.
+  deleted: 2026-10-20
+- model: hy3-angelslim (AngelSlim Hy3 IQ1_M + MTP, full dir)
+  path_was: /mnt/raid0/llm/models/hy3-angelslim/
+  size_gb: 85.45
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Research candidate (295B-total/21B-active Hunyuan-v3 MoE), never in the served lineup. The dir held Hy3-IQ1_M-mtp.gguf plus LICENSE,
+    README.md, recipes/hyv3_{iq1m,iq1m_mtp,q4km,q4km_mtp}_recipe.txt, setup_hyv3_llama.sh, patches/01-hyv3-arch.patch, patches/02-hyv3-mtp-tools.patch and hyv3_opensource_chat_template.jinja; the patches/recipes
+    were not preserved (re-download from AngelSlim/Hy3-GGUF). roles.hy3_angelslim_iq1m_mtp deprecated in the same commit (reviewer_pool_gen.py excludes deprecated staged keys). Stale tooling: cpu_prefill_v8_regression_runner.py,
+    hy3_task_quality_runner.py, iqk_real_model_correctness_runner.py.'
+  deleted: 2026-10-20
+- model: Qwen3.6-27B-Fable-Fusion-711-GGUF (Q8_0 + MTP-Q8_0)
+  path_was: /mnt/raid0/llm/models/Qwen3.6-27B-Fable-Fusion-711-GGUF/
+  size_gb: 55.9
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). gpu_shadow_lane bake-off arms (qwen36_27b_ff_q8, qwen36_27b_ff_mtp_q8); no roles.* row. Files: Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-Q8_0.gguf
+    (29787701792 B, sha256 2fff409d...f14f4d) and ...-NEO-MTP-Q8_0.gguf (30239022560 B, sha256 041c175f...dd1d0). The orchestrator''s gpu_shadow_lane_tenancy.yaml / gpu_shadow_lane_np_ceiling.yaml tenants
+    are annotated as deleted (default-off, planning-only lane). Stale tooling: p3_bakeoff_manifest.py, weight_delta_geometry.py.'
+  deleted: 2026-10-20
+- model: Qwopus3.8-27B-Flash.Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/Qwopus3.8-27B-Flash.Q8_0.gguf
+  size_gb: 27.05
+  reason: Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). No references in the master registry, orchestrator, recipes or scripts.
+  deleted: 2026-10-20
+- model: ThinkingCap-Qwen3.6-27B-GGUF
+  path_was: /mnt/raid0/llm/models/ThinkingCap-Qwen3.6-27B-GGUF/
+  size_gb: 27.05
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Fine-tune evaluated in the architect-27b-finetunes-v8 six-arm study (arm A3-tc; results retained under artifacts/); no roles.*
+    row. One Q8_0 file (dir 29047082976 B); exact filename not recoverable from registry/git text. Stale tooling: weight_delta_geometry.py.'
+  deleted: 2026-10-20
+- model: Qwen_Qwen3.6-27B-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/Qwen_Qwen3.6-27B-Q8_0.gguf
+  size_gb: 26.7
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Non-MTP stock Qwen3.6-27B Q8_0 (sha256 5927dc06...), superseded by Qwen3.8-27B on :8083. roles.qwen36_27b_q8 deprecated in the
+    same commit. Also gpu_shadow_lane bake-off arm 1 / D2 default tenant (qwen36_27b_stock_q8); the orchestrator tenancy data and TENANT_CANDIDATE_MODEL are annotated as deleted. Stale tooling: p3_bakeoff_manifest.py,
+    run_autokernel_async_prefetch_replay.py, run_autokernel_q4k_unpack_attribution.py, weight_delta_geometry.py.'
+  deleted: 2026-10-20
+- model: Qwen2.5-Coder-32B-Instruct-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF/Qwen2.5-Coder-32B-Instruct-Q8_0.gguf
+  size_gb: 32.43
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep). Q8 sibling of the KEPT Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf in the same dir (CPU coder is bandwidth-bound; Q4_K_M ~ Q8 quality
+    per the coder-quant decision). roles.coder_escalation_q8 deprecated in the same commit. Stale tooling: bench_all_spec_sweeps.sh, bench_coder_192t.sh, bench_numa_coder_quant_sweep.sh, bench_sweep_coder_spec_params.sh,
+    bench_tree_speculation_server.sh (CODER_Q8).'
+  deleted: 2026-10-20
+- model: Qwen3.6-27B-MTP-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/Qwen3.6-27B-MTP-Q8_0.gguf
+  size_gb: 27.05
+  reason: 'Operator-approved 2026-10-20 disk reclaim (DS41-1017 swap prep; operator: "we use qwen3.8 now"). Former production GPU model for architect_general/coder_escalation (swapped to Qwen3.8-27B 2026-08-20)
+    and their documented rollback anchor; that anchor is WITHDRAWN by this deletion. roles.qwen36_27b_mtp_q8_local deprecated and the server_mode.architect_critic description amended in the same commit.
+    Stale references: autokernel testdata gdn_bf16_b32_historical_task_v1.json (historical task record), e5_cell_manifests.py, k35_stack_context_matrix_runner.py, laguna_pgpu1_dflash_runner.py; orchestrator
+    q_scorer.py score key (name only) and a test fixture.'
+  deleted: 2026-10-20
+- model: Qwen3.8-Flash-Next-IQ4_XS-uniform.gguf (single file)
+  path_was: /mnt/raid0/llm/models/unsloth/Qwen3.8-Flash-Next-GGUF/IQ4_XS-uniform/Qwen3.8-Flash-Next-IQ4_XS-uniform.gguf
+  size_gb: 91.64
+  reason: 'Operator ruling 2026-10-20: retired, keeper UD-IQ4_XS (the 3-shard UD-IQ4_XS set is the codified recipe TRUNK since research d9af93b4f; qwen38_flash_next_recipe.py keeps this file only as MEASURED_TRUNK,
+    because every INF-70 headline was measured on it). A local requant of UD (llama-quantize --allow-requantize), not on HF; sha256 4bfb9849...f8957. Deleted by the operator via guarded_rm.sh. The mentions
+    at architect_general and qwen38_flash_next_ud_iq4xs_local are measurement provenance and stay.'
+  deleted: 2026-10-20
 observations:
   slot_admission_alignment_2026_02_20:
     title: 'Slot/admission alignment: eliminated 50% KV cache waste across all backends'
@@ -1864,9 +1959,9 @@ server_mode:
       evidence: 'CT-1b A/B artifacts: /workspace/artifacts/chat-templates/epyc-qwen3x-v1/ab-cpu-20260821/ct1b-terse/ (measured on Qwen3.6-35B-A3B; UNMEASURED on this role''s Qwen3.8-27B). E-7: this role''s
         calibration stamps are voided by the template axis and must re-measure. NOTE this REPLACES the Unsloth-embedded template documented under the qwen38_27b_q8_local role row.'
     model_role: qwen38_27b_q8_local
-    description: 'System architecture — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0), at MEDIUM reasoning effort as of 2026-09-22. 2026-08-20: artifact swapped from Qwen3.6-27B-MTP-Q8_0 (rollback anchor: qwen36_27b_mtp_q8_local,
-      retained). 2026-07-31: 122B vacated to the new architect_critic role. PRIMARY for the :8083 GPU process; coder_escalation AND, from 2026-09-22, ingest_long_context are aliases on it. n_ctx raised
-      65536 -> 196608 once worker_vision vacated the card.'
+    description: 'System architecture — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0), at MEDIUM reasoning effort as of 2026-09-22. 2026-08-20: artifact swapped from Qwen3.6-27B-MTP-Q8_0 (former rollback anchor
+      qwen36_27b_mtp_q8_local; GGUF deleted 2026-10-20, anchor withdrawn). 2026-07-31: 122B vacated to the new architect_critic role. PRIMARY for the :8083 GPU process; coder_escalation AND, from 2026-09-22,
+      ingest_long_context are aliases on it. n_ctx raised 65536 -> 196608 once worker_vision vacated the card.'
     shared_with:
     - coder_escalation
     - ingest_long_context
