@@ -692,6 +692,37 @@ class ChatCompletionsTransport:
         self.enable_thinking = enable_thinking
         self._client = client
 
+    def prefill_trunk(self, messages: list[dict[str, str]], *, timeout_s: float,
+                      checkpoint_at: list[Any] | None = None) -> dict[str, Any]:
+        """KPF-21: a prefill-only request (``max_tokens: 0``, no stream) that
+        returns when the server has prefilled ``messages``; with
+        ``checkpoint_at`` it also pins the junction checkpoint (RTG-58 P1
+        server). Called only by the pool gate with the fork on. Raises on a
+        non-2xx reply (the caller treats that as 'no trunk request')."""
+        import httpx
+
+        payload: dict[str, Any] = {
+            "messages": messages, "max_tokens": 0, "stream": False,
+            "temperature": 0.2, "cache_prompt": True,
+            "chat_template_kwargs": {"enable_thinking": bool(self.enable_thinking)},
+        }
+        if checkpoint_at:
+            payload["checkpoint_at"] = checkpoint_at
+        timeout = httpx.Timeout(max(1.0, timeout_s), connect=CONNECT_TIMEOUT_S)
+        client = self._client or httpx.Client(timeout=timeout)
+        try:
+            resp = client.post(f"{self.url}/v1/chat/completions", json=payload, timeout=timeout)
+            resp.raise_for_status()
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
+        finally:
+            if self._client is None:
+                client.close()
+        timings = body.get("timings") if isinstance(body, dict) else None
+        return {"timings": timings if isinstance(timings, dict) else None}
+
     def complete(self, messages: list[dict[str, str]], *, max_tokens: int,
                  should_stop: Callable[[], bool], timeout_s: float,
                  on_first_chunk: Callable[[], None] | None = None,
@@ -792,6 +823,7 @@ class PoolGatedTransport:
         self.deadline_s = deadline_s  # time.perf_counter deadline (the request's)
         self.admitted_calls = 0
         self.wait_s_total = 0.0
+        self.trunk_outcomes: list[str | None] = []  # KPF-21, flag-on only
 
     def complete(self, messages: list[dict[str, str]], *, max_tokens: int,
                  should_stop: Callable[[], bool], timeout_s: float) -> CompletionResult:
@@ -835,6 +867,11 @@ class PoolGatedTransport:
                 log.debug("scouts: prefill_done failed", exc_info=True)
 
         extra: dict[str, Any] = {}
+        if key_kwargs:
+            # KPF-21 (flag + FORK on, server advertises the fork): the trunk once,
+            # prefill-only, BEFORE the children are released (prefill_over).
+            _scout_trunk_prefill(self, messages, prefill_over, should_stop,
+                                 max(1.0, float(timeout_s) - waited))
         if getattr(self.inner, "gate_kwargs", False) is True:
             extra["on_first_chunk"] = prefill_over
             checkpoint_at = _scout_checkpoint_at(self.pool, self.url, messages) if key_kwargs else None
@@ -903,6 +940,44 @@ def _scout_checkpoint_at(pool: Any, url: str,
         return [{"message": 0, "at": "end"}]
     except Exception:
         return None
+
+
+def _scout_trunk_prefill(gate: Any, messages: list[dict[str, str]], prefill_over: Callable[[], None],
+                         should_stop: Callable[[], bool], timeout_s: float) -> None:
+    """KPF-21: issue the shared trunk ONCE as a prefill-only request, then hand
+    the prefill on so the gate releases the held siblings. The trunk is message
+    0 (the system prompt every sibling shares). Sent only with the flag and
+    ``ORCHESTRATOR_PREFIX_INDEX_FORK`` on, a server whose ``/props.slot_fork``
+    advertises the fork (``trunk_prefill.capability``), a trunk of at least the
+    server's ``min_tokens`` and a transport with ``prefill_trunk``. One sibling
+    issues; the others wait for it or skip. Never raises and never blocks the
+    scout past its own timeout: any failure means the scout just runs as before
+    (the gate still releases siblings at the first output chunk)."""
+    try:
+        from src.inference import prefix_index, trunk_prefill
+
+        if not prefix_index.fork_requested() or len(messages) < 2:
+            return
+        send = getattr(gate.inner, "prefill_trunk", None)
+        if getattr(gate.inner, "gate_kwargs", False) is not True or not callable(send):
+            return
+        pool = gate.pool
+        caps = pool.fork_caps(gate.url) if callable(getattr(pool, "fork_caps", None)) else None
+        trunk_text = str(messages[0].get("content") or "")
+        mode = trunk_prefill.capability(
+            caps, len(trunk_text) / prefix_index.PREFIX_CHARS_PER_TOKEN)
+        if mode is None:
+            return
+        checkpoint_at = [{"message": 0, "at": "end"}] if mode == "checkpoint" else None
+        key = trunk_prefill.trunk_key(gate.url, trunk_text)
+        outcome = trunk_prefill.get_registry().ensure(
+            key, lambda: send(messages, timeout_s=timeout_s, checkpoint_at=checkpoint_at),
+            wait_s=min(timeout_s, trunk_prefill.WAIT_S))
+        gate.trunk_outcomes.append(outcome.get("outcome"))
+        if outcome.get("outcome") in ("issued", "waited") and not should_stop():
+            prefill_over()  # the trunk is prefilled: release the held siblings now
+    except Exception:  # noqa: BLE001 -- never fails a scout
+        log.debug("scouts: trunk prefill failed", exc_info=True)
 
 
 def _scout_observe(pool: Any, url: str, ticket: Any, key: str, result: CompletionResult) -> None:

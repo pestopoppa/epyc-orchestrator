@@ -258,3 +258,40 @@ def test_passthrough_forwards_raw_bytes_and_records_no_index(monkeypatch, tmp_pa
                    <= LEGACY_RECORD_KEYS | LEGACY_HISTORY_KEYS for r in records)
     finally:
         srv.close()
+
+
+def test_kpf21_trunk_prefill_and_kpf25_ordering_are_inert_with_the_flag_off(monkeypatch):
+    """KPF-21 / KPF-25: FORK=1 and a server advertising the fork change nothing
+    with the master flag off: no prefill-only request, no /props read, the
+    registry is never touched, and wave prompts keep the legacy order."""
+    from src.api.routes.chat_pipeline import scout_stage as S
+    from src.inference import trunk_prefill
+    from src.parallel_step_executor import StepExecutor
+
+    trunk_prefill.get_registry().reset()
+    bodies: list[dict] = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, content=b"data: [DONE]\n\n")
+
+    caps_reads: list = []
+    pool = MagicMock()
+    pool.acquire.return_value = 1
+    pool.fork_caps.side_effect = lambda url: caps_reads.append(url) or {
+        "min_tokens": 1, "mode": "checkpoint", "checkpoint_at": True}
+    inner = S.ChatCompletionsTransport("http://x", client=httpx.Client(
+        transport=httpx.MockTransport(handler)))
+    gate = S.PoolGatedTransport(inner, url=URL, limit=SimpleNamespace(pool_tokens=393216), pool=pool)
+    msgs = [{"role": "system", "content": "s" * 90000}, {"role": "user", "content": "t"}]
+    gate.complete(msgs, max_tokens=8, should_stop=lambda: False, timeout_s=5)
+    assert len(bodies) == 1 and bodies[0]["max_tokens"] == 8
+    assert set(bodies[0]) == {"messages", "max_tokens", "stream", "temperature", "cache_prompt",
+                              "stream_options", "chat_template_kwargs"}
+    assert caps_reads == [] and gate.trunk_outcomes == []
+    assert trunk_prefill.get_registry().stats == {
+        "issued": 0, "failed": 0, "reused": 0, "waited": 0, "wait_timeouts": 0}
+    ex = StepExecutor(primitives=MagicMock())
+    step = {"id": "s", "action": "A", "outputs": ["o"]}
+    assert ex._build_step_prompt({"objective": "OBJ"}, step) == (
+        "## Task\nA\n\n## Overall Objective\nOBJ\n\n## Expected Outputs\no")
