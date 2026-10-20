@@ -369,3 +369,15 @@ def test_predeclared_interpretations_are_in_the_docstring():
     }
     for text in st.PREDECLARED_INTERPRETATIONS.values():
         assert text in (st.__doc__ or "")
+
+
+def test_kill_decision_floor_failures_make_it_underpowered_whatever_the_evidence():
+    h, lx = _passing_pair()  # n = 120 and a clear pass on its own
+    assert st.kill_decision({"bge.hybrid": h}, {}, lx, "bm25")["verdict"] == "PASS"
+    d = st.kill_decision({"bge.hybrid": h}, {}, lx, "bm25", floor_failures=["trace rows=60 < 75"])
+    assert d["underpowered"] is True and d["verdict"] == "UNDERPOWERED/KILL"
+    assert d["verdict_with_extension"] == "UNDERPOWERED/KILL"
+    assert d["floor_failures"] == ["trace rows=60 < 75"]
+    assert d["registered"]["bge.hybrid"]["pass"] is True  # the evidence is still reported
+    assert d["extension_only"] == []
+    assert st.TRACE_N_MIN == 75

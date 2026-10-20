@@ -1058,9 +1058,9 @@ def _write_variant(out, rows, name, hits, failed=(), skip=(), only_group=None):
         )
 
 
-def _pass_world(tmp_path, n_probe=45, n_spill=85):
+def _pass_world(tmp_path, n_probe=45, n_spill=85, leak=lambda i: None):
     out = tmp_path / "a"
-    rows = _write_world(out, n_probe, n_spill, leak=lambda i: i % 2 == 0)
+    rows = _write_world(out, n_probe, n_spill, leak=leak)
     n = len(rows)
     lex = set(range(0, 60))
     _write_variant(out, rows, "bm25", lex)
@@ -1100,9 +1100,7 @@ def test_analyze_kill_rule_pass_selection_pending_without_a_speed_block(tmp_path
     assert res["lexical_vs_dense_vs_hybrid"]["bge-large"]["dense"][
         "pooled_recall5"
     ] == pytest.approx(45 / 130)
-    assert res["leakage_cut"]["recall5"]["answer_named_verbatim=true"]["n"] == 65
-    assert "bge-large.hybrid" in res["leakage_cut"]["recall5"]["answer_named_verbatim=false"]
-    assert res["leakage_cut"]["kill_rule_on_false_subset"]["n"] == 65
+    assert res["leakage_cut"]["recall5"]["answer_named_verbatim=true"]["n"] == 0  # no flags here
     assert res["cost_flag"] == "contended_not_for_selection"
     cost = res["cost_contended"]["bm25"]
     assert len(cost["latencies_ms"]) == 130 and cost["p95_ms"] is not None
@@ -1662,49 +1660,91 @@ def test_freeze_rejects_a_bundle_id_clash_with_different_content_and_allows_none
     }
 
 
-def test_multi_source_dry_run_runs_every_stage_and_prints_both_decision_sets(tmp_path, capsys):
+def test_multi_source_dry_run_runs_every_stage_and_prints_primary_and_secondary_sets(
+    tmp_path, capsys
+):
     assert ev.main(["--dry-run", "--multi-source", "--out", str(tmp_path)]) == 0
     printed = capsys.readouterr().out
-    assert "KILL RULE (pooled, with synthetic): UNDERPOWERED/KILL (n=18)" in printed
-    assert "KILL RULE (pooled, without synthetic): UNDERPOWERED/KILL (n=12)" in printed
-    assert "SELECTION (pooled, with synthetic): not applicable" in printed
+    # primary = probe45 (6, no flag) + agent_nav unflagged (3) + synthetic_spill unflagged (3)
+    assert "KILL RULE: UNDERPOWERED/KILL (n=12)" in printed
+    assert (
+        "FLOOR CHECK FAILED (primary): n=12 < 120; trace rows=6 < 75 -> UNDERPOWERED/KILL"
+        in printed
+    )
+    assert "SELECTION: not applicable (kill rule UNDERPOWERED/KILL)" in printed
+    assert (
+        "(non-deciding) KILL RULE (pooled, flagged included): UNDERPOWERED/KILL (n=18)" in printed
+    )
+    assert (
+        "(non-deciding) KILL RULE (without synthetic, flagged excluded): UNDERPOWERED/KILL (n=9)"
+        in printed
+    )
+    assert (
+        "(non-deciding) KILL RULE (without synthetic, flagged included): UNDERPOWERED/KILL (n=12)"
+        in printed
+    )
     out = tmp_path / "out"
     a = json.loads((out / "analysis.json").read_text())
-    assert (
-        a["synthetic_present"] and a["n_deciding"] == 18 and a["n_deciding_without_synthetic"] == 12
-    )
+    assert a["synthetic_present"] and a["n_deciding"] == 12 and a["n_flagged_excluded"] == 6
+    assert a["n_by_set"] == {
+        "primary": 12,
+        "pooled_flagged_included": 18,
+        "without_synthetic_flagged_excluded": 9,
+        "without_synthetic_flagged_included": 12,
+    }
     assert a["n_by_group"] == {
         "probe45": 6,
         "agent_nav": 6,
         "synthetic_spill": 6,
         "trivial_head": 3,
     }
-    # exact per-stratum recall@1 of the synthetic world: lexical 4/6, dense 4/6, hybrid 5/6 in EVERY stratum
+    assert a["floor_check"]["failures"] == ["n=12 < 120", "trace rows=6 < 75"]
+    sets = a["decision_sets"]
+    # recall@1 of the synthetic world on the pooled set that INCLUDES flagged rows: lexical 4/6,
+    # dense 4/6, hybrid 5/6 in every stratum
+    full = sets["pooled_flagged_included"]["recall"]
     for stratum in ("probe45", "agent_nav", "synthetic_spill"):
-        assert a["recall"]["bm25"][stratum]["1"]["recall"] == pytest.approx(4 / 6)
-        assert a["recall"]["bge-large.dense"][stratum]["1"]["recall"] == pytest.approx(4 / 6)
-        assert a["recall"]["bge-large.hybrid"][stratum]["1"]["recall"] == pytest.approx(5 / 6)
-    w = a["recall_by_writer"]["bge-large.hybrid"]
-    assert w["writer=A"]["1"]["n"] == 3 and w["writer=B"]["1"]["n"] == 3
-    # synthetic queries 1,3,5 have writer A (hybrid hits all three), 2,4,6 writer B (q4 is unanswerable)
+        assert full["bm25"][stratum]["1"]["recall"] == pytest.approx(4 / 6)
+        assert full["bge-large.dense"][stratum]["1"]["recall"] == pytest.approx(4 / 6)
+        assert full["bge-large.hybrid"][stratum]["1"]["recall"] == pytest.approx(5 / 6)
+    # the primary drops the flagged queries q1, q3, q6 of the trace strata (they are easy for bm25)
+    prim = a["recall"]
+    assert prim["bm25"]["agent_nav"]["1"]["recall"] == pytest.approx(1 / 3)
+    assert prim["bge-large.dense"]["agent_nav"]["1"]["recall"] == pytest.approx(2 / 3)
+    assert prim["bge-large.hybrid"]["synthetic_spill"]["1"]["n"] == 3
+    assert prim["bm25"]["probe45"]["1"]["n"] == 6  # probe45 is kept whole
+    w = a["recall_by_writer"]["bge-large.hybrid"]  # primary: q5 (writer A); q2, q4 (writer B)
+    assert w["writer=A"]["1"]["n"] == 1 and w["writer=B"]["1"]["n"] == 2
     assert w["writer=A"]["1"]["recall"] == 1.0 and w["writer=B"]["1"]["recall"] == pytest.approx(
-        2 / 3
+        0.5
     )
+    # the leakage effect is visible as a difference: bm25 aces the flagged agent_nav queries
+    eff = a["leakage"]["effect_flagged_minus_unflagged"]
+    assert eff["bm25"]["agent_nav"]["recall"]["1"]["diff"] == pytest.approx(1.0 - 1 / 3)
+    assert eff["bge-large.dense"]["agent_nav"]["recall"]["1"]["diff"] == pytest.approx(0.0)
+    assert eff["bge-large.hybrid"]["agent_nav"]["recall"]["1"]["diff"] == pytest.approx(1 / 3)
+    rates = a["leakage"]["flag_rates"]
+    assert rates["by_writer"]["A"]["flag_rate"] == pytest.approx(2 / 3)
+    assert rates["by_writer"]["B"]["flag_rate"] == pytest.approx(1 / 3)
+    assert rates["by_intent_source"]["assistant_text"]["flag_rate"] == pytest.approx(2 / 3)
+    assert rates["by_stratum"]["probe45"]["flag_rate"] is None  # no flag on probe45
     assert set(a["leakage_cut_intent_source"]["values"]) == {"assistant_text", "bash_description"}
     assert a["trivial_head"]["bm25"]["n"] == 3
     assert "colgrep" not in a["variants"]  # the dry run only prints the ColGREP commands ...
     assert printed.count(" search ") == 6  # ... for the probe45 queries alone
     md = (out / "analysis.md").read_text()
-    assert ev.BIAS_NOTE in md and "# Decision set: pooled, with synthetic" in md
-    assert "# Decision set: pooled, without synthetic" in md
+    assert ev.BIAS_NOTE in md and ev.BIAS_NOTE_SCOPE in md
+    assert (
+        "# PRIMARY decision set" in md
+        and "# SECONDARY (non-deciding): pooled, flagged included" in md
+    )
+    assert "!!! FLOOR CHECK FAILED (primary)" in md
     assert (out / "perquery-bge-large.hybrid.jsonl").exists()
     rows = ev.ResultStore(out).rows("bge-large.hybrid")
-    assert {q for q in rows if q.startswith("y-")} == {f"y-q{i}" for i in range(1, 7)}
-    assert {q for q in rows if q.startswith("th-")} == {
-        "th-q1",
-        "th-q2",
-        "th-q3",
-    }  # trivial head WAS run
+    assert {q for q in rows if q.startswith("y-")} == {
+        f"y-q{i}" for i in range(1, 7)
+    }  # flagged ran too
+    assert {q for q in rows if q.startswith("th-")} == {"th-q1", "th-q2", "th-q3"}
 
 
 # ───────────────────────────────────────────────────────────────────────────── two decision sets
@@ -1741,7 +1781,7 @@ def _lines(res):
     return res["verdict_lines"]
 
 
-def test_with_synthetic_passes_while_without_synthetic_is_underpowered(tmp_path):
+def test_primary_passes_while_the_secondary_without_synthetic_set_is_underpowered(tmp_path):
     out = tmp_path / "s1"
     rows = _write_strata(out, [("probe45", 45), ("agent_nav", 40), ("synthetic_spill", 60)])
     assert len(rows) == 145
@@ -1750,24 +1790,28 @@ def test_with_synthetic_passes_while_without_synthetic_is_underpowered(tmp_path)
     _write_variant(out, rows, "bge-large.hybrid", set(range(0, 50)) | set(range(60, 95)))
     _write_variant(out, rows, "granite-97m-r2.hybrid", set(range(0, 55)))
     res = ev.analyze(out)
+    # no flags anywhere: the primary set is the whole pool, and the duplicate secondary sets vanish
     assert _lines(res) == [
-        "KILL RULE (pooled, with synthetic): PASS (n=145)",
-        "KILL RULE (pooled, without synthetic): UNDERPOWERED/KILL (n=85)",
-        "SELECTION (pooled, with synthetic): pending speed block",
-        "SELECTION (pooled, without synthetic): not applicable (kill rule UNDERPOWERED/KILL)",
+        "KILL RULE: PASS (n=145)",
+        "SELECTION: pending speed block",
+        "(non-deciding) KILL RULE (without synthetic, flagged excluded): UNDERPOWERED/KILL (n=85)",
     ]
-    ws, wo = res["decision_sets"]["with_synthetic"], res["decision_sets"]["without_synthetic"]
-    assert (ws["n_deciding"], wo["n_deciding"]) == (145, 85)
+    sets = res["decision_sets"]
+    assert sets["pooled_flagged_included"] == {"identical_to": "primary"}
+    assert sets["without_synthetic_flagged_included"] == {
+        "identical_to": "without_synthetic_flagged_excluded"
+    }
+    prim, wo = sets["primary"], sets["without_synthetic_flagged_excluded"]
+    assert (prim["n_deciding"], wo["n_deciding"]) == (145, 85)
+    assert prim["deciding"] is True and wo["deciding"] is False
     assert wo["kill_rule"]["underpowered"] is True and wo["kill_rule"]["n_min"] == 120
     # the evidence for the small set is still reported (it just cannot pass)
     assert wo["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(15 / 85)
-    assert ws["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(25 / 145)
-    # top-level legacy keys describe the with-synthetic (widest) set
-    assert (
-        res["kill_rule"] == ws["kill_rule"]
-        and res["n_deciding"] == 145
-        and res["n_deciding_without_synthetic"] == 85
+    assert prim["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(
+        25 / 145
     )
+    # top-level keys describe the PRIMARY set
+    assert res["kill_rule"] == prim["kill_rule"] and res["n_deciding"] == 145
     assert (
         res["recall"]["bm25"]["pooled"][5]["n"] == 145
         and wo["recall"]["bm25"]["pooled"][5]["n"] == 85
@@ -1775,9 +1819,11 @@ def test_with_synthetic_passes_while_without_synthetic_is_underpowered(tmp_path)
     assert set(res["recall"]["bm25"]) == {"probe45", "agent_nav", "synthetic_spill", "pooled"}
     assert set(wo["recall"]["bm25"]) == {"probe45", "agent_nav", "pooled"}
     assert res["n_by_group"] == {"probe45": 45, "agent_nav": 40, "synthetic_spill": 60}
+    # a non-deciding set never selects
+    assert wo["selection"]["status"] == "not applicable" and wo["selection_line"] is None
 
 
-def test_a_synthetic_stratum_that_favours_lexical_flips_with_synthetic_to_fail(tmp_path):
+def test_a_secondary_pass_never_overrides_a_failing_primary(tmp_path):
     out = tmp_path / "s2"
     rows = _write_strata(out, [("probe45", 45), ("agent_nav", 90), ("synthetic_spill", 40)])
     assert len(rows) == 175
@@ -1790,29 +1836,29 @@ def test_a_synthetic_stratum_that_favours_lexical_flips_with_synthetic_to_fail(t
     _write_variant(out, rows, "granite-97m-r2.hybrid", set(range(0, 45)))
     res = ev.analyze(out)
     assert _lines(res) == [
-        "KILL RULE (pooled, with synthetic): FAIL (n=175)",
-        "KILL RULE (pooled, without synthetic): PASS (n=135)",
-        "SELECTION (pooled, with synthetic): not applicable (kill rule FAIL)",
-        "SELECTION (pooled, without synthetic): pending speed block",
+        "KILL RULE: FAIL (n=175)",
+        "SELECTION: not applicable (kill rule FAIL)",
+        "(non-deciding) KILL RULE (without synthetic, flagged excluded): PASS (n=135)",
     ]
-    ws, wo = res["decision_sets"]["with_synthetic"], res["decision_sets"]["without_synthetic"]
-    assert ws["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(5 / 175)
+    sets = res["decision_sets"]
+    prim, wo = sets["primary"], sets["without_synthetic_flagged_excluded"]
+    assert prim["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(
+        5 / 175
+    )
     assert wo["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(25 / 135)
     assert wo["kill_rule"]["registered"]["bge-large.hybrid"]["ci_lo"] > 0
+    assert wo["selection"]["status"] == "not applicable"  # the secondary PASS selects nothing
+    assert res["selection"]["reason"] == "kill rule FAIL"
     # per-stratum descriptive paired diff vs L: the synthetic stratum is where the hybrid loses
-    ps = ws["per_stratum_paired_diff"]
-    assert set(ps) == {"probe45", "agent_nav", "synthetic_spill"} and set(
-        wo["per_stratum_paired_diff"]
-    ) == {"probe45", "agent_nav"}
+    ps = prim["per_stratum_paired_diff"]
+    assert set(ps) == {"probe45", "agent_nav", "synthetic_spill"}
+    assert set(wo["per_stratum_paired_diff"]) == {"probe45", "agent_nav"}
     d = ps["synthetic_spill"]["diffs"]["bge-large.hybrid"]
     assert ps["synthetic_spill"]["n"] == 40 and ps["synthetic_spill"]["vs"] == "bm25"
     assert d["mean_diff"] == pytest.approx(-0.5) and d["descriptive"] is True
-    assert (
-        ps["agent_nav"]["n"] == 90 and "bm25" not in ps["agent_nav"]["diffs"]
-    )  # L is not diffed vs itself
+    assert ps["agent_nav"]["n"] == 90 and "bm25" not in ps["agent_nav"]["diffs"]
     assert ps["probe45"]["diffs"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(-5 / 45)
-    # the answer is "the same arms, two sets": L is each set's own best lexical arm
-    assert ws["lexical_baseline"]["L"] == wo["lexical_baseline"]["L"] == "bm25"
+    assert prim["lexical_baseline"]["L"] == wo["lexical_baseline"]["L"] == "bm25"
 
 
 def test_recall_by_writer_and_the_intent_source_cut(tmp_path):
@@ -1845,19 +1891,24 @@ def test_recall_by_writer_and_the_intent_source_cut(tmp_path):
     assert ic["values"]["assistant_text"]["kill_rule"]["verdict"] == "UNDERPOWERED/KILL"
     # the answer_named_verbatim cut is still produced, per decision set
     assert "answer_named_verbatim=true" in res["leakage_cut"]["recall5"]
-    assert "leakage_cut" in res["decision_sets"]["without_synthetic"]
+    assert "leakage_cut" in res["decision_sets"]["without_synthetic_flagged_excluded"]
 
 
-def test_no_synthetic_rows_means_one_set_and_the_single_set_lines(tmp_path):
+def test_no_synthetic_rows_and_no_flags_mean_one_set_and_the_single_set_lines(tmp_path):
     out, rows, n = _pass_world(tmp_path)
     res = ev.analyze(out)
-    assert res["synthetic_present"] is False
-    assert res["decision_sets"]["without_synthetic"] == {"identical_to": "with_synthetic"}
+    assert res["synthetic_present"] is False and res["n_flagged_excluded"] == 0
+    for key in (
+        "pooled_flagged_included",
+        "without_synthetic_flagged_excluded",
+        "without_synthetic_flagged_included",
+    ):
+        assert res["decision_sets"][key] == {"identical_to": "primary"}
     assert res["verdict_lines"][0] == f"KILL RULE: PASS (n={n})"
-    assert not any("pooled" in line for line in res["verdict_lines"])
+    assert not any("non-deciding" in line for line in res["verdict_lines"])
 
 
-def test_trivial_head_stays_outside_both_decision_sets(tmp_path):
+def test_trivial_head_stays_outside_every_set(tmp_path):
     out = tmp_path / "s4"
     rows = _write_strata(
         out, [("probe45", 45), ("agent_nav", 40), ("synthetic_spill", 40), ("trivial_head", 12)]
@@ -1865,12 +1916,13 @@ def test_trivial_head_stays_outside_both_decision_sets(tmp_path):
     _write_variant(out, rows, "bm25", set(range(0, 125)))
     _write_variant(out, rows, "grep", set(range(0, 20)))
     res = ev.analyze(out)
-    assert res["n_deciding"] == 125 and res["n_deciding_without_synthetic"] == 85
+    assert res["n_deciding"] == 125 and res["n_by_set"]["without_synthetic_flagged_excluded"] == 85
     assert (
         res["trivial_head"]["bm25"]["n"] == 12 and res["trivial_head"]["bm25"]["recall"]["5"] == 0.0
     )
-    for key in ("with_synthetic", "without_synthetic"):
-        assert "trivial_head" not in res["decision_sets"][key]["n_by_group"]
+    for ds in res["decision_sets"].values():
+        assert "trivial_head" not in ds.get("n_by_group", {})
+    assert res["floor_check"]["n"] == 125 and res["floor_check"]["n_trace"] == 80
 
 
 def test_bias_note_is_verbatim_in_the_header_and_the_json(tmp_path):
@@ -1896,13 +1948,14 @@ def test_bias_note_is_verbatim_in_the_header_and_the_json(tmp_path):
     assert verbatim in (out2 / "analysis.md").read_text().splitlines()[:6]
 
 
-def test_each_decision_set_gets_its_own_incompleteness_and_selection(tmp_path):
+def test_each_set_gets_its_own_incompleteness_and_only_the_primary_selects(tmp_path):
     out = tmp_path / "s6"
     rows = _write_strata(out, [("probe45", 45), ("agent_nav", 90), ("synthetic_spill", 40)])
     _write_variant(out, rows, "bm25", set(range(0, 50)))
     _write_variant(out, rows, "grep", set(range(0, 30)))
     _write_variant(out, rows, "bge-large.hybrid", set(range(0, 40)) | set(range(50, 85)))
-    # the synthetic rows were never run for granite: incomplete WITH synthetic, complete WITHOUT it
+    # the synthetic rows were never run for granite: incomplete on the primary (pooled) set,
+    # complete on the secondary without-synthetic set
     _write_variant(
         out, rows, "granite-97m-r2.hybrid", set(range(0, 100)), skip=set(range(135, 175))
     )
@@ -1916,12 +1969,305 @@ def test_each_decision_set_gets_its_own_incompleteness_and_selection(tmp_path):
         )
     )
     res = ev.analyze(out, speed)
-    ws, wo = res["decision_sets"]["with_synthetic"], res["decision_sets"]["without_synthetic"]
-    assert ws["completeness"]["granite-97m-r2.hybrid"]["n_missing"] == 40
+    prim = res["decision_sets"]["primary"]
+    wo = res["decision_sets"]["without_synthetic_flagged_excluded"]
+    assert prim["completeness"]["granite-97m-r2.hybrid"]["n_missing"] == 40
     assert wo["completeness"]["granite-97m-r2.hybrid"]["complete"] is True
     assert "granite-97m-r2.hybrid" in wo["kill_rule"]["registered"]
-    assert "granite-97m-r2.hybrid" not in ws["kill_rule"]["registered"]
-    assert ws["kill_rule"]["missing_registered"] == ["granite-97m-r2.hybrid"]
-    # without synthetic, granite (100/135 hits) is the best and cheapest: selected
-    assert wo["selection"]["selected"] == "granite-97m-r2.hybrid"
-    assert _lines(res)[-1] == "SELECTION (pooled, without synthetic): granite-97m-r2.hybrid"
+    assert "granite-97m-r2.hybrid" not in prim["kill_rule"]["registered"]
+    assert prim["kill_rule"]["missing_registered"] == ["granite-97m-r2.hybrid"]
+    # granite (100 of the first 135 hits) would win the secondary set, but a non-deciding set selects
+    # nothing: the single SELECTION line is the primary's, over the arms complete on the primary set
+    assert wo["selection_line"] is None
+    sel_lines = [ln for ln in _lines(res) if ln.startswith("SELECTION")]
+    assert sel_lines == ["SELECTION: bge-large.hybrid"]
+    assert res["selection"]["selected"] == "bge-large.hybrid"
+
+
+# ───────────────────────────────────────────────────────────────────────────── primary set, floors, leakage
+
+
+def _flagged_world(tmp_path, name="p"):
+    """probe45 (45, no flag) + agent_nav (60) + synthetic_spill (300); every third trace row is
+    flagged answer_named_verbatim. Lexical hits ALL flagged rows (the verbatim leak) but only a
+    quarter of the unflagged ones; the hybrid hits half of each."""
+    out = tmp_path / name
+    rows = _write_strata(
+        out,
+        [("probe45", 45), ("agent_nav", 60), ("synthetic_spill", 300)],
+        leak=lambda i: (i % 3 == 0) if i >= 45 else None,
+    )
+    flagged = [i for i, r in enumerate(rows) if r["answer_named_verbatim"] is True]
+    unfl = [i for i, r in enumerate(rows) if r["group"] != "probe45" and i not in set(flagged)]
+    assert (len(flagged), len(unfl)) == (120, 240)
+    bm25 = set(flagged) | set(range(0, 20)) | set(unfl[:60])
+    hybrid = set(flagged[:60]) | set(range(0, 35)) | set(unfl[:120])
+    _write_variant(out, rows, "bm25", bm25)
+    _write_variant(out, rows, "grep", set(list(bm25)[:30]))
+    _write_variant(out, rows, "bge-large.hybrid", hybrid)
+    _write_variant(out, rows, "granite-97m-r2.hybrid", set(range(0, 40)))
+    return out, rows, flagged
+
+
+def test_the_primary_set_excludes_flagged_rows_and_is_the_only_deciding_one(tmp_path):
+    out, rows, flagged = _flagged_world(tmp_path)
+    res = ev.analyze(out)
+    # primary: lexical 80/285, hybrid 155/285 -> PASS. Pooled WITH the verbatim rows the lexical arm
+    # catches up (215 vs 200 of 405) -> FAIL, but that set is non-deciding.
+    assert _lines(res) == [
+        "KILL RULE: PASS (n=285)",
+        "SELECTION: pending speed block",
+        "(non-deciding) KILL RULE (pooled, flagged included): FAIL (n=405)",
+        "(non-deciding) KILL RULE (without synthetic, flagged excluded): UNDERPOWERED/KILL (n=85)",
+        "(non-deciding) KILL RULE (without synthetic, flagged included): UNDERPOWERED/KILL (n=105)",
+    ]
+    assert res["n_deciding"] == 285 and res["n_flagged_excluded"] == 120
+    assert res["n_by_set"] == {
+        "primary": 285,
+        "pooled_flagged_included": 405,
+        "without_synthetic_flagged_excluded": 85,
+        "without_synthetic_flagged_included": 105,
+    }
+    sets = res["decision_sets"]
+    assert sets["primary"]["n_by_group"] == {"probe45": 45, "agent_nav": 40, "synthetic_spill": 200}
+    assert res["n_by_group"] == {"probe45": 45, "agent_nav": 60, "synthetic_spill": 300}
+    prim = sets["primary"]["kill_rule"]["registered"]["bge-large.hybrid"]
+    pooled = sets["pooled_flagged_included"]["kill_rule"]["registered"]["bge-large.hybrid"]
+    assert prim["mean_diff"] == pytest.approx(75 / 285) and prim["pass"] is True
+    assert pooled["mean_diff"] == pytest.approx(15 / 405) and pooled["pass"] is False
+    # top-level keys are the PRIMARY set's; L, the bootstrap tables and selection come from it alone
+    assert (
+        res["kill_rule"] == sets["primary"]["kill_rule"] and res["completeness"]["bm25"]["n"] == 285
+    )
+    assert res["bootstrap_recall5"]["bge-large.hybrid"]["vs_L"]["n"] == 285
+    assert sets["primary"]["deciding"] is True
+    for key in list(sets)[1:]:
+        ds = sets[key]
+        assert ds["deciding"] is False and ds["selection_line"] is None
+        assert ds["selection"]["status"] == "not applicable"
+        assert all(line.startswith("(non-deciding) ") for line in ds["kill_lines"])
+    # a probe45 row is never excluded (it carries no flag); an unflagged-by-absence trace row is kept
+    prim_rows = ev.primary_rows(ev.read_jsonl(out / "queries-labelled.jsonl"))
+    assert sum(q["group"] == "probe45" for q in prim_rows) == 45
+    assert all(q.get("answer_named_verbatim") is not True for q in prim_rows)
+    # the extension-flip logic also lives in the primary set: nothing to flip here
+    assert res["kill_rule"]["changed_by_extension"] is False
+
+
+def test_floor_check_function_counts_primary_rows_only(tmp_path):
+    def rows(spec):
+        out = []
+        for group, n, flagged in spec:
+            for i in range(n):
+                out.append(
+                    {
+                        "id": f"{group}{i}",
+                        "group": group,
+                        "scored": True,
+                        "answer_named_verbatim": True
+                        if i < flagged
+                        else (None if group == "probe45" else False),
+                    }
+                )
+        return out
+
+    # the expected real set: 45 + 23 + 278 = 346 total, 301 trace (flagged rows do not count)
+    ok = ev.floor_check(
+        rows([("probe45", 45, 0), ("agent_nav", 43, 20), ("synthetic_spill", 478, 200)])
+    )
+    assert (ok["n"], ok["n_trace"], ok["ok"], ok["failures"]) == (346, 301, True, [])
+    assert ok["n_flagged_excluded"] == 220 and ok["by_group"]["agent_nav"]["in_primary"] == 23
+    assert ev.floor_banner(ok) == "floor check ok: primary n=346 (>= 120), trace rows=301 (>= 75)"
+    # n >= 120 but too few trace rows
+    low_trace = ev.floor_check(rows([("probe45", 100, 0), ("agent_nav", 60, 0)]))
+    assert low_trace["failures"] == ["trace rows=60 < 75"] and low_trace["ok"] is False
+    # lots of rows, but the flagged ones are excluded from both floors
+    flagged_heavy = ev.floor_check(rows([("probe45", 45, 0), ("synthetic_spill", 200, 150)]))
+    assert flagged_heavy["n"] == 95 and flagged_heavy["failures"] == [
+        "n=95 < 120",
+        "trace rows=50 < 75",
+    ]
+    # trivial_head and unscored rows count for nothing
+    extra = rows([("probe45", 45, 0), ("agent_nav", 80, 0)]) + [
+        {"id": "t", "group": "trivial_head", "scored": True, "answer_named_verbatim": False},
+        {"id": "u", "group": "agent_nav", "scored": False, "answer_named_verbatim": False},
+    ]
+    assert ev.floor_check(extra)["n"] == 125
+    assert "FLOOR CHECK FAILED (primary): n=95 < 120; trace rows=50 < 75" in ev.floor_banner(
+        flagged_heavy
+    )
+
+
+def test_analyze_floor_failure_is_underpowered_even_when_the_evidence_passes(tmp_path):
+    out = tmp_path / "f1"
+    rows = _write_strata(
+        out, [("probe45", 100), ("agent_nav", 60)]
+    )  # n = 160 >= 120, trace 60 < 75
+    _write_variant(out, rows, "bm25", set(range(0, 40)))
+    _write_variant(out, rows, "grep", set(range(0, 20)))
+    _write_variant(out, rows, "bge-large.hybrid", set(range(0, 100)))
+    _write_variant(out, rows, "granite-97m-r2.hybrid", set(range(0, 90)))
+    res = ev.analyze(out)
+    assert res["verdict_lines"][0] == "KILL RULE: UNDERPOWERED/KILL (n=160)"
+    assert (
+        res["verdict_lines"][1]
+        == "FLOOR CHECK FAILED (primary): trace rows=60 < 75 -> UNDERPOWERED/KILL"
+    )
+    assert res["verdict_lines"][2] == "SELECTION: not applicable (kill rule UNDERPOWERED/KILL)"
+    kill = res["kill_rule"]
+    assert kill["floor_failures"] == ["trace rows=60 < 75"] and kill["underpowered"] is True
+    assert (
+        kill["registered"]["bge-large.hybrid"]["pass"] is True
+    )  # the evidence is shown, it cannot decide
+    assert res["floor_check"]["ok"] is False
+    ev.cmd_analyze(ev.build_parser().parse_args(["analyze", "--out", str(out)]))
+    md = (out / "analysis.md").read_text()
+    assert "**!!! FLOOR CHECK FAILED (primary): trace rows=60 < 75" in md.splitlines()[6]
+    # UNDERPOWERED/KILL outranks INCOMPLETE: a set that misses a floor is killed whatever the arms did
+    out2 = tmp_path / "f2"
+    rows2 = _write_strata(out2, [("probe45", 45)])
+    _write_variant(out2, rows2, "bm25", set(range(0, 10)))  # grep missing: L cannot be chosen
+    assert ev.analyze(out2)["verdict_lines"][0] == "KILL RULE: UNDERPOWERED/KILL (n=45)"
+
+
+def test_analyze_floors_pass_on_the_expected_real_shape(tmp_path):
+    out = tmp_path / "f3"
+    _write_strata(
+        out,
+        [("probe45", 45), ("agent_nav", 43), ("synthetic_spill", 478)],
+        leak=lambda i: (i - 45) % 11 == 0 if i >= 45 else None,
+    )
+    res = ev.analyze(out)  # no arm results at all: INCOMPLETE, but the floors are the topic here
+    fc = res["floor_check"]
+    assert fc["ok"] is True and fc["failures"] == []
+    assert fc["n"] == res["n_deciding"] and fc["n_trace"] == fc["n"] - 45
+    assert not any(line.startswith("FLOOR CHECK") for line in res["verdict_lines"])
+    assert res["verdict_lines"][0] == f"KILL RULE: INCOMPLETE (n={fc['n']})"
+
+
+def test_freeze_reports_the_floor_check_loudly_and_hashes_it(tmp_path, capsys):
+    inp = ev.make_synthetic_inputs(tmp_path / "in", multi=True)
+    out = tmp_path / "out"
+    assert _freeze_multi(inp, out) == 0  # a warning, not a refusal
+    cap = capsys.readouterr()
+    banner = "FLOOR CHECK FAILED (primary): n=12 < 120; trace rows=6 < 75 -> the 2.2 verdict reads UNDERPOWERED/KILL"
+    assert banner in cap.out and banner in cap.err and "!!!" in cap.err
+    fc = json.loads((out / "floor-check.json").read_text())
+    assert (
+        fc["n"] == 12 and fc["n_trace"] == 6 and fc["n_flagged_excluded"] == 6 and fc["ok"] is False
+    )
+    assert any(
+        Path(line.split("  ", 1)[1]).name == "floor-check.json"
+        for line in (out / "FROZEN-AT-LAUNCH.sha256").read_text().splitlines()
+    )
+    # --require-floors turns the warning into exit 3 (the freeze file is still written)
+    inp2 = ev.make_synthetic_inputs(tmp_path / "in2", multi=True)
+    assert _freeze_multi(inp2, tmp_path / "out2", ["--require-floors"]) == 3
+    assert (tmp_path / "out2" / "FROZEN-AT-LAUNCH.sha256").exists()
+
+
+def test_leakage_block_flag_rates_and_recall_by_flag_and_writer(tmp_path):
+    out = tmp_path / "lk"
+    rows = _write_strata(out, [("probe45", 45), ("agent_nav", 40), ("synthetic_spill", 40)])
+    # writer A: 15 of 20 flagged; writer B: 5 of 20; assistant_text: 10 of 20; bash_description: 2 of 20
+    seen = {"A": 0, "B": 0, "assistant_text": 0, "bash_description": 0}
+    for r in rows:
+        key = r.get("writer") or r.get("intent_source")
+        if key:
+            quota = {"A": 15, "B": 5, "assistant_text": 10, "bash_description": 2}[key]
+            r["answer_named_verbatim"] = seen[key] < quota
+            seen[key] += 1
+    (out / "queries-labelled.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    flagged = {i for i, r in enumerate(rows) if r["answer_named_verbatim"] is True}
+    # bm25 hits exactly the flagged rows; grep nothing
+    _write_variant(out, rows, "bm25", flagged)
+    _write_variant(out, rows, "grep", set())
+    _write_variant(
+        out, rows, "bge-large.hybrid", set(range(0, 45)) | {i for i in range(45, 125) if i % 2}
+    )
+    lk = ev.analyze(out)["leakage"]
+    fr = lk["flag_rates"]
+    assert fr["by_writer"]["A"] == {
+        "n": 20,
+        "flagged": 15,
+        "unflagged": 5,
+        "unlabelled": 0,
+        "flag_rate": 0.75,
+    }
+    assert fr["by_writer"]["B"]["flag_rate"] == 0.25
+    assert fr["by_intent_source"]["assistant_text"]["flag_rate"] == 0.5
+    assert fr["by_intent_source"]["bash_description"]["flag_rate"] == 0.1
+    assert fr["by_stratum"]["probe45"] == {
+        "n": 45,
+        "flagged": 0,
+        "unflagged": 0,
+        "unlabelled": 45,
+        "flag_rate": None,
+    }
+    assert fr["by_stratum"]["agent_nav"]["flag_rate"] == pytest.approx(12 / 40)
+    assert fr["trace_all"]["flag_rate"] == pytest.approx(32 / 80)
+    rbf = lk["recall_by_flag"]["bm25"]
+    for k in (1, 3, 5, 10):  # recall@k on a one-pointer hit is the same at every k
+        assert rbf["synthetic_spill/writer=A:flagged"][k]["recall"] == 1.0
+        assert rbf["synthetic_spill/writer=A:unflagged"][k]["recall"] == 0.0
+    assert (
+        rbf["synthetic_spill/writer=A:flagged"][5]["n"] == 15 and rbf["trace:flagged"][5]["n"] == 32
+    )
+    assert rbf["trace:unflagged"][5]["n"] == 48 and "ci_lo" in rbf["trace:flagged"][5]
+    assert rbf["agent_nav/intent_source=assistant_text:flagged"][1]["n"] == 10
+    eff = lk["effect_flagged_minus_unflagged"]
+    assert eff["bm25"]["trace"]["recall"][5]["diff"] == pytest.approx(1.0)
+    assert eff["bm25"]["synthetic_spill/writer=B"]["recall"][5] == {
+        "flagged": 1.0,
+        "unflagged": 0.0,
+        "diff": 1.0,
+    }
+    assert eff["bge-large.hybrid"]["trace"]["n_flagged"] == 32
+    # grep never hits: no flagged/unflagged difference
+    assert eff["grep"]["trace"]["recall"][5]["diff"] == 0.0
+    assert set(lk["vs_L_recall5"]) >= {"trace:flagged", "trace:unflagged", "agent_nav:flagged"}
+    assert "probe45:unlabelled" not in lk["vs_L_recall5"]
+    assert lk["vs"] in ("bm25", "grep")
+    assert lk["vs_L_recall5"]["trace:flagged"]["bge-large.hybrid"]["descriptive"] is True
+
+
+def test_prerun_amendment_q_is_recorded_in_the_interpretations_and_the_config(tmp_path):
+    q = ev.PREDECLARED["q_prerun_amendment_primary_unflagged"]
+    assert q.startswith("(q) PRE-RUN AMENDMENT 2026-10-20, before any arm ran")
+    for needle in (
+        "81% synthetic",
+        "42%",
+        "answer_named_verbatim",
+        "n >= 120",
+        "trace rows",
+        ">= 75",
+    ):
+        assert needle in q
+    assert "PRIMARY" in ev.PREDECLARED["a_decision_set"] and "SECONDARY" in ev.PREDECLARED["n_sets"]
+    assert "PRIMARY set only" in ev.PREDECLARED["p_selection_primary_only"]
+    assert q in (ev.__doc__ or "")  # echoed in the module docstring like the others
+    ev.run_synthetic(tmp_path / "out", tmp_path / "inputs", multi=True)
+    pre = json.loads((tmp_path / "out" / "config-echo.json").read_text())["stable"]["predeclared"]
+    assert pre["interpretations"]["q_prerun_amendment_primary_unflagged"] == q
+    assert pre["stats"]["trace_min"] == 75 and pre["stats"]["n_min"] == 120
+
+
+def test_markdown_orders_primary_leakage_then_the_non_deciding_sets(tmp_path):
+    out, _, _ = _flagged_world(tmp_path, "md")
+    ev.cmd_analyze(ev.build_parser().parse_args(["analyze", "--out", str(out)]))
+    md = (out / "analysis.md").read_text()
+    head = md.splitlines()
+    assert (
+        head[2] == ev.BIAS_NOTE and head[4] == ev.BIAS_NOTE_SCOPE
+    )  # header: the note, then its scope
+    assert "!!! FLOOR CHECK" not in md  # floors hold: no alarm
+    i_primary = md.index("# PRIMARY decision set")
+    i_leak = md.index("## leakage measurement")
+    i_sec = md.index("# SECONDARY (non-deciding): pooled, flagged included")
+    assert i_primary < i_leak < i_sec
+    assert "### flagged minus unflagged recall (the leakage effect)" in md
+    assert "### flag rates" in md and "| writer A |" in md
+    # a non-deciding set shows recall tables and kill-rule evidence, not selection or bootstrap tables
+    secondary = md[i_sec:]
+    assert "## kill rule (recall@5, hybrid vs L) - pooled, flagged included" in secondary
+    assert "paired bootstrap" not in secondary.split("# SECONDARY (non-deciding): without")[0]

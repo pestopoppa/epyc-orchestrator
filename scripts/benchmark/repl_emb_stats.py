@@ -39,6 +39,8 @@ PRIMARY_K = 5
 M_DEFAULT = 0.10
 X_DEFAULT = 0.05
 N_MIN = 120
+#: REPL-EMB-2.1: at least 75 queries from real traces (non-probe45, non-trivial_head) in the decision set.
+TRACE_N_MIN = 75
 #: Float slack for the ``>=`` comparisons (a margin of exactly 12/120 must pass M = 0.10).
 EPS = 1e-9
 BOOTSTRAP_CHUNK = 1000
@@ -46,13 +48,14 @@ WILSON_Z = 1.959963984540054
 
 PREDECLARED_INTERPRETATIONS: dict[str, str] = {
     "a_decision_set": (
-        "(a) The decision set is probe45 (45) plus the scored trace-derived queries (strata agent_nav, "
-        "synthetic_spill and, if present, spill_follow), pooled; trivial_head is outside it. It is "
-        "reported as TWO decision sets, pooled WITH and pooled WITHOUT synthetic_spill, each with its "
-        "own n floor: the kill rule requires n >= 120 for that set, with fewer its verdict is "
-        "UNDERPOWERED/KILL per REPL-EMB-2.1 ('small n kills by design'). (Amended 2026-10-20, before "
-        "any arm ran: the single spill_follow source yielded n = 0 and the trace stratum became "
-        "agent_nav + synthetic_spill.)"
+        "(a) The DECIDING set is the PRIMARY set: probe45 (45, no flag, all kept) plus the scored "
+        "trace-derived queries (agent_nav, synthetic_spill and, if present, spill_follow) with every "
+        "answer_named_verbatim row EXCLUDED, pooled; trivial_head is outside it. It needs n >= 120 "
+        "AND at least 75 trace rows; with fewer its verdict is UNDERPOWERED/KILL per REPL-EMB-2.1 "
+        "('small n kills by design'). The pooled set including flagged rows and the without-synthetic "
+        "sets are SECONDARY, labelled non-deciding. (Amended 2026-10-20, before any arm ran: first "
+        "the single spill_follow source yielded n = 0 and the trace stratum became agent_nav + "
+        "synthetic_spill; then the deciding set became the unflagged one, see (q).)"
     ),
     "b_registered_hybrids": (
         "(b) The kill rule is evaluated for EACH registered hybrid (hybrid-BGE, hybrid-Granite) "
@@ -247,10 +250,14 @@ def kill_decision(
     M: float = M_DEFAULT,
     n_min: int = N_MIN,
     missing_registered: Sequence[str] = (),
+    floor_failures: Sequence[str] = (),
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = DEFAULT_SEED,
 ) -> dict[str, Any]:
     """Interpretations (a), (b), (e): the verdict over registered hybrids, extension flagged.
+
+    ``floor_failures`` names further registered floors the query set misses (e.g. the trace-row
+    floor); any of them, like n < n_min, makes the verdict ``UNDERPOWERED/KILL``.
 
     ``registered`` / ``extension`` map hybrid-arm name -> per-query recall@5 vector (complete on
     the deciding set). ``missing_registered`` names registered hybrids that could not be scored.
@@ -269,7 +276,7 @@ def kill_decision(
     ext = evaluate(extension)
     reg_pass = sorted(k for k, v in reg.items() if v["pass"])
     ext_pass = sorted(k for k, v in ext.items() if v["pass"])
-    underpowered = n < n_min
+    underpowered = n < n_min or bool(floor_failures)
 
     def verdict(passers: Sequence[str], can_fail: bool) -> str:
         if underpowered:
@@ -287,6 +294,7 @@ def kill_decision(
         "n": int(n),
         "n_min": int(n_min),
         "underpowered": bool(underpowered),
+        "floor_failures": list(floor_failures),
         "lexical_baseline": lexical_name,
         "lexical_recall5": float(lex.mean()) if n else None,
         "registered": reg,
@@ -436,6 +444,7 @@ __all__ = [
     "N_MIN",
     "PREDECLARED_INTERPRETATIONS",
     "PRIMARY_K",
+    "TRACE_N_MIN",
     "X_DEFAULT",
     "count_failed",
     "kill_decision",

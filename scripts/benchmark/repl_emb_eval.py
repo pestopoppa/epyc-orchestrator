@@ -87,6 +87,11 @@ BIAS_NOTE = (
     "which favours lexical arms. The synthetic stratum therefore makes the kill rule "
     "conservative toward dense arms."
 )
+BIAS_NOTE_SCOPE = (
+    "The deciding (primary) set excludes the answer_named_verbatim rows (interpretation (q)): the "
+    "note above applies in full to the secondary, non-deciding sets that include flagged rows, and "
+    "only in part to the unflagged synthetic rows that remain in the primary set."
+)
 REGISTERED_DENSE = ("bge-large", "granite-97m-r2")
 REGISTERED_HYBRIDS = tuple(f"{a}.hybrid" for a in REGISTERED_DENSE)
 LEXICAL_ARMS = ("grep", "bm25")
@@ -176,19 +181,35 @@ EVAL_INTERPRETATIONS: dict[str, str] = {
         "and is excluded from its n. It is reported "
         "against L on probe45 and takes no part in the kill rule."
     ),
-    "n_two_decision_sets": (
-        "(n) Two decision sets: 'pooled, with synthetic' = every scored non-trivial row; 'pooled, "
-        "without synthetic' = the same minus synthetic_spill. Each has its own L (the better of "
-        "grep / BM25 on that set), kill-rule evidence, n floor and verdict line; the any-passes "
-        "interpretation (b) applies within each set. With no synthetic_spill rows the two sets "
-        "coincide and the single-set lines (KILL RULE: ...) are printed. Per-stratum paired diffs "
-        "vs L, recall split by synthetic writer (A/B) and the answer_named_verbatim / "
-        "intent_source cuts are descriptive and never gate."
+    "n_sets": (
+        "(n) Sets: PRIMARY (deciding) = every scored non-trivial row EXCEPT those flagged "
+        "answer_named_verbatim (probe45 has no flag and is kept whole). SECONDARY, labelled "
+        "'(non-deciding)': pooled including flagged rows; without synthetic_spill with flagged rows "
+        "excluded; without synthetic_spill with flagged rows included; each stratum separately (the "
+        "per-stratum recall tables). A secondary set identical to an earlier one is not repeated. "
+        "Every set gets its own L (the better of grep / BM25 on it), recall tables and kill-rule "
+        "evidence with the n floor; the any-passes interpretation (b) applies within each set. "
+        "Per-stratum paired diffs vs L, recall split by synthetic writer (A/B), and the "
+        "answer_named_verbatim / intent_source cuts are descriptive and never gate."
     ),
     "o_synthetic_bias": "(o) " + BIAS_NOTE,
-    "p_selection_per_set": (
-        "(p) Selection is evaluated per decision set, each gated by that set's own kill verdict; "
-        "the speed block is shared."
+    "p_selection_primary_only": (
+        "(p) Selection is evaluated for the PRIMARY set only, gated by its own kill verdict; the "
+        "speed block is shared. Secondary sets get no selection."
+    ),
+    "q_prerun_amendment_primary_unflagged": (
+        "(q) PRE-RUN AMENDMENT 2026-10-20, before any arm ran: the only deciding set is the "
+        "PRIMARY set with every answer_named_verbatim row excluded (probe45 + agent_nav, "
+        "synthetic_spill and spill_follow unflagged). Reason: the pooled set is 81% synthetic and 42% "
+        "of the synthetic queries are flagged answer_named_verbatim; left in the deciding set, that "
+        "leakage would let the lexical arm dominate and could kill dense retrieval through a "
+        "query-writing artefact. The kill rule, L, the floors, selection, the bootstrap tables vs L "
+        "and vs BGE and the extension-flip logic use the primary set alone; the earlier pooled "
+        "with/without-synthetic sets stay as secondary, non-deciding reports. Floors, checked at "
+        "freeze (loud warning) and at analyze (verdict UNDERPOWERED/KILL): primary n >= 120 AND "
+        "trace rows (non-probe45, non-trivial_head) >= 75. Leakage is measured, not corrected: "
+        "recall@{1,3,5,10} on the flagged and the unflagged subsets, flag rates by stratum, writer "
+        "and intent_source."
     ),
 }
 PREDECLARED: dict[str, str] = {**stats.PREDECLARED_INTERPRETATIONS, **EVAL_INTERPRETATIONS}
@@ -1308,6 +1329,7 @@ def predeclared_record() -> dict[str, Any]:
             "M": stats.M_DEFAULT,
             "X": stats.X_DEFAULT,
             "n_min": stats.N_MIN,
+            "trace_min": stats.TRACE_N_MIN,
             "resamples": stats.DEFAULT_RESAMPLES,
             "seed": stats.DEFAULT_SEED,
             "ci_level": stats.CI_LEVEL,
@@ -1398,6 +1420,8 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
     rows, summary = label_queries(probe_rows, trace_rows, trivial_rows)
     labelled = out / "queries-labelled.jsonl"
     labelled_sha = write_labelled(labelled, rows)
+    fc = floor_check(rows)
+    write_json(out / "floor-check.json", fc)
 
     store = make_bundle_store(
         rows,
@@ -1440,6 +1464,7 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
         corpus,
         out / "bundles-summary.json",
         out / "gold-check.json",
+        out / "floor-check.json",
         out / "predeclared-interpretations.json",
         out / "inputs.json",
         *harness_files(),
@@ -1454,6 +1479,17 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
     for w in gold_check["warnings"]:
         print(f"# gold warning: {w}")
     rows_out = write_freeze(out, paths)
+    banner = floor_banner(fc)
+    if fc["ok"]:
+        print(f"# {banner}")
+    else:
+        bar = "#" * 78
+        for stream in (sys.stdout, sys.stderr):
+            print(
+                f"{bar}\n# !!! {banner}\n# !!! primary = probe45 + trace strata, answer_named_verbatim rows excluded\n{bar}",
+                file=stream,
+            )
+    print(f"# floor-check: {dumps(fc['by_group'], sort_keys=True)}")
     print(f"# queries-labelled.jsonl sha256 {labelled_sha}")
     print(f"# code_intent regex: {CODE_INTENT_REGEX}")
     print(dumps(summary, indent=2, sort_keys=True))
@@ -1461,6 +1497,9 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
     for h, p in rows_out:
         print(f"{h}  {p}")
     print(f"# wrote {freeze_file}")
+    if not fc["ok"] and getattr(args, "require_floors", False):
+        print("# --require-floors: exiting 3 (the freeze file was written)", file=sys.stderr)
+        return 3
     return 0
 
 
@@ -1740,6 +1779,74 @@ def _vecs(sc: Mapping[str, Any]) -> dict[int, list[float]]:
     return {k: v.tolist() for k, v in sc["vec"].items()}
 
 
+def flag_state(q: Mapping[str, Any]) -> str:
+    """'flagged' (answer_named_verbatim true) | 'unflagged' (false) | 'unlabelled' (no flag)."""
+    f = q.get("answer_named_verbatim")
+    return "flagged" if f is True else "unflagged" if f is False else "unlabelled"
+
+
+def primary_rows(rows: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The PRIMARY (only deciding) set, interpretation (q): scored, non-trivial rows with every
+    ``answer_named_verbatim`` row excluded. probe45 carries no flag, so all of it is kept; a trace
+    row with no flag is kept too (only ``true`` is excluded) and counted as ``unlabelled``."""
+    return [
+        q
+        for q in rows
+        if q["scored"]
+        and q["group"] != TRIVIAL_GROUP
+        and q.get("answer_named_verbatim") is not True
+    ]
+
+
+def floor_check(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    n_min: int = stats.N_MIN,
+    trace_min: int = stats.TRACE_N_MIN,
+) -> dict[str, Any]:
+    """The registered floors on the PRIMARY set: n >= 120 AND >= 75 trace rows (non-probe45,
+    non-trivial_head). Used at freeze (loud warning) and at analyze (verdict UNDERPOWERED/KILL)."""
+    rows = list(rows)
+    prim = primary_rows(rows)
+    n = len(prim)
+    n_trace = sum(1 for q in prim if q["group"] != "probe45")
+    failures = []
+    if n < n_min:
+        failures.append(f"n={n} < {n_min}")
+    if n_trace < trace_min:
+        failures.append(f"trace rows={n_trace} < {trace_min}")
+    scored = [q for q in rows if q["scored"] and q["group"] != TRIVIAL_GROUP]
+    by_group: dict[str, dict[str, int]] = {}
+    for q in scored:
+        g = by_group.setdefault(
+            q["group"], {"n": 0, "flagged": 0, "unflagged": 0, "unlabelled": 0, "in_primary": 0}
+        )
+        g["n"] += 1
+        g[flag_state(q)] += 1
+        g["in_primary"] += q.get("answer_named_verbatim") is not True
+    return {
+        "n": n,
+        "n_min": n_min,
+        "n_trace": n_trace,
+        "trace_min": trace_min,
+        "ok": not failures,
+        "failures": failures,
+        "n_scored_nontrivial": len(scored),
+        "n_flagged_excluded": len(scored) - n,
+        "by_group": by_group,
+        "rule": "primary set (answer_named_verbatim rows excluded): n >= n_min AND trace rows >= trace_min",
+    }
+
+
+def floor_banner(fc: Mapping[str, Any]) -> str:
+    if fc["ok"]:
+        return (
+            f"floor check ok: primary n={fc['n']} (>= {fc['n_min']}), "
+            f"trace rows={fc['n_trace']} (>= {fc['trace_min']})"
+        )
+    return f"FLOOR CHECK FAILED (primary): {'; '.join(fc['failures'])} -> the 2.2 verdict reads UNDERPOWERED/KILL"
+
+
 LEGACY_SET_KEYS = (
     "completeness",
     "recall",
@@ -1887,11 +1994,18 @@ def _decide(
     tag: str,
     resamples: int,
     seed: int,
+    *,
+    deciding: bool = True,
+    floor_failures: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Everything the decision needs for ONE pooled decision set (interpretations (a)-(e), (n))."""
+    """Everything the decision needs for ONE pooled set (interpretations (a)-(e), (n), (q)).
+
+    Only the PRIMARY set is ``deciding``: its lines are unprefixed and it alone gets a selection.
+    Every other set's lines carry the ``(non-deciding)`` prefix and no selection."""
     sc = {v: _score_variant(rows_of[v], _applicable(v, set_qs)) for v in variants}
     res: dict[str, Any] = {
         "tag": tag,
+        "deciding": deciding,
         "n_deciding": len(set_qs),
         "n_by_group": {
             g: sum(q["group"] == g for q in set_qs)
@@ -1960,9 +2074,13 @@ def _decide(
     }
     n_dec = len(set_qs)
     if L is None:
+        under = n_dec < stats.N_MIN or bool(floor_failures)
         kill: dict[str, Any] = {
-            "verdict": "INCOMPLETE",
+            "verdict": "UNDERPOWERED/KILL" if under else "INCOMPLETE",
             "n": n_dec,
+            "n_min": stats.N_MIN,
+            "underpowered": under,
+            "floor_failures": list(floor_failures),
             "reason": "a lexical leg (grep / bm25) is missing or incomplete",
         }
     else:
@@ -1972,14 +2090,16 @@ def _decide(
             sc[L["L"]]["vec"][PRIMARY_K],
             L["L"],
             missing_registered=[v for v in REGISTERED_HYBRIDS if v not in reg],
+            floor_failures=floor_failures,
             resamples=resamples,
             seed=seed,
         )
     res["kill_rule"] = kill
-    lines = [f"{_tagged('KILL RULE', tag)}{kill['verdict']} (n={kill['n']})"]
+    prefix = "" if deciding else "(non-deciding) "
+    lines = [f"{prefix}{_tagged('KILL RULE', tag)}{kill['verdict']} (n={kill['n']})"]
     if kill.get("changed_by_extension"):
         lines.append(
-            f"{_tagged('KILL RULE', tag, 'incl. extension arms')}{kill['verdict_with_extension']} "
+            f"{prefix}{_tagged('KILL RULE', tag, 'incl. extension arms')}{kill['verdict_with_extension']} "
             f"[extension_only: {', '.join(kill['extension_only']) or 'none'}] (not a registered-arm result)"
         )
     res["kill_lines"] = lines
@@ -2027,7 +2147,13 @@ def _decide(
         if v.endswith(".hybrid") and sc[v]["complete"] and sc[v]["n"]
     }
     head = _tagged("SELECTION", tag)
-    if kill.get("verdict") == "PASS":
+    if not deciding:
+        sel = {
+            "status": "not applicable",
+            "reason": "non-deciding set: selection is for the primary set only",
+        }
+        sel_line = None
+    elif kill.get("verdict") == "PASS":
         if not speed:
             sel = {
                 **stats.selection_rule(sel_arms),
@@ -2050,6 +2176,178 @@ def _decide(
     return res
 
 
+# ── leakage measurement (answer_named_verbatim), over ALL scored non-trivial rows ──────────────
+
+
+def _rate_row(qs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    states = Counter(flag_state(q) for q in qs)
+    labelled = states["flagged"] + states["unflagged"]
+    return {
+        "n": len(qs),
+        "flagged": states["flagged"],
+        "unflagged": states["unflagged"],
+        "unlabelled": states["unlabelled"],
+        "flag_rate": (states["flagged"] / labelled) if labelled else None,
+    }
+
+
+def flag_rates(dec_all: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Share of rows flagged ``answer_named_verbatim``: by stratum, by synthetic writer (A / B), by
+    agent_nav intent_source, and for the trace strata together."""
+    out: dict[str, Any] = {
+        "note": "flag_rate = flagged / (flagged + unflagged); unlabelled rows (no flag) are counted apart",
+        "by_stratum": {
+            g: _rate_row([q for q in dec_all if q["group"] == g])
+            for g in _group_order({q["group"] for q in dec_all})
+        },
+        "trace_all": _rate_row([q for q in dec_all if q["group"] != "probe45"]),
+        "by_writer": {},
+        "by_intent_source": {},
+    }
+    for field, key in (("writer", "by_writer"), ("intent_source", "by_intent_source")):
+        for value in sorted({str(q[field]) for q in dec_all if q.get(field) is not None}):
+            out[key][value] = _rate_row([q for q in dec_all if str(q.get(field)) == value])
+    return out
+
+
+def _leak_subsets(dec_all: Sequence[Mapping[str, Any]]) -> dict[str, set[str]]:
+    """label -> ids; label = '<scope>:<flagged|unflagged|unlabelled>'. Scopes: each stratum, the
+    trace strata together, each synthetic writer, each agent_nav intent_source."""
+    subsets: dict[str, set[str]] = {}
+
+    def add(scope: str, q: Mapping[str, Any]) -> None:
+        subsets.setdefault(f"{scope}:{flag_state(q)}", set()).add(q["id"])
+
+    for q in dec_all:
+        g = q["group"]
+        add(g, q)
+        if g != "probe45":
+            add("trace", q)
+        if g == SYNTHETIC_GROUP and q.get("writer") is not None:
+            add(f"{g}/writer={q['writer']}", q)
+        if g == "agent_nav" and q.get("intent_source") is not None:
+            add(f"{g}/intent_source={q['intent_source']}", q)
+    return subsets
+
+
+def _vecs_on(sc_v: Mapping[str, Any], ids: Sequence[str]) -> dict[int, np.ndarray] | None:
+    pos = {q["id"]: i for i, q in enumerate(sc_v["qs"])}
+    if not ids or any(i not in pos for i in ids):
+        return None
+    idx = [pos[i] for i in ids]
+    return {k: sc_v["vec"][k][idx] for k in KS}
+
+
+def leakage_block(
+    sc_all: Mapping[str, Any],
+    dec_all: Sequence[Mapping[str, Any]],
+    L: Any,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """The leakage effect made visible as a difference (interpretation (q)): per arm/variant,
+    recall@{1,3,5,10} on the FLAGGED and the UNFLAGGED subsets, flagged-minus-unflagged, and the
+    descriptive paired diff vs L on each subset. Reported for every stratum, the trace strata
+    together and the synthetic writers; never gates anything."""
+    subsets = _leak_subsets(dec_all)
+    order = {q["id"]: i for i, q in enumerate(dec_all)}
+    out: dict[str, Any] = {
+        "note": "descriptive; answer_named_verbatim rows are excluded from the deciding set",
+        "flag_rates": flag_rates(dec_all),
+        "subset_sizes": {k: len(v) for k, v in sorted(subsets.items())},
+        "recall_by_flag": {},
+        "effect_flagged_minus_unflagged": {},
+        "vs_L_recall5": {},
+        "vs": L["L"] if L else None,
+    }
+    ids_of = {k: sorted(v, key=order.__getitem__) for k, v in subsets.items()}
+    for v, s in sc_all.items():
+        if not s["n"]:
+            continue
+        table: dict[str, Any] = {}
+        for label, ids in ids_of.items():
+            vecs = _vecs_on(s, ids)
+            if vecs is None:
+                continue
+            table[label] = {}
+            for k in KS:
+                hits = float(vecs[k].sum())
+                lo, hi = stats.wilson_interval(hits, len(ids))
+                table[label][k] = {
+                    "n": len(ids),
+                    "hits": hits,
+                    "recall": hits / len(ids),
+                    "ci_lo": lo,
+                    "ci_hi": hi,
+                    "ci": "wilson-95",
+                }
+        if table:
+            out["recall_by_flag"][v] = table
+        eff: dict[str, Any] = {}
+        for label in table:
+            scope, _, state = label.rpartition(":")
+            if state != "flagged" or f"{scope}:unflagged" not in table:
+                continue
+            fl, un = table[label], table[f"{scope}:unflagged"]
+            eff[scope] = {
+                "n_flagged": fl[PRIMARY_K]["n"],
+                "n_unflagged": un[PRIMARY_K]["n"],
+                "recall": {
+                    k: {
+                        "flagged": fl[k]["recall"],
+                        "unflagged": un[k]["recall"],
+                        "diff": fl[k]["recall"] - un[k]["recall"],
+                    }
+                    for k in KS
+                },
+            }
+        if eff:
+            out["effect_flagged_minus_unflagged"][v] = eff
+    if L:
+        lsc = sc_all[L["L"]]
+        for label, ids in ids_of.items():
+            if label.endswith(":unlabelled"):
+                continue
+            lvec = _vec_on(lsc, ids)
+            if lvec is None:
+                continue
+            row = {}
+            for v, s in sc_all.items():
+                vv = None if v == L["L"] else _vec_on(s, ids)
+                if vv is not None:
+                    row[v] = {
+                        "descriptive": True,
+                        "n": len(ids),
+                        **stats.paired_bootstrap(vv, lvec, resamples, seed),
+                    }
+            if row:
+                out["vs_L_recall5"][label] = row
+    return out
+
+
+def _set_defs(
+    dec_all: Sequence[Mapping[str, Any]],
+) -> list[tuple[str, list[Mapping[str, Any]], str, bool]]:
+    """(key, queries, line tag, deciding) -- the PRIMARY set first, then the secondary reports."""
+    prim = [q for q in dec_all if q.get("answer_named_verbatim") is not True]
+    return [
+        ("primary", prim, "", True),
+        ("pooled_flagged_included", list(dec_all), "pooled, flagged included", False),
+        (
+            "without_synthetic_flagged_excluded",
+            [q for q in prim if q["group"] != SYNTHETIC_GROUP],
+            "without synthetic, flagged excluded",
+            False,
+        ),
+        (
+            "without_synthetic_flagged_included",
+            [q for q in dec_all if q["group"] != SYNTHETIC_GROUP],
+            "without synthetic, flagged included",
+            False,
+        ),
+    ]
+
+
 def analyze(
     out: str | Path,
     speed_json: str | Path | None = None,
@@ -2057,29 +2355,35 @@ def analyze(
     resamples: int = stats.DEFAULT_RESAMPLES,
     seed: int = stats.DEFAULT_SEED,
 ) -> dict[str, Any]:
-    """Per-arm, per-stratum recall and the kill rule on TWO decision sets (interpretation (n)):
-    pooled WITH the synthetic_spill stratum and pooled WITHOUT it, each with its own n floor.
+    """Per-arm, per-stratum recall and the kill rule (interpretations (a)-(e), (n)-(q)).
 
-    With no synthetic_spill rows the two sets coincide and the single-set verdict lines
-    (``KILL RULE: ...``) are printed; the top-level per-set keys always describe the
-    with-synthetic (= widest) set."""
+    The PRIMARY set -- probe45 plus every trace stratum with the ``answer_named_verbatim`` rows
+    excluded -- is the ONLY deciding set: L, the kill rule, the n >= 120 and trace >= 75 floors,
+    selection, the bootstrap tables and the extension-flip logic use it alone, and the top-level
+    keys describe it. The pooled-with-flagged-rows set and the without-synthetic sets (flagged
+    excluded and included) are SECONDARY: same recall tables and kill-rule evidence, verdict lines
+    prefixed ``(non-deciding)``, no selection. A secondary set identical to an earlier one is not
+    repeated. Leakage is measured over all rows in ``leakage``."""
     out = Path(out)
     qrows = read_jsonl(out / "queries-labelled.jsonl")
     scored = [q for q in qrows if q["scored"]]
-    dec = [q for q in scored if q["group"] != TRIVIAL_GROUP]
-    dec_real = [q for q in dec if q["group"] != SYNTHETIC_GROUP]
+    dec_all = [q for q in scored if q["group"] != TRIVIAL_GROUP]
     trivial = [q for q in scored if q["group"] == TRIVIAL_GROUP]
-    synthetic_present = len(dec_real) != len(dec)
     store = ResultStore(out)
     variants = store.variants()
     rows_of = {v: store.rows(v) for v in variants}
     speed = load_speed(speed_json)
+    fc = floor_check(qrows)
+    defs = _set_defs(dec_all)
     res: dict[str, Any] = {
-        "schema": "repl-emb-analysis/2",
+        "schema": "repl-emb-analysis/3",
         "bias_note": BIAS_NOTE,
-        "n_deciding": len(dec),
-        "n_deciding_without_synthetic": len(dec_real),
-        "synthetic_present": synthetic_present,
+        "bias_note_scope": BIAS_NOTE_SCOPE,
+        "floor_check": fc,
+        "n_deciding": len(defs[0][1]),
+        "n_by_set": {key: len(qs) for key, qs, _, _ in defs},
+        "synthetic_present": any(q["group"] == SYNTHETIC_GROUP for q in dec_all),
+        "n_flagged_excluded": len(dec_all) - len(defs[0][1]),
         "n_by_group": {
             g: sum(q["group"] == g for q in scored)
             for g in _group_order({q["group"] for q in scored} - {TRIVIAL_GROUP})
@@ -2090,33 +2394,46 @@ def analyze(
         "failures_count_as_misses": True,
         "cost_flag": "contended_not_for_selection",
     }
-    ws = _decide(
-        dec,
-        rows_of,
-        variants,
-        speed,
-        "pooled, with synthetic" if synthetic_present else "",
-        resamples,
-        seed,
-    )
-    wo = (
-        _decide(dec_real, rows_of, variants, speed, "pooled, without synthetic", resamples, seed)
-        if synthetic_present
-        else None
-    )
-    res["decision_sets"] = {
-        "with_synthetic": ws,
-        "without_synthetic": wo if wo is not None else {"identical_to": "with_synthetic"},
-    }
-    for key in LEGACY_SET_KEYS:  # the with-synthetic (widest) set, under the single-set key names
-        res[key] = ws[key]
-    res["recall_by_writer"] = ws["recall_by_writer"]
-    res["per_stratum_paired_diff"] = ws["per_stratum_paired_diff"]
-    res["leakage_cut_intent_source"] = ws["leakage_cut_intent_source"]
-    sets = [ws] + ([wo] if wo is not None else [])
-    res["verdict_lines"] = [ln for d in sets for ln in d["kill_lines"]] + [
-        d["selection_line"] for d in sets
-    ]
+    sets: dict[str, Any] = {}
+    seen: dict[frozenset, str] = {}
+    for key, qs, tag, deciding in defs:
+        ids = frozenset(q["id"] for q in qs)
+        if key != "primary" and (ids in seen or not ids):
+            sets[key] = {"identical_to": seen[ids]} if ids in seen else {"empty": True}
+            continue
+        seen.setdefault(ids, key)
+        sets[key] = _decide(
+            qs,
+            rows_of,
+            variants,
+            speed,
+            tag,
+            resamples,
+            seed,
+            deciding=deciding,
+            floor_failures=fc["failures"] if deciding else (),
+        )
+    res["decision_sets"] = sets
+    prim = sets["primary"]
+    for key in LEGACY_SET_KEYS:  # the PRIMARY (deciding) set, under the single-set key names
+        res[key] = prim[key]
+    res["recall_by_writer"] = prim["recall_by_writer"]
+    res["per_stratum_paired_diff"] = prim["per_stratum_paired_diff"]
+    res["leakage_cut_intent_source"] = prim["leakage_cut_intent_source"]
+    lines = list(prim["kill_lines"])
+    if not fc["ok"]:
+        lines.append(
+            f"FLOOR CHECK FAILED (primary): {'; '.join(fc['failures'])} -> UNDERPOWERED/KILL"
+        )
+    lines.append(prim["selection_line"])
+    for key, _, _, _ in defs[1:]:
+        if "kill_lines" in sets[key]:
+            lines += sets[key]["kill_lines"]
+    res["verdict_lines"] = lines
+
+    # leakage over ALL rows (flagged and unflagged), against the primary set's L
+    sc_all = {v: _score_variant(rows_of[v], _applicable(v, dec_all)) for v in variants}
+    res["leakage"] = leakage_block(sc_all, dec_all, prim["lexical_baseline"], resamples, seed)
 
     # trivial-head stratum: a separate table, outside the decision
     res["trivial_head"] = {}
@@ -2191,8 +2508,9 @@ def _pct(x: Any) -> str:
     return "n/a" if x is None else f"{x:.3f}"
 
 
-def _render_set(ds: Mapping[str, Any], suffix: str) -> list[str]:
-    """The tables of ONE decision set; ``suffix`` names the set in two-set mode."""
+def _render_set(ds: Mapping[str, Any], suffix: str, full: bool = True) -> list[str]:
+    """The tables of ONE set; ``suffix`` names it. A non-deciding set (``full`` false) gets the
+    recall tables and the kill-rule evidence only."""
     L: list[str] = []
     lb = ds["lexical_baseline"]
     L.append(
@@ -2250,6 +2568,8 @@ def _render_set(ds: Mapping[str, Any], suffix: str) -> list[str]:
         ]
     else:
         L.append(kr.get("reason", ""))
+    if not full:
+        return L
     L += [
         "",
         f"## lexical vs dense vs hybrid (pooled recall@5){suffix}",
@@ -2316,30 +2636,112 @@ def _render_set(ds: Mapping[str, Any], suffix: str) -> list[str]:
     return L
 
 
+def _render_leakage(lk: Mapping[str, Any]) -> list[str]:
+    L = ["## leakage measurement (answer_named_verbatim; descriptive, never gates)", ""]
+    fr = lk["flag_rates"]
+    L += [
+        "### flag rates",
+        "",
+        "| scope | n | flagged | unflagged | unlabelled | flag rate |",
+        "|---|---|---|---|---|---|",
+    ]
+    rows = [(f"stratum {g}", r) for g, r in fr["by_stratum"].items()]
+    rows += [("all trace strata", fr["trace_all"])]
+    rows += [(f"writer {w}", r) for w, r in fr["by_writer"].items()]
+    rows += [(f"intent_source {i}", r) for i, r in fr["by_intent_source"].items()]
+    for name, r in rows:
+        L.append(
+            f"| {name} | {r['n']} | {r['flagged']} | {r['unflagged']} | {r['unlabelled']} | {_pct(r['flag_rate'])} |"
+        )
+    shown = [
+        k
+        for k in lk["subset_sizes"]
+        if not k.endswith(":unlabelled")
+        and not k.startswith("probe45")
+        and "intent_source" not in k
+    ]
+    L += [
+        "",
+        "### recall@k on the flagged vs the unflagged subset",
+        "",
+        "| arm | subset | n | R@1 | R@3 | R@5 | R@10 |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for v, by in lk["recall_by_flag"].items():
+        for label in shown:
+            if label in by:
+                ks = by[label]
+                L.append(
+                    f"| {v} | {label} | {ks[1]['n']} | "
+                    + " | ".join(f"{ks[k]['recall']:.3f}" for k in KS)
+                    + " |"
+                )
+    L += [
+        "",
+        "### flagged minus unflagged recall (the leakage effect)",
+        "",
+        "| arm | scope | n flagged | n unflagged | dR@1 | dR@3 | dR@5 | dR@10 |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for v, by in lk["effect_flagged_minus_unflagged"].items():
+        for scope, e in by.items():
+            L.append(
+                f"| {v} | {scope} | {e['n_flagged']} | {e['n_unflagged']} | "
+                + " | ".join(f"{e['recall'][k]['diff']:+.3f}" for k in KS)
+                + " |"
+            )
+    L += [
+        "",
+        f"### hybrid minus L ({lk['vs']}) on each subset, recall@5",
+        "",
+        "| subset | n | arm | diff | CI |",
+        "|---|---|---|---|---|",
+    ]
+    for label, row in lk["vs_L_recall5"].items():
+        for v, b in row.items():
+            if v.endswith(".hybrid"):
+                L.append(
+                    f"| {label} | {b['n']} | {v} | {b['mean_diff']:+.3f} | [{b['ci_lo']:+.3f}, {b['ci_hi']:+.3f}] |"
+                )
+    return L + [""]
+
+
 def render_markdown(res: Mapping[str, Any]) -> str:
-    L = ["# REPL-EMB-2.2 offline retrieval eval", "", res["bias_note"], ""]
+    fc = res["floor_check"]
+    L = [
+        "# REPL-EMB-2.2 offline retrieval eval",
+        "",
+        res["bias_note"],
+        "",
+        res["bias_note_scope"],
+        "",
+    ]
+    if not fc["ok"]:
+        L += [f"**!!! {floor_banner(fc)} !!!**", ""]
     L += [f"- {line}" for line in res["verdict_lines"]]
     L += [
         "",
-        f"deciding n = {res['n_deciding']}"
-        + (
-            f" with synthetic, {res['n_deciding_without_synthetic']} without"
-            if res["synthetic_present"]
-            else ""
-        )
-        + f"  ({res['n_by_group']}; unscored {res['n_unscored']})",
+        f"deciding (primary) n = {res['n_deciding']} after excluding {res['n_flagged_excluded']} "
+        f"answer_named_verbatim rows; {floor_banner(fc)}",
+        f"all scored rows by group: {res['n_by_group']}; unscored {res['n_unscored']}",
+        "costs here are `contended_not_for_selection`; failures count as misses.",
+        "",
     ]
-    L += ["costs here are `contended_not_for_selection`; failures count as misses.", ""]
     sets = res["decision_sets"]
-    if res["synthetic_present"]:
-        for key, name in (
-            ("with_synthetic", "with synthetic"),
-            ("without_synthetic", "without synthetic"),
-        ):
-            L += [f"# Decision set: pooled, {name} (n={sets[key]['n_deciding']})", ""]
-            L += _render_set(sets[key], f" - {name}") + [""]
-    else:
-        L += _render_set(sets["with_synthetic"], "") + [""]
+    L += [f"# PRIMARY decision set (the only deciding set; n={sets['primary']['n_deciding']})", ""]
+    L += _render_set(sets["primary"], "") + [""]
+    L += _render_leakage(res["leakage"])
+    for key, ds in sets.items():
+        if key == "primary":
+            continue
+        if "identical_to" in ds:
+            L += [f"# SECONDARY {key}: identical to {ds['identical_to']}, not repeated", ""]
+            continue
+        if ds.get("empty"):
+            L += [f"# SECONDARY {key}: empty", ""]
+            continue
+        L += [f"# SECONDARY (non-deciding): {ds['tag']} (n={ds['n_deciding']})", ""]
+        L += _render_set(ds, f" - {ds['tag']}", full=False) + [""]
     if res["trivial_head"]:
         L += [
             "## trivial-head stratum (outside the decision)",
@@ -2454,10 +2856,13 @@ def _trace_rows(
     bundle_id: str,
     extra: Callable[[int], dict[str, Any]],
     n: int | None = None,
+    flags: bool = False,
 ) -> list[dict[str, Any]]:
     rows = []
     for i, q in enumerate(synthetic_queries(lambda name: str(spill / f"{name}.txt"), prefix)[:n]):
         g = q["gold"]
+        if not flags:
+            q = {k: v for k, v in q.items() if k != "answer_named_verbatim"}
         rows.append(
             {
                 **q,
@@ -2477,8 +2882,9 @@ def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
 def make_synthetic_inputs(root: Path, multi: bool = False) -> dict[str, Any]:
     """A fake pinned checkout, spill files, bundles.json, queries, rules and manifest.
 
-    ``multi=False``: the legacy single trace source (one ``spill_follow``-by-default file).
-    ``multi=True``: the three-source layout -- ``trace2/`` (agent_nav queries, a trivial-head file,
+    ``multi=False``: the legacy single trace source (one ``spill_follow``-by-default file, no
+    ``answer_named_verbatim`` flags).
+    ``multi=True``: the three-source layout, whose rows DO carry the flag (q1, q3, q6 flagged) -- ``trace2/`` (agent_nav queries, a trivial-head file,
     its own bundles.json) and ``synth/`` (synthetic_spill queries with a ``writer``, its own
     bundles.json). The legacy files are always written; ``trace_queries`` / ``trivial_queries`` /
     ``bundles_json`` in the result name the sources to freeze."""
@@ -2493,6 +2899,9 @@ def make_synthetic_inputs(root: Path, multi: bool = False) -> dict[str, Any]:
     (root / "bundles.json").write_text(dumps({"spill-b1": entry}, indent=1), encoding="utf-8")
     probe = []
     for q in synthetic_queries(lambda n: f"seaborn/{n}.py", "p-"):
+        q = {
+            k: v for k, v in q.items() if k != "answer_named_verbatim"
+        }  # the real probe45 has no flag
         probe.append({**q, "repo": repo, "commit": "0" * 40, "stratum": "intake1357_probe45"})
     _write_jsonl(root / "probe45.jsonl", probe)
     _write_jsonl(
@@ -2518,11 +2927,12 @@ def make_synthetic_inputs(root: Path, multi: bool = False) -> dict[str, Any]:
             "intent_source": "assistant_text" if i % 2 == 0 else "bash_description",
         }
         _write_jsonl(
-            nav / "queries-trace.jsonl", _trace_rows(root / "spill_nav", "n-", "nav-b1", nav_extra)
+            nav / "queries-trace.jsonl",
+            _trace_rows(root / "spill_nav", "n-", "nav-b1", nav_extra, flags=True),
         )
         _write_jsonl(
             nav / "queries-trivial-head.jsonl",
-            _trace_rows(root / "spill_nav", "th-", "nav-b1", nav_extra, n=3),
+            _trace_rows(root / "spill_nav", "th-", "nav-b1", nav_extra, n=3, flags=True),
         )
         _write_jsonl(
             syn / "queries-synth.jsonl",
@@ -2531,6 +2941,7 @@ def make_synthetic_inputs(root: Path, multi: bool = False) -> dict[str, Any]:
                 "y-",
                 "syn-b1",
                 lambda i: {"stratum": "synthetic_spill", "writer": "A" if i % 2 == 0 else "B"},
+                flags=True,
             ),
         )
         out.update(
@@ -2681,6 +3092,11 @@ def build_parser() -> argparse.ArgumentParser:
     fz.add_argument("--probe-checkouts", default=DEFAULT_PROBE_CHECKOUTS)
     fz.add_argument("--colgrep-bin", default=COLGREP_BIN)
     fz.add_argument("--refreeze", action="store_true")
+    fz.add_argument(
+        "--require-floors",
+        action="store_true",
+        help="exit 3 if the primary set misses n >= 120 or trace rows >= 75 (default: warn loudly)",
+    )
 
     rn = sub.add_parser("run", help="run arms (resumable)")
     rn.add_argument("--out", required=True)
