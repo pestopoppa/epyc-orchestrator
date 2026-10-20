@@ -111,7 +111,7 @@ def build_items(
         ]
         qkind = "file:" + str(queries_file)
     else:
-        # PROXY: first non-empty line of every k-th picked chunk. These are NOT the UFH-07
+        # PROXY: first non-empty line of every k-th picked chunk. These are NOT the intake-1357#03 probe
         # questions (that set is not frozen yet); the verdict is labelled accordingly.
         queries = []
         step = max(1, len(picked) // n_queries)
@@ -146,7 +146,8 @@ def build_items(
         "doc_texts": doc_texts,
         "queries": queries,
         "query_set_kind": qkind,
-        "query_set_is_ufh07": queries_file is not None and "ufh07" in queries_file.name.lower(),
+        "query_set_is_ufh07": queries_file is not None
+        and ("probe45" in queries_file.name.lower() or "ufh07" in queries_file.name.lower()),
     }
 
 
@@ -320,10 +321,10 @@ def compare(out: Path, items_meta: dict[str, Any]) -> dict[str, Any]:
         and len(items_meta["queries"]) >= UFH07_QUESTIONS
     )
     res["scope_note"] = (
-        "complete: >=200 chunks and the UFH-07 question set"
+        "complete: >=200 chunks and the 45 behavioural questions (intake-1357#03)"
         if res["scope_complete"]
         else f"PARTIAL: {n_chunks} chunks (>= {MIN_CHUNKS}: {n_chunks >= MIN_CHUNKS}); query set = {items_meta['query_set_kind']} "
-        f"({len(items_meta['queries'])} queries), NOT the frozen UFH-07 question set"
+        f"({len(items_meta['queries'])} queries), NOT the 45 behavioural questions (intake-1357#03)"
     )
     return res
 
@@ -365,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--queries",
                 type=Path,
                 default=None,
-                help="JSONL {id,text,code_intent}; named *ufh07* for the real set",
+                help="JSONL {id,text,code_intent}; the 45 behavioural questions of intake-1357#03 (file name containing probe45)",
             )
             p.add_argument(
                 "--reuse-items",

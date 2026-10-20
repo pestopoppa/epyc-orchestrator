@@ -92,6 +92,55 @@ def count_code_intent(queries: Path | None) -> dict[str, Any]:
     }
 
 
+def heldout_query_set(path: Path | None, source_root: Path | None) -> dict[str, Any]:
+    """Stratum 1 of the 2.2 query set: the 45 behavioural questions of intake-1357#03."""
+    if path is None:
+        return {"status": "absent"}
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    classes: dict[str, int] = {}
+    for r in rows:
+        classes[r["class"]] = classes.get(r["class"], 0) + 1
+    repos = {r["repo"]: r["commit"] for r in rows}
+    src_digests = None
+    if source_root:
+        src_digests = {
+            n: sha256_file(source_root / n) for n in ("regrade_nodes.json", "results/probes.json")
+        }
+    return {
+        "status": "frozen_held_out",
+        "name": "intake1357_probe45",
+        "n_queries": len(rows),
+        "n_classes": len(classes),
+        "queries_per_class": sorted(set(classes.values())),
+        "file": path.name,
+        "file_sha256": sha256_file(path),
+        "source": {
+            "paper": "arXiv 2607.09691 (intake-1357#03)",
+            "companion_repo": "https://github.com/integrallis/act-context",
+            "commit": "fd115351d0ab742993aa5d7006f1369fb15b6e74",
+            "files": [
+                "experiments/probe_regrade/regrade_nodes.json",
+                "experiments/probe_regrade/results/probes.json",
+            ],
+            "label": "probes minted by the paper authors from each class's TEST FILE (exp-015); 15 classes x 3 questions over seaborn, pylint, pytest at pinned SWE-bench base commits",
+            "source_files_sha256": src_digests,
+        },
+        "target_repos_at_pinned_commits": repos,
+        "gold": {
+            "kind": "class_span",
+            "derivation": "path + start_line..end_line of the class each probe was minted for, from regrade_nodes.json at the pinned commit; "
+            "fixed by the source before any arm runs and independent of every arm's output; recall@k scoring = a returned pointer in the same file overlapping the span by >= 1 line (the 2.1 overlap rule)",
+            "alt_locus": "the test file the probe was minted from is recorded per row and is NOT gold unless the 2.2 freeze registers it",
+        },
+        "code_intent_labels": "null on every row: the code-intent label is assigned blind at the 2.2 freeze, so the item (e) count stays null until then",
+        "held_out": "no arm, prompt or threshold may be tuned on these 45; they are scored once at the 2.2 launch",
+        "stratum_2_traces": {
+            "status": "not_collected",
+            "requirement": ">= 75 real spill-follow and context-bundle trace queries, kept as a SEPARATE stratum (2.1: n >= 120 overall)",
+        },
+    }
+
+
 def build(args: argparse.Namespace) -> dict[str, Any]:
     ver = lambda p: md.version(p)  # noqa: E731
     iso = {
@@ -250,6 +299,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             for s in specs
         ],
         "query_set": count_code_intent(args.queries),
+        "heldout_query_set": heldout_query_set(args.heldout_queries, args.heldout_source_root),
         "parity_gate": {
             "script": str(gate_py.relative_to(REPO_ROOT)),
             "script_sha256": sha256_file(gate_py),
@@ -260,7 +310,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 "gguf_bf16_min_cos": 0.99,
                 "gguf_q8_0_min_cos": 0.98,
                 "min_chunks": 200,
-                "question_set": "the 45 UFH-07 questions",
+                "question_set": "the 45 behavioural questions of intake-1357#03 (integrallis/act-context@fd115351, experiments/probe_regrade)",
             },
         },
         "frozen_context_search": {
@@ -294,6 +344,18 @@ def main() -> int:
     ap.add_argument("--bge-gguf", type=Path, required=True)
     ap.add_argument(
         "--queries", type=Path, default=None, help="frozen 2.1 query set JSONL, if one exists"
+    )
+    ap.add_argument(
+        "--heldout-queries",
+        type=Path,
+        default=None,
+        help="probe45 JSONL (intake-1357#03 questions with gold spans)",
+    )
+    ap.add_argument(
+        "--heldout-source-root",
+        type=Path,
+        default=None,
+        help="act-context experiments/probe_regrade dir (for file digests)",
     )
     ap.add_argument(
         "--llama-runtime",

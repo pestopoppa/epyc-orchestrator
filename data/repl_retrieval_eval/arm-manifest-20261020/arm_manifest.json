@@ -336,20 +336,61 @@
   "path": "src/repl_environment/context_search.py",
   "sha256": "6a4b18d6e243858a3964e29dbc1af4f74df431075226bed0e9fc174adbbf072f"
  },
- "manifest_sha256": "80937c8d47babf9470bd4e9f081456d7f6d4c9f7d5cf5d54bb9129813d933517",
- "orchestrator_commit": "325adb51",
+ "heldout_query_set": {
+  "code_intent_labels": "null on every row: the code-intent label is assigned blind at the 2.2 freeze, so the item (e) count stays null until then",
+  "file": "probe45-intake1357.jsonl",
+  "file_sha256": "1cd90d56b6c9aaf3cc777c4fa3fe5276005400f22c86079adf5229a50bafc48b",
+  "gold": {
+   "alt_locus": "the test file the probe was minted from is recorded per row and is NOT gold unless the 2.2 freeze registers it",
+   "derivation": "path + start_line..end_line of the class each probe was minted for, from regrade_nodes.json at the pinned commit; fixed by the source before any arm runs and independent of every arm's output; recall@k scoring = a returned pointer in the same file overlapping the span by >= 1 line (the 2.1 overlap rule)",
+   "kind": "class_span"
+  },
+  "held_out": "no arm, prompt or threshold may be tuned on these 45; they are scored once at the 2.2 launch",
+  "n_classes": 15,
+  "n_queries": 45,
+  "name": "intake1357_probe45",
+  "queries_per_class": [
+   3
+  ],
+  "source": {
+   "commit": "fd115351d0ab742993aa5d7006f1369fb15b6e74",
+   "companion_repo": "https://github.com/integrallis/act-context",
+   "files": [
+    "experiments/probe_regrade/regrade_nodes.json",
+    "experiments/probe_regrade/results/probes.json"
+   ],
+   "label": "probes minted by the paper authors from each class's TEST FILE (exp-015); 15 classes x 3 questions over seaborn, pylint, pytest at pinned SWE-bench base commits",
+   "paper": "arXiv 2607.09691 (intake-1357#03)",
+   "source_files_sha256": {
+    "regrade_nodes.json": "1e71e0eb7955c626046c246ccb145b68b91634767b1c733c93576f4a787c200b",
+    "results/probes.json": "027b2707637c063fd6f7dc24519227d08a44b43338d16a45903b5c4b64c800d8"
+   }
+  },
+  "status": "frozen_held_out",
+  "stratum_2_traces": {
+   "requirement": ">= 75 real spill-follow and context-bundle trace queries, kept as a SEPARATE stratum (2.1: n >= 120 overall)",
+   "status": "not_collected"
+  },
+  "target_repos_at_pinned_commits": {
+   "mwaskom/seaborn": "22cdfb0c93f8ec78492d87edb810f10cb7f57a31",
+   "pylint-dev/pylint": "273a8b25620467c1e5686aa8d2a1dbb8c02c78d0",
+   "pytest-dev/pytest": "6e7dc8bac831cd8cf7a53b08efa366bd84f0c0fe"
+  }
+ },
+ "manifest_sha256": "5360026d9430a8f4aa73f1ff7a5beab473b6d977d0084a4e0b50206ea68e5286",
+ "orchestrator_commit": "9fbcbcf3+e24b5042",
  "parity_gate": {
   "arms_module_sha256": "efa3eb19253c30bc3782019e759395154bb9421eb907dedd2d4dc2d9a738c2ee",
   "predeclared": {
    "gguf_bf16_min_cos": 0.99,
    "gguf_q8_0_min_cos": 0.98,
    "min_chunks": 200,
-   "question_set": "the 45 UFH-07 questions",
+   "question_set": "the 45 behavioural questions of intake-1357#03 (integrallis/act-context@fd115351, experiments/probe_regrade)",
    "st_bf16_vs_st_fp32_min_cos": 0.99,
    "zero_nonfinite": true
   },
   "script": "scripts/benchmark/repl_emb_parity_gate.py",
-  "script_sha256": "33089dfc14de30143dca163d02fbd4957b828fabcc640642ed50119ce65680dd"
+  "script_sha256": "390e99f7dea3795a1c0b22d13b6adb7077467440fda89da34eb96d093245f282"
  },
  "prompt_side_mechanism": {
   "adapter_rule": "the adapter prefixes both sides; it tells them apart by the admission_wait_s the shipped index passes (INDEX_ADMISSION_WAIT_S for chunk batches, QUERY_ADMISSION_WAIT_S for the query); repl_emb_arms.side_for asserts the constants differ.",
