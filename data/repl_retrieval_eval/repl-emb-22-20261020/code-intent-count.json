@@ -1,0 +1,17 @@
+{
+ "schema": "repl-emb-code-intent-count/1",
+ "source": "queries-labelled.jsonl of the frozen REPL-EMB-2.2 launch",
+ "label_method": "deterministic regex on the query text, applied by the harness at freeze, blind to every arm's output",
+ "gold": "every row carries a gold span fixed before any arm ran (probe45 class span from regrade_nodes.json; agent_nav lines the agent actually read; synthetic span fixed at corpus build)",
+ "n_rows": 582,
+ "n_code_intent_true": 56,
+ "n_code_intent_true_scored_nontrivial": 51,
+ "n_code_intent_true_primary": 41,
+ "by_group_code_intent_true": {
+  "agent_nav": 10,
+  "probe45": 34,
+  "synthetic_spill": 7,
+  "trivial_head": 5
+ },
+ "queries_labelled_sha256": "66463d139da03c3baeb662d65cfc77296c3dbd0e96867114863b0bd191d0c3ed"
+}
