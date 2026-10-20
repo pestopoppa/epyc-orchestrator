@@ -112,7 +112,10 @@ flags:
   session_token_budget: baseline
   side_effect_tracking: baseline
   skillbank: baseline
-  spec_off_bitwise_roles: baseline
+  spec_off_bitwise_roles:
+    expected: on
+    reason: "Q38-T10 per-role parity: judges, grader, replay CLIs send per-request speculative.n_max=0. Control arm Q38-T10.1 passed 2026-10-20 (20/20 token-identical alone and beside a speculating slot). Takes effect at the next API reload; revert via src/features.py default_prod."
+    since: 2026-10-20
   specialist_routing: baseline
   staged_rewards: baseline
   state_history_snapshots: baseline

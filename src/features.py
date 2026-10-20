@@ -224,10 +224,10 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # machine-parsed roles must emit output identical to non-speculative decoding. When ON, those
     # callers (eval_tower llm_judge + rubric judge, model_grader, coherence_judge, the judge_redundancy
     # and routing_replay CLIs) send the per-request llama-server field `speculative.n_max: 0`
-    # (src/spec_policy.py). Serving callers never send it. Default OFF = payloads byte-identical to
-    # today; do NOT flip until the Q38-T10.1 control arm proves per-request n_max 0 is token-identical
-    # to a spec-off server (alone and beside a concurrent speculating slot).
-    FeatureSpec("spec_off_bitwise_roles", False, False, "SPEC_OFF_BITWISE_ROLES", "Q38-T10: bitwise-required roles (judges, grader, replay CLIs) send per-request speculative.n_max=0; default off pending the Q38-T10.1 control arm"),
+    # (src/spec_policy.py). Serving callers never send it. Test default OFF = payloads byte-identical
+    # to legacy. Prod default ON since 2026-10-20: the Q38-T10.1 control arm PASSED (per-request n_max 0
+    # token-identical to a spec-off server, 20/20 alone and 20/20 beside a speculating slot).
+    FeatureSpec("spec_off_bitwise_roles", False, True, "SPEC_OFF_BITWISE_ROLES", "Q38-T10: bitwise-required roles (judges, grader, replay CLIs) send per-request speculative.n_max=0; ON in prod after the Q38-T10.1 control arm passed 2026-10-20 (test default stays off)"),
     # Web research reranking
     FeatureSpec("web_research_rerank", False, False, "WEB_RESEARCH_RERANK", "ColBERT snippet reranking in web_research pipeline"),
     # Routing telemetry
@@ -698,7 +698,7 @@ class Features:
     v1_subagent_link: bool = False  # HS-19a stage 1: record /v1 subagent parent links (tap + session log); default off
     v1_escalation: bool = False  # TE-1: opt-in /v1 frontdoor escalation via /chat's post-answer hooks (explicit x_escalation); default off
     thinking_roles_chat_lane: bool = False  # RI-23: thinking-on roles on /v1/chat/completions (kwargs + reasoning_content); default off
-    spec_off_bitwise_roles: bool = False  # Q38-T10: bitwise-required roles send per-request speculative.n_max=0; default off pending Q38-T10.1 control arm
+    spec_off_bitwise_roles: bool = False  # Q38-T10: bitwise-required roles send per-request speculative.n_max=0; prod default ON (registry), Q38-T10.1 control arm passed 2026-10-20
 
     # Web research reranking (ColBERT snippet pre-fetch filtering)
     web_research_rerank: bool = False  # Rerank DDG snippets via ColBERT before page fetch

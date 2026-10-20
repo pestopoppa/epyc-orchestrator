@@ -76,9 +76,14 @@ def role_config():
 # ── flag + helper ──────────────────────────────────────────────────────────
 
 
-def test_flag_registered_default_off_in_test_and_prod():
+def test_flag_registered_default_on_in_prod_off_in_test():
+    """Flipped ON in prod 2026-10-20 after the Q38-T10.1 control arm passed; test default stays OFF."""
+    from src.features import get_features
+
     spec = next(s for s in _FEATURE_REGISTRY if s.name == "spec_off_bitwise_roles")
-    assert spec.default_test is False and spec.default_prod is False
+    assert spec.default_test is False and spec.default_prod is True
+    assert get_features(production=True).spec_off_bitwise_roles is True
+    assert get_features(production=False).spec_off_bitwise_roles is False
     assert spec_policy.bitwise_roles_enabled() is False
     assert spec_policy.bitwise_n_max() is None
     assert spec_policy.bitwise_call_kwargs() == {}
