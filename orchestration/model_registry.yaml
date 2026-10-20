@@ -13,8 +13,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-07T14:31:55+00:00
-# Cache key:   66f4d64c9033823d...
+# Compiled at: 2026-10-20T14:00:01+00:00
+# Cache key:   2be38b302c1cae07...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -2814,8 +2814,9 @@ roles:
     tier: A
     description: 'Qwen3.8-Flash-Next UD-IQ4_XS exact local artifact (3 shards). 2026-09-22: PROMOTED from research-campaign artifact to the PRODUCTION model backing architect_critic (:8074, CPU), single-role:
       ingest_long_context is NOT aliased here — operator ruling C2 sent it to architect_general''s :8083 GPU Qwen3.8-27B (server_mode.ingest_long_context.alias_of, server_mode.architect_critic.shared_with).
-      ⚠ THIS IS NOT THE ARTIFACT THE CAMPAIGN MEASURED — the codified recipe''s TRUNK_GGUF is the IQ4_XS-uniform SINGLE FILE (98,392,912,256 B, sha256 4bfb9849...f8957). Reconciling served-vs-anchor is
-      PROD-3''s open job and the recipe module says so itself. Every performance figure attached to this model was taken on the uniform file.'
+      2026-10-20 (operator): this 3-shard set is ALSO the codified recipe''s TRUNK (scripts/lib/qwen38_flash_next_recipe.py TRUNK_SHARDS); the former campaign anchor, the IQ4_XS-uniform single file (98,392,912,256
+      B, sha256 4bfb9849...f8957), is RETIRED (keeper UD-IQ4_XS). ⚠ Every performance figure attached to this model was still taken on that retired uniform file (recipe MEASURED_TRUNK) and must be re-measured
+      on this artifact before it is quoted as this artifact''s throughput.'
     model:
       name: Qwen3.8-Flash-Next-UD-IQ4_XS
       path: /mnt/raid0/llm/models/unsloth/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf
