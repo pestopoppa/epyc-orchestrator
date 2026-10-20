@@ -1,0 +1,1689 @@
+{
+ "files": [
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/accepted_gaps.yaml",
+   "sha256": "33621d4f71ea0221395eb3776533437f16d1225e28067dbaa6d09ad56cf43f6d",
+   "kind": "json",
+   "chars": 3512
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/anomaly_signals.yaml",
+   "sha256": "7c8a66b2725a5301feb5392dfa269edc4d5307092dfbb71485b2725f30bda0d0",
+   "kind": "json",
+   "chars": 3673
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "sha256": "a4a860c11438957df1cce86bde04eeb28dc8af23d91a0b18de350e3e922149c3",
+   "kind": "json",
+   "chars": 4864
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "sha256": "e2effd1af8fc81c96de7019bd30ec6c262fc1d4935d0492d6322364e9f0bd7da",
+   "kind": "json",
+   "chars": 13132
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "sha256": "e408c615319607f50cb0bff3b734bb6a82d0caf5f4d38b61c24011b75008b37e",
+   "kind": "json",
+   "chars": 10224
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/cloud_judges.yaml",
+   "sha256": "ca1418bc4c415709c71d1e6a5614b33a97502d17c0e8a5ecae27076d45d69bf4",
+   "kind": "json",
+   "chars": 2148
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/__init__.py",
+   "sha256": "6d37d473407c0b0c05de0763a32fc25e24f963655353aec158f7a3409f3f054b",
+   "kind": "code",
+   "chars": 1565
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/_fence_rules.py",
+   "sha256": "238416a6fd3515717cde09dd8fc71197d8afaa66e374ae5b07b09525ffb45752",
+   "kind": "code",
+   "chars": 4155
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "sha256": "1e14b56f56169eaa12eebc1f8906352ec04a424554b4133fe1f2c64c3834e0b5",
+   "kind": "code",
+   "chars": 23264
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "sha256": "6a4b18d6e243858a3964e29dbc1af4f74df431075226bed0e9fc174adbbf072f",
+   "kind": "code",
+   "chars": 21210
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "sha256": "4f203b7ab59ad6467ade8d5cd3540fb203ca9b047620749f36a780adbb0ad310",
+   "kind": "code",
+   "chars": 11956
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "sha256": "acbc97ce8bdf043f3c3d1762b004bb22a78e62fb2af0bdc7fa5ba35b423128db",
+   "kind": "code",
+   "chars": 19649
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_tools.py",
+   "sha256": "049d004689084f8ef988bf01bb08850d28a7a7c1e7cc0512e1cdb08c854f9f43",
+   "kind": "code",
+   "chars": 2013
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "sha256": "12a459a23161c08ce696fdae828a0cbba9cd0d4529db649e4a9a96f6dee88207",
+   "kind": "code",
+   "chars": 12491
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "sha256": "d943d472403fa5bff1bf8b694374d863868cca2160485d78ab10b87ee54a00f9",
+   "kind": "code",
+   "chars": 17859
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/suggestions.py",
+   "sha256": "d5a52f3ea5f010b7b9a2a0f0bf0f7c7c6e909a1f70f0e3055de643fa5c7830f4",
+   "kind": "code",
+   "chars": 3709
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/unicode_sanitizer.py",
+   "sha256": "44b3c91211f5dfbd58dc6c4d911979c0b13d4bb4d468af9292d0907008d28e64",
+   "kind": "code",
+   "chars": 3422
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/CURRENT-CAMPAIGN.md",
+   "sha256": "e1b75817e1748d435f780a9d7e3cc9ed799f78100b699abc85abe1e5fb14b83a",
+   "kind": "prose",
+   "chars": 36408
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "sha256": "c39eaaa0f34c127ac641b47086cbe2764d5c9843ab049dbf1594334f40b18523",
+   "kind": "prose",
+   "chars": 245979
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/capability-registry-and-promotion.md",
+   "sha256": "7367f720067cc25de8154aff379c88b49c09a9820765bf0a0716a3355a5618d5",
+   "kind": "prose",
+   "chars": 23839
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "sha256": "0b1fb059398d6b68f49bdc1e7b66a329819a3ec16302aa5027f9ff7b6ee99961",
+   "kind": "prose",
+   "chars": 37436
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "sha256": "7b0cc6217c383929ead2732f833e7d8d6f17be24282ace19909c33c8de63b5bf",
+   "kind": "prose",
+   "chars": 56510
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/gpu-candidates-surface-qwen38-update.md",
+   "sha256": "44b6e3d52e95d1de44f42d0c0cc037626352261e325b254fc9b1db0036614a79",
+   "kind": "prose",
+   "chars": 10484
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "sha256": "c481e2b4c80cadcc2c8ccece859cbc26abdba42955bf016c52417a38ef27873c",
+   "kind": "prose",
+   "chars": 55008
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/minddr-deep-research-mode.md",
+   "sha256": "3c393889c8322b7fc1c60f23bd639a61ce87150c6857938440de82740350a15e",
+   "kind": "prose",
+   "chars": 20527
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/objective-task-rate-goodput.md",
+   "sha256": "e0f404d52fb2f5a469f832200a42a4369bf4cef777c9c45114d96e031491fba4",
+   "kind": "prose",
+   "chars": 33509
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "sha256": "b25e0b2d170b1f14d572b56cf0148ca07b99993609c6aea76dd1789dbdcfad79",
+   "kind": "prose",
+   "chars": 96341
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/rlm-contested-claims-self-evaluation.md",
+   "sha256": "9a9be34602d519d52fe2ecc04973dc0269ccef16456ed0e4974f18c9311a76ed",
+   "kind": "prose",
+   "chars": 17170
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/standardized-stack-update-pipeline-finalization.md",
+   "sha256": "595d57206600d04b680ed225733cc4857df397f4eea16580a43930440db42612",
+   "kind": "prose",
+   "chars": 24106
+  },
+  {
+   "path": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/v9-kernel-per-request-speculative-params.md",
+   "sha256": "893728d998f1b32b356b902b9de14d563e78f876745f4f551e9cdd6abdbe6305",
+   "kind": "prose",
+   "chars": 7759
+  }
+ ],
+ "chunk_max_chars": 800,
+ "dense_input_max_chars": 800,
+ "n_chunks": 211,
+ "chunk_kinds": {
+  "code": 80,
+  "json": 51,
+  "prose": 80
+ },
+ "chunks": [
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 10683,
+   "end": 11421,
+   "text_sha256": "fb3f47a67759226d512735a0b0fe8bd7e7bfc16787740f26435c19ca58ff88b0"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 3086,
+   "end": 3879,
+   "text_sha256": "2eb2b5beb77305bd69d655a52a7c818fa76db3f70f0f67c37cb55b238bf134b3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 13785,
+   "end": 14583,
+   "text_sha256": "10eac76b7957e6ce90ef71c014eb8d1435d6e4079272f8d471f2548a993bfb4a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 59303,
+   "end": 59937,
+   "text_sha256": "38f7c07ef6baf1bf2bdad4c278a204a53f9500a8567ebd31db820a28d42bfd28"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 7707,
+   "end": 8488,
+   "text_sha256": "899c278871be862346985dcf3b2d0117330cc4e78ef75290d1f210febe653f90"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 18588,
+   "end": 19379,
+   "text_sha256": "ba49d0a72c57dfeefe65904d246c71b58d3e5688ae0218aa128b1a66c7003cb0"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 46215,
+   "end": 46945,
+   "text_sha256": "fabf52d0bb14d4866389527b29615359ba50db15a33465e8930029622fab4bcf"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 36437,
+   "end": 37184,
+   "text_sha256": "ddd8bca5bee9e04bc028b0128812d2d2fa3111e3382fadd27661d0cdcf7766f3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/CURRENT-CAMPAIGN.md",
+   "start": 31462,
+   "end": 32262,
+   "text_sha256": "f7c4507bc409d9997f42a5594441be2d4b395bdacd0135389edb85d8bf45cc6b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/suggestions.py",
+   "start": 3145,
+   "end": 3709,
+   "text_sha256": "3d28c5a5e1c63bffec77f8a6351cfec26ba9cbc6d83d349d0bbcea20c6e54bf1"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 1594,
+   "end": 2362,
+   "text_sha256": "d0caf0d8af9f3c65382e6a52cd9d3e171032ac00ef390b7e1dd051a32bd5d8d5"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 5389,
+   "end": 6153,
+   "text_sha256": "6e81bba08812630891f3b42ade63542e8b9aa24e790ae36ee099db7c028ff1a6"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 2363,
+   "end": 3161,
+   "text_sha256": "6ee6bac607a3b59c8fed941c49f858277bdf8d4657c14defff7536cc4728bd84"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 5278,
+   "end": 5997,
+   "text_sha256": "681685cf4a7e4df82d053471b7ed82b451698cbdcf22cb7904c30baecf57ab25"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 1525,
+   "end": 2320,
+   "text_sha256": "3723b87ae75ddc22360f9dc0b5bf860ebf4c10fad5a299aa8d97d036560f1cc4"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 4678,
+   "end": 5478,
+   "text_sha256": "a291e22d71547a1584103b71f069e2500ea8ba309cf035f9c8b30b21466fbb13"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 0,
+   "end": 775,
+   "text_sha256": "8df6d016311c98802239b3abd297859c60fd4b027fac23746f130daa67fea0ae"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 43339,
+   "end": 43828,
+   "text_sha256": "cdf99456481ee36419ff0fa90a8195442146612ff4a20876471df3e30af52765"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 10835,
+   "end": 11621,
+   "text_sha256": "3569b58473bfc6e79b8a1a8d200e7f3e89e9ab8c46c645b73f91164395e79a27"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 6231,
+   "end": 7023,
+   "text_sha256": "72f0767ae3f5a46bbf71e523bc6e2e639816942e679a14aece81d4d56f2fafbb"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 0,
+   "end": 794,
+   "text_sha256": "ad5b33a3f02037eba8dec4d1a8328f9a70af823f1bbe278ac42b9ffe9a963097"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 6153,
+   "end": 6917,
+   "text_sha256": "157e0fd4bbd0a28b299d336fc4755361154ff9025709916cbd04dc36ff98e64e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 3840,
+   "end": 4597,
+   "text_sha256": "ad013bbebfb6b9db35b72601265152267380de3ee0c23701c25639cb22369391"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 0,
+   "end": 788,
+   "text_sha256": "84134af98e9bca2b175fca3729d4ecf48ee41428c16e48bdb010df0a1da8ee8d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 110172,
+   "end": 110971,
+   "text_sha256": "0a69aa689008a83352c5db0f53bebbfba21bca5b5077be7989dd6a434c2ca2d2"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 1577,
+   "end": 2363,
+   "text_sha256": "b945ead72853a5b9c74fcb7053542b08cc62f64f76340549210d3ce23282c0a6"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 2220,
+   "end": 2969,
+   "text_sha256": "3f26cfe5d904cf22fe84f1fd99f3224e5fb47cb777dad040cd33c2941d04a070"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 18454,
+   "end": 19181,
+   "text_sha256": "bace41314efd8f433ee8450fb47eb5cbafd0a0bae1d4fc4f3c0a00e7742d4f1d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/capability-registry-and-promotion.md",
+   "start": 9633,
+   "end": 10414,
+   "text_sha256": "b87a4d6af6de358eb354baf407dee95fa4f3ed8edf14091f6fddf3e4bcdc6b75"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 6219,
+   "end": 6994,
+   "text_sha256": "106a241ebf142b3a3969829385f80fa963049f0d0065762efb2cc483e20fe84b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 80502,
+   "end": 81245,
+   "text_sha256": "19c08d031faca568b456f8c4b26482f3697a65c8afa435be0ebfc3631d55a090"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 4695,
+   "end": 5469,
+   "text_sha256": "27fc05065edf61d1157bfaeea738be48b909f3a9007bc5b2c942da5ac1cd70fc"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/CURRENT-CAMPAIGN.md",
+   "start": 0,
+   "end": 715,
+   "text_sha256": "aec365133de686d0184c776ee68ef68ee003b750af040f972d60ca9d330df081"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 4744,
+   "end": 5524,
+   "text_sha256": "df4abf6e83fd8afee8e56780c4a7e51c6f1ada2160583ac7f0aae87da55eda58"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 6887,
+   "end": 7651,
+   "text_sha256": "4963b70e795570a0e30f90eacc29cf614836c7df7fd66fb8796cd75e32b72d5e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/objective-task-rate-goodput.md",
+   "start": 681,
+   "end": 1457,
+   "text_sha256": "c8f90fd53b587d5e6bfb745bff9d81ec2bf4ac597fd9dd79d6d72f479cbd4383"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 3014,
+   "end": 3813,
+   "text_sha256": "d54c1adb678bcd7210c7f227f61d385956cb4c5506f63d90bb19c5c480518212"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 0,
+   "end": 800,
+   "text_sha256": "b98a971f81000adf9f1514dff4370eb405f660e2a1ab3eafc5bc039f2ab4364c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 9339,
+   "end": 10032,
+   "text_sha256": "a1dd925e59c875c3fb04ba12d9739f75241aaff51941e19846881930d3802cb3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 13517,
+   "end": 14278,
+   "text_sha256": "1e87e56cdc7f7cef172e4095133a9488fdabfd95c067dc3e8372e47ec70e41b3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 184360,
+   "end": 185053,
+   "text_sha256": "d0f59334b758c88e3b3ff024a1b490d2f64555f585acbe1c9a7ba0af7b5d836f"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 2320,
+   "end": 3060,
+   "text_sha256": "c0f681e221192c390fcf0a5b35ddcde4670aa3095896bd6e50aed8c3c81d356a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 77487,
+   "end": 78252,
+   "text_sha256": "d222ab8dcd005844e2a7b3ff2efd3f2d919eee6745c4b65aeefc60962cfb6a2b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 6271,
+   "end": 7053,
+   "text_sha256": "d114810ff127ae336f4d3adcc8ccd26f0e718dc2cb0d62e8507def91ad369dac"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/anomaly_signals.yaml",
+   "start": 788,
+   "end": 1576,
+   "text_sha256": "12f1a6e9e4dae516fd954e17ec84c1bc61eec6182d88eae423da72168027b063"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 3060,
+   "end": 3840,
+   "text_sha256": "79593b4bae778f4e05d2bc3f0bc1412660ccacee1582670b60fe67967f17674f"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 38030,
+   "end": 38744,
+   "text_sha256": "291bf8e162f3e5f69a6b047d7df7c36bb64b15572410c25ab0be19c6e700ec72"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 9121,
+   "end": 9919,
+   "text_sha256": "5f46bbedc98f32c704761de4219487a6d256bb90e1eca237713639109beed23a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 143536,
+   "end": 144319,
+   "text_sha256": "20b887cf5cca9cc2a661cc4a786bd7ec3eed2c8b1920da864669b722dba62db6"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 192604,
+   "end": 193346,
+   "text_sha256": "4903db43facbdba4d27605a864b3f4fb32fdf57f38e58e6d9247c17859d079de"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 0,
+   "end": 791,
+   "text_sha256": "a2190490205802a8d7927e9cbb1b8ea5b4579d4fc5e129c232db132380040358"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 21721,
+   "end": 22429,
+   "text_sha256": "01bf3ab3ee7b2a294e1f17a7667f6a9ac8058d039615c2d982942e85aa0b6f9f"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/accepted_gaps.yaml",
+   "start": 759,
+   "end": 1510,
+   "text_sha256": "46b197a243caf50abeef27d1cdcecd825c3ed52e688c82ea85614fbe8642547e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 9314,
+   "end": 10105,
+   "text_sha256": "78a5d542f7d08e7a88aca9b555492545cfe3d5d2c0beac0e4aecf41d57d61225"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 9240,
+   "end": 10022,
+   "text_sha256": "acf63d1281d1a713c599420eb471658663f6ee64e0afaf45e8b5ca6abd83aa54"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 6068,
+   "end": 6795,
+   "text_sha256": "03eaa11d9e9dddf7ddf0221324f5ea974ad86c3244fee53bcf871298d9e4cd3a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/CURRENT-CAMPAIGN.md",
+   "start": 8216,
+   "end": 8977,
+   "text_sha256": "96531991b9fd92dd7d4f8a555b5f83fea72419a906d06898f21967e2145ad83c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 2302,
+   "end": 3086,
+   "text_sha256": "e968c2bb13f2119ee99dcd7ccf4b238854e429a731de9fe14a7eea0026e9327c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/anomaly_signals.yaml",
+   "start": 2361,
+   "end": 3143,
+   "text_sha256": "6a2997c85e61f0bba0a3676caad4cef74074c9201ef934a46cc1f49907178121"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 12357,
+   "end": 13132,
+   "text_sha256": "3cc0bafd6805943027091a06a0e787bf4f0e4e71946de9daab8c694eda732a7a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 21756,
+   "end": 22118,
+   "text_sha256": "b3c5519a29d87688a3652005ccc36184d04e7d482a6e84f78c51eb10e5f5297a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 3953,
+   "end": 4744,
+   "text_sha256": "ba387623bcdfc907e0e25680d007271b8a942e12469099ef1313174086dcf620"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 10032,
+   "end": 10224,
+   "text_sha256": "f09f6cf4a7c3785f186d9577b43d0a33efb1d2463262a803d3bbed36eb1a61ef"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 69159,
+   "end": 69958,
+   "text_sha256": "b61789863f09a77427adcd7b2de86783bbc3101a07d602e6b14bcfa9365044bc"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 45061,
+   "end": 45741,
+   "text_sha256": "0ada6aece0067452d110e5a28f686fdb4a39c529dd90f3978cbcdd8523c1050e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/gpu-candidates-surface-qwen38-update.md",
+   "start": 0,
+   "end": 770,
+   "text_sha256": "30b359f2ada1b5076e799bcf84997afc06c644d5030e12c41d65550fa9e586d9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 225242,
+   "end": 226003,
+   "text_sha256": "6c52e0203ef9fe23d3de05e03859fc5308aeecfb702ba82a69c77f891961688c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 5524,
+   "end": 6271,
+   "text_sha256": "4e07d54b56741777624df45916487735be142867596dd1e8bf9f63115234f041"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/objective-task-rate-goodput.md",
+   "start": 8829,
+   "end": 9591,
+   "text_sha256": "5d3ba7473ae734ce369c2aa0b60245cbfae43e0235dd5dcb723ce69aca2e9c9e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "start": 6818,
+   "end": 7618,
+   "text_sha256": "6f76eb09811043764a701b8f3ec46307bc77ab24bed0aac89a7ff11718e5b632"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 1585,
+   "end": 2320,
+   "text_sha256": "a00b8e79aa723f17b0933d69ffa6ca622fc0fa1cc57754548731fc280238c734"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/__init__.py",
+   "start": 0,
+   "end": 800,
+   "text_sha256": "92cfe72804a5830b8189075a018d7b938d2bdef79c69886b1faf383619a71842"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 1489,
+   "end": 2282,
+   "text_sha256": "ffeaec7d26c74245cc7d91a82bad40d480a3654e4b5535bd3b42d5ef244df8a6"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 44588,
+   "end": 45357,
+   "text_sha256": "578fff81892436816719489df5eae5870287194447b60a8babc94956e95f3181"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 29948,
+   "end": 30654,
+   "text_sha256": "6e7d8bc3e53f3d272cabc2b68078f72936bdc788cd13da5a94384b260e8393b2"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 13852,
+   "end": 14615,
+   "text_sha256": "59cf9b955513b05d2f314b92cb5b832acc3664f818fb84781b8c4255219603c3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 4632,
+   "end": 5432,
+   "text_sha256": "73ca6b252846316da0c6ec023e208b44f19b73aba6622cbac4687d903bcb6e31"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 3879,
+   "end": 4673,
+   "text_sha256": "2b21016682a08f629360203015b78b10b4ba278781e39e5f2c178ffc9946992a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 6723,
+   "end": 7458,
+   "text_sha256": "a6147d36bb0c0f2f65eaee6fdead6f76cfa7e721af09754b73f7eaabe24484a9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 12389,
+   "end": 13189,
+   "text_sha256": "a3f27edfeccb5e17f38168a4744984f79933188675778845b2b45753963e4e8e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 93669,
+   "end": 94380,
+   "text_sha256": "097a0b32ca061f43a2a5f6f1cbdae5af45a108657c1528d151640afcb89ac390"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 12216,
+   "end": 12993,
+   "text_sha256": "2c9c56823b297e9244fa07712b6841b387a5a80ee92ff8f2c0082f87642839e5"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 49596,
+   "end": 50150,
+   "text_sha256": "88172ef712283b7a67bb5ff3f6d39eb48bd6f3c84055c891e0f333872bfeafb2"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 10057,
+   "end": 10835,
+   "text_sha256": "37b54da9b53a7bf2441ba294f643fd61349f4878285b9f4a2b92e720195b195b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/suggestions.py",
+   "start": 0,
+   "end": 792,
+   "text_sha256": "8022abec17957e2cbcc2e2bfb380054f972646471e4eb6c36751c510a9e9e17d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 7715,
+   "end": 8514,
+   "text_sha256": "1bb71dadabc459780bb082953b737aa1054ca47df2a6525b207ef6a63ce86114"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/accepted_gaps.yaml",
+   "start": 0,
+   "end": 759,
+   "text_sha256": "eb150abc90093358ae8212e2843c9e03b7cd746ca77fa64a034ea187e828fe6f"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 18488,
+   "end": 19256,
+   "text_sha256": "87d9db5466d6729541019a758fd6094f1dd02383b21f0e1c3cd1d7f18327d008"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 7783,
+   "end": 8552,
+   "text_sha256": "51c9ce742d20d163cd0c4a8d2918af89228cc5a22a1268f577e15960144f5f1d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 10020,
+   "end": 10756,
+   "text_sha256": "4a259d61870c8658d05c53787f2fbb14fe5e19b50618914670af836ddf124d09"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 11556,
+   "end": 12327,
+   "text_sha256": "c6c2d559dad0158c6a79b8aadc07fb9b6bce01bb955acf9760704c57e2d485ec"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 118513,
+   "end": 119293,
+   "text_sha256": "9337b223025ad215566da51dd29777ea1003aa6c552fda5027e24b6d04ca8187"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 7053,
+   "end": 7795,
+   "text_sha256": "e2f04cdef2d88142e3629368b78a74ea8e662c5987da5a87a0423e015c9ab740"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 10815,
+   "end": 11611,
+   "text_sha256": "a313174dda3adcdd2045cbef55373c70a24453a859ce85540377d60b0f89cfc7"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 775,
+   "end": 1518,
+   "text_sha256": "dbf11faf86737f606a7237b2cafdf0aeb2f067dc170b869f3ccfac24326b2cdc"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 14391,
+   "end": 15134,
+   "text_sha256": "2d0e972731b2fd68f6971104b30b7d77138cc78ceff0d3aae1464453497b61e8"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "start": 14111,
+   "end": 14911,
+   "text_sha256": "2dc466daf407d10003874545aa5ffa41676c4c316384dca98f04fe375ea38038"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 208778,
+   "end": 209507,
+   "text_sha256": "7b71ff2d19437e86668f0e75dffb128bb11cc54dccddf0ca81b918b892ed3050"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 19865,
+   "end": 20584,
+   "text_sha256": "5af3401560f2d867abe6e13d830190951be558fb7801735b74889d46e9b34c88"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 9268,
+   "end": 10057,
+   "text_sha256": "d16eee9df9c87a4cd64a7c551cc88275fe83f345ba8b14332246a1c8002c1451"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/_fence_rules.py",
+   "start": 1560,
+   "end": 2340,
+   "text_sha256": "af18613e6caa923275ad3fb79f5bafefabeb60a6d4764bb326c5336168b35ea2"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 3101,
+   "end": 3897,
+   "text_sha256": "c950ee331731cb95754b2c0ba345f4a1c4836ef2472f28b29ca31cacd19da261"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 60853,
+   "end": 61587,
+   "text_sha256": "911605008cfa72d643660f52c953624b7b7b91945fe665b80952d26eb26df667"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 167701,
+   "end": 168415,
+   "text_sha256": "d9e0a1f8878d0b97518dd1332faaa4a0912aad997a2f9f45412c6b80d47340c7"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 22286,
+   "end": 22915,
+   "text_sha256": "2ac41d341ea513bb2f9c3d08a375f9b1bc8b0fea4d22b6079d08c0b559f8cdfe"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 3755,
+   "end": 4534,
+   "text_sha256": "877bccb9a515dd7602831a42ba380011475387522616fabb621de01aa37715b4"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 36174,
+   "end": 36839,
+   "text_sha256": "8d91db41c714bd266d8be28cc6e2f7b43de340e60dbbe232805053c9cec7d946"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/CURRENT-CAMPAIGN.md",
+   "start": 24017,
+   "end": 24817,
+   "text_sha256": "3948705ba18ac79625b045d01bf60db809d3b44b59ea8892f70bd84c9368099b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 727,
+   "end": 1483,
+   "text_sha256": "247fd5e790c8015ee0d117eab87d08d2e293523629aad72cc1bc8b90bf17d565"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/accepted_gaps.yaml",
+   "start": 1510,
+   "end": 2293,
+   "text_sha256": "a02655daadee1852866ea1b487f7ae70ea39de2315e930361e7ed99b5de16605"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 794,
+   "end": 1585,
+   "text_sha256": "245ec90e45ad2c2bd3c897466ade4c5ca068142051b764b5ac83263062e0f57b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 16940,
+   "end": 17720,
+   "text_sha256": "0d85588a110db57ea828d74f353a846b08b3dc021bf1419a5d1a61ed181b85d9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/evidence-plane-ledger-and-sequential-verdicts.md",
+   "start": 29135,
+   "end": 29441,
+   "text_sha256": "611f324a1618260bd6ac31b07fd5cb9221ad5246dfde2cf7c6f1d90e21388b41"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 21728,
+   "end": 22518,
+   "text_sha256": "12dcd6ca15fc6bdf6cd6e2981cf469c957d285bfac616bda30a8d7f8b5c1f887"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "start": 0,
+   "end": 211,
+   "text_sha256": "386b97569d50645d0f3416d75a5c49e4a6b37b2f5e627c6605a280b09fd5fa2b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/unicode_sanitizer.py",
+   "start": 791,
+   "end": 1569,
+   "text_sha256": "9042ade2f1b9a83c696d9ae342cb498096c32cf5b6610737600d50d8cc9d307f"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 7740,
+   "end": 8528,
+   "text_sha256": "343871062e8a830f830710070ad3f21aee6980bdca5979ae540c043efceb0e36"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 16996,
+   "end": 17792,
+   "text_sha256": "6733b51c26f5ad788a8dbfa9c689c44592cf7838fff827f8cebc973542fd6874"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 20150,
+   "end": 20944,
+   "text_sha256": "aca04a2db0e5605dfc4a4640c57571817b84cd6825487bb318eae216f544da73"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 20039,
+   "end": 20827,
+   "text_sha256": "4279c7de2f3e4f2b3588b972dcbe61e1b4bbfb4d6c522948f66a3ec3cae549a3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 6917,
+   "end": 7715,
+   "text_sha256": "2f20503df88fb2a96ae827a42ed476d063451137ef64c5605955b51dd2a683ae"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 16913,
+   "end": 17704,
+   "text_sha256": "3fa09bd6ac49aea4716bf372203cffd8d90e3f67764f2cbd1dfbc9a98bd5d7b9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 4673,
+   "end": 4864,
+   "text_sha256": "1751b2b380e4431bbe52b9ed3d46fb87f6f3223267a655424c424bbb779d7ff1"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 159434,
+   "end": 160162,
+   "text_sha256": "cd6ff7ec46945cd2614e8dd1e0410cf4eb4f50cb75e31ece6fda514578eca67d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "start": 36106,
+   "end": 36497,
+   "text_sha256": "929693816df2fb517239cad58b3e6973429d8c0b32828365d6207a6010490c13"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/cloud_judges.yaml",
+   "start": 1511,
+   "end": 2148,
+   "text_sha256": "ed6f69e8e02a940f07185979c92d36898fc4b9f0af8043e06e519518616d34fc"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 16895,
+   "end": 17681,
+   "text_sha256": "1f591cd4b675c7015680b0d0eeecfc3be75d8327dc88eb60ed038cf0bdd0b460"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 10766,
+   "end": 11545,
+   "text_sha256": "b391b4262108cd098f5642e4b4a0349384488688206365f8621bdad35ab15786"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "start": 21469,
+   "end": 22226,
+   "text_sha256": "97e235065557befe109adbe494b80817631310d8381bcb4df6c1e2a6b3b5630c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/anomaly_signals.yaml",
+   "start": 3143,
+   "end": 3673,
+   "text_sha256": "e35b2886a7f4fbc5e2f4ca0efcc737d373961184f7e288d5d4e30dec2360f36b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 101943,
+   "end": 102662,
+   "text_sha256": "4b3c62ba612ddf0e4698db14cd6e60b6202601ead7e31d312e4e60207c2dd18f"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_tools.py",
+   "start": 0,
+   "end": 790,
+   "text_sha256": "23945297f8b4a17bcf56cd5877a76b51ddb72a1960b29fbf36bf337e3637eb14"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/objective-task-rate-goodput.md",
+   "start": 17134,
+   "end": 17894,
+   "text_sha256": "f145cdfeec9239ce191286bd3998f4b43be4ee588dc070cb1d3c763991942493"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/suggestions.py",
+   "start": 1557,
+   "end": 2347,
+   "text_sha256": "33897c3a07ee7852a6454a216ded5098433869c41b4cb961dc95bde71c79a51d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/_fence_rules.py",
+   "start": 0,
+   "end": 773,
+   "text_sha256": "803069b4c2a22ff3c7533bb43236ef951fecbd508ca8c2df04ca0a3d85bd6e8c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 0,
+   "end": 761,
+   "text_sha256": "4eefe46306316b7115712af5c0cee02cac3b32f2803e31fc0a565dfe9d1fd984"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 11621,
+   "end": 12357,
+   "text_sha256": "267141213d28622598cd299b40d975b576f9c3ae4333f36cfd822bc7862df7db"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 9282,
+   "end": 10017,
+   "text_sha256": "9d67cf3eac75a673fb8aae251adb6055c0f13771d42fa303121cdb79e2182746"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 6239,
+   "end": 7037,
+   "text_sha256": "d7cfc90adb1a693a61cf2c6055bf5d5a079a5341b1a90d5d0d633418b2f86654"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 10787,
+   "end": 11509,
+   "text_sha256": "059f1876a895a58df0d3819e788c4d053788c6be9e35ee7169390afc6d1f28d9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 3085,
+   "end": 3859,
+   "text_sha256": "537c04ac8122be5b355ae9fbc0b12059245e6f028c8766ea6057f412b45f5806"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 200820,
+   "end": 201535,
+   "text_sha256": "cfdeaba6a0d50617fd9ed8cc49320c765459868fa23db863d269263205219d43"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/capability-registry-and-promotion.md",
+   "start": 1935,
+   "end": 2735,
+   "text_sha256": "7c2a807f99df2e5e5605c7f17e0135318a84519b0dd367cbb4c63ef6927f5b1a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 3158,
+   "end": 3899,
+   "text_sha256": "1d3a7a20b297077d386e54720b0e9328f32f902249620c30580bd60da2dabcf9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 10892,
+   "end": 11631,
+   "text_sha256": "bb5baba57508d144374bd8bf0c59df5712529453db14820fbf2269e11a586268"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/minddr-deep-research-mode.md",
+   "start": 6223,
+   "end": 6923,
+   "text_sha256": "d86deb577862cf8c42a0840c176348d040881185bb3f089eb048d6bdd577f05c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 1580,
+   "end": 2370,
+   "text_sha256": "39d9a299afe3b820ac28054bf91e648ebaf3f0d741c5dd1ec470612a01b34781"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 13953,
+   "end": 14705,
+   "text_sha256": "293476ebd25f8438187ca1f26ce530d25bd5f93e1ad91f0df0cf399dfdd50059"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_tools.py",
+   "start": 1546,
+   "end": 2013,
+   "text_sha256": "97b0019dc3fabb9a0da00901c8d8f805e9a08b311f5295810c16e738e3998fd9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/delegation-context-preassembly.md",
+   "start": 29324,
+   "end": 29904,
+   "text_sha256": "c2bf8dfa7b1504d64ec3ec79cb1863734af165d9e83c881d9a0b61dfa2be651e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 6126,
+   "end": 6907,
+   "text_sha256": "51c4d399c274cb0fdf14f6c5141866923d63e27f316e861162efbc4fca85f531"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 52341,
+   "end": 53004,
+   "text_sha256": "c6b8eae7fa1fb47e5c2801e3985c69801d30810412d9c381fbe5b83a78026f83"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 4694,
+   "end": 5477,
+   "text_sha256": "362f5f7275a9b94d8a0db12195497ebf81441fc555b1c79572f70a04e196d6da"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 15365,
+   "end": 16110,
+   "text_sha256": "ff78e5cd325d062c75a85a6f2c31beb26a1e1cf533b97489a6f4c4d544f8e125"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/kv-prefix-fork-and-paged-attention.md",
+   "start": 54269,
+   "end": 55008,
+   "text_sha256": "3e93591383a67695a6dee294953ac5e10107903cad3391cecc51c59b40046a2a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 8565,
+   "end": 9339,
+   "text_sha256": "efd6f1f404f6688cf8d222303dac7555e37b09a1770c76bbf7724921c2f20dff"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 5324,
+   "end": 6095,
+   "text_sha256": "67f03f3786b7b0fd853d8bd326de3106e60d50bdb7e25751e7d756240db596ac"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 0,
+   "end": 776,
+   "text_sha256": "66e02a3b91902fa4c26659c0f7e5946c0dcc5f5386c9b63546fc507e4dd318e9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 15447,
+   "end": 16210,
+   "text_sha256": "92b9a8c9d6b42949922ebaf334e4290748c9c08665059d5235893b25cd924a80"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 135179,
+   "end": 135938,
+   "text_sha256": "fad9fdcc34814efb12ba084e0b09b24d7ec6f4d08b1ed02c6c45dfe71c97f849"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/accepted_gaps.yaml",
+   "start": 3048,
+   "end": 3512,
+   "text_sha256": "59a3237c1135c7f641a763015b635f796b6d9d9a560147c0eeaef811c01e8560"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 27973,
+   "end": 28766,
+   "text_sha256": "552595cede7d6b01dbab103c9842d78545e1b86dc9d04b0bed9ea021453e7be8"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/objective-task-rate-goodput.md",
+   "start": 25121,
+   "end": 25921,
+   "text_sha256": "f21d71dd3b7a1a942ee39607feee260491a9cc64eefe1a9755cf2b966257ea01"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/cloud_judges.yaml",
+   "start": 725,
+   "end": 1511,
+   "text_sha256": "445690b5ff1c0317ccb9d265a9ab2acd67051cf5125c514176cf6ac8d064c76e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 14475,
+   "end": 15207,
+   "text_sha256": "bfa9ef671d4cf1be69f323a6dee05157b2b663897c5b551eb0316f767036332e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/anomaly_signals.yaml",
+   "start": 0,
+   "end": 788,
+   "text_sha256": "94679675d36491b91272b7ee918df5380c81df0398a3b26ebfb236bd7c178e7b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 4572,
+   "end": 5327,
+   "text_sha256": "967f0d67ec6e769ddd203d4fa4dc8e1e0a10168ec1db5b9633d8c49be2b910db"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 8514,
+   "end": 9268,
+   "text_sha256": "c1200360469b2bb39d349902bacaa295028e176889fb704e86461f59bcb5b0ed"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 85523,
+   "end": 86231,
+   "text_sha256": "cb619f3a43d2b5ed8adcff90dc460f5a9b1b458571d24235e33007168ce101b1"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 73029,
+   "end": 73764,
+   "text_sha256": "a850c91e3efd91a6cb27071501c1e9a215b409c25bb8538b3a8bcdf68939a872"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 87686,
+   "end": 88139,
+   "text_sha256": "9ddca1fe0793a8bfdc4845bec891517a029ca20ce97e848c30910f3a48c10967"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 37145,
+   "end": 37769,
+   "text_sha256": "3de2d0bb4f8b09bc90cbfff5f856b11326ef3be709b4378e313d19e368363bad"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 232967,
+   "end": 233743,
+   "text_sha256": "6df11d8e52ef9d0459bed36eaeef78ba2cc0cd248745b7c1eab5395c32c1befe"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 9264,
+   "end": 9991,
+   "text_sha256": "8d3dc97239c72d7d4b38830137857e380bc376b48bff3fe6e8a38a1706c74005"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/procedure_tools.py",
+   "start": 8437,
+   "end": 9228,
+   "text_sha256": "5ac831bb0eca08462d804b40220ecad2ffce15d84151369408296396e2fe2e70"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/capability_registry.yaml",
+   "start": 4597,
+   "end": 5389,
+   "text_sha256": "4dbaf334cbac5ef3e83a6df678e078cda8cd26a6b317d2c62498dcf54c31fc50"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 66337,
+   "end": 67062,
+   "text_sha256": "9274daa00df0ced2b42a2e10dfbd3cdbe67afb2485da79bbce7ea1e613edbee7"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/gpu-candidates-surface-qwen38-update.md",
+   "start": 8048,
+   "end": 8779,
+   "text_sha256": "d8ddc5b0c4c974ec1b10ac2cd12a79b9af03f76bfe33f48031e1687c3d766906"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 12353,
+   "end": 13104,
+   "text_sha256": "a54e1385c2b9578110e7f118872d0899270d3d696e406d46e99e39f420b32979"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 791,
+   "end": 1577,
+   "text_sha256": "31e060b7da89b0a73f7630faa1d44b095442f9b01f23741eb3e3e912c359a7bf"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 3170,
+   "end": 3915,
+   "text_sha256": "e080d4ef93ed04d93d89ab911ef5ef4eea1eead342dab11ac3da52f031ebda03"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 13804,
+   "end": 14571,
+   "text_sha256": "cce102f4c0faae65b5b086fab747e9fec040c110023f6a9ded421b5554c587c7"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 216954,
+   "end": 217680,
+   "text_sha256": "9e6509a22cf8342894133525397bcc8739838f3c4573db084e4fa0c1a6460c73"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/_fence_rules.py",
+   "start": 3127,
+   "end": 3903,
+   "text_sha256": "1a3208b7066629296d642c8016e04960500f9ef40e029b916444959b4a1713f3"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/objective-task-rate-goodput.md",
+   "start": 32607,
+   "end": 32917,
+   "text_sha256": "4a917258f8f7ead0af29223ffebb1af503b9d6267883ee2d5e22ccb6f34e7bd9"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 7657,
+   "end": 8394,
+   "text_sha256": "04b9798a6fd93f64353181e9018854d4e672117866db80f4d047226c6fc5318a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 52799,
+   "end": 53517,
+   "text_sha256": "8ac24753418293c7d8a0430c009aa958b2727ded34a121d7bfa314da609fd8bb"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/accepted_gaps.yaml",
+   "start": 2293,
+   "end": 3048,
+   "text_sha256": "1981be9c8f2dc4a617a0ebb14e6bee03f88df93facfbbaae2400c71670adc540"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 12287,
+   "end": 13061,
+   "text_sha256": "8f3a2877e3969f85262a8e63198b3fafd1221f9991325c7ab10cd54c47f1bfda"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 3161,
+   "end": 3953,
+   "text_sha256": "bfa7a191bdc1658c6eb2db6c69e4c329bcefeb21df05c9fc6549a3c58eae4c51"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 151782,
+   "end": 152522,
+   "text_sha256": "fd084085a3fc9032ca0daa0765d5000941b10d9140b0851a72d04b22106dc43c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 11456,
+   "end": 12251,
+   "text_sha256": "6c039d4c37bb4de16302cfdff530ac0c9eb6c474fda607cbfbaf3cd616fea91a"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 241329,
+   "end": 242075,
+   "text_sha256": "091d3c71f553dc1f4f5c7bd44e8ad4f593d2ec41e55cdbe3c3dca2352708776c"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 29562,
+   "end": 30074,
+   "text_sha256": "2fc94ade898b7459eeef27d2a41d8ab778c58238cfc260348132f9b6a6e9ea26"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/minddr-deep-research-mode.md",
+   "start": 14045,
+   "end": 14767,
+   "text_sha256": "4c010a9aafeabb29ea9b53af56a94d814a7648105adf034e1832ebaf83b51738"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/anomaly_signals.yaml",
+   "start": 1576,
+   "end": 2361,
+   "text_sha256": "2d0196b275ec72facf383af768727a73f52264d1794db03557d55ca02eedc8ab"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 3071,
+   "end": 3798,
+   "text_sha256": "5ecac1f9980caa88c7f171aa5cad74e948a6e98d307ac5958fc52ace5cc53db8"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 175978,
+   "end": 176685,
+   "text_sha256": "2743546e84c8f81a15f0d541da444f00dc0e60e651291b09481a36269804ff00"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/classifier_config.yaml",
+   "start": 7795,
+   "end": 8565,
+   "text_sha256": "231c4b595bd1c20d686f0ac4f6efc03bf4531f7c65d27f5e149ca9d97f0a599b"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/CURRENT-CAMPAIGN.md",
+   "start": 16575,
+   "end": 17321,
+   "text_sha256": "46ec7708da50df4646466c7ee5aea46444ed34b6b4d7cc46fa71eb9d3e630922"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 0,
+   "end": 792,
+   "text_sha256": "75c941e2d237043730693724cb58b25779a01b66a58ddbe5656278fbe5cd6db5"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/autopilot_baseline.yaml",
+   "start": 1518,
+   "end": 2302,
+   "text_sha256": "f1a90c990e33551289c30ee928225b608c0124c5082f0875f7551ea5898d99e7"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/context_search.py",
+   "start": 15378,
+   "end": 16165,
+   "text_sha256": "647c5ae0bc4057f95f97eaf95bd11319253e148f5e92c5093b0bfa9b3b852deb"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/orchestration/cloud_judges.yaml",
+   "start": 0,
+   "end": 725,
+   "text_sha256": "146f40db7300dbf4fac1b2c5da9c159380b6ad1b0dcd3759bea99ac2dcb3c552"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/file_exploration.py",
+   "start": 6245,
+   "end": 7010,
+   "text_sha256": "e7ddba2b4d58620900635b959a49d07ada2dd597b031785dec20fde081cb3c22"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/capability-registry-and-promotion.md",
+   "start": 17025,
+   "end": 17825,
+   "text_sha256": "eab3680caf7785ef73be29c6e393cfd4e664d94e7cac74fe863246c309f80147"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/combined_ops.py",
+   "start": 1545,
+   "end": 2323,
+   "text_sha256": "1759d5191debc714bccbef689c23d1e65168b51717eebd19d95408a5612bfe3d"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/reasoning-compression.md",
+   "start": 94972,
+   "end": 95751,
+   "text_sha256": "90cbe667cd85d01b37b50650c1c2e6fa1b63136be22f0dd3defc948068ba2bbb"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-root-20261020/handoffs/active/autokernel-rebuild-program.md",
+   "start": 126818,
+   "end": 127548,
+   "text_sha256": "8fa6fc6d0178828526c612ffa9c325cdcfd5e5488f130eff4cdab3b6fd4222df"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/safe_pickle.py",
+   "start": 15380,
+   "end": 16121,
+   "text_sha256": "be0c24c1211bd9a690856ceb88da5343daf0efbbf61688510208364a7cd4870e"
+  },
+  {
+   "section": "/mnt/raid0/llm/worktrees/repl-emb-25-orch-20261020/src/repl_environment/exploration_core.py",
+   "start": 7807,
+   "end": 8536,
+   "text_sha256": "9bf78c32053d7f845765102177b68b64970369e7b844edd2264443dc242acd39"
+  }
+ ],
+ "queries": [
+  {
+   "id": "proxy-000",
+   "text": "f\"blocked global during unpickle: {module}.{name} is not allowlisted\"",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-001",
+   "text": "return \"[ERROR: Combined ops disabled. Set REPL_COMBINED_OPS=1 to enable.]\"",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-002",
+   "text": "9's first \"37/37\" flaky-green. C10, C14 and C16 also closed 2026-07-29 (`bf1adb94`, `42884724`, `536839d3`): the standalone adapter suite is collected and asserting, index/pane endpoints resolve with ",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-003",
+   "text": "use_memrl: true  # MemRL-backed specialist routing",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-004",
+   "text": "# AutoPilot frozen baseline metrics.",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-005",
+   "text": "# Capability Registry \u2014 schema scaffold",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-006",
+   "text": "worthless on production anyway. (c) **Launch run 24 as-is** \u2014 the confirm gate protects",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-007",
+   "text": "wrapped that table in capability-registry markers and recorded the check command. Orchestrator W3 follow-up adds a",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-008",
+   "text": "# Current campaign state",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-009",
+   "text": "- **P0 DONE** (root `7f86e383`) \u00b7 **P1 DONE** \u00b7 **P2 DONE** incl. the measured A/A floor \u00b7",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-010",
+   "text": "port-bound tests, the `test_campaign_footprint.py` / `test_program_md.py` set) with",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-011",
+   "text": "category: empty_output",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-012",
+   "text": "build at `jobs=64` at once. Third finding, ours alone: **`serving.py` pins nothing** \u2014 `llama-server`",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-013",
+   "text": "# printed on every gate run with its owner and expiry.",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-014",
+   "text": ">   (~8.5 h, every CPU region lock, blocks :8070). Verify live state before relying on this line.",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-015",
+   "text": "T172927Z.log`, wrapper PID `1091014`, Python PID `1091018`, `--max-trials 930`; durable rows are recorded through trial `902`, and the current heartbeat shows trial `903` active in `dispatch_action`. ",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-016",
+   "text": "- Key technique: Learnable super token at prefix level identifies unproductive branches from initial errors; first systematic taxonomy of path pruning (internal/external signal \u00d7 learnable/heuristic).",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-017",
+   "text": "2026-06-13 hold named. The threshold was never met and never waived \u2014 it was overtaken. Any",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-018",
+   "text": "is a memory-corruption primitive in its constructor form: ``ndarray(shape,",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-019",
+   "text": "def _batch_web_search(self, queries: list[str], max_results: int = 3) -> str:",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-020",
+   "text": "bounded (~one tail cycle). Re-raise only if a future stop shows the tail entry mattering.",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-021",
+   "text": "\"\"\"Contextual suggestions appended to tool output (S3a).",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-022",
+   "text": "if cur_start is not None and line_end - cur_start > max_chars:",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-023",
+   "text": "# Complementary to conformal prediction (which gates on output uncertainty).",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-024",
+   "text": "- **Priors 2026-09-14 (not gating):** (a) once the edit site is known, signature/skeleton renderings of the rest of the edited files bought no resolve signal over name placeholders (23/70 vs 25/70, Mc",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-025",
+   "text": "return \"knowledge_root\"",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-026",
+   "text": "**Why it works**: short-m@k paper shows shorter reasoning chains are up to 34.5% more accurate within the same question. Correct reasoning is concise; incorrect reasoning wanders (95-188 backtracks fo",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-027",
+   "text": "_checkpoint_create, _checkpoint_restore, _registry_lookup, _registry_update,",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-028",
+   "text": "Under W8 pressure the prompt menu should no longer expose `seed_batch`,",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-029",
+   "text": "self._track_research(\"peek\", f\"n={n}\" + (f\", offset={offset}\" if offset else \"\"), result)",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-030",
+   "text": "surface: chat_template_kwargs.enable_thinking",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-031",
+   "text": "2026-10-06 source boundary: DCP9A-USAGE supplies a fresh explicitly bounded cohort; historical61-transcript figures above are not current-cohort evidence. Definition1 remains not evaluable because ord",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-032",
+   "text": "- **GitNexus** (DCP-3) and **ColGREP** (DCP-1/2 discovery).",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-033",
+   "text": "(`ce6e4bea`). Operator: *\"the draw should be somewhat randomized.\"* Rotating PER TRIAL",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-034",
+   "text": "values: [true, false]",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-035",
+   "text": "based on autopilot log analysis showing repeated sequential web_search",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-036",
+   "text": "vectors: Any  # numpy.ndarray | None",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-037",
+   "text": "_validate_file_path: Callable[[str], tuple[bool, str | None]] \u2014 path validation method",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-038",
+   "text": "#: request. An attempt that finished at least one batch is progress and never counts.",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-039",
+   "text": "_scope_denial = _scope_refusal('checkpoint_create')",
+   "code_intent": true
+  },
+  {
+   "id": "proxy-040",
+   "text": "# The gap check now asks \"is there evidence?\" rather than \"is there a scalar?\",",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-041",
+   "text": "- [x] **Action 13: Model-tier-differentiated conciseness** \u2014 \u2705 2026-04-09. Audit confirmed existing tier differentiation is correct: architect already has aggressive \"<150 tokens\" + \"maximally concise",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-042",
+   "text": "--no-kv-unified, taskset) \u2014 attribution requires one factor at a time. If config moves",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-043",
+   "text": "- [x] **R24-5 \u2014 fix or delete `gates.deterministic`.** \u2705 2026-09-15 \u2014 `loop/gates.py:127-150` adds each run's RETURN CODE to a set",
+   "code_intent": false
+  },
+  {
+   "id": "proxy-044",
+   "text": "- **Reported results**: K&K 0.802/0.880, MATH500 0.598/0.636, LitBench 8.80/8.40 (SD/FM). Replacing text critiques with binary correctness collapses gains \u2014 semantically-rich text feedback is load-bea",
+   "code_intent": false
+  }
+ ],
+ "query_set_kind": "proxy-first-line",
+ "query_set_is_ufh07": false
+}

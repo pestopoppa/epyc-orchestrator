@@ -1,0 +1,23 @@
+{
+  "lane": "gguf-q8_0",
+  "arm_id": "eg2-gguf-q8_0-768",
+  "index_identity": {
+    "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
+    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+    "dim": 768,
+    "dtype": "q8_0",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "runtime": "llama-server-experimental",
+    "digest": "ec753cd1b68706ab6a253f2f18f85a9de92eeaa68b32a475af3df9c686b7aac6"
+  },
+  "load_s": 0.0,
+  "encode_s": 19.27,
+  "rss_after_load_mb": 34.4,
+  "rss_after_encode_mb": 46.0,
+  "peak_rss_mb": 48.1,
+  "threads": 4,
+  "max_seq_length": null,
+  "n_docs": 211,
+  "n_queries": 45,
+  "raw_dim": 768
+}

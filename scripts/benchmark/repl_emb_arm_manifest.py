@@ -153,6 +153,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "numpy",
             "safetensors",
             "tokenizers",
+            "pillow",
+            "torchvision",
         )
     }
     lock = lock_pins(REPO_ROOT / "uv.lock")

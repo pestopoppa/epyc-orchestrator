@@ -1,0 +1,23 @@
+{
+  "lane": "st-bf16",
+  "arm_id": "eg2-st-bf16-768",
+  "index_identity": {
+    "model": "google/embeddinggemma-2",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "dim": 768,
+    "dtype": "bf16",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "runtime": "sentence-transformers/transformers/torch-cpu",
+    "digest": "17fa8195fdff7c4f9bebfd5a191d8430c5ed1d9c34570bf96b9ff349c0f438d3"
+  },
+  "load_s": 4.37,
+  "encode_s": 20.8,
+  "rss_after_load_mb": 760.8,
+  "rss_after_encode_mb": 1293.7,
+  "peak_rss_mb": 2552.7,
+  "threads": 8,
+  "max_seq_length": 1000000000000000019884624838656,
+  "n_docs": 211,
+  "n_queries": 45,
+  "raw_dim": 768
+}

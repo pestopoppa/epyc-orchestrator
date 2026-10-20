@@ -85,19 +85,19 @@
    "adapter": "LlamaServerAdapter",
    "arm_id": "eg2-gguf-bf16-768",
    "code_query_prompt": "task: code retrieval | query: ",
-   "dense_embedder_model_id": "eg2-gguf-bf16-768#d059eda6cb41",
+   "dense_embedder_model_id": "eg2-gguf-bf16-768#8d88a0b65bea",
    "dim": 768,
    "doc_prompt": "title: none | text: ",
    "dtype": "bf16",
    "family": "gguf",
    "index_identity": {
-    "digest": "d059eda6cb41c675ce6b61344be8b11433d3957bf6f36fa7b75ad8f141ec6580",
+    "digest": "8d88a0b65bea85610801cc7ea22a6c092bd50f2395484dd4f7f5984fd51bcef7",
     "dim": 768,
     "dtype": "bf16",
     "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
     "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
     "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+    "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
    },
    "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
    "native_dim": 768,
@@ -106,25 +106,25 @@
    "pooling": "mean",
    "query_prompt": "task: search result | query: ",
    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
   },
   {
    "adapter": "LlamaServerAdapter",
    "arm_id": "eg2-gguf-bf16-256",
    "code_query_prompt": "task: code retrieval | query: ",
-   "dense_embedder_model_id": "eg2-gguf-bf16-256#e711408cd51f",
+   "dense_embedder_model_id": "eg2-gguf-bf16-256#61d01ad12113",
    "dim": 256,
    "doc_prompt": "title: none | text: ",
    "dtype": "bf16",
    "family": "gguf",
    "index_identity": {
-    "digest": "e711408cd51fae4f831b704135bba1c8974d92fe202d1fee5509bec89a64a92e",
+    "digest": "61d01ad1211349156fc2a03d14609c78f1a78f8deb436ccb697c02aef5994264",
     "dim": 256,
     "dtype": "bf16",
     "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
     "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
     "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+    "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
    },
    "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
    "native_dim": 768,
@@ -133,25 +133,25 @@
    "pooling": "mean",
    "query_prompt": "task: search result | query: ",
    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
   },
   {
    "adapter": "LlamaServerAdapter",
    "arm_id": "eg2-gguf-q8_0-768",
    "code_query_prompt": "task: code retrieval | query: ",
-   "dense_embedder_model_id": "eg2-gguf-q8_0-768#93f97e45e637",
+   "dense_embedder_model_id": "eg2-gguf-q8_0-768#d0119296b1ff",
    "dim": 768,
    "doc_prompt": "title: none | text: ",
    "dtype": "q8_0",
    "family": "gguf",
    "index_identity": {
-    "digest": "93f97e45e637621dba8e56c333b9c68ba58924494b4c574dacc5b5a5d8772830",
+    "digest": "d0119296b1ffacf1eaaa665cc870b4b9d9038ec3c5b158fee436cfcc9ffd45ec",
     "dim": 768,
     "dtype": "q8_0",
     "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
     "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
     "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+    "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
    },
    "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
    "native_dim": 768,
@@ -160,25 +160,25 @@
    "pooling": "mean",
    "query_prompt": "task: search result | query: ",
    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
   },
   {
    "adapter": "LlamaServerAdapter",
    "arm_id": "eg2-gguf-q8_0-256",
    "code_query_prompt": "task: code retrieval | query: ",
-   "dense_embedder_model_id": "eg2-gguf-q8_0-256#72f3c552aae6",
+   "dense_embedder_model_id": "eg2-gguf-q8_0-256#83dd93f37973",
    "dim": 256,
    "doc_prompt": "title: none | text: ",
    "dtype": "q8_0",
    "family": "gguf",
    "index_identity": {
-    "digest": "72f3c552aae63c545777409f70ccac006e1f150c915861dc359386ea94a9cdc1",
+    "digest": "83dd93f379731fa3baaac47022530ac364f328f7bc8f5cd377a541d531d16f85",
     "dim": 256,
     "dtype": "q8_0",
     "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
     "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
     "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+    "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
    },
    "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
    "native_dim": 768,
@@ -187,7 +187,7 @@
    "pooling": "mean",
    "query_prompt": "task: search result | query: ",
    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
-   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   "runtime": "llama-server b10305-966c24d6e CPU-only (experimental/gemma-embedding2-on-v10-20261020, build-cpu, GGML_NATIVE)"
   },
   {
    "adapter": "Model2VecAdapter",
@@ -249,10 +249,12 @@
   "isolated_venv": {
    "model2vec": "0.10.0",
    "numpy": "2.5.2",
+   "pillow": "13.0.0",
    "safetensors": "0.8.0",
    "sentence-transformers": "6.1.0",
    "tokenizers": "0.23.3",
    "torch": "2.14.1+cpu",
+   "torchvision": "0.29.1+cpu",
    "transformers": "5.20.1"
   },
   "lock_gap": {
@@ -377,8 +379,8 @@
    "pytest-dev/pytest": "6e7dc8bac831cd8cf7a53b08efa366bd84f0c0fe"
   }
  },
- "manifest_sha256": "5360026d9430a8f4aa73f1ff7a5beab473b6d977d0084a4e0b50206ea68e5286",
- "orchestrator_commit": "9fbcbcf3+e24b5042",
+ "manifest_sha256": "1493832e4e8667b73afc162da0f66c4bfdd141887b6c6de2a444ca3fa846fb84",
+ "orchestrator_commit": "963c4874+",
  "parity_gate": {
   "arms_module_sha256": "efa3eb19253c30bc3782019e759395154bb9421eb907dedd2d4dc2d9a738c2ee",
   "predeclared": {

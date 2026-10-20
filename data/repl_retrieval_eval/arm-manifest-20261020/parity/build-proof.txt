@@ -1,0 +1,52 @@
+== commits
+966c24d6e 2026-10-20 17:11:05 +0000 experimental: port gemma-embedding2 to v10 APIs (inline load_swa_pattern body; build
+d871e67e0 2026-10-20 16:39:33 +0000 experimental: apply C++ model part of upstream PR #30054 (gemma-embedding2) onto pro
+ffc1bac82 2026-09-21 14:36:50 +0000 graph: emit the fused MoE top-k op only on CPU-only graphs (fixes -30% on every MoE 
+== binaries (mtime)
+2026-10-20 18:09:46.242140421 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-base.so
+2026-10-20 18:09:46.242140421 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-base.so.0
+2026-10-20 18:09:46.247140415 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-base.so.0.16.0
+2026-10-20 18:09:46.324140312 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-cpu.so
+2026-10-20 18:09:46.324140312 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-cpu.so.0
+2026-10-20 18:09:46.328140307 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-cpu.so.0.16.0
+2026-10-20 18:09:46.386140229 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml.so
+2026-10-20 18:09:46.386140229 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml.so.0
+2026-10-20 18:09:46.390304514 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml.so.0.16.0
+2026-10-20 18:09:50.415135048 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libllama.so
+2026-10-20 18:09:50.415135048 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libllama.so.0
+2026-10-20 18:09:50.420135042 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libllama.so.0.0.10305
+2026-10-20 18:10:25.684928737 /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/llama-server
+== commit date of HEAD: 2026-10-20 17:11:05 +0000
+== strings gemma-embedding2 / gemma-embedding
+34801:gemma-embedding
+34802:gemma-embedding2
+== version
+version: 10305 (966c24d6e)
+built with GNU 15.2.0 for Linux x86_64
+== linkage
+  OK   libmtmd.so.0                 -> /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libmtmd.so.0
+  OK   libllama.so.0                -> /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libllama.so.0
+  OK   libggml.so.0                 -> /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml.so.0
+  OK   libggml-base.so.0            -> /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-base.so.0
+  OK   libggml-cpu.so.0             -> /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin/libggml-cpu.so.0
+
+LD_LIBRARY_PATH order as the loader sees it:
+         1	/mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin
+
+PASS: all linked ggml libraries resolve inside /mnt/raid0/llm/worktrees/llama-gemma-embedding2-20261020/build-cpu/bin
+NOTE: ggml backends (ggml-hip, ggml-cpu-<arch>) are dlopened at RUNTIME and
+      are not covered by ldd. Confirm the intended device appears in the
+      program's own startup log (e.g. 'Device 0: AMD Instinct MI210') and
+      do not trust a 'use gpu = 1' flag alone — that flag reports what was
+      REQUESTED, not what was loaded.
+== also with env -u LD_LIBRARY_PATH
+      are not covered by ldd. Confirm the intended device appears in the
+      program's own startup log (e.g. 'Device 0: AMD Instinct MI210') and
+      do not trust a 'use gpu = 1' flag alone — that flag reports what was
+      REQUESTED, not what was loaded.
+== help flags
+-ub,   --ubatch-size N                  physical maximum batch size (default: 512)
+--pooling {none,mean,cls,last,rank}     pooling type for embeddings, use model default if unspecified
+-np,   --parallel N                     number of server slots (default: -1, -1 = auto)
+--embd-normalize N                      normalisation for embeddings (default: 2) (-1=none, 0=max absolute
+--embedding, --embeddings               restrict to only support embedding use case; use only with dedicated
