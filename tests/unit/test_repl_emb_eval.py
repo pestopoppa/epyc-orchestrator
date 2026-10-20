@@ -1432,6 +1432,7 @@ def test_isolated_environment_imports_only_numpy_and_the_shipped_modules():
     imports = set(re.findall(r"^(?:import|from) ([A-Za-z_][\w]*)", src, flags=re.M))
     allowed = {
         "argparse",
+        "collections",
         "contextlib",
         "dataclasses",
         "hashlib",
@@ -1454,3 +1455,473 @@ def test_isolated_environment_imports_only_numpy_and_the_shipped_modules():
     }
     assert imports <= allowed, imports - allowed
     assert os.path.exists(ev.REPO_ROOT / "src" / "trace" / "navigation.py")
+
+
+# ───────────────────────────────────────────────────────────────────────────── strata, multi-source freeze
+
+
+def _spill_entry(tmp_path, name):
+    return ev._write_spill_dir(tmp_path / name)
+
+
+def test_trace_group_is_driven_by_the_row_stratum():
+    assert ev.trace_group({"stratum": "agent_nav"}) == ("agent_nav", "stratum")
+    assert ev.trace_group({"stratum": "synthetic_spill"}) == ("synthetic_spill", "stratum")
+    assert ev.trace_group({"stratum": "spill_follow"}) == ("spill_follow", "stratum")
+    assert ev.trace_group({"stratum": "trivial_head"}) == ("trivial_head", "stratum")
+    # the legacy single-source layout: an unknown label (or none) is spill_follow, and says so
+    assert ev.trace_group({"stratum": "spill"}) == ("spill_follow", "legacy_default")
+    assert ev.trace_group({}) == ("spill_follow", "legacy_default")
+
+
+def test_label_queries_keeps_the_three_trace_strata_apart():
+    def row(i, stratum, **kw):
+        return {
+            "id": i,
+            "text": "plain words",
+            "stratum": stratum,
+            "bundle_id": "b",
+            "gold": {"path": "/s/1.txt", "ranges": [[1, 4]]},
+            **kw,
+        }
+
+    probe = [
+        {
+            "id": "p1",
+            "text": "t",
+            "repo": "mwaskom/seaborn",
+            "gold": {"path": "a.py", "start_line": 1, "end_line": 2},
+        }
+    ]
+    trace = [
+        row("n1", "agent_nav", intent_source="assistant_text"),
+        row("n2", "agent_nav", intent_source="bash_description"),
+        row("y1", "synthetic_spill", writer="A"),
+        row("y2", "synthetic_spill", writer="B"),
+        row("f1", "spill_follow"),
+        row("u1", "something_else"),
+    ]
+    trivial = [row("h1", "agent_nav", intent_source="assistant_text")]
+    rows, summary = ev.label_queries(probe, trace, trivial)
+    group = {r["id"]: r["group"] for r in rows}
+    assert group == {
+        "p1": "probe45",
+        "n1": "agent_nav",
+        "n2": "agent_nav",
+        "y1": "synthetic_spill",
+        "y2": "synthetic_spill",
+        "f1": "spill_follow",
+        "u1": "spill_follow",
+        "h1": "trivial_head",
+    }
+    src = {r["id"]: r["group_source"] for r in rows}
+    assert (
+        src["u1"] == "legacy_default"
+        and src["n1"] == "stratum"
+        and src["h1"] == "file"
+        and src["p1"] == "file"
+    )
+    assert [r["id"] for r in rows] == [
+        "p1",
+        "n1",
+        "n2",
+        "y1",
+        "y2",
+        "f1",
+        "u1",
+        "h1",
+    ]  # file order, trivial last
+    assert (
+        rows[3]["stratum"] == "synthetic_spill" and rows[3]["writer"] == "A"
+    )  # pass-through fields survive
+    assert rows[-1]["stratum"] == "agent_nav"  # the raw stratum is kept on a trivial-head row
+    assert (
+        summary["by_group"]["agent_nav"]["n"] == 2 and summary["by_group"]["trivial_head"]["n"] == 1
+    )
+    assert summary["by_writer"] == {"A": 1, "B": 1}
+    assert summary["by_intent_source"] == {"assistant_text": 2, "bash_description": 1}
+    assert summary["by_group_source"] == {"file": 2, "stratum": 5, "legacy_default": 1}
+
+
+def test_load_bundles_json_merges_files_and_rejects_clashing_ids(tmp_path):
+    e1, e2, e3 = (
+        {
+            "files": [{"path": f"/x/{n}", "sha256": "0" * 64, "bytes": 1, "chunks": 1}],
+            "total_chunks": 1,
+        }
+        for n in "abc"
+    )
+    a, b, c, empty, wrapped = (
+        tmp_path / n for n in ("a.json", "b.json", "c.json", "empty.json", "w.json")
+    )
+    a.write_text(json.dumps({"b1": e1}))
+    b.write_text(json.dumps({"b2": e2, "b1": e1}))  # an identical repeat is fine
+    c.write_text(json.dumps({"b1": e3}))
+    empty.write_text("")  # the miner's empty trace/ source
+    wrapped.write_text(json.dumps({"bundles": {"b4": e3}}))
+    assert ev.load_bundles_json([a, b, empty, wrapped]) == {"b1": e1, "b2": e2, "b4": e3}
+    assert ev.load_bundles_json(a) == {"b1": e1} and ev.load_bundles_json(str(a)) == {"b1": e1}
+    assert (
+        ev.load_bundles_json(None) == {}
+        and ev.load_bundles_json([]) == {}
+        and ev.load_bundles_json([empty]) == {}
+    )
+    with pytest.raises(ValueError, match="different content"):
+        ev.load_bundles_json([a, c])
+
+
+def _freeze_multi(inp, out, extra=()):
+    argv = [
+        "freeze",
+        "--out",
+        str(out),
+        "--probe45",
+        str(inp["root"] / "probe45.jsonl"),
+        "--rules-md",
+        str(inp["root"] / "RULES.md"),
+        "--arm-manifest",
+        str(inp["root"] / "arm_manifest.json"),
+        "--probe-checkouts",
+        str(inp["checkouts"]),
+        "--colgrep-bin",
+        str(inp["root"] / "none"),
+        *extra,
+    ]
+    argv += [x for f in inp["trace_queries"] for x in ("--trace-queries", str(f))]
+    argv += [x for f in inp["trivial_queries"] for x in ("--trivial-queries", str(f))]
+    argv += [x for f in inp["bundles_json"] for x in ("--bundles-json", str(f))]
+    return ev.cmd_freeze(ev.build_parser().parse_args(argv), head_fn=FAKE_HEAD)
+
+
+def test_freeze_with_several_trace_sources_covers_every_file_given(tmp_path, capsys):
+    inp = ev.make_synthetic_inputs(tmp_path / "in", multi=True)
+    out = tmp_path / "out"
+    assert _freeze_multi(inp, out) == 0
+    covered = {
+        Path(line.split("  ", 1)[1])
+        for line in (out / "FROZEN-AT-LAUNCH.sha256").read_text().splitlines()
+    }
+    given = [*inp["trace_queries"], *inp["trivial_queries"], *inp["bundles_json"]]
+    assert len(given) == 5
+    for f in given:
+        assert f.resolve() in covered, f
+    assert (
+        inp["root"] / "queries-trace.jsonl"
+    ).resolve() not in covered  # the legacy file was not given
+    lab = ev.read_jsonl(out / "queries-labelled.jsonl")
+    assert _count_by(lab, "group") == {
+        "probe45": 6,
+        "agent_nav": 6,
+        "synthetic_spill": 6,
+        "trivial_head": 3,
+    }
+    assert {r["bundle"] for r in lab if r["group"] == "synthetic_spill"} == {"syn-b1"}
+    assert {r["writer"] for r in lab if r["group"] == "synthetic_spill"} == {"A", "B"}
+    inputs = json.loads((out / "inputs.json").read_text())
+    assert (
+        len(inputs["trace_queries"]) == 2
+        and len(inputs["bundles_json"]) == 2
+        and len(inputs["trivial_queries"]) == 1
+    )
+    assert ev.verify_freeze(out) == []
+    # changing ANY of the files given breaks the freeze
+    for f in given:
+        original = f.read_text()
+        f.write_text(original + " ")
+        assert any(f.name in p for p in ev.verify_freeze(out)), f
+        f.write_text(original)
+    assert ev.verify_freeze(out) == []
+    assert "by_intent_source" in capsys.readouterr().out
+
+
+def _count_by(rows, key):
+    out = {}
+    for r in rows:
+        out[r[key]] = out.get(r[key], 0) + 1
+    return out
+
+
+def test_freeze_rejects_a_bundle_id_clash_with_different_content_and_allows_none_given(tmp_path):
+    inp = ev.make_synthetic_inputs(tmp_path / "in", multi=True)
+    clash = tmp_path / "clash.json"
+    data = json.loads(inp["bundles_json"][0].read_text())
+    ((bid, entry),) = data.items()
+    entry["total_chunks"] = 99
+    clash.write_text(json.dumps({bid: entry}))
+    bad = dict(inp, bundles_json=[*inp["bundles_json"], clash])
+    with pytest.raises(ValueError, match="different content"):
+        _freeze_multi(bad, tmp_path / "out1")
+    # an identical repeat of a file is accepted
+    same = dict(inp, bundles_json=[*inp["bundles_json"], inp["bundles_json"][0]])
+    assert _freeze_multi(same, tmp_path / "out2") == 0
+    # only probe45 (no trace source at all) is a legal, tiny, UNDERPOWERED set
+    only = dict(inp, trace_queries=[], trivial_queries=[], bundles_json=[])
+    assert _freeze_multi(only, tmp_path / "out3") == 0
+    assert {r["group"] for r in ev.read_jsonl(tmp_path / "out3" / "queries-labelled.jsonl")} == {
+        "probe45"
+    }
+
+
+def test_multi_source_dry_run_runs_every_stage_and_prints_both_decision_sets(tmp_path, capsys):
+    assert ev.main(["--dry-run", "--multi-source", "--out", str(tmp_path)]) == 0
+    printed = capsys.readouterr().out
+    assert "KILL RULE (pooled, with synthetic): UNDERPOWERED/KILL (n=18)" in printed
+    assert "KILL RULE (pooled, without synthetic): UNDERPOWERED/KILL (n=12)" in printed
+    assert "SELECTION (pooled, with synthetic): not applicable" in printed
+    out = tmp_path / "out"
+    a = json.loads((out / "analysis.json").read_text())
+    assert (
+        a["synthetic_present"] and a["n_deciding"] == 18 and a["n_deciding_without_synthetic"] == 12
+    )
+    assert a["n_by_group"] == {
+        "probe45": 6,
+        "agent_nav": 6,
+        "synthetic_spill": 6,
+        "trivial_head": 3,
+    }
+    # exact per-stratum recall@1 of the synthetic world: lexical 4/6, dense 4/6, hybrid 5/6 in EVERY stratum
+    for stratum in ("probe45", "agent_nav", "synthetic_spill"):
+        assert a["recall"]["bm25"][stratum]["1"]["recall"] == pytest.approx(4 / 6)
+        assert a["recall"]["bge-large.dense"][stratum]["1"]["recall"] == pytest.approx(4 / 6)
+        assert a["recall"]["bge-large.hybrid"][stratum]["1"]["recall"] == pytest.approx(5 / 6)
+    w = a["recall_by_writer"]["bge-large.hybrid"]
+    assert w["writer=A"]["1"]["n"] == 3 and w["writer=B"]["1"]["n"] == 3
+    # synthetic queries 1,3,5 have writer A (hybrid hits all three), 2,4,6 writer B (q4 is unanswerable)
+    assert w["writer=A"]["1"]["recall"] == 1.0 and w["writer=B"]["1"]["recall"] == pytest.approx(
+        2 / 3
+    )
+    assert set(a["leakage_cut_intent_source"]["values"]) == {"assistant_text", "bash_description"}
+    assert a["trivial_head"]["bm25"]["n"] == 3
+    assert "colgrep" not in a["variants"]  # the dry run only prints the ColGREP commands ...
+    assert printed.count(" search ") == 6  # ... for the probe45 queries alone
+    md = (out / "analysis.md").read_text()
+    assert ev.BIAS_NOTE in md and "# Decision set: pooled, with synthetic" in md
+    assert "# Decision set: pooled, without synthetic" in md
+    assert (out / "perquery-bge-large.hybrid.jsonl").exists()
+    rows = ev.ResultStore(out).rows("bge-large.hybrid")
+    assert {q for q in rows if q.startswith("y-")} == {f"y-q{i}" for i in range(1, 7)}
+    assert {q for q in rows if q.startswith("th-")} == {
+        "th-q1",
+        "th-q2",
+        "th-q3",
+    }  # trivial head WAS run
+
+
+# ───────────────────────────────────────────────────────────────────────────── two decision sets
+
+
+def _write_strata(out, spec, leak=lambda i: None):
+    """spec = [(group, n), ...] in row order; writer A/B on synthetic_spill, intent_source on agent_nav."""
+    out.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for group, n in spec:
+        for i in range(n):
+            r = {
+                "id": f"{group}-{i}",
+                "group": group,
+                "scored": True,
+                "code_intent": False,
+                "code_intent_source": "input",
+                "bundle": "b",
+                "text": "t",
+                "stratum": "intake1357_probe45" if group == "probe45" else group,
+                "gold_spans": [["f.py", 10, 20]],
+                "answer_named_verbatim": leak(len(rows)),
+            }
+            if group == "synthetic_spill":
+                r["writer"] = "AB"[i % 2]
+            if group == "agent_nav":
+                r["intent_source"] = ("assistant_text", "bash_description")[i % 2]
+            rows.append(r)
+    (out / "queries-labelled.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return rows
+
+
+def _lines(res):
+    return res["verdict_lines"]
+
+
+def test_with_synthetic_passes_while_without_synthetic_is_underpowered(tmp_path):
+    out = tmp_path / "s1"
+    rows = _write_strata(out, [("probe45", 45), ("agent_nav", 40), ("synthetic_spill", 60)])
+    assert len(rows) == 145
+    _write_variant(out, rows, "bm25", set(range(0, 60)))
+    _write_variant(out, rows, "grep", set(range(0, 40)))
+    _write_variant(out, rows, "bge-large.hybrid", set(range(0, 50)) | set(range(60, 95)))
+    _write_variant(out, rows, "granite-97m-r2.hybrid", set(range(0, 55)))
+    res = ev.analyze(out)
+    assert _lines(res) == [
+        "KILL RULE (pooled, with synthetic): PASS (n=145)",
+        "KILL RULE (pooled, without synthetic): UNDERPOWERED/KILL (n=85)",
+        "SELECTION (pooled, with synthetic): pending speed block",
+        "SELECTION (pooled, without synthetic): not applicable (kill rule UNDERPOWERED/KILL)",
+    ]
+    ws, wo = res["decision_sets"]["with_synthetic"], res["decision_sets"]["without_synthetic"]
+    assert (ws["n_deciding"], wo["n_deciding"]) == (145, 85)
+    assert wo["kill_rule"]["underpowered"] is True and wo["kill_rule"]["n_min"] == 120
+    # the evidence for the small set is still reported (it just cannot pass)
+    assert wo["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(15 / 85)
+    assert ws["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(25 / 145)
+    # top-level legacy keys describe the with-synthetic (widest) set
+    assert (
+        res["kill_rule"] == ws["kill_rule"]
+        and res["n_deciding"] == 145
+        and res["n_deciding_without_synthetic"] == 85
+    )
+    assert (
+        res["recall"]["bm25"]["pooled"][5]["n"] == 145
+        and wo["recall"]["bm25"]["pooled"][5]["n"] == 85
+    )
+    assert set(res["recall"]["bm25"]) == {"probe45", "agent_nav", "synthetic_spill", "pooled"}
+    assert set(wo["recall"]["bm25"]) == {"probe45", "agent_nav", "pooled"}
+    assert res["n_by_group"] == {"probe45": 45, "agent_nav": 40, "synthetic_spill": 60}
+
+
+def test_a_synthetic_stratum_that_favours_lexical_flips_with_synthetic_to_fail(tmp_path):
+    out = tmp_path / "s2"
+    rows = _write_strata(out, [("probe45", 45), ("agent_nav", 90), ("synthetic_spill", 40)])
+    assert len(rows) == 175
+    synth = set(range(135, 175))
+    _write_variant(out, rows, "bm25", set(range(0, 50)) | synth)  # lexical aces the synthetic rows
+    _write_variant(out, rows, "grep", set(range(0, 30)))
+    _write_variant(
+        out, rows, "bge-large.hybrid", set(range(0, 40)) | set(range(50, 85)) | set(range(135, 155))
+    )
+    _write_variant(out, rows, "granite-97m-r2.hybrid", set(range(0, 45)))
+    res = ev.analyze(out)
+    assert _lines(res) == [
+        "KILL RULE (pooled, with synthetic): FAIL (n=175)",
+        "KILL RULE (pooled, without synthetic): PASS (n=135)",
+        "SELECTION (pooled, with synthetic): not applicable (kill rule FAIL)",
+        "SELECTION (pooled, without synthetic): pending speed block",
+    ]
+    ws, wo = res["decision_sets"]["with_synthetic"], res["decision_sets"]["without_synthetic"]
+    assert ws["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(5 / 175)
+    assert wo["kill_rule"]["registered"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(25 / 135)
+    assert wo["kill_rule"]["registered"]["bge-large.hybrid"]["ci_lo"] > 0
+    # per-stratum descriptive paired diff vs L: the synthetic stratum is where the hybrid loses
+    ps = ws["per_stratum_paired_diff"]
+    assert set(ps) == {"probe45", "agent_nav", "synthetic_spill"} and set(
+        wo["per_stratum_paired_diff"]
+    ) == {"probe45", "agent_nav"}
+    d = ps["synthetic_spill"]["diffs"]["bge-large.hybrid"]
+    assert ps["synthetic_spill"]["n"] == 40 and ps["synthetic_spill"]["vs"] == "bm25"
+    assert d["mean_diff"] == pytest.approx(-0.5) and d["descriptive"] is True
+    assert (
+        ps["agent_nav"]["n"] == 90 and "bm25" not in ps["agent_nav"]["diffs"]
+    )  # L is not diffed vs itself
+    assert ps["probe45"]["diffs"]["bge-large.hybrid"]["mean_diff"] == pytest.approx(-5 / 45)
+    # the answer is "the same arms, two sets": L is each set's own best lexical arm
+    assert ws["lexical_baseline"]["L"] == wo["lexical_baseline"]["L"] == "bm25"
+
+
+def test_recall_by_writer_and_the_intent_source_cut(tmp_path):
+    out = tmp_path / "s3"
+    rows = _write_strata(out, [("probe45", 45), ("agent_nav", 40), ("synthetic_spill", 40)])
+    index = {r["id"]: i for i, r in enumerate(rows)}
+    a_ids = {index[f"synthetic_spill-{i}"] for i in range(0, 40, 2)}
+    nav_text = {index[f"agent_nav-{i}"] for i in range(0, 40, 2)}
+    # bm25 hits every writer-A synthetic row and no writer-B row; agent_nav: only assistant_text rows
+    _write_variant(out, rows, "bm25", a_ids | nav_text)
+    _write_variant(out, rows, "grep", a_ids)
+    _write_variant(out, rows, "bge-large.hybrid", a_ids | nav_text | set(range(0, 20)))
+    res = ev.analyze(out)
+    w = res["recall_by_writer"]["bm25"]
+    assert set(w) == {"writer=A", "writer=B", "pooled"}
+    assert w["writer=A"][5]["recall"] == 1.0 and w["writer=B"][5]["recall"] == 0.0
+    assert w["writer=A"][5]["n"] == w["writer=B"][5]["n"] == 20 and w["pooled"][5]["n"] == 40
+    assert "probe45" not in json.dumps(w)  # the writer split is the synthetic stratum only
+    ic = res["leakage_cut_intent_source"]
+    assert (
+        ic["field"] == "intent_source" and ic["n_unlabelled"] == 45 + 40
+    )  # probe45 + synthetic carry none
+    assert set(ic["values"]) == {"assistant_text", "bash_description"}
+    assert ic["values"]["assistant_text"]["n"] == 20 and ic["values"]["bash_description"]["n"] == 20
+    assert ic["values"]["assistant_text"]["recall5"]["bm25"] == 1.0
+    assert ic["values"]["bash_description"]["recall5"]["bm25"] == 0.0
+    assert (
+        "kill_rule" in ic["values"]["assistant_text"]
+    )  # evidence on the subset (UNDERPOWERED at n=20)
+    assert ic["values"]["assistant_text"]["kill_rule"]["verdict"] == "UNDERPOWERED/KILL"
+    # the answer_named_verbatim cut is still produced, per decision set
+    assert "answer_named_verbatim=true" in res["leakage_cut"]["recall5"]
+    assert "leakage_cut" in res["decision_sets"]["without_synthetic"]
+
+
+def test_no_synthetic_rows_means_one_set_and_the_single_set_lines(tmp_path):
+    out, rows, n = _pass_world(tmp_path)
+    res = ev.analyze(out)
+    assert res["synthetic_present"] is False
+    assert res["decision_sets"]["without_synthetic"] == {"identical_to": "with_synthetic"}
+    assert res["verdict_lines"][0] == f"KILL RULE: PASS (n={n})"
+    assert not any("pooled" in line for line in res["verdict_lines"])
+
+
+def test_trivial_head_stays_outside_both_decision_sets(tmp_path):
+    out = tmp_path / "s4"
+    rows = _write_strata(
+        out, [("probe45", 45), ("agent_nav", 40), ("synthetic_spill", 40), ("trivial_head", 12)]
+    )
+    _write_variant(out, rows, "bm25", set(range(0, 125)))
+    _write_variant(out, rows, "grep", set(range(0, 20)))
+    res = ev.analyze(out)
+    assert res["n_deciding"] == 125 and res["n_deciding_without_synthetic"] == 85
+    assert (
+        res["trivial_head"]["bm25"]["n"] == 12 and res["trivial_head"]["bm25"]["recall"]["5"] == 0.0
+    )
+    for key in ("with_synthetic", "without_synthetic"):
+        assert "trivial_head" not in res["decision_sets"][key]["n_by_group"]
+
+
+def test_bias_note_is_verbatim_in_the_header_and_the_json(tmp_path):
+    verbatim = (
+        "Synthetic queries are LLM-written; they tend to share vocabulary with their source span, "
+        "which favours lexical arms. The synthetic stratum therefore makes the kill rule conservative "
+        "toward dense arms."
+    )
+    assert ev.BIAS_NOTE == verbatim
+    out = tmp_path / "s5"
+    rows = _write_strata(out, [("probe45", 20), ("synthetic_spill", 20)])
+    _write_variant(out, rows, "bm25", set(range(0, 10)))
+    _write_variant(out, rows, "grep", set(range(0, 5)))
+    assert ev.cmd_analyze(ev.build_parser().parse_args(["analyze", "--out", str(out)])) == 0
+    md = (out / "analysis.md").read_text()
+    head = md.splitlines()[:6]
+    assert verbatim in head  # a line of its own in the header, before any table
+    assert json.loads((out / "analysis.json").read_text())["bias_note"] == verbatim
+    assert ev.PREDECLARED["o_synthetic_bias"] == "(o) " + verbatim
+    # also present when there is no synthetic stratum at all (a fixed part of the header)
+    out2, _, _ = _pass_world(tmp_path / "again")
+    ev.cmd_analyze(ev.build_parser().parse_args(["analyze", "--out", str(out2)]))
+    assert verbatim in (out2 / "analysis.md").read_text().splitlines()[:6]
+
+
+def test_each_decision_set_gets_its_own_incompleteness_and_selection(tmp_path):
+    out = tmp_path / "s6"
+    rows = _write_strata(out, [("probe45", 45), ("agent_nav", 90), ("synthetic_spill", 40)])
+    _write_variant(out, rows, "bm25", set(range(0, 50)))
+    _write_variant(out, rows, "grep", set(range(0, 30)))
+    _write_variant(out, rows, "bge-large.hybrid", set(range(0, 40)) | set(range(50, 85)))
+    # the synthetic rows were never run for granite: incomplete WITH synthetic, complete WITHOUT it
+    _write_variant(
+        out, rows, "granite-97m-r2.hybrid", set(range(0, 100)), skip=set(range(135, 175))
+    )
+    speed = tmp_path / "speed.json"
+    speed.write_text(
+        json.dumps(
+            {
+                "bge-large": {"cpu_s_per_query": 0.5, "p95_ms": 9},
+                "granite-97m-r2": {"cpu_s_per_query": 0.1, "p95_ms": 5},
+            }
+        )
+    )
+    res = ev.analyze(out, speed)
+    ws, wo = res["decision_sets"]["with_synthetic"], res["decision_sets"]["without_synthetic"]
+    assert ws["completeness"]["granite-97m-r2.hybrid"]["n_missing"] == 40
+    assert wo["completeness"]["granite-97m-r2.hybrid"]["complete"] is True
+    assert "granite-97m-r2.hybrid" in wo["kill_rule"]["registered"]
+    assert "granite-97m-r2.hybrid" not in ws["kill_rule"]["registered"]
+    assert ws["kill_rule"]["missing_registered"] == ["granite-97m-r2.hybrid"]
+    # without synthetic, granite (100/135 hits) is the best and cheapest: selected
+    assert wo["selection"]["selected"] == "granite-97m-r2.hybrid"
+    assert _lines(res)[-1] == "SELECTION (pooled, without synthetic): granite-97m-r2.hybrid"

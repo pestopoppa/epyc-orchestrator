@@ -50,6 +50,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -75,8 +76,17 @@ KS = stats.KS
 OFFLINE_INDEX_TIMEOUT_S = 1e9
 W_DENSE, W_BM25, W_RRF_K = 0.75, 0.25, 60
 
-DECISION_GROUPS = ("probe45", "spill_follow")
+#: Trace strata the miners produce; a trace row's own ``stratum`` drives its group.
+TRACE_STRATA = ("agent_nav", "synthetic_spill", "spill_follow")
+SYNTHETIC_GROUP = "synthetic_spill"
+#: Decision groups, in report order. Every scored group except trivial_head is in the decision set.
+DECISION_GROUPS = ("probe45", *TRACE_STRATA)
 TRIVIAL_GROUP = "trivial_head"
+BIAS_NOTE = (
+    "Synthetic queries are LLM-written; they tend to share vocabulary with their source span, "
+    "which favours lexical arms. The synthetic stratum therefore makes the kill rule "
+    "conservative toward dense arms."
+)
 REGISTERED_DENSE = ("bge-large", "granite-97m-r2")
 REGISTERED_HYBRIDS = tuple(f"{a}.hybrid" for a in REGISTERED_DENSE)
 LEXICAL_ARMS = ("grep", "bm25")
@@ -144,9 +154,11 @@ EVAL_INTERPRETATIONS: dict[str, str] = {
         "dense-only and increments n_failed."
     ),
     "j_groups": (
-        "(j) Groups: probe45 rows = group probe45; every row of the miner's queries-trace.jsonl = "
-        "group spill_follow; an optional trivial-head file = group trivial_head, scored but reported "
-        "outside the decision. A row with no gold span is scored:false and excluded everywhere."
+        "(j) Groups: probe45 rows = group probe45; a trace row's group is its own `stratum` when that is "
+        "agent_nav, synthetic_spill or spill_follow (any other label = spill_follow, the legacy "
+        "default, recorded as group_source); the trivial-head files = group trivial_head, scored but "
+        "reported outside the decision. A row with no gold span is scored:false and excluded "
+        "everywhere."
     ),
     "k_offline_budget": (
         "(k) The shipped index-build budget is disabled for the offline eval (INDEX_TIMEOUT_MIN_S = "
@@ -159,9 +171,24 @@ EVAL_INTERPRETATIONS: dict[str, str] = {
         "rrf_fuse does; rrf_fuse itself is untouched."
     ),
     "m_colgrep": (
-        "(m) ColGREP is a registered arm on probe45 only (code-only, tree-sitter): spill-follow "
-        "bundles are .txt, so it is not_applicable there and is excluded from its n. It is reported "
+        "(m) ColGREP is a registered arm on probe45 only (code-only, tree-sitter): the trace "
+        "bundles (agent_nav, synthetic_spill, spill_follow) are .txt, so it is not_applicable there "
+        "and is excluded from its n. It is reported "
         "against L on probe45 and takes no part in the kill rule."
+    ),
+    "n_two_decision_sets": (
+        "(n) Two decision sets: 'pooled, with synthetic' = every scored non-trivial row; 'pooled, "
+        "without synthetic' = the same minus synthetic_spill. Each has its own L (the better of "
+        "grep / BM25 on that set), kill-rule evidence, n floor and verdict line; the any-passes "
+        "interpretation (b) applies within each set. With no synthetic_spill rows the two sets "
+        "coincide and the single-set lines (KILL RULE: ...) are printed. Per-stratum paired diffs "
+        "vs L, recall split by synthetic writer (A/B) and the answer_named_verbatim / "
+        "intent_source cuts are descriptive and never gate."
+    ),
+    "o_synthetic_bias": "(o) " + BIAS_NOTE,
+    "p_selection_per_set": (
+        "(p) Selection is evaluated per decision set, each gated by that set's own kill verdict; "
+        "the speed block is shared."
     ),
 }
 PREDECLARED: dict[str, str] = {**stats.PREDECLARED_INTERPRETATIONS, **EVAL_INTERPRETATIONS}
@@ -308,6 +335,20 @@ def _labelled_row(row: Mapping[str, Any], group: str, bundle: str) -> dict[str, 
     return r
 
 
+def trace_group(row: Mapping[str, Any]) -> tuple[str, str]:
+    """Group of a trace row, driven by its own ``stratum`` (interpretation (n)).
+
+    ``agent_nav`` / ``synthetic_spill`` / ``spill_follow`` map to themselves and a row that says
+    ``trivial_head`` is trivial; any other stratum label falls back to ``spill_follow`` (the legacy
+    single-source layout), recorded as ``group_source = legacy_default``."""
+    stratum = row.get("stratum")
+    if stratum == TRIVIAL_GROUP:
+        return TRIVIAL_GROUP, "stratum"
+    if stratum in TRACE_STRATA:
+        return str(stratum), "stratum"
+    return "spill_follow", "legacy_default"
+
+
 def label_queries(
     probe_rows: Sequence[Mapping[str, Any]],
     trace_rows: Sequence[Mapping[str, Any]],
@@ -315,21 +356,28 @@ def label_queries(
     *,
     probe_repos: Mapping[str, Any] = PROBE_REPOS,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """The frozen query file's rows (probe45, then spill_follow, then trivial_head) + a summary."""
+    """The frozen query file's rows (probe45, then the trace rows in file order, then the
+    trivial-head rows) + a summary. ``trace_rows`` may merge several sources: each row's
+    ``stratum`` decides its group."""
     out: list[dict[str, Any]] = []
     for r in probe_rows:
         repo = r.get("repo")
         if repo not in probe_repos:
             raise ValueError(f"probe row {r.get('id')!r}: unknown repo {repo!r}")
-        out.append(_labelled_row(r, "probe45", f"probe45:{repo}"))
-    for group, rows in (("spill_follow", trace_rows), (TRIVIAL_GROUP, trivial_rows)):
-        for r in rows:
-            bundle = r.get("bundle") or r.get("bundle_id")
-            if not bundle:
-                raise ValueError(f"{group} row {r.get('id')!r} has no bundle / bundle_id")
-            out.append(_labelled_row(r, group, str(bundle)))
-    ids = [r["id"] for r in out]
-    dup = sorted({i for i in ids if ids.count(i) > 1})
+        row = _labelled_row(r, "probe45", f"probe45:{repo}")
+        row["group_source"] = "file"
+        out.append(row)
+    planned = [(*trace_group(r), r) for r in trace_rows]
+    planned += [(TRIVIAL_GROUP, "file", r) for r in trivial_rows]
+    for group, source, r in planned:
+        bundle = r.get("bundle") or r.get("bundle_id")
+        if not bundle:
+            raise ValueError(f"{group} row {r.get('id')!r} has no bundle / bundle_id")
+        row = _labelled_row(r, group, str(bundle))
+        row["group_source"] = source
+        out.append(row)
+    counts = Counter(r["id"] for r in out)
+    dup = sorted(i for i, c in counts.items() if c > 1)
     if dup:
         raise ValueError(f"duplicate query ids: {dup[:5]}")
     summary: dict[str, Any] = {
@@ -348,6 +396,11 @@ def label_queries(
         }
     summary["n_code_intent_true"] = sum(r["code_intent"] for r in out)
     summary["n_labelled_by_regex"] = sum(r["code_intent_source"] == "regex" for r in out)
+    summary["by_group_source"] = dict(Counter(r["group_source"] for r in out))
+    for field in ("writer", "intent_source"):
+        summary[f"by_{field}"] = dict(
+            Counter(str(r[field]) for r in out if r.get(field) is not None)
+        )
     return out, summary
 
 
@@ -453,13 +506,29 @@ def build_spill_bundle(bundle_id: str, entry: Mapping[str, Any]) -> Bundle:
     return Bundle(bundle_id, sections, files)
 
 
-def load_bundles_json(path: str | Path | None) -> dict[str, Any]:
-    if not path:
+def load_bundles_json(paths: str | Path | Sequence[str | Path] | None) -> dict[str, Any]:
+    """Merge one or several ``bundles.json`` files ({bundle_id: {files, total_chunks}}).
+
+    A bundle id appearing in two files with DIFFERENT content is an error; identical repeats are
+    fine. An empty file (the miner's empty ``trace/`` source) contributes nothing."""
+    if not paths:
         return {}
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(data, dict) and isinstance(data.get("bundles"), dict):
-        return data["bundles"]
-    return data
+    files = [paths] if isinstance(paths, (str, Path)) else list(paths)
+    merged: dict[str, Any] = {}
+    for f in files:
+        text = Path(f).read_text(encoding="utf-8")
+        if not text.strip():
+            continue
+        data = json.loads(text)
+        if isinstance(data, dict) and isinstance(data.get("bundles"), dict):
+            data = data["bundles"]
+        for bid, entry in data.items():
+            if bid in merged and merged[bid] != entry:
+                raise ValueError(
+                    f"bundle id {bid!r} appears in two bundles files with different content ({f})"
+                )
+            merged[bid] = entry
+    return merged
 
 
 def corpus_listing(bundles: Iterable[Bundle]) -> str:
@@ -532,7 +601,7 @@ class BundleStore:
 def make_bundle_store(
     queries: Sequence[Mapping[str, Any]],
     *,
-    bundles_json: str | Path | None,
+    bundles_json: str | Path | Sequence[str | Path] | None,
     probe_checkouts: str | Path,
     probe_repos: Mapping[str, Mapping[str, str]] = PROBE_REPOS,
     head_fn: Callable[[Path], str] = git_head,
@@ -1077,7 +1146,7 @@ def run_colgrep(
     na = [q for q in queries if q["group"] != "probe45"]
     meta.data["not_applicable"] = {
         "n_queries": len(na),
-        "reason": "ColGREP is code-only (tree-sitter); spill-follow bundles are .txt",
+        "reason": "ColGREP is code-only (tree-sitter); the trace bundles (agent_nav, synthetic_spill, spill_follow) are .txt",
         "groups": sorted({q["group"] for q in na}),
     }
     done = store.finished("colgrep", retry_failed)
@@ -1320,15 +1389,19 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
             f"{freeze_file} exists; pass --refreeze to replace it (before any arm runs)"
         )
     probe_rows = read_jsonl(args.probe45)
-    trace_rows = read_jsonl(args.trace_queries)
-    trivial_rows = read_jsonl(args.trivial_queries) if args.trivial_queries else []
+    trace_files = list(args.trace_queries or [])
+    trivial_files = list(args.trivial_queries or [])
+    bundle_files = list(args.bundles_json or [])
+    trace_rows = [r for f in trace_files for r in read_jsonl(f)]
+    trivial_rows = [r for f in trivial_files for r in read_jsonl(f)]
+    load_bundles_json(bundle_files)  # fail fast on a bundle-id collision with different content
     rows, summary = label_queries(probe_rows, trace_rows, trivial_rows)
     labelled = out / "queries-labelled.jsonl"
     labelled_sha = write_labelled(labelled, rows)
 
     store = make_bundle_store(
         rows,
-        bundles_json=args.bundles_json,
+        bundles_json=bundle_files,
         probe_checkouts=args.probe_checkouts,
         head_fn=head_fn,
     )
@@ -1350,11 +1423,9 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
         out / "inputs.json",
         {
             "probe45": str(Path(args.probe45).resolve()),
-            "trace_queries": str(Path(args.trace_queries).resolve()),
-            "trivial_queries": str(Path(args.trivial_queries).resolve())
-            if args.trivial_queries
-            else None,
-            "bundles_json": str(Path(args.bundles_json).resolve()) if args.bundles_json else None,
+            "trace_queries": [str(Path(f).resolve()) for f in trace_files],
+            "trivial_queries": [str(Path(f).resolve()) for f in trivial_files],
+            "bundles_json": [str(Path(f).resolve()) for f in bundle_files],
             "rules_md": str(Path(args.rules_md).resolve()),
             "arm_manifest": str(Path(args.arm_manifest).resolve()),
             "probe_checkouts": str(Path(args.probe_checkouts).resolve()),
@@ -1362,7 +1433,7 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
     )
     paths = [
         labelled,
-        Path(args.trace_queries),
+        *(Path(f) for f in trace_files),
         Path(args.probe45),
         Path(args.rules_md),
         Path(args.arm_manifest),
@@ -1373,9 +1444,7 @@ def cmd_freeze(args: argparse.Namespace, *, head_fn: Callable[[Path], str] = git
         out / "inputs.json",
         *harness_files(),
     ]
-    for opt in (args.bundles_json, args.trivial_queries):
-        if opt:
-            paths.append(Path(opt))
+    paths += [Path(f) for f in (*bundle_files, *trivial_files)]
     if args.colgrep_bin and Path(args.colgrep_bin).is_file():
         paths.append(Path(args.colgrep_bin))
         sha = sha256_file(args.colgrep_bin)
@@ -1671,34 +1740,164 @@ def _vecs(sc: Mapping[str, Any]) -> dict[int, list[float]]:
     return {k: v.tolist() for k, v in sc["vec"].items()}
 
 
-def analyze(
-    out: str | Path,
-    speed_json: str | Path | None = None,
-    *,
-    resamples: int = stats.DEFAULT_RESAMPLES,
-    seed: int = stats.DEFAULT_SEED,
+LEGACY_SET_KEYS = (
+    "completeness",
+    "recall",
+    "recall_by_stratum_label",
+    "lexical_baseline",
+    "lexical_vs_dense_vs_hybrid",
+    "kill_rule",
+    "bootstrap_recall5",
+    "leakage_cut",
+    "selection",
+)
+
+
+def _vec_on(sc_v: Mapping[str, Any], ids: Sequence[str]) -> np.ndarray | None:
+    """recall@5 of a scored variant on exactly ``ids`` (None if any of them has no row)."""
+    pos = {q["id"]: i for i, q in enumerate(sc_v["qs"])}
+    if not ids or any(i not in pos for i in ids):
+        return None
+    return sc_v["vec"][PRIMARY_K][[pos[i] for i in ids]]
+
+
+def _group_order(groups: Iterable[str]) -> list[str]:
+    known = [g for g in DECISION_GROUPS if g in set(groups)]
+    return known + sorted(set(groups) - set(known))
+
+
+def _per_stratum_diff(
+    sc: Mapping[str, Any], set_qs: Sequence[Mapping[str, Any]], L: Any, resamples: int, seed: int
 ) -> dict[str, Any]:
-    out = Path(out)
-    qrows = read_jsonl(out / "queries-labelled.jsonl")
-    scored = [q for q in qrows if q["scored"]]
-    dec = [q for q in scored if q["group"] in DECISION_GROUPS]
-    trivial = [q for q in scored if q["group"] == TRIVIAL_GROUP]
-    store = ResultStore(out)
-    variants = store.variants()
-    rows_of = {v: store.rows(v) for v in variants}
-    res: dict[str, Any] = {
-        "schema": "repl-emb-analysis/1",
-        "n_deciding": len(dec),
-        "n_by_group": {
-            g: sum(q["group"] == g for q in scored) for g in sorted({q["group"] for q in scored})
-        },
-        "n_unscored": len(qrows) - len(scored),
-        "variants": variants,
-        "failures_count_as_misses": True,
-        "cost_flag": "contended_not_for_selection",
+    """Descriptive paired diff (recall@5) of every complete variant vs L, within each stratum.
+    No n floor and no verdict: the decision is the pooled kill rule."""
+    out: dict[str, Any] = {}
+    if L is None:
+        return out
+    for g in _group_order({q["group"] for q in set_qs}):
+        ids = [q["id"] for q in set_qs if q["group"] == g]
+        lvec = _vec_on(sc[L["L"]], ids)
+        if lvec is None:
+            continue
+        diffs = {}
+        for v, s in sc.items():
+            vv = None if v == L["L"] else _vec_on(s, ids)
+            if vv is not None:
+                diffs[v] = {
+                    "descriptive": True,
+                    "vs": L["L"],
+                    **stats.paired_bootstrap(vv, lvec, resamples, seed),
+                }
+        out[g] = {"n": len(ids), "vs": L["L"], "diffs": diffs}
+    return out
+
+
+def _recall_by_writer(sc: Mapping[str, Any]) -> dict[str, Any]:
+    """recall@k of the synthetic_spill stratum split by its ``writer`` (A / B)."""
+    out: dict[str, Any] = {}
+    for v, s in sc.items():
+        m = np.array([q["group"] == SYNTHETIC_GROUP for q in s["qs"]], dtype=bool)
+        if not m.any():
+            continue
+        labels = [
+            f"writer={q.get('writer') or 'unlabelled'}"
+            for q in s["qs"]
+            if q["group"] == SYNTHETIC_GROUP
+        ]
+        out[v] = stats.stratum_report({v: {k: s["vec"][k][m] for k in KS}}, labels)[v]
+    return out
+
+
+def _subset_kill(
+    sc: Mapping[str, Any], ids: set[str], L: Any, resamples: int, seed: int
+) -> dict[str, Any] | None:
+    """The kill-rule evidence restricted to the queries in ``ids`` (a reported variant)."""
+    if not (L and ids):
+        return None
+    mask = {
+        v: np.array([q["id"] in ids for q in s["qs"]])
+        for v, s in sc.items()
+        if s["complete"] and s["n"] and v != "colgrep"
     }
 
-    sc = {v: _score_variant(rows_of[v], _applicable(v, dec)) for v in variants}
+    def pick(v: str) -> Any:
+        return sc[v]["vec"][PRIMARY_K][mask[v]]
+
+    reg = {v: pick(v) for v in REGISTERED_HYBRIDS if v in mask}
+    ext = {v: pick(v) for v in mask if v.endswith(".hybrid") and v not in REGISTERED_HYBRIDS}
+    if not reg or L["L"] not in mask:
+        return None
+    return stats.kill_decision(
+        reg,
+        ext,
+        pick(L["L"]),
+        L["L"],
+        resamples=resamples,
+        seed=seed,
+        missing_registered=[v for v in REGISTERED_HYBRIDS if v not in reg],
+    )
+
+
+def _field_cut(
+    sc: Mapping[str, Any],
+    set_qs: Sequence[Mapping[str, Any]],
+    field: str,
+    L: Any,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """recall@5 and the kill-rule evidence per value of a pass-through field (reported variant)."""
+    by_value: dict[str, set[str]] = {}
+    for q in set_qs:
+        if q.get(field) is not None:
+            by_value.setdefault(str(q[field]), set()).add(q["id"])
+    out: dict[str, Any] = {
+        "note": "reported variant; does not replace the decision",
+        "field": field,
+        "n_unlabelled": sum(1 for q in set_qs if q.get(field) is None),
+        "values": {},
+    }
+    for value in sorted(by_value):
+        ids = by_value[value]
+        entry: dict[str, Any] = {"n": len(ids), "recall5": {}}
+        for v, s in sc.items():
+            if not (s["complete"] and s["n"]) or v == "colgrep":
+                continue
+            m = np.array([q["id"] in ids for q in s["qs"]])
+            if m.any():
+                entry["recall5"][v] = float(s["vec"][PRIMARY_K][m].mean())
+        kill = _subset_kill(sc, ids, L, resamples, seed)
+        if kill is not None:
+            entry["kill_rule"] = kill
+        out["values"][value] = entry
+    return out
+
+
+def _tagged(prefix: str, tag: str, rest: str = "") -> str:
+    """'KILL RULE (pooled, with synthetic; incl. extension arms): ' style prefixes."""
+    inner = "; ".join(x for x in (tag, rest) if x)
+    return f"{prefix} ({inner}): " if inner else f"{prefix}: "
+
+
+def _decide(
+    set_qs: Sequence[Mapping[str, Any]],
+    rows_of: Mapping[str, Mapping[str, Any]],
+    variants: Sequence[str],
+    speed: Mapping[str, Mapping[str, Any]],
+    tag: str,
+    resamples: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Everything the decision needs for ONE pooled decision set (interpretations (a)-(e), (n))."""
+    sc = {v: _score_variant(rows_of[v], _applicable(v, set_qs)) for v in variants}
+    res: dict[str, Any] = {
+        "tag": tag,
+        "n_deciding": len(set_qs),
+        "n_by_group": {
+            g: sum(q["group"] == g for q in set_qs)
+            for g in _group_order({q["group"] for q in set_qs})
+        },
+    }
     res["completeness"] = {
         v: {k: sc[v][k] for k in ("n", "n_applicable", "n_failed", "n_missing", "complete")}
         for v in variants
@@ -1714,6 +1913,7 @@ def analyze(
         res["recall_by_stratum_label"][v] = stats.stratum_report(
             {v: sc[v]["vec"]}, [q.get("stratum") or q["group"] for q in sc[v]["qs"]]
         )[v]
+    res["recall_by_writer"] = _recall_by_writer(sc)
 
     # lexical baseline L
     L: dict[str, Any] | None = None
@@ -1721,7 +1921,7 @@ def analyze(
         L = stats.lexical_baseline(sc["grep"]["vec"][PRIMARY_K], sc["bm25"]["vec"][PRIMARY_K])
     res["lexical_baseline"] = L
 
-    # lexical vs dense vs hybrid per dense arm (pooled recall@5 and per group)
+    # lexical vs dense vs hybrid per dense arm (pooled recall@5)
     res["lexical_vs_dense_vs_hybrid"] = {}
     dense_ids = sorted(
         {v.split(".")[0] for v in variants if v.split(".")[-1] in ("dense", "hybrid", "whybrid")}
@@ -1758,35 +1958,33 @@ def analyze(
         and sc[v]["complete"]
         and sc[v]["n"]
     }
-    n_dec = len(dec)
+    n_dec = len(set_qs)
     if L is None:
-        kill = {
+        kill: dict[str, Any] = {
             "verdict": "INCOMPLETE",
             "n": n_dec,
             "reason": "a lexical leg (grep / bm25) is missing or incomplete",
         }
-        verdict_line = f"KILL RULE: INCOMPLETE (n={n_dec})"
     else:
-        missing = [v for v in REGISTERED_HYBRIDS if v not in reg]
         kill = stats.kill_decision(
             reg,
             ext,
             sc[L["L"]]["vec"][PRIMARY_K],
             L["L"],
-            missing_registered=missing,
+            missing_registered=[v for v in REGISTERED_HYBRIDS if v not in reg],
             resamples=resamples,
             seed=seed,
         )
-        verdict_line = f"KILL RULE: {kill['verdict']} (n={kill['n']})"
     res["kill_rule"] = kill
-    lines = [verdict_line]
+    lines = [f"{_tagged('KILL RULE', tag)}{kill['verdict']} (n={kill['n']})"]
     if kill.get("changed_by_extension"):
         lines.append(
-            f"KILL RULE (incl. extension arms): {kill['verdict_with_extension']} "
+            f"{_tagged('KILL RULE', tag, 'incl. extension arms')}{kill['verdict_with_extension']} "
             f"[extension_only: {', '.join(kill['extension_only']) or 'none'}] (not a registered-arm result)"
         )
+    res["kill_lines"] = lines
 
-    # bootstrap CIs vs L and vs BGE (recall@5, pooled deciding set / the arm's applicable set)
+    # bootstrap CIs vs L and vs BGE (recall@5, pooled over the set / the arm's applicable part of it)
     res["bootstrap_recall5"] = {}
     for v in variants:
         s = sc[v]
@@ -1795,10 +1993,8 @@ def analyze(
         ids = [q["id"] for q in s["qs"]]
         entry = {}
         if L and v != L["L"]:
-            lv = sc[L["L"]]
-            pos = {q["id"]: i for i, q in enumerate(lv["qs"])}
-            if all(i in pos for i in ids):
-                b = lv["vec"][PRIMARY_K][[pos[i] for i in ids]]
+            b = _vec_on(sc[L["L"]], ids)
+            if b is not None:
                 entry["vs_L"] = {
                     "L": L["L"],
                     **stats.paired_bootstrap(s["vec"][PRIMARY_K], b, resamples, seed),
@@ -1806,9 +2002,8 @@ def analyze(
         kind = v.split(".")[-1] if "." in v else "hybrid"
         ref = f"bge-large.{kind if kind in ('dense', 'hybrid', 'whybrid') else 'hybrid'}"
         if ref in sc and ref != v and sc[ref]["complete"] and sc[ref]["n"]:
-            pos = {q["id"]: i for i, q in enumerate(sc[ref]["qs"])}
-            if all(i in pos for i in ids):
-                b = sc[ref]["vec"][PRIMARY_K][[pos[i] for i in ids]]
+            b = _vec_on(sc[ref], ids)
+            if b is not None:
                 entry["vs_bge"] = {
                     "ref": ref,
                     **stats.paired_bootstrap(s["vec"][PRIMARY_K], b, resamples, seed),
@@ -1816,8 +2011,112 @@ def analyze(
         if entry:
             res["bootstrap_recall5"][v] = entry
 
-    # leakage cut (reported variant)
-    res["leakage_cut"] = _leakage_cut(sc, dec, L, resamples, seed)
+    res["per_stratum_paired_diff"] = _per_stratum_diff(sc, set_qs, L, resamples, seed)
+    # leakage cuts (reported variants)
+    res["leakage_cut"] = _leakage_cut(sc, set_qs, L, resamples, seed)
+    res["leakage_cut_intent_source"] = _field_cut(sc, set_qs, "intent_source", L, resamples, seed)
+
+    # selection (interpretation (c), (d), (o)): only if THIS set's kill rule passed
+    sel_arms = {
+        v: {
+            "recall5": float(sc[v]["vec"][PRIMARY_K].mean()),
+            "cpu_s_per_query": (speed.get(v) or {}).get("cpu_s_per_query"),
+            "p95_ms": (speed.get(v) or {}).get("p95_ms", (speed.get(v) or {}).get("query_p95_ms")),
+        }
+        for v in variants
+        if v.endswith(".hybrid") and sc[v]["complete"] and sc[v]["n"]
+    }
+    head = _tagged("SELECTION", tag)
+    if kill.get("verdict") == "PASS":
+        if not speed:
+            sel = {
+                **stats.selection_rule(sel_arms),
+                "status": "pending speed block",
+                "selected": None,
+            }
+            sel_line = f"{head}pending speed block"
+        else:
+            sel = stats.selection_rule(sel_arms)
+            sel_line = (
+                f"{head}{sel['selected']}"
+                if sel["status"] == "selected"
+                else f"{head}pending speed block (no cost row for {', '.join(sel.get('missing_cost', []))})"
+            )
+    else:
+        sel = {"status": "not applicable", "reason": f"kill rule {kill.get('verdict')}"}
+        sel_line = f"{head}not applicable (kill rule {kill.get('verdict')})"
+    res["selection"] = sel
+    res["selection_line"] = sel_line
+    return res
+
+
+def analyze(
+    out: str | Path,
+    speed_json: str | Path | None = None,
+    *,
+    resamples: int = stats.DEFAULT_RESAMPLES,
+    seed: int = stats.DEFAULT_SEED,
+) -> dict[str, Any]:
+    """Per-arm, per-stratum recall and the kill rule on TWO decision sets (interpretation (n)):
+    pooled WITH the synthetic_spill stratum and pooled WITHOUT it, each with its own n floor.
+
+    With no synthetic_spill rows the two sets coincide and the single-set verdict lines
+    (``KILL RULE: ...``) are printed; the top-level per-set keys always describe the
+    with-synthetic (= widest) set."""
+    out = Path(out)
+    qrows = read_jsonl(out / "queries-labelled.jsonl")
+    scored = [q for q in qrows if q["scored"]]
+    dec = [q for q in scored if q["group"] != TRIVIAL_GROUP]
+    dec_real = [q for q in dec if q["group"] != SYNTHETIC_GROUP]
+    trivial = [q for q in scored if q["group"] == TRIVIAL_GROUP]
+    synthetic_present = len(dec_real) != len(dec)
+    store = ResultStore(out)
+    variants = store.variants()
+    rows_of = {v: store.rows(v) for v in variants}
+    speed = load_speed(speed_json)
+    res: dict[str, Any] = {
+        "schema": "repl-emb-analysis/2",
+        "bias_note": BIAS_NOTE,
+        "n_deciding": len(dec),
+        "n_deciding_without_synthetic": len(dec_real),
+        "synthetic_present": synthetic_present,
+        "n_by_group": {
+            g: sum(q["group"] == g for q in scored)
+            for g in _group_order({q["group"] for q in scored} - {TRIVIAL_GROUP})
+        }
+        | ({TRIVIAL_GROUP: len(trivial)} if trivial else {}),
+        "n_unscored": len(qrows) - len(scored),
+        "variants": variants,
+        "failures_count_as_misses": True,
+        "cost_flag": "contended_not_for_selection",
+    }
+    ws = _decide(
+        dec,
+        rows_of,
+        variants,
+        speed,
+        "pooled, with synthetic" if synthetic_present else "",
+        resamples,
+        seed,
+    )
+    wo = (
+        _decide(dec_real, rows_of, variants, speed, "pooled, without synthetic", resamples, seed)
+        if synthetic_present
+        else None
+    )
+    res["decision_sets"] = {
+        "with_synthetic": ws,
+        "without_synthetic": wo if wo is not None else {"identical_to": "with_synthetic"},
+    }
+    for key in LEGACY_SET_KEYS:  # the with-synthetic (widest) set, under the single-set key names
+        res[key] = ws[key]
+    res["recall_by_writer"] = ws["recall_by_writer"]
+    res["per_stratum_paired_diff"] = ws["per_stratum_paired_diff"]
+    res["leakage_cut_intent_source"] = ws["leakage_cut_intent_source"]
+    sets = [ws] + ([wo] if wo is not None else [])
+    res["verdict_lines"] = [ln for d in sets for ln in d["kill_lines"]] + [
+        d["selection_line"] for d in sets
+    ]
 
     # trivial-head stratum: a separate table, outside the decision
     res["trivial_head"] = {}
@@ -1834,7 +2133,7 @@ def analyze(
             "reported outside the decision; not in n, L, the kill rule or selection"
         )
 
-    # cost (contended) + selection
+    # cost (contended)
     res["cost_contended"] = {}
     for v in variants:
         lat = [r["latency_ms"] for r in rows_of[v].values() if not r["failed"]]
@@ -1857,37 +2156,7 @@ def analyze(
             ),
             "flag": "contended_not_for_selection",
         }
-    speed = load_speed(speed_json)
     res["speed_block"] = {"path": str(speed_json) if speed_json else None, "arms": sorted(speed)}
-    sel_arms = {
-        v: {
-            "recall5": float(sc[v]["vec"][PRIMARY_K].mean()),
-            "cpu_s_per_query": (speed.get(v) or {}).get("cpu_s_per_query"),
-            "p95_ms": (speed.get(v) or {}).get("p95_ms", (speed.get(v) or {}).get("query_p95_ms")),
-        }
-        for v in variants
-        if v.endswith(".hybrid") and sc[v]["complete"] and sc[v]["n"]
-    }
-    if kill.get("verdict") == "PASS":
-        if not speed:
-            sel = {
-                **stats.selection_rule(sel_arms),
-                "status": "pending speed block",
-                "selected": None,
-            }
-            lines.append("SELECTION: pending speed block")
-        else:
-            sel = stats.selection_rule(sel_arms)
-            lines.append(
-                f"SELECTION: {sel['selected']}"
-                if sel["status"] == "selected"
-                else f"SELECTION: pending speed block (no cost row for {', '.join(sel.get('missing_cost', []))})"
-            )
-    else:
-        sel = {"status": "not applicable", "reason": f"kill rule {kill.get('verdict')}"}
-        lines.append(f"SELECTION: not applicable (kill rule {kill.get('verdict')})")
-    res["selection"] = sel
-    res["verdict_lines"] = lines
     res["semble"] = semble_status()
     return res
 
@@ -1895,6 +2164,7 @@ def analyze(
 def _leakage_cut(
     sc: Mapping[str, Any], dec: Sequence[Mapping[str, Any]], L: Any, resamples: int, seed: int
 ) -> dict[str, Any]:
+    """The ``answer_named_verbatim`` cut: recall@5 per cut, kill rule on the not-verbatim subset."""
     flag = {q["id"]: q.get("answer_named_verbatim") for q in dec}
     cuts = {"answer_named_verbatim=true": True, "answer_named_verbatim=false": False}
     out: dict[str, Any] = {
@@ -1911,29 +2181,9 @@ def _leakage_cut(
             m = np.array([q["id"] in ids for q in s["qs"]])
             if m.any():
                 out["recall5"][name][v] = float(s["vec"][PRIMARY_K][m].mean())
-    ids_false = {i for i, v in flag.items() if v is False}
-    if L and ids_false:
-        mask = {
-            v: np.array([q["id"] in ids_false for q in s["qs"]])
-            for v, s in sc.items()
-            if s["complete"] and s["n"] and v != "colgrep"
-        }
-
-        def pick(v: str) -> Any:
-            return sc[v]["vec"][PRIMARY_K][mask[v]]
-
-        reg = {v: pick(v) for v in REGISTERED_HYBRIDS if v in mask}
-        ext = {v: pick(v) for v in mask if v.endswith(".hybrid") and v not in REGISTERED_HYBRIDS}
-        if reg and L["L"] in mask:
-            out["kill_rule_on_false_subset"] = stats.kill_decision(
-                reg,
-                ext,
-                pick(L["L"]),
-                L["L"],
-                resamples=resamples,
-                seed=seed,
-                missing_registered=[v for v in REGISTERED_HYBRIDS if v not in reg],
-            )
+    kill = _subset_kill(sc, {i for i, v in flag.items() if v is False}, L, resamples, seed)
+    if kill is not None:
+        out["kill_rule_on_false_subset"] = kill
     return out
 
 
@@ -1941,17 +2191,12 @@ def _pct(x: Any) -> str:
     return "n/a" if x is None else f"{x:.3f}"
 
 
-def render_markdown(res: Mapping[str, Any]) -> str:
-    L = ["# REPL-EMB-2.2 offline retrieval eval", ""]
-    L += [f"- {line}" for line in res["verdict_lines"]]
-    L += [
-        "",
-        f"deciding n = {res['n_deciding']}  ({res['n_by_group']}; unscored {res['n_unscored']})",
-    ]
-    L += ["costs here are `contended_not_for_selection`; failures count as misses.", ""]
-    lb = res["lexical_baseline"]
+def _render_set(ds: Mapping[str, Any], suffix: str) -> list[str]:
+    """The tables of ONE decision set; ``suffix`` names the set in two-set mode."""
+    L: list[str] = []
+    lb = ds["lexical_baseline"]
     L.append(
-        f"**L** = {lb['L'] if lb else 'n/a'}"
+        f"**L{suffix}** = {lb['L'] if lb else 'n/a'}"
         + (
             f" (grep {lb['grep_recall5']:.3f}, bm25 {lb['bm25_recall5']:.3f}, tie={lb['tie']})"
             if lb
@@ -1960,22 +2205,33 @@ def render_markdown(res: Mapping[str, Any]) -> str:
     )
     L += [
         "",
-        "## recall@k per arm and stratum (Wilson 95%)",
+        f"## recall@k per arm and stratum (Wilson 95%){suffix}",
         "",
         "| arm | stratum | n | R@1 | R@3 | R@5 | R@10 |",
         "|---|---|---|---|---|---|---|",
     ]
-    for v, by in res["recall"].items():
+    for v, by in ds["recall"].items():
         for g, ks in by.items():
-            c = res["completeness"][v]
-            tag = "" if c["complete"] else " (INCOMPLETE)"
+            tag = "" if ds["completeness"][v]["complete"] else " (INCOMPLETE)"
             cells = " | ".join(
                 f"{ks[k]['recall']:.3f} [{_pct(ks[k]['ci_lo'])}, {_pct(ks[k]['ci_hi'])}]"
                 for k in KS
             )
             L.append(f"| {v}{tag} | {g} | {ks[1]['n']} | {cells} |")
-    kr = res["kill_rule"]
-    L += ["", "## kill rule (recall@5, hybrid vs L)", ""]
+    if ds.get("recall_by_writer"):
+        L += [
+            "",
+            f"## synthetic_spill recall split by writer{suffix}",
+            "",
+            "| arm | writer | n | R@1 | R@3 | R@5 | R@10 |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for v, by in ds["recall_by_writer"].items():
+            for g, ks in by.items():
+                cells = " | ".join(f"{ks[k]['recall']:.3f}" for k in KS)
+                L.append(f"| {v} | {g} | {ks[1]['n']} | {cells} |")
+    kr = ds["kill_rule"]
+    L += ["", f"## kill rule (recall@5, hybrid vs L){suffix}", ""]
     if "registered" in kr:
         L += [
             "| hybrid | kind | R@5 | L R@5 | diff | CI lo | CI hi | margin | CI>0 | pass |",
@@ -1990,18 +2246,18 @@ def render_markdown(res: Mapping[str, Any]) -> str:
                 )
         L += [
             "",
-            f"M = {kr['M']}, n_min = {kr['n_min']}, bootstrap resamples/seed = {stats.DEFAULT_RESAMPLES}/{stats.DEFAULT_SEED}",
+            f"n = {kr['n']}, M = {kr['M']}, n_min = {kr['n_min']}, bootstrap resamples/seed = {stats.DEFAULT_RESAMPLES}/{stats.DEFAULT_SEED}",
         ]
     else:
         L.append(kr.get("reason", ""))
     L += [
         "",
-        "## lexical vs dense vs hybrid (pooled recall@5)",
+        f"## lexical vs dense vs hybrid (pooled recall@5){suffix}",
         "",
         "| dense arm | registered | L | dense | hybrid | weighted hybrid |",
         "|---|---|---|---|---|---|",
     ]
-    for a, e in res["lexical_vs_dense_vs_hybrid"].items():
+    for a, e in ds["lexical_vs_dense_vs_hybrid"].items():
         L.append(
             f"| {a} | {e['registered']} | {_pct(e.get('lexical_L', {}).get('pooled_recall5'))} | "
             f"{_pct(e.get('dense', {}).get('pooled_recall5'))} | {_pct(e.get('hybrid', {}).get('pooled_recall5'))} | "
@@ -2009,12 +2265,12 @@ def render_markdown(res: Mapping[str, Any]) -> str:
         )
     L += [
         "",
-        "## paired bootstrap, recall@5 (diff, 95% CI)",
+        f"## paired bootstrap, recall@5 (diff, 95% CI){suffix}",
         "",
         "| arm | vs | diff | CI |",
         "|---|---|---|---|",
     ]
-    for v, e in res["bootstrap_recall5"].items():
+    for v, e in ds["bootstrap_recall5"].items():
         for key in ("vs_L", "vs_bge"):
             if key in e:
                 b = e[key]
@@ -2023,18 +2279,69 @@ def render_markdown(res: Mapping[str, Any]) -> str:
                 )
     L += [
         "",
-        "## leakage cut (reported variant)",
+        f"## per-stratum paired diff vs L, recall@5 (descriptive, no verdict){suffix}",
         "",
-        f"unlabelled rows: {res['leakage_cut']['n_unlabelled']}",
-        "",
+        "| stratum | n | arm | diff | CI |",
+        "|---|---|---|---|---|",
     ]
-    for name, d in res["leakage_cut"]["recall5"].items():
+    for g, d in ds["per_stratum_paired_diff"].items():
+        for v, b in d["diffs"].items():
+            L.append(
+                f"| {g} | {d['n']} | {v} | {b['mean_diff']:+.3f} | [{b['ci_lo']:+.3f}, {b['ci_hi']:+.3f}] |"
+            )
+    lk = ds["leakage_cut"]
+    L += ["", f"## leakage cut: answer_named_verbatim (reported variant){suffix}", ""]
+    L.append(f"unlabelled rows: {lk['n_unlabelled']}")
+    for name, d in lk["recall5"].items():
         L.append(
             f"- {name}: n={d['n']}; " + ", ".join(f"{k} {x:.3f}" for k, x in d.items() if k != "n")
         )
+    ic = ds["leakage_cut_intent_source"]
+    L += ["", f"## leakage cut: intent_source (reported variant){suffix}", ""]
+    L.append(f"rows without the field: {ic['n_unlabelled']}")
+    for name, d in ic["values"].items():
+        kv = d.get("kill_rule")
+        verdict = f"; kill rule on this subset: {kv['verdict']} (n={kv['n']})" if kv else ""
+        L.append(
+            f"- {name}: n={d['n']}; "
+            + ", ".join(f"{k} {x:.3f}" for k, x in d["recall5"].items())
+            + verdict
+        )
+    sel = ds["selection"]
+    L += ["", f"## selection{suffix}", "", f"status: {sel.get('status')}"]
+    for r in sel.get("table", []):
+        L.append(
+            f"- {r['arm']}: R@5 {r['recall5']:.3f}, cpu_s/q {r['cpu_s_per_query']}, p95 {r['p95_ms']}, candidate={r['candidate']}"
+        )
+    return L
+
+
+def render_markdown(res: Mapping[str, Any]) -> str:
+    L = ["# REPL-EMB-2.2 offline retrieval eval", "", res["bias_note"], ""]
+    L += [f"- {line}" for line in res["verdict_lines"]]
+    L += [
+        "",
+        f"deciding n = {res['n_deciding']}"
+        + (
+            f" with synthetic, {res['n_deciding_without_synthetic']} without"
+            if res["synthetic_present"]
+            else ""
+        )
+        + f"  ({res['n_by_group']}; unscored {res['n_unscored']})",
+    ]
+    L += ["costs here are `contended_not_for_selection`; failures count as misses.", ""]
+    sets = res["decision_sets"]
+    if res["synthetic_present"]:
+        for key, name in (
+            ("with_synthetic", "with synthetic"),
+            ("without_synthetic", "without synthetic"),
+        ):
+            L += [f"# Decision set: pooled, {name} (n={sets[key]['n_deciding']})", ""]
+            L += _render_set(sets[key], f" - {name}") + [""]
+    else:
+        L += _render_set(sets["with_synthetic"], "") + [""]
     if res["trivial_head"]:
         L += [
-            "",
             "## trivial-head stratum (outside the decision)",
             "",
             "| arm | n | R@1 | R@3 | R@5 | R@10 |",
@@ -2044,8 +2351,8 @@ def render_markdown(res: Mapping[str, Any]) -> str:
             L.append(
                 f"| {v} | {t['n']} | " + " | ".join(f"{t['recall'][str(k)]:.3f}" for k in KS) + " |"
             )
+        L.append("")
     L += [
-        "",
         "## failures (counted as misses) and contended cost",
         "",
         "| arm | n | failed | missing | p50 ms | p95 ms |",
@@ -2055,12 +2362,6 @@ def render_markdown(res: Mapping[str, Any]) -> str:
         cost = res["cost_contended"][v]
         L.append(
             f"| {v} | {c['n']} | {c['n_failed']} | {c['n_missing']} | {_pct(cost['p50_ms'])} | {_pct(cost['p95_ms'])} |"
-        )
-    sel = res["selection"]
-    L += ["", "## selection", "", f"status: {sel.get('status')}"]
-    for r in sel.get("table", []):
-        L.append(
-            f"- {r['arm']}: R@5 {r['recall5']:.3f}, cpu_s/q {r['cpu_s_per_query']}, p95 {r['p95_ms']}, candidate={r['candidate']}"
         )
     L += ["", f"semble: {res['semble']}", ""]
     return "\n".join(L)
@@ -2135,8 +2436,52 @@ def synthetic_queries(path_of: Callable[[str], str], prefix: str) -> list[dict[s
     ]
 
 
-def make_synthetic_inputs(root: Path) -> dict[str, Any]:
-    """A fake pinned checkout, spill files, bundles.json, queries, rules and manifest."""
+def _write_spill_dir(spill: Path) -> dict[str, Any]:
+    """Three spill files + the bundles.json entry the miners would write for them."""
+    spill.mkdir(parents=True, exist_ok=True)
+    files = []
+    for name, text in synthetic_files("txt").items():
+        p = spill / name
+        p.write_text(text, encoding="utf-8")
+        raw = text.encode()
+        files.append({"path": str(p), "sha256": sha256_bytes(raw), "bytes": len(raw), "chunks": 2})
+    return {"files": files, "total_chunks": 6}
+
+
+def _trace_rows(
+    spill: Path,
+    prefix: str,
+    bundle_id: str,
+    extra: Callable[[int], dict[str, Any]],
+    n: int | None = None,
+) -> list[dict[str, Any]]:
+    rows = []
+    for i, q in enumerate(synthetic_queries(lambda name: str(spill / f"{name}.txt"), prefix)[:n]):
+        g = q["gold"]
+        rows.append(
+            {
+                **q,
+                "gold": {"path": g["path"], "ranges": [[g["start_line"], g["end_line"]]]},
+                "bundle_id": bundle_id,
+                **extra(i),
+            }
+        )
+    return rows
+
+
+def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+
+def make_synthetic_inputs(root: Path, multi: bool = False) -> dict[str, Any]:
+    """A fake pinned checkout, spill files, bundles.json, queries, rules and manifest.
+
+    ``multi=False``: the legacy single trace source (one ``spill_follow``-by-default file).
+    ``multi=True``: the three-source layout -- ``trace2/`` (agent_nav queries, a trivial-head file,
+    its own bundles.json) and ``synth/`` (synthetic_spill queries with a ``writer``, its own
+    bundles.json). The legacy files are always written; ``trace_queries`` / ``trivial_queries`` /
+    ``bundles_json`` in the result name the sources to freeze."""
     root.mkdir(parents=True, exist_ok=True)
     repo = "mwaskom/seaborn"
     co = root / "checkouts" / PROBE_REPOS[repo]["checkout"]
@@ -2144,36 +2489,55 @@ def make_synthetic_inputs(root: Path) -> dict[str, Any]:
     pkg.mkdir(parents=True, exist_ok=True)
     for name, text in synthetic_files("py").items():
         (pkg / name).write_text(text, encoding="utf-8")
-    spill = root / "spill"
-    spill.mkdir(exist_ok=True)
-    bundle_files = []
-    for name, text in synthetic_files("txt").items():
-        p = spill / name
-        p.write_text(text, encoding="utf-8")
-        raw = text.encode()
-        bundle_files.append(
-            {"path": str(p), "sha256": sha256_bytes(raw), "bytes": len(raw), "chunks": 2}
-        )
-    (root / "bundles.json").write_text(
-        dumps({"spill-b1": {"files": bundle_files, "total_chunks": 6}}, indent=1), encoding="utf-8"
-    )
+    entry = _write_spill_dir(root / "spill")
+    (root / "bundles.json").write_text(dumps({"spill-b1": entry}, indent=1), encoding="utf-8")
     probe = []
     for q in synthetic_queries(lambda n: f"seaborn/{n}.py", "p-"):
         probe.append({**q, "repo": repo, "commit": "0" * 40, "stratum": "intake1357_probe45"})
-    trace = []
-    for q in synthetic_queries(lambda n: str(spill / f"{n}.txt"), "s-"):
-        g = q["gold"]
-        trace.append(
-            {
-                **q,
-                "gold": {"path": g["path"], "ranges": [[g["start_line"], g["end_line"]]]},
-                "bundle_id": "spill-b1",
-            }
-        )
-    (root / "probe45.jsonl").write_text("".join(dumps(r) + "\n" for r in probe), encoding="utf-8")
-    (root / "queries-trace.jsonl").write_text(
-        "".join(dumps(r) + "\n" for r in trace), encoding="utf-8"
+    _write_jsonl(root / "probe45.jsonl", probe)
+    _write_jsonl(
+        root / "queries-trace.jsonl", _trace_rows(root / "spill", "s-", "spill-b1", lambda i: {})
     )
+    out: dict[str, Any] = {
+        "root": root,
+        "checkouts": root / "checkouts",
+        "trace_queries": [root / "queries-trace.jsonl"],
+        "trivial_queries": [],
+        "bundles_json": [root / "bundles.json"],
+    }
+    if multi:
+        nav, syn = root / "trace2", root / "synth"
+        nav_entry = _write_spill_dir(root / "spill_nav")
+        syn_entry = _write_spill_dir(root / "spill_synth")
+        nav.mkdir(exist_ok=True)
+        syn.mkdir(exist_ok=True)
+        (nav / "bundles.json").write_text(dumps({"nav-b1": nav_entry}), encoding="utf-8")
+        (syn / "bundles.json").write_text(dumps({"syn-b1": syn_entry}), encoding="utf-8")
+        nav_extra = lambda i: {  # noqa: E731
+            "stratum": "agent_nav",
+            "intent_source": "assistant_text" if i % 2 == 0 else "bash_description",
+        }
+        _write_jsonl(
+            nav / "queries-trace.jsonl", _trace_rows(root / "spill_nav", "n-", "nav-b1", nav_extra)
+        )
+        _write_jsonl(
+            nav / "queries-trivial-head.jsonl",
+            _trace_rows(root / "spill_nav", "th-", "nav-b1", nav_extra, n=3),
+        )
+        _write_jsonl(
+            syn / "queries-synth.jsonl",
+            _trace_rows(
+                root / "spill_synth",
+                "y-",
+                "syn-b1",
+                lambda i: {"stratum": "synthetic_spill", "writer": "A" if i % 2 == 0 else "B"},
+            ),
+        )
+        out.update(
+            trace_queries=[nav / "queries-trace.jsonl", syn / "queries-synth.jsonl"],
+            trivial_queries=[nav / "queries-trivial-head.jsonl"],
+            bundles_json=[nav / "bundles.json", syn / "bundles.json"],
+        )
     (root / "RULES.md").write_text("synthetic dry-run rules\n", encoding="utf-8")
     llama_rt, m2v_rt = "llama-server dry-run", "model2vec dry-run"
     specs = eval_specs(llama_rt, m2v_rt)
@@ -2185,15 +2549,15 @@ def make_synthetic_inputs(root: Path) -> dict[str, Any]:
         ]
     }
     (root / "arm_manifest.json").write_text(dumps(manifest, indent=1), encoding="utf-8")
-    return {"root": root, "checkouts": root / "checkouts"}
+    return out
 
 
 def run_synthetic(
-    out: Path, inputs_root: Path, *, echo: Callable[[str], None] = print
+    out: Path, inputs_root: Path, *, echo: Callable[[str], None] = print, multi: bool = False
 ) -> dict[str, Any]:
     """freeze -> run (lexical, every dense arm on a fake embedder, ColGREP commands printed) ->
     analyze, all through the real subcommand entry points. No network, no process, no model."""
-    inp = make_synthetic_inputs(inputs_root)
+    inp = make_synthetic_inputs(inputs_root, multi=multi)
     root = inp["root"]
     out.mkdir(parents=True, exist_ok=True)
     ap = build_parser()
@@ -2206,10 +2570,9 @@ def run_synthetic(
                 str(out),
                 "--probe45",
                 str(root / "probe45.jsonl"),
-                "--trace-queries",
-                str(root / "queries-trace.jsonl"),
-                "--bundles-json",
-                str(root / "bundles.json"),
+                *[x for f in inp["trace_queries"] for x in ("--trace-queries", str(f))],
+                *[x for f in inp["trivial_queries"] for x in ("--trivial-queries", str(f))],
+                *[x for f in inp["bundles_json"] for x in ("--bundles-json", str(f))],
                 "--rules-md",
                 str(root / "RULES.md"),
                 "--arm-manifest",
@@ -2255,7 +2618,7 @@ def cmd_dry_run(args: argparse.Namespace) -> int:
     ctx = None if args.out else tempfile.TemporaryDirectory(prefix="repl-emb-dry-")
     try:
         base = Path(args.out) if args.out else Path(ctx.name)  # type: ignore[union-attr]
-        res = run_synthetic(base / "out", base / "synthetic-inputs")
+        res = run_synthetic(base / "out", base / "synthetic-inputs", multi=bool(args.multi_source))
         print(f"# dry-run ok: {len(res['variants'])} variants; semble: {res['semble']}; out={base}")
     finally:
         if ctx:
@@ -2279,6 +2642,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--dry-run", action="store_true", help="synthetic end-to-end run, no network")
     ap.add_argument("--out", help="(dry-run) keep the synthetic run in this directory")
+    ap.add_argument(
+        "--multi-source",
+        action="store_true",
+        help="(dry-run) use the three-source layout: agent_nav + synthetic_spill + trivial head",
+    )
     sub = ap.add_subparsers(dest="cmd")
 
     fz = sub.add_parser("freeze", help="label queries and write FROZEN-AT-LAUNCH.sha256")
@@ -2289,11 +2657,25 @@ def build_parser() -> argparse.ArgumentParser:
             REPO_ROOT / "data/repl_retrieval_eval/arm-manifest-20261020/probe45-intake1357.jsonl"
         ),
     )
-    fz.add_argument("--trace-queries", required=True, help="the miner's queries-trace.jsonl")
     fz.add_argument(
-        "--trivial-queries", help="optional trivial-head query file (reported outside the decision)"
+        "--trace-queries",
+        action="append",
+        default=[],
+        help="a miner's queries file (repeatable: agent_nav, synthetic_spill, spill_follow ...); "
+        "each row's `stratum` drives its group",
     )
-    fz.add_argument("--bundles-json", required=True, help="the miner's trace/bundles.json")
+    fz.add_argument(
+        "--trivial-queries",
+        action="append",
+        default=[],
+        help="trivial-head query file (repeatable; reported outside the decision)",
+    )
+    fz.add_argument(
+        "--bundles-json",
+        action="append",
+        default=[],
+        help="a miner's bundles.json (repeatable; merged, a clashing bundle id is an error)",
+    )
     fz.add_argument("--rules-md", required=True)
     fz.add_argument("--arm-manifest", default=str(DEFAULT_ARM_MANIFEST))
     fz.add_argument("--probe-checkouts", default=DEFAULT_PROBE_CHECKOUTS)
@@ -2330,7 +2712,9 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--llama-runtime")
     rn.add_argument("--m2v-runtime")
     rn.add_argument("--arm-manifest")
-    rn.add_argument("--bundles-json")
+    rn.add_argument(
+        "--bundles-json", action="append", help="override the frozen bundles files (repeatable)"
+    )
     rn.add_argument("--probe-checkouts")
     rn.add_argument("--groups", help="comma list of groups to run (default all)")
     rn.add_argument("--embed-timeout-s", type=float, default=600.0)
@@ -2351,6 +2735,7 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--seed", type=int, default=stats.DEFAULT_SEED)
     dr = sub.add_parser("dry-run", help="synthetic end-to-end run, no network")
     dr.add_argument("--out", help="keep the synthetic run in this directory")
+    dr.add_argument("--multi-source", action="store_true", help="use the three-source layout")
     return ap
 
 

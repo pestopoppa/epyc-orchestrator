@@ -46,9 +46,13 @@ WILSON_Z = 1.959963984540054
 
 PREDECLARED_INTERPRETATIONS: dict[str, str] = {
     "a_decision_set": (
-        "(a) The decision set is probe45 (45) plus the spill_follow scored queries, pooled. The kill "
-        "rule requires n >= 120 pooled; with fewer the verdict is UNDERPOWERED/KILL per REPL-EMB-2.1 "
-        "('small n kills by design')."
+        "(a) The decision set is probe45 (45) plus the scored trace-derived queries (strata agent_nav, "
+        "synthetic_spill and, if present, spill_follow), pooled; trivial_head is outside it. It is "
+        "reported as TWO decision sets, pooled WITH and pooled WITHOUT synthetic_spill, each with its "
+        "own n floor: the kill rule requires n >= 120 for that set, with fewer its verdict is "
+        "UNDERPOWERED/KILL per REPL-EMB-2.1 ('small n kills by design'). (Amended 2026-10-20, before "
+        "any arm ran: the single spill_follow source yielded n = 0 and the trace stratum became "
+        "agent_nav + synthetic_spill.)"
     ),
     "b_registered_hybrids": (
         "(b) The kill rule is evaluated for EACH registered hybrid (hybrid-BGE, hybrid-Granite) "
