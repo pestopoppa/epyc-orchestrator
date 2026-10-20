@@ -1,0 +1,455 @@
+{
+ "arms": [
+  {
+   "adapter": "SentenceTransformersAdapter",
+   "arm_id": "eg2-st-fp32-768",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-st-fp32-768#7c07ebef8bc6",
+   "dim": 768,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "fp32",
+   "family": "st",
+   "index_identity": {
+    "digest": "7c07ebef8bc6efb9afd5046626ae4444f72fbb484e424e971fd44c8b67fc171a",
+    "dim": 768,
+    "dtype": "fp32",
+    "model": "google/embeddinggemma-2",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "runtime": "sentence-transformers==6.1.0/transformers==5.20.1/torch==2.14.1+cpu"
+   },
+   "model_repo": "google/embeddinggemma-2",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+   "runtime": "sentence-transformers==6.1.0/transformers==5.20.1/torch==2.14.1+cpu"
+  },
+  {
+   "adapter": "SentenceTransformersAdapter",
+   "arm_id": "eg2-st-fp32-256",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-st-fp32-256#9bca02178738",
+   "dim": 256,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "fp32",
+   "family": "st",
+   "index_identity": {
+    "digest": "9bca021787384ad30907ddd134b00a3beca9da1b4de0e308e86c905553284afa",
+    "dim": 256,
+    "dtype": "fp32",
+    "model": "google/embeddinggemma-2",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "runtime": "sentence-transformers==6.1.0/transformers==5.20.1/torch==2.14.1+cpu"
+   },
+   "model_repo": "google/embeddinggemma-2",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+   "runtime": "sentence-transformers==6.1.0/transformers==5.20.1/torch==2.14.1+cpu"
+  },
+  {
+   "adapter": "SentenceTransformersAdapter",
+   "arm_id": "eg2-st-bf16-768",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-st-bf16-768#bfec708bba61",
+   "dim": 768,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "bf16",
+   "family": "st",
+   "index_identity": {
+    "digest": "bfec708bba6171878921236212a8adc32d6beefcfdab8021458cb0a3a6360478",
+    "dim": 768,
+    "dtype": "bf16",
+    "model": "google/embeddinggemma-2",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "runtime": "sentence-transformers==6.1.0/transformers==5.20.1/torch==2.14.1+cpu"
+   },
+   "model_repo": "google/embeddinggemma-2",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "parity reference arm only (BF16 vs FP32 gate); not a 2.7 recall arm",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+   "runtime": "sentence-transformers==6.1.0/transformers==5.20.1/torch==2.14.1+cpu"
+  },
+  {
+   "adapter": "LlamaServerAdapter",
+   "arm_id": "eg2-gguf-bf16-768",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-gguf-bf16-768#d059eda6cb41",
+   "dim": 768,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "bf16",
+   "family": "gguf",
+   "index_identity": {
+    "digest": "d059eda6cb41c675ce6b61344be8b11433d3957bf6f36fa7b75ad8f141ec6580",
+    "dim": 768,
+    "dtype": "bf16",
+    "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   },
+   "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "exists only if REPL-EMB-2.6 passes its parity gate",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+  },
+  {
+   "adapter": "LlamaServerAdapter",
+   "arm_id": "eg2-gguf-bf16-256",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-gguf-bf16-256#e711408cd51f",
+   "dim": 256,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "bf16",
+   "family": "gguf",
+   "index_identity": {
+    "digest": "e711408cd51fae4f831b704135bba1c8974d92fe202d1fee5509bec89a64a92e",
+    "dim": 256,
+    "dtype": "bf16",
+    "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   },
+   "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-BF16.gguf",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "exists only if REPL-EMB-2.6 passes its parity gate",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+  },
+  {
+   "adapter": "LlamaServerAdapter",
+   "arm_id": "eg2-gguf-q8_0-768",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-gguf-q8_0-768#93f97e45e637",
+   "dim": 768,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "q8_0",
+   "family": "gguf",
+   "index_identity": {
+    "digest": "93f97e45e637621dba8e56c333b9c68ba58924494b4c574dacc5b5a5d8772830",
+    "dim": 768,
+    "dtype": "q8_0",
+    "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   },
+   "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "exists only if REPL-EMB-2.6 passes its parity gate",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+  },
+  {
+   "adapter": "LlamaServerAdapter",
+   "arm_id": "eg2-gguf-q8_0-256",
+   "code_query_prompt": "task: code retrieval | query: ",
+   "dense_embedder_model_id": "eg2-gguf-q8_0-256#72f3c552aae6",
+   "dim": 256,
+   "doc_prompt": "title: none | text: ",
+   "dtype": "q8_0",
+   "family": "gguf",
+   "index_identity": {
+    "digest": "72f3c552aae63c545777409f70ccac006e1f150c915861dc359386ea94a9cdc1",
+    "dim": 256,
+    "dtype": "q8_0",
+    "model": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
+    "prompt_hash": "05e21668a4f78706ea20a6617fa867fbb9dba4a7a6c4499a8e0a0204ff2b57e1",
+    "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+    "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+   },
+   "model_repo": "ggml-org/embeddinggemma-2-GGUF/embeddinggemma-2-Q8_0.gguf",
+   "native_dim": 768,
+   "normalise": "l2-after-truncation",
+   "notes": "exists only if REPL-EMB-2.6 passes its parity gate",
+   "pooling": "mean",
+   "query_prompt": "task: search result | query: ",
+   "revision": "58faf90940886df2d62be555c8765d00dac362c5",
+   "runtime": "llama-server experimental/gemma-embedding2-on-v10 (CPU, build-cpu)"
+  },
+  {
+   "adapter": "Model2VecAdapter",
+   "arm_id": "potion-code-16m-v2",
+   "code_query_prompt": "",
+   "dense_embedder_model_id": "potion-code-16m-v2#4d9d14176785",
+   "dim": 256,
+   "doc_prompt": "",
+   "dtype": "static-fp32",
+   "family": "static",
+   "index_identity": {
+    "digest": "4d9d141767850a246fd9b99b8d220152b6881adbe9fb3e51ffb2e0a2d0708bbd",
+    "dim": 256,
+    "dtype": "static-fp32",
+    "model": "minishlab/potion-code-16M-v2",
+    "prompt_hash": "79067089903e2aa61d16c3ec406d639f46804aa0525e1fb96fad6109503599bc",
+    "revision": "e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+    "runtime": "model2vec==0.10.0/numpy==2.5.2"
+   },
+   "model_repo": "minishlab/potion-code-16M-v2",
+   "native_dim": 256,
+   "normalise": "l2",
+   "notes": "",
+   "pooling": "mean-of-token-lookup",
+   "query_prompt": "",
+   "revision": "e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b",
+   "runtime": "model2vec==0.10.0/numpy==2.5.2"
+  },
+  {
+   "adapter": "Model2VecAdapter",
+   "arm_id": "potion-base-8m",
+   "code_query_prompt": "",
+   "dense_embedder_model_id": "potion-base-8m#f6d4716bb92f",
+   "dim": 256,
+   "doc_prompt": "",
+   "dtype": "static-fp32",
+   "family": "static",
+   "index_identity": {
+    "digest": "f6d4716bb92f8446d9b09f3e045596a893d64543df4e4434688b786a684c34a6",
+    "dim": 256,
+    "dtype": "static-fp32",
+    "model": "minishlab/potion-base-8M",
+    "prompt_hash": "79067089903e2aa61d16c3ec406d639f46804aa0525e1fb96fad6109503599bc",
+    "revision": "bf8b056651a2c21b8d2565580b8569da283cab23",
+    "runtime": "model2vec==0.10.0/numpy==2.5.2"
+   },
+   "model_repo": "minishlab/potion-base-8M",
+   "native_dim": 256,
+   "normalise": "l2",
+   "notes": "",
+   "pooling": "mean-of-token-lookup",
+   "query_prompt": "",
+   "revision": "bf8b056651a2c21b8d2565580b8569da283cab23",
+   "runtime": "model2vec==0.10.0/numpy==2.5.2"
+  }
+ ],
+ "compat_matrix": {
+  "hf_card_requirement": "config_sentence_transformers.json requires sentence-transformers >= 6.1.0",
+  "isolated_venv": {
+   "model2vec": "0.10.0",
+   "numpy": "2.5.2",
+   "safetensors": "0.8.0",
+   "sentence-transformers": "6.1.0",
+   "tokenizers": "0.23.3",
+   "torch": "2.14.1+cpu",
+   "transformers": "5.20.1"
+  },
+  "lock_gap": {
+   "isolated_matches_maintainer_run": true,
+   "maintainer_run_versions": {
+    "sentence-transformers": "6.1.0",
+    "transformers": "5.20.1"
+   },
+   "statement": "The production uv.lock pins sentence-transformers 5.3.0, transformers 4.57.6, torch 2.9.0; EmbeddingGemma 2 needs sentence-transformers >= 6.1.0 and transformers >= 5.19.0. The lock is NOT touched; every EmbeddingGemma 2 ST lane runs in the isolated venv."
+  },
+  "production_lock_uv_lock": {
+   "model2vec": null,
+   "numpy": "2.4.4",
+   "sentence-transformers": "5.3.0",
+   "torch": "2.9.0",
+   "transformers": "4.57.6"
+  },
+  "required": {
+   "sentence-transformers": ">=6.1.0",
+   "transformers": ">=5.19.0"
+  }
+ },
+ "eg2_model_facts": {
+  "context_window_model_card": 8192,
+  "embedding_dim": 768,
+  "head_dim": 256,
+  "heads": 4,
+  "hidden_size": 512,
+  "intermediate_size": 2048,
+  "kv_heads": 2,
+  "layers": 24,
+  "max_position_embeddings_config_json": 262144,
+  "sliding_window": 512,
+  "source": "config.json of the pinned revision (read from the snapshot, not recalled)",
+  "vocab_size": 262144
+ },
+ "encoding": {
+  "eg2": {
+   "code_intent_rule": "CodeRetrieval query form only for queries labelled code-intent in the frozen 2.1 query set; documents always use the Document form (the card's code-search row uses `title: {title or filename} | text: {code}`; the task text fixes `title: none` and the harness follows the task text).",
+   "document": "title: none | text: {chunk}",
+   "dtype": "FP32 on CPU; BF16 reference lane; FP16 is never used (card: NaN or silent degradation)",
+   "effective_input_cap": {
+    "chunk_chars": 800,
+    "note": "the shipped index clips every embedded text to 800 chars (~200-400 tokens), far below the card's 8,192 tokens and config.json's 262,144 positions; the cap actually in force is the character clip. ST max_seq_length and the llama-server n_ctx/n_ubatch actually used are recorded per run by the parity gate."
+   },
+   "mrl": {
+    "dims": [
+     768,
+     256
+    ],
+    "method": "keep leading dims then L2 re-normalise (applied by the adapter, not by ST truncate_dim)"
+   },
+   "pooling": "mean (1_Pooling/config.json include_prompt=true)",
+   "query": "task: search result | query: {q}",
+   "query_code_intent": "task: code retrieval | query: {q}",
+   "text_only_loading": {
+    "card_param_count": "270M",
+    "config_kwargs": {
+     "audio_config": null,
+     "vision_config": null
+    }
+   }
+  },
+  "static": {
+   "potion-base-8m": "256-d lookup-and-mean, L2",
+   "potion-code-16m-v2": "256-d lookup-and-mean, L2",
+   "prefixes": "none",
+   "runtime": "model2vec==0.10.0/numpy==2.5.2"
+  }
+ },
+ "frozen_context_search": {
+  "constants": {
+   "CANDIDATES_PER_RANKER": 64,
+   "CHUNK_MAX_CHARS": 800,
+   "DENSE_BATCH_CHUNKS": 128,
+   "DENSE_INPUT_MAX_CHARS": 800,
+   "INDEX_ASSUMED_TEXTS_PER_S": 25.0,
+   "MAX_DENSE_CHUNKS": 4096,
+   "RRF_K": 60
+  },
+  "path": "src/repl_environment/context_search.py",
+  "sha256": "6a4b18d6e243858a3964e29dbc1af4f74df431075226bed0e9fc174adbbf072f"
+ },
+ "manifest_sha256": "80937c8d47babf9470bd4e9f081456d7f6d4c9f7d5cf5d54bb9129813d933517",
+ "orchestrator_commit": "325adb51",
+ "parity_gate": {
+  "arms_module_sha256": "efa3eb19253c30bc3782019e759395154bb9421eb907dedd2d4dc2d9a738c2ee",
+  "predeclared": {
+   "gguf_bf16_min_cos": 0.99,
+   "gguf_q8_0_min_cos": 0.98,
+   "min_chunks": 200,
+   "question_set": "the 45 UFH-07 questions",
+   "st_bf16_vs_st_fp32_min_cos": 0.99,
+   "zero_nonfinite": true
+  },
+  "script": "scripts/benchmark/repl_emb_parity_gate.py",
+  "script_sha256": "33089dfc14de30143dca163d02fbd4957b828fabcc640642ed50119ce65680dd"
+ },
+ "prompt_side_mechanism": {
+  "adapter_rule": "the adapter prefixes both sides; it tells them apart by the admission_wait_s the shipped index passes (INDEX_ADMISSION_WAIT_S for chunk batches, QUERY_ADMISSION_WAIT_S for the query); repl_emb_arms.side_for asserts the constants differ.",
+  "constants": {
+   "INDEX_ADMISSION_WAIT_S": 2.0,
+   "QUERY_ADMISSION_WAIT_S": 0.5
+  },
+  "problem": "ContextSearchIndex only prefixes queries (query_text + BGE-only _QUERY_PREFIXES) and sends documents unprefixed.",
+  "shipped_code_modified": false
+ },
+ "query_set": {
+  "code_intent_with_blind_code_span_gold": null,
+  "reason": "REPL-EMB-2.2 has not launched; no frozen 2.1 query set or gold labels exist yet (data/repl_retrieval_eval/<run-id>/ is absent). Recount at the 2.2 freeze.",
+  "status": "query_set_not_frozen"
+ },
+ "revisions": {
+  "ggml-org/embeddinggemma-2-GGUF": {
+   "files": {
+    "embeddinggemma-2-BF16.gguf": {
+     "bytes": 557950176,
+     "sha256": "68bae29d62fb8c7d23e98d21fd4662753ddd636e6b62b8a70dfe059a9844f216"
+    },
+    "embeddinggemma-2-Q8_0.gguf": {
+     "bytes": 309855456,
+     "sha256": "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135"
+    }
+   },
+   "revision": "58faf90940886df2d62be555c8765d00dac362c5"
+  },
+  "google/embeddinggemma-2": {
+   "files": {
+    "config.json": {
+     "bytes": 4455,
+     "sha256": "b8f1e9931b57fbc054acdb445c41765d55b0074c58d145fa82839941ad1b5bb3"
+    },
+    "config_sentence_transformers.json": {
+     "bytes": 1565,
+     "sha256": "031e56a498d33c349ab489a21885bcfe25b4fcba841149dc99e1e90d4a7c28f5"
+    },
+    "model.safetensors": {
+     "bytes": 1488915288,
+     "sha256": "197a32965d4b1105faf060417baa899e193fb73cd401f42ec9295234d5553d79"
+    },
+    "modules.json": {
+     "bytes": 413,
+     "sha256": "3d02572a0455b832de67fb8e63a54981bc7e8b46e337c95e917bd8122a533bfd"
+    },
+    "tokenizer.json": {
+     "bytes": 32170510,
+     "sha256": "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4"
+    },
+    "tokenizer.model": {
+     "bytes": 4689013,
+     "sha256": "e594c8a90eb08d8bda498ff4747977dc827ae0c3c56b5c0d41a605a22d02ef03"
+    }
+   },
+   "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+  },
+  "incumbent:bge-large-en-v1.5-f16.gguf": {
+   "bytes": 669603712,
+   "path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+   "sha256": "3379a0e9cea28fc6d7136df8ea7a88ef99ccce5963b9a6f7af9609997be762e3"
+  },
+  "minishlab/potion-base-8M": {
+   "files": {
+    "config.json": {
+     "bytes": 202,
+     "sha256": "2a6ac0e9aaa356a68a5688070db78fc3a464fefe85d2f06a1905ce3718687553"
+    },
+    "model.safetensors": {
+     "bytes": 30236760,
+     "sha256": "f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2"
+    },
+    "tokenizer.json": {
+     "bytes": 683666,
+     "sha256": "e67e803f624fb4d67dea1c730d06e1067e1b14d830e2c2202569e3ef0f70bb50"
+    }
+   },
+   "resolved": "HF API main HEAD on 2026-10-20 (lastModified 2026-03-27)",
+   "revision": "bf8b056651a2c21b8d2565580b8569da283cab23"
+  },
+  "minishlab/potion-code-16M-v2": {
+   "files": {
+    "config.json": {
+     "bytes": 59,
+     "sha256": "148e5691a6fcc553437156859701fba017a1ba5d340b170f17e0f3668fb861a7"
+    },
+    "model.safetensors": {
+     "bytes": 32490072,
+     "sha256": "75cf7a6c2171b230ad19b1e7d8e0b1aee86da5a02af8e7cacedd9921d227623c"
+    },
+    "tokenizer.json": {
+     "bytes": 1024340,
+     "sha256": "107bbdcbad4bff1d299b7a4c3a2fb17c52890688b7dd0e4c9deab79d3c4f3d45"
+    }
+   },
+   "revision": "e9d2a44ca6a05ac6685f3b23709ea57eb7352d5b"
+  }
+ },
+ "schema": "repl-emb-arm-manifest/1",
+ "scope": "deterministic infrastructure; no recall or speed claim",
+ "task": "REPL-EMB-2.5"
+}
