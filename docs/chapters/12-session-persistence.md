@@ -46,6 +46,8 @@ The persistence layer is split into five components, each owning a single respon
 │   └── scheduler.json                # Procedure scheduler state
 ```
 
+`session_embeddings.npy` is never deleted or overwritten by the store. If its stored dimension differs from the configured one (or it cannot be parsed), `SQLiteSessionStore` keeps the file untouched, logs an ERROR naming the stored dimension, expected dimension and path, and opens with embeddings disabled: `store_embedding` raises `SessionEmbeddingsRefused`, `search_by_embedding` returns `[]`, and session metadata keeps working. Changing the embedding dimension is a migration (a separate tool), not a constructor side effect.
+
 </details>
 
 ## 7-Phase Implementation

@@ -45,6 +45,56 @@ class SummaryBacklogExceeded(ValueError):
     """Raised rather than silently omitting messages during summary refresh."""
 
 
+class SessionEmbeddingsRefused(RuntimeError):
+    """The on-disk session embeddings file was REFUSED and left untouched.
+
+    Raised when an existing, non-empty ``session_embeddings.npy`` cannot be used
+    as-is: its stored vector dimension differs from the store's expected
+    dimension (``reason="dim_mismatch"``, e.g. 1024-d BGE -> 256-d
+    EmbeddingGemma 2), or it cannot be parsed (``reason="unreadable"``).
+
+    The store NEVER deletes, truncates or overwrites such a file: the bytes in
+    it may be the only copy of every session embedding. Changing the embedding
+    dimension is a migration (a separate tool), not something a constructor may
+    do by throwing the old vectors away.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        reason: str,
+        *,
+        stored_dim: int | None = None,
+        expected_dim: int | None = None,
+        detail: str = "",
+    ) -> None:
+        self.path = Path(path)
+        self.reason = reason
+        self.stored_dim = stored_dim
+        self.expected_dim = expected_dim
+        self.detail = detail
+        if reason == "dim_mismatch":
+            what = f"stored dimension {stored_dim} != expected dimension {expected_dim}"
+        else:
+            what = f"file is unreadable ({detail}); expected dimension {expected_dim}"
+        super().__init__(
+            f"Refusing session embeddings file {self.path}: {what}. The file was "
+            "left untouched (never deleted or overwritten); session embedding "
+            "store/search are DISABLED until it is migrated or moved aside "
+            "explicitly (migration is a separate tool)."
+        )
+
+    def clone(self) -> "SessionEmbeddingsRefused":
+        """Fresh instance with the same facts (no accumulated traceback)."""
+        return SessionEmbeddingsRefused(
+            self.path,
+            self.reason,
+            stored_dim=self.stored_dim,
+            expected_dim=self.expected_dim,
+            detail=self.detail,
+        )
+
+
 def _json_col(row: Any, name: str) -> dict:
     """Read a JSON dict column, tolerating rows from before the column existed."""
     try:
@@ -122,10 +172,31 @@ class SQLiteSessionStore(BaseSessionStore):
         # so session ownership lives in the shared database, not in a mutex.
         self.leases = SessionLeaseManager(self.db_path)
 
-        # Load or create embeddings array
-        self._load_embeddings()
+        # Load or create embeddings array. A refused file (dimension mismatch /
+        # unreadable) is KEPT UNTOUCHED and the store opens with embeddings
+        # disabled: session metadata lives in SQLite and must stay usable, and
+        # nothing here may delete or overwrite the existing vectors.
+        self._embeddings: np.ndarray | None = None
+        self._next_embedding_idx = 0
+        self.embeddings_refusal: SessionEmbeddingsRefused | None = None
+        try:
+            self._load_embeddings()
+        except SessionEmbeddingsRefused as exc:
+            self.embeddings_refusal = exc
+            logger.error(
+                "SQLiteSessionStore at %s opened WITHOUT session embeddings "
+                "(store_embedding raises SessionEmbeddingsRefused, "
+                "search_by_embedding returns []): %s",
+                self.db_path,
+                exc,
+            )
 
         logger.info(f"SQLiteSessionStore initialized at {self.db_path}")
+
+    @property
+    def embeddings_available(self) -> bool:
+        """False when the embeddings file was refused at load (see ``embeddings_refusal``)."""
+        return self._embeddings is not None
 
     def _init_db(self) -> None:
         """Initialize SQLite database schema with WAL mode."""
@@ -307,24 +378,66 @@ class SQLiteSessionStore(BaseSessionStore):
             conn.execute("ALTER TABLE checkpoints ADD COLUMN pickled_globals TEXT DEFAULT '{}'")
         conn.commit()
 
+    def _embeddings_unavailable(self) -> SessionEmbeddingsRefused:
+        """Fresh refusal describing why embeddings are disabled (never logs)."""
+        if self.embeddings_refusal is not None:
+            return self.embeddings_refusal.clone()
+        return SessionEmbeddingsRefused(
+            self.embeddings_path,
+            "unreadable",
+            expected_dim=self.embedding_dim,
+            detail="embeddings array not loaded",
+        )
+
+    def _refuse_embeddings(
+        self,
+        reason: str,
+        *,
+        stored_dim: int | None = None,
+        detail: str = "",
+    ) -> SessionEmbeddingsRefused:
+        """Build the refusal for the existing embeddings file and log it loudly."""
+        exc = SessionEmbeddingsRefused(
+            self.embeddings_path,
+            reason,
+            stored_dim=stored_dim,
+            expected_dim=self.embedding_dim,
+            detail=detail,
+        )
+        logger.error("%s", exc)
+        return exc
+
     def _load_embeddings(self) -> None:
-        """Load or create embeddings array (memory-mapped)."""
+        """Load or create embeddings array (memory-mapped).
+
+        A missing or zero-byte file is created fresh (no data to lose). An
+        existing non-empty file is loaded when its dimension matches; otherwise
+        this raises ``SessionEmbeddingsRefused`` and leaves the file byte-for-byte
+        untouched. This method never deletes or overwrites an existing non-empty
+        file (a dimension change is a migration, handled by a separate tool).
+
+        Raises:
+            SessionEmbeddingsRefused: stored dimension != ``embedding_dim``, or
+                the file cannot be parsed as a 2-D ``.npy`` array.
+        """
         if self.embeddings_path.exists() and self.embeddings_path.stat().st_size > 0:
+            # Probe READ-ONLY first so a refused file is never even opened for write.
             try:
-                self._embeddings = np.load(self.embeddings_path, mmap_mode="r+")
-                if self._embeddings.shape[1] != self.embedding_dim:
-                    logger.warning(
-                        "Session embeddings dim mismatch (%s != %s); recreating file.",
-                        self._embeddings.shape[1],
-                        self.embedding_dim,
-                    )
-                    self.embeddings_path.unlink()
-                else:
-                    self._next_embedding_idx = len(self._embeddings)
-                    return
+                probe = np.load(self.embeddings_path, mmap_mode="r")
             except (EOFError, ValueError) as e:
-                logger.warning(f"Corrupt embeddings file, recreating: {e}")
-                self.embeddings_path.unlink()
+                raise self._refuse_embeddings(
+                    "unreadable", detail=f"{type(e).__name__}: {e}"
+                ) from e
+            shape = getattr(probe, "shape", None)
+            del probe
+            if shape is None or len(shape) != 2:
+                raise self._refuse_embeddings("unreadable", detail=f"array shape {shape}")
+            if shape[1] != self.embedding_dim:
+                raise self._refuse_embeddings("dim_mismatch", stored_dim=int(shape[1]))
+
+            self._embeddings = np.load(self.embeddings_path, mmap_mode="r+")
+            self._next_embedding_idx = len(self._embeddings)
+            return
 
         # Create new embeddings array (start with 1000 slots)
         initial_size = 1000
@@ -1353,8 +1466,17 @@ class SQLiteSessionStore(BaseSessionStore):
         embedding: np.ndarray,
         content_type: str = "session",
     ) -> int:
-        """Store an embedding for semantic search."""
+        """Store an embedding for semantic search.
+
+        Raises:
+            SessionEmbeddingsRefused: the embeddings file was refused at load
+                (dimension mismatch / unreadable). Nothing is written, so the
+                caller cannot believe a dropped vector was saved.
+        """
         with self._embeddings_lock:
+            if self._embeddings is None:
+                raise self._embeddings_unavailable()
+
             # Ensure we have space
             if self._next_embedding_idx >= len(self._embeddings):
                 self._grow_embeddings()
@@ -1384,7 +1506,19 @@ class SQLiteSessionStore(BaseSessionStore):
         limit: int = 10,
         min_similarity: float = 0.3,
     ) -> list[tuple[str, float]]:
-        """Search by embedding similarity using cosine similarity."""
+        """Search by embedding similarity using cosine similarity.
+
+        Returns ``[]`` (with a warning) when the embeddings file was refused at
+        load: a search is read-only and advisory, so there is no data to lose.
+        """
+        embeddings = self._embeddings
+        if embeddings is None:
+            logger.warning(
+                "search_by_embedding: session embeddings disabled, returning no results: %s",
+                self._embeddings_unavailable(),
+            )
+            return []
+
         # Get valid embedding indices for this content type
         with self._get_connection() as conn:
             rows = conn.execute(
@@ -1404,7 +1538,7 @@ class SQLiteSessionStore(BaseSessionStore):
 
         results = []
         for idx, sid in zip(indices, session_ids):
-            stored_emb = self._embeddings[idx]
+            stored_emb = embeddings[idx]
             stored_norm = stored_emb / (np.linalg.norm(stored_emb) + 1e-8)
             similarity = float(np.dot(query_norm, stored_norm))
 
@@ -1543,6 +1677,6 @@ class SQLiteSessionStore(BaseSessionStore):
     def close(self) -> None:
         """Close the store and flush embeddings to disk."""
         # Flush embeddings
-        if hasattr(self, "_embeddings"):
+        if getattr(self, "_embeddings", None) is not None:
             self._embeddings.flush()
         logger.info("SQLiteSessionStore closed")

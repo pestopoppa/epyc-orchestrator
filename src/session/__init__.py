@@ -30,7 +30,7 @@ from src.session.models import (
 )
 from src.session.persister import IdleMonitor, SessionPersister
 from src.session.protocol import SessionStore
-from src.session.sqlite_store import SQLiteSessionStore
+from src.session.sqlite_store import SessionEmbeddingsRefused, SQLiteSessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,7 @@ __all__ = [
     "SessionStore",
     # Implementation
     "SQLiteSessionStore",
+    "SessionEmbeddingsRefused",
     # Document caching
     "DocumentCache",
     "get_document_cache",

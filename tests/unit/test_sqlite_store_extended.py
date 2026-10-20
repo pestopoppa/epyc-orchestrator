@@ -365,16 +365,20 @@ class TestEmbeddings:
             assert isinstance(results[0], tuple)
             assert len(results[0]) == 2
 
-    def test_load_embeddings_error_recovery(self, tmp_path):
-        """Test that corrupt embeddings file is recreated."""
+    def test_load_embeddings_corrupt_file_is_refused_not_recreated(self, tmp_path):
+        """A corrupt embeddings file is KEPT (never unlinked/recreated).
+
+        The store still opens with embeddings disabled; see
+        test_sqlite_store_embedding_refusal.py for the full contract.
+        """
         db_path = tmp_path / "test.db"
         embeddings_path = tmp_path / "embeddings.npy"
 
         # Create a corrupt embeddings file
         embeddings_path.write_bytes(b"corrupt data")
 
-        # Should recreate the file
         store = SQLiteSessionStore(db_path=db_path, embeddings_path=embeddings_path)
-        assert store._embeddings is not None
-        assert len(store._embeddings) > 0
+        assert store._embeddings is None
+        assert not store.embeddings_available
+        assert embeddings_path.read_bytes() == b"corrupt data"
         store.close()
