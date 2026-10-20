@@ -1033,9 +1033,12 @@ def primitives_completer(
     def complete(messages: Sequence[Mapping[str, Any]], schema: Mapping[str, Any]) -> str:
         from src.chat_completions_roles import thinking_off
 
-        prompt = "\n\n".join(
+        from src.security.control_tokens import neutralise_control_tokens
+
+        # CT-12.3c: the text being repaired is model output derived from untrusted input.
+        prompt = neutralise_control_tokens("\n\n".join(
             f"[{m.get('role', 'user')}]\n{m.get('content', '')}" for m in messages
-        )
+        ))
         with thinking_off():
             return primitives.llm_call(
                 prompt,

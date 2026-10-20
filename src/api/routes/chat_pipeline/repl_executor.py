@@ -35,6 +35,7 @@ from src.session.lease import HeldSessionLease, SessionLeaseManager
 from src.session.models import Checkpoint
 from src.session.protocol import normalize_checkpoint_for_repl_restore
 from src.structured_output.repair import parse_with_repair, primitives_completer
+from src.security.control_tokens import neutralise_control_tokens
 
 from src.api.routes.chat_summarization import (
     _run_two_stage_summarization,
@@ -378,7 +379,10 @@ async def _execute_repl_body(
             pull_budget_bytes=request.context_pull_budget_bytes,
             search_enabled=bool(getattr(request, "context_search", False)),
         )
-        root_prompt = f"{request.prompt}\n\n{context_bundle.render_root_block()}"
+        # CT-12.3c: the bundle index carries caller-supplied file names/labels.
+        root_prompt = (
+            f"{request.prompt}\n\n{neutralise_control_tokens(context_bundle.render_root_block())}"
+        )
 
     # Create REPL environment — use DocumentREPLEnvironment when document
     # preprocessing produced structured results (sections, figures, etc.)
@@ -388,7 +392,7 @@ async def _execute_repl_body(
 
     # Inject SkillBank skill context if available (SkillRL §3.2)
     if routing.skill_context:
-        combined_context = f"{routing.skill_context}\n\n{combined_context}"
+        combined_context = f"{neutralise_control_tokens(routing.skill_context)}\n\n{combined_context}"  # CT-12.3c
 
     # Derive tool context for cascading policy (WS-3: deny web for reasoning domains)
     from src.tool_policy import NO_WEB_TASK_TYPES
@@ -403,7 +407,7 @@ async def _execute_repl_body(
         doc_context = DocumentContext.from_document_result(doc_result)
 
         # Use searchable text as REPL context, prepend the user's question
-        doc_text = doc_result.to_searchable_text()
+        doc_text = neutralise_control_tokens(doc_result.to_searchable_text())  # CT-12.3c: OCR'd text
         combined_context = f"Question: {request.prompt}\n\n{doc_text}"
 
         repl = DocumentREPLEnvironment(

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.prompt_builders.resolver import resolve_prompt
+from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
 from src.registry.stack_priors import live_stack_role_records
 
 
@@ -136,13 +137,14 @@ def build_plan_review_prompt(
 
     steps_block = "\n".join(step_lines)
 
-    return resolve_prompt(
+    # CT-12.3c: objective and plan-step text derive from the user's task.
+    return _ct_neutralise(resolve_prompt(
         "plan_review",
         _PLAN_REVIEW_FALLBACK,
         objective=objective[:200],
         task_type=task_type,
         steps_section=steps_block,
-    )
+    ))
 
 
 # ── Architect Delegation Prompts ─────────────────────────────────────────
@@ -173,13 +175,14 @@ def build_architect_investigate_prompt(
             f"\nEvidence bundle (for discovery; not a solution plan):\n{context[:3000]}\n"
         )
 
-    return resolve_prompt(
+    # CT-12.3c: question and evidence bundle are untrusted.
+    return _ct_neutralise(resolve_prompt(
         "architect_investigate",
         _ARCHITECT_INVESTIGATE_FALLBACK,
         context_section=context_section,
         valid_roles_section=_architect_investigate_valid_roles_section(),
         question=question[:2000],
-    )
+    ))
 
 
 def _specialist_clearly_failed(report: str) -> bool:
@@ -222,10 +225,11 @@ def build_architect_synthesis_prompt(
     else:
         investigate_option = "\nDo NOT delegate or request further investigation. Answer now.\n"
 
-    return resolve_prompt(
+    # CT-12.3c: the specialist report is delegated sub-task output (untrusted).
+    return _ct_neutralise(resolve_prompt(
         "architect_synthesis",
         _ARCHITECT_SYNTHESIS_FALLBACK,
         investigate_option=investigate_option,
         question=question[:2000],
         report=report[:6000],
-    )
+    ))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from src.prompt_builders.resolver import resolve_prompt
+from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
 
 _FORMALIZER_FALLBACK = (
     "Reformat the following answer to strictly satisfy this format constraint: {format_spec}\n\n"
@@ -66,9 +67,10 @@ def build_formalizer_prompt(answer: str, prompt: str, format_spec: str) -> str:
     Returns:
         Formatted formalizer prompt string.
     """
-    return resolve_prompt(
+    # CT-12.3c: the answer being reformatted and the user prompt are untrusted.
+    return _ct_neutralise(resolve_prompt(
         "formalizer", _FORMALIZER_FALLBACK,
         format_spec=format_spec,
         prompt=prompt[:500],
         answer=answer,
-    )
+    ))

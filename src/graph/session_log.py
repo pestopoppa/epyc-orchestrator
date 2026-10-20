@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.roles import Role
+from src.security.control_tokens import neutralise_control_tokens
 
 log = logging.getLogger(__name__)
 
@@ -637,7 +638,7 @@ def should_consolidate(
 
 def build_consolidation_prompt(granular_blocks: list[str]) -> str:
     """Build prompt for Tier 2 deep consolidation via worker_general."""
-    block_text = "\n".join(granular_blocks)
+    block_text = neutralise_control_tokens("\n".join(granular_blocks))  # CT-12.3c
     return (
         "Consolidate this sequence of REPL session events into a dense 2-4 "
         "sentence paragraph. Preserve: key findings, errors encountered, "
@@ -963,7 +964,7 @@ def build_session_summary_deterministic(records: list[TurnRecord]) -> str:
 
 def build_session_summary_prompt(records: list[TurnRecord]) -> str:
     """Build a prompt for the fast worker to summarize session history."""
-    record_text = "\n".join(r.to_log_line() for r in records)
+    record_text = neutralise_control_tokens("\n".join(r.to_log_line() for r in records))  # CT-12.3c
     return (
         "Summarize this REPL session history in 2-4 dense sentences. "
         "Focus on: what approaches were tried, what failed, what worked, "
@@ -976,7 +977,7 @@ def build_session_summary_prompt(records: list[TurnRecord]) -> str:
 
 def build_scratchpad_extraction_prompt(records: list[TurnRecord]) -> str:
     """Build a combined prompt for session summary + scratchpad extraction."""
-    record_text = "\n".join(r.to_log_line() for r in records)
+    record_text = neutralise_control_tokens("\n".join(r.to_log_line() for r in records))  # CT-12.3c
     categories = ", ".join(sorted(SCRATCHPAD_CATEGORIES))
     return (
         "Analyze this REPL session history and produce TWO sections.\n\n"

@@ -39,6 +39,7 @@ from enum import Enum
 from typing import Any, TYPE_CHECKING
 
 from src.roles import Role, chain_name_to_role
+from src.security.control_tokens import neutralise_control_tokens
 from src.proactive_delegation.types import (
     AggregatedResult,
     ComplexitySignals,
@@ -571,7 +572,7 @@ class ProactiveDelegator:
                 prompt_with_feedback = (
                     prompt
                     + "\n\n## Previous Feedback\n"
-                    + "\n".join(f"- {fb}" for fb in sliced)
+                    + neutralise_control_tokens("\n".join(f"- {fb}" for fb in sliced))  # CT-12.3c
                     + "\n\nAddress the feedback above."
                 )
             else:
@@ -721,7 +722,8 @@ class ProactiveDelegator:
             ]
         )
 
-        return "\n".join(prompt_parts)
+        # CT-12.3c: objective/action/inputs derive from the user's task (untrusted).
+        return neutralise_control_tokens("\n".join(prompt_parts))
 
     def _escalate_role(self, current_role: str) -> str:
         """Get escalated role for current role, via the canonical ladder.

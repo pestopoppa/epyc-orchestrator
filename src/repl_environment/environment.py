@@ -45,6 +45,7 @@ from src.repl_environment.procedure_tools import _ProcedureToolsMixin
 from src.repl_environment.context import _ContextMixin
 from src.repl_environment.state import _StateMixin
 from src.research_context import ResearchContext
+from src.security.control_tokens import neutralise_repl_globals, neutralise_control_tokens
 
 _log = logging.getLogger(__name__)
 
@@ -535,7 +536,9 @@ class REPLEnvironment(
             globals_dict["SCRIPT"] = self._invoke_script
             globals_dict["find_scripts"] = self._find_scripts
 
-        return globals_dict
+        # CT-12.3c: break chat control-token spellings in everything the REPL
+        # reads from outside the orchestrator, at the source.
+        return neutralise_repl_globals(globals_dict)
 
     def _validate_file_path(self, path: str) -> tuple[bool, str | None]:
         """Validate that a file path is allowed.
@@ -817,7 +820,7 @@ class REPLEnvironment(
 
                 summary = self.llm_primitives.llm_call(
                     prompt=prompt,
-                    context_slice=ctx,
+                    context_slice=neutralise_control_tokens(ctx),  # CT-12.3c: program output
                     role="worker",
                     n_tokens=512,
                     skip_suffix=True,

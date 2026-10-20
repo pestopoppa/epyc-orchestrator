@@ -233,6 +233,7 @@ from enum import Enum
 from typing import Any
 
 import httpx
+from src.security.control_tokens import neutralise_control_tokens
 
 from src.typed_decisions.confidence import (
     choice_confidence,
@@ -1229,7 +1230,7 @@ def build_native_prompt(
     prompt is stored on the layout side channel (``_last_native_layout``).
     """
     lines = [_NATIVE_INSTRUCTIONS, ""]
-    lines.append(f"STATE:\n{state}")
+    lines.append(f"STATE:\n{neutralise_control_tokens(state)}")  # CT-12.3c: state is untrusted
     lines.append("")
     lines.append("QUESTION SEQUENCE:")
     for index, item in enumerate(questions, start=1):

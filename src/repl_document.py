@@ -26,6 +26,7 @@ from typing import Any
 
 from src.models.document import DocumentPreprocessResult, FigureRef, Section
 from src.repl_environment import REPLEnvironment, REPLConfig
+from src.security.control_tokens import neutralise_control_tokens, neutralise_repl_globals
 
 
 @dataclass
@@ -111,6 +112,8 @@ class DocumentREPLEnvironment(REPLEnvironment):
         self._globals["page_range"] = self._page_range
         self._globals["search_sections"] = self._search_sections
         self._globals["document_info"] = self._document_info
+        # CT-12.3c: section/figure text is OCR'd / extracted from the document (untrusted).
+        neutralise_repl_globals(self._globals)
 
     def _section(self, n: int) -> str:
         """Get text from specific section (1-indexed).
@@ -313,7 +316,7 @@ class DocumentREPLEnvironment(REPLEnvironment):
             DocumentREPLEnvironment with document context.
         """
         return cls(
-            context=document_result.to_searchable_text(),
+            context=neutralise_control_tokens(document_result.to_searchable_text()),  # CT-12.3c
             document_context=DocumentContext.from_document_result(document_result),
             config=config,
             **kwargs,

@@ -40,6 +40,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
+from src.security.control_tokens import neutralise_control_tokens
 
 from src.typed_decisions.confidence import (
     choice_confidence,
@@ -305,7 +306,7 @@ def _build_prompt(state: str, questions: Sequence[Question], schema: dict[str, A
     return (
         f"{_INSTRUCTIONS}\n"
         f"RESPONSE JSON SCHEMA (authoritative):\n{schema_text}\n\n"
-        f"STATE:\n{state}\n\n"
+        f"STATE:\n{neutralise_control_tokens(state)}\n\n"  # CT-12.3c: state is untrusted
         f"QUESTION CATALOG:\n{_build_catalog(questions)}\n"
     )
 

@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 from src.repl_environment.types import FinalSignal
+from src.security.control_tokens import neutralise_control_tokens, neutralise_llm_args
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ class _ContextMixin:
                 f"Be specific about what you find. Note any references to other "
                 f"sections or information that may require cross-referencing."
             )
-            prompts.append(prompt)
+            prompts.append(neutralise_control_tokens(prompt))  # CT-12.3c: chunk text + task
 
         # Dispatch to workers in batch
         try:
@@ -440,6 +441,8 @@ class _ContextMixin:
             llm_call result.
         """
         self._exploration_calls += 1
+        # CT-12.3c: REPL code builds sub-LM prompts from untrusted REPL data.
+        args, kwargs = neutralise_llm_args(args, kwargs)
         result = self.llm_primitives.llm_call(*args, **kwargs)
         self._exploration_log.add_event("llm_call", {"args": args, "kwargs": kwargs}, result)
         return result
@@ -451,6 +454,7 @@ class _ContextMixin:
             llm_batch result.
         """
         self._exploration_calls += 1
+        args, kwargs = neutralise_llm_args(args, kwargs)  # CT-12.3c
         result = self.llm_primitives.llm_batch(*args, **kwargs)
         self._exploration_log.add_event("llm_batch", {"args": args, "kwargs": kwargs}, result)
         return result

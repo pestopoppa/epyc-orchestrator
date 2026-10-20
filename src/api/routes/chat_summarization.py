@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
+from src.security.control_tokens import neutralise_control_tokens
 
 from src.api.routes.chat_utils import (
     _estimate_tokens,
@@ -211,6 +212,7 @@ async def _run_two_stage_summarization(
 
     # Build worker prompts — task-specific instructions
     worker_prompts = []
+    # CT-12.3c: the document chunks are untrusted (idempotent if already clean).
     for chunk in chunks:
         worker_prompt = (
             f"Analyze this section ({chunk['index'] + 1}/{n_chunks}) of a larger document.\n"
@@ -221,7 +223,7 @@ async def _run_two_stage_summarization(
             f"If the task asks to FIND something specific, look for it and report exact matches.\n"
             f"Be concise. Output structured findings only."
         )
-        worker_prompts.append(worker_prompt)
+        worker_prompts.append(neutralise_control_tokens(worker_prompt))
 
     # Dispatch chunk digests to the live stack's summarization worker.
     worker_role = _summarization_worker_role(stack_priors_path)
@@ -277,6 +279,8 @@ async def _run_two_stage_summarization(
             "Be precise and include specific details from the findings."
         )
 
+    # CT-12.3c: worker digests are model output derived from untrusted text.
+    digest_text = neutralise_control_tokens(digest_text)
     synthesis_prompt = (
         f"You analyzed a large document in {n_chunks} sections. Here are the worker findings:\n\n"
         f"{digest_text}\n\n"

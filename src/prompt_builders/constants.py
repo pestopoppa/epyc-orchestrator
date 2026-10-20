@@ -395,6 +395,9 @@ def build_react_prompt(
         max_turns=max_turns,
     )
 
+    # CT-12.3c: context and question are untrusted; react_prompt is ours (no spellings).
+    from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
+
     if context:
-        return f"{react_prompt}\n\nContext:\n{context}\n\nQuestion: {prompt}"
-    return f"{react_prompt}\n\nQuestion: {prompt}"
+        return f"{react_prompt}\n\nContext:\n{_ct_neutralise(context)}\n\nQuestion: {_ct_neutralise(prompt)}"
+    return f"{react_prompt}\n\nQuestion: {_ct_neutralise(prompt)}"

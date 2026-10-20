@@ -100,6 +100,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
+from src.security.control_tokens import neutralise_control_tokens
+
 log = logging.getLogger(__name__)
 
 SCHEMA = "epyc.orchestrator.scouts.v1"
@@ -610,7 +612,8 @@ def run_scout(index: int, target: ScoutTarget, *, reader: ScopedReader,
             {"role": "system", "content": _SYSTEM.format(
                 root=reader.root, ncmd=COMMANDS_PER_REPLY, nread=READ_MAX_LINES,
                 ngrep=GREP_MAX_HITS, turns=config.max_turns, words=words)},
-            {"role": "user", "content": (
+            # CT-12.3c: the seed is raw repository file content (untrusted).
+            {"role": "user", "content": neutralise_control_tokens(
                 f"Target: {target.describe()}\n"
                 + (f"Located at {located}.\n" if located else "")
                 + f"\nEvidence gathered by the orchestrator:\n{seed}\n\n"
@@ -644,7 +647,8 @@ def run_scout(index: int, target: ScoutTarget, *, reader: ScopedReader,
                 result.evidence_refs = len(_EVIDENCE_RE.findall(summary))
                 result.status = "ok" if summary.strip() else "no_summary"
                 return result
-            messages.append({"role": "assistant", "content": _strip_think(reply.text)[:4000]})
+            messages.append({"role": "assistant",
+                             "content": neutralise_control_tokens(_strip_think(reply.text)[:4000])})
             if commands:
                 output = _run_commands(reader, commands, result, pull_left)
                 pull_left -= len(output)
@@ -654,7 +658,8 @@ def run_scout(index: int, target: ScoutTarget, *, reader: ScopedReader,
             left = config.max_turns - turn
             tail = ("This is your LAST reply: write SUMMARY now, no commands."
                     if left == 1 else f"Replies left: {left}.")
-            messages.append({"role": "user", "content": f"{output}\n\n{tail}"})
+            # CT-12.3c: READ/GREP output is file content (untrusted).
+            messages.append({"role": "user", "content": f"{neutralise_control_tokens(output)}\n\n{tail}"})
         result.status = "no_summary"
         return result
     except ScoutCancelled:

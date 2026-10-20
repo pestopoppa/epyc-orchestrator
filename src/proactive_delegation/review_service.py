@@ -591,6 +591,10 @@ Rules:
         """
         from src.chat_completions_roles import thinking_off
 
+        # CT-12.3c: reviewer prompts embed candidate output / task text (untrusted).
+        from src.security.control_tokens import neutralise_llm_args
+
+        args, kwargs = neutralise_llm_args(args, kwargs)
         with thinking_off():
             return self.primitives.llm_call(*args, **kwargs)
 

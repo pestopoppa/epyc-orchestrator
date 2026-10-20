@@ -515,6 +515,11 @@ class PromptBuilder:
         if outputs:
             prompt.outputs = ", ".join(outputs)
 
+        # CT-12.3c: action/constraints and step inputs (prior-step outputs, context)
+        # are untrusted; neutralise the fields so the structured form is covered too.
+        prompt.action = _ct_neutralise(prompt.action)
+        prompt.constraints = _ct_neutralise(prompt.constraints)
+        prompt.inputs = _ct_neutralise(prompt.inputs)
         if as_structured:
             return prompt
         return prompt.to_string()
@@ -1171,6 +1176,9 @@ for m in matches:
 header = peek(2000)
 print(header)"""
 
+    # CT-12.3c: original_prompt and state are untrusted.
+    original_prompt = _ct_neutralise(original_prompt)
+    state = _ct_neutralise(state)
     return f"""You are an orchestrator processing a large document ({context_chars:,} chars, ~{est_tokens:,} tokens).
 
 ## Task
@@ -1225,8 +1233,8 @@ def build_task_decomposition_prompt(objective: str, context: str = "") -> str:
         Prompt string for the architect model.
     """
     context_note = f"\nContext ({len(context)} chars): {context[:200]}..." if context else ""
-    return resolve_prompt(
+    return _ct_neutralise(resolve_prompt(  # CT-12.3c: objective/context are untrusted
         "task_decomposition", _TASK_DECOMPOSITION_FALLBACK,
         objective=objective[:500],
         context_note=context_note,
-    )
+    ))

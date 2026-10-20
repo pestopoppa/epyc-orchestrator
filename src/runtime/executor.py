@@ -768,7 +768,10 @@ class Executor:
         if step.outputs:
             parts.append(f"\nExpected outputs: {', '.join(step.outputs)}")
 
-        return "\n".join(parts)
+        # CT-12.3c: step inputs are prior-step outputs / user context (untrusted).
+        from src.security.control_tokens import neutralise_control_tokens
+
+        return neutralise_control_tokens("\n".join(parts))
 
     def get_context(self) -> ContextManager:
         """Get the context manager.

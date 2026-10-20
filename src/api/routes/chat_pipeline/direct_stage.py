@@ -90,7 +90,10 @@ def _execute_direct(
 
     # Inject SkillBank skill context if available (SkillRL §3.2)
     if routing.skill_context:
-        direct_prompt = f"{routing.skill_context}\n\n{direct_prompt}"
+        # CT-12.3c: SkillBank text is learned from past (untrusted) tasks.
+        from src.security.control_tokens import neutralise_control_tokens
+
+        direct_prompt = f"{neutralise_control_tokens(routing.skill_context)}\n\n{direct_prompt}"
 
     # Cap token budget for MCQs to prevent self-doubt loops where the
     # model states the correct answer then second-guesses into a wrong one.

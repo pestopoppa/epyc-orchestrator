@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.roles import Role
+from src.security.control_tokens import neutralise_control_tokens
 from src.graph.state import TaskState
 
 log = logging.getLogger(__name__)
@@ -258,7 +259,7 @@ async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
             index_head = f"{_resolve_compaction_prompt()}\n\n---\n\n"
             # The cap bounds the WHOLE call input: prompt + separator + context.
             index_input = _cap_index_input(ctx, to_externalize, len(index_head))
-            full_index_prompt = f"{index_head}{index_input}"
+            full_index_prompt = f"{index_head}{neutralise_control_tokens(index_input)}"  # CT-12.3c
             try:
                 if _use_inline_calls_in_tests():
                     index = ctx.deps.primitives.llm_call(

@@ -14,6 +14,7 @@ from src.graph.helpers import _validate_final_answer
 from src.structured_output.repair import parse_with_repair, primitives_completer
 from src.task_ir import canonicalize_task_ir
 from src.roles import Role
+from src.security.control_tokens import neutralise_control_tokens
 
 _MAX_SCHEMA_RETRIES = 2
 
@@ -598,7 +599,7 @@ class _RoutingMixin:
             # /completion and /v1 lanes), instead of relying only on the
             # prose preamble above to get the model to comply.
             result = self.llm_primitives.llm_call(
-                query_prompt,
+                neutralise_control_tokens(query_prompt),  # CT-12.3c
                 role=target_role,
                 persona=persona or None,
                 json_schema=schema,
@@ -640,7 +641,7 @@ class _RoutingMixin:
                         result,
                     )
                     result = self.llm_primitives.llm_call(
-                        retry_prompt,
+                        neutralise_control_tokens(retry_prompt),  # CT-12.3c
                         role=target_role,
                         persona=persona or None,
                         json_schema=schema,
@@ -811,7 +812,7 @@ class _RoutingMixin:
             delegate_prompt = f"{ctx_preview}\n\n## Task\n{item}"
         try:
             return self.llm_primitives.llm_call(
-                delegate_prompt,
+                neutralise_control_tokens(delegate_prompt),  # CT-12.3c
                 role=target_role,
                 persona=persona or None,
             )

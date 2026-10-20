@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
 
 from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.security.control_tokens import neutralise_control_tokens
 from src.structured_output.repair import parse_with_repair, primitives_completer
 
 from .chat_delegation_config import (
@@ -630,7 +631,7 @@ def _apply_decision_guards(
                 # (no-op while thinking_roles_chat_lane is off).
                 with thinking_off():
                     forced_raw = primitives.llm_call(
-                        force_prompt,
+                        neutralise_control_tokens(force_prompt),  # CT-12.3c
                         role=architect_role,
                         skip_suffix=True,
                         n_tokens=128,

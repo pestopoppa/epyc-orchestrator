@@ -29,6 +29,7 @@ from src.constants import (
 from src.delegation_reports import store_report
 from src.env_parsing import env_int as _env_int
 from src.exceptions import InferenceError
+from src.security.control_tokens import neutralise_control_tokens
 from src.repl_environment import REPLEnvironment
 
 # Phase-1/2/3 extractions (2026-05-22 Task C). chat_delegation.py keeps the
@@ -122,7 +123,7 @@ def _run_architect_decision(
         else:
             full_prompt = (
                 f"{prompt_text}\n\n"
-                f"Computation result:\n{arch_last_output}\n\n"
+                f"Computation result:\n{neutralise_control_tokens(arch_last_output)}\n\n"  # CT-12.3c
                 f"Now make your decision (D|answer or I|brief:...|to:role):"
             )
         # Turn 0 = routing decision (tight budget).
@@ -291,7 +292,8 @@ def _maybe_dcp_seed_context(
             code_search_fn=code_search_fn,
             file_reader_fn=_file_reader_fn,
         )
-        seed = render_bundle(bundle, file_reader_fn=_file_reader_fn)
+        # CT-12.3c: the rendered bundle is raw repository file content.
+        seed = neutralise_control_tokens(render_bundle(bundle, file_reader_fn=_file_reader_fn))
         if seed:
             return (
                 f"{base_ctx}\n\n[DCP pre-assembled context]\n{seed}".strip()
@@ -1192,7 +1194,7 @@ def _architect_delegated_answer_inner(
         forced_prompt = (
             f"You MUST answer now. Synthesize from all available information.\n\n"
             f"Question: {question[:2000]}\n\n"
-            f"Investigation reports:\n" + "\n---\n".join(reports[-3:])  # Last 3 reports
+            f"Investigation reports:\n" + neutralise_control_tokens("\n---\n".join(reports[-3:]))  # Last 3 reports (CT-12.3c)
         )
         try:
             answer = primitives.llm_call(

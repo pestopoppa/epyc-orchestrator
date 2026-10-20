@@ -27,6 +27,7 @@ from pydantic_graph import GraphRunContext
 
 from src.autopilot_core.measurement_guards import inband_error_text as _inband_error_text
 from src.escalation import ErrorCategory
+from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
 from src.exceptions import ContextOverflowError, InferenceError
 from src.graph.error_classifier import classify_error as _classify_error_impl
 from src.graph.escalation_helpers import detect_role_cycle as _detect_role_cycle_impl
@@ -1316,6 +1317,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Compress prompt on escalation to reduce architect prefill time (WS3B)
     prompt = _maybe_compress_for_escalation(prompt, state)
+    # CT-12.3c: the builder neutralises its own inputs, but this turn also appends
+    # auto-gathered file context, workspace/session blocks, scratchpad insights and
+    # escalation text -- none of which carry orchestrator control tokens (templating
+    # happens at the backend), so neutralise the assembled prompt once here.
+    prompt = _ct_neutralise(prompt)
 
     # Apply GBNF grammar on first turn when tool use is required
     if state.tool_required and state.turns == 1 and deps.repl is not None:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from src.delegation_reports import store_report
 from src.roles import Role
+from src.security.control_tokens import neutralise_control_tokens
 
 from .chat_delegation_config import (
     DelegationConfig,
@@ -122,7 +123,8 @@ def _build_compact_specialist_prompt(
             prompt += f"- output: {_trim_block(last_output, 600)}\n"
         if last_error:
             prompt += f"- error: {_trim_block(last_error, 400)}\n"
-    return prompt
+    # CT-12.3c: question, architect brief and previous-turn REPL signals are untrusted.
+    return neutralise_control_tokens(prompt)
 
 
 
@@ -150,7 +152,7 @@ def _maybe_summarize_specialist_report(
     )
     try:
         summarized = primitives.llm_call(
-            prompt,
+            neutralise_control_tokens(prompt),  # CT-12.3c: specialist report is untrusted
             role="worker_summarize",
             skip_suffix=True,
             n_tokens=cfg.summarize_n_tokens,

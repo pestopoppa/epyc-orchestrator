@@ -22,6 +22,7 @@ from src.prompt_builders import (
     VISION_TOOL_DESCRIPTIONS,
 )
 from src.api.routes.chat_utils import QWEN_STOP
+from src.security.control_tokens import neutralise_control_tokens
 from src.api.routes.vision_serving import (
     fallback_vl_port_for_role as _fallback_vl_port_for_role,
     stack_priors_available as _stack_priors_available,
@@ -243,7 +244,8 @@ async def _handle_vision_request(
     if structured_context:
         context_parts.append(f"Structured analysis:\n---\n{structured_context}\n---")
     if context_parts:
-        context_block = "\n\n".join(context_parts)
+        # CT-12.3c: OCR text and structured analysis come from the image, not from us.
+        context_block = neutralise_control_tokens("\n\n".join(context_parts))
         vl_prompt = (
             f"{context_block}\n\n"
             f"Using the above extracted information and the image, answer:\n{request.prompt}"
@@ -588,7 +590,7 @@ Important rules:
             break
 
         # Append assistant response
-        messages.append({"role": "assistant", "content": response_text})
+        messages.append({"role": "assistant", "content": neutralise_control_tokens(response_text)})  # CT-12.3c
 
         # Check for Final Answer
         if "Final Answer:" in response_text:
@@ -632,7 +634,7 @@ Important rules:
         messages.append(
             {
                 "role": "user",
-                "content": f"Observation: {observation}",
+                "content": f"Observation: {neutralise_control_tokens(observation)}",  # CT-12.3c: OCR/tool text
             }
         )
 
@@ -765,7 +767,8 @@ async def _handle_multi_file_vision(
             file_results.append(f"[File: {p.name}] Error: {e}")
 
     # Synthesize: two-stage if many files, direct if few
-    all_content = "\n\n".join(file_results)
+    # CT-12.3c: file contents / OCR / transcripts are untrusted.
+    all_content = neutralise_control_tokens("\n\n".join(file_results))
     if len(all_content) > 20000:
         answer, _stats = await _run_two_stage_summarization(
             request.prompt,

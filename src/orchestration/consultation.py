@@ -19,6 +19,7 @@ import jsonschema
 import yaml
 
 from src.orchestration.interaction import INTERACTION_POLICY_VERSION
+from src.security.control_tokens import neutralise_control_tokens
 
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
@@ -242,6 +243,7 @@ def consult(
         skill=spec,
         context=context,
     )
+    prompt = neutralise_control_tokens(prompt)  # CT-12.3c: consult context is untrusted
     n_tokens = int(override_max_tokens or spec.max_output_tokens)
     try:
         from src.scheduling.contention_gate import ContentionDenied

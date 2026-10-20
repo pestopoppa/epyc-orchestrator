@@ -51,6 +51,7 @@ except ImportError:
     utility_builtins = {}
 
 from src.config import _registry_timeout
+from src.security.control_tokens import neutralise_llm_args, neutralise_result
 
 # Default execution timeout from registry
 _RESTRICTED_TIMEOUT = int(_registry_timeout("repl", "restricted_executor", 120))
@@ -203,11 +204,13 @@ class RestrictedExecutor:
         self._final_answer: str | None = None
         self._exploration_calls = 0
 
+    @neutralise_result  # CT-12.3c
     def _peek(self, n: int = 500) -> str:
         """Return first n characters of context."""
         self._exploration_calls += 1
         return self.context[:n]
 
+    @neutralise_result  # CT-12.3c
     def _grep(self, pattern: str) -> list[str]:
         """Search context with regex."""
         import re
@@ -237,6 +240,7 @@ class RestrictedExecutor:
         if self.llm_primitives is None:
             raise RuntimeError("llm_call not available (no LLM primitives)")
         self._exploration_calls += 1
+        args, kwargs = neutralise_llm_args(args, kwargs)  # CT-12.3c
         return self.llm_primitives.llm_call(*args, **kwargs)
 
     def _llm_batch(self, *args, **kwargs) -> list[str]:
@@ -244,6 +248,7 @@ class RestrictedExecutor:
         if self.llm_primitives is None:
             raise RuntimeError("llm_batch not available (no LLM primitives)")
         self._exploration_calls += 1
+        args, kwargs = neutralise_llm_args(args, kwargs)  # CT-12.3c
         return self.llm_primitives.llm_batch(*args, **kwargs)
 
     def _build_globals(self) -> dict[str, Any]:

@@ -18,6 +18,7 @@ import re
 
 from src.graph.helpers import _validate_final_answer
 from src.structured_output.repair import parse_with_repair
+from src.security.control_tokens import neutralise_control_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ def _batch_repair_completer(llm_primitives, role: str, persona: str | None):
         )
         prompt = f"{_render_child_schema_preamble(schema)}\n\n{rendered}"
         results = llm_primitives.llm_batch(
-            [prompt], role=role, persona=persona, json_schema=schema,
+            [neutralise_control_tokens(prompt)], role=role, persona=persona, json_schema=schema,
         )
         return results[0] if results else ""
 
@@ -413,7 +414,7 @@ class _CombinedOpsMixin:
         # prompt list; a caller needing per-prompt schemas would need one
         # llm_batch call per schema, or llm_call per prompt).
         raw_results = self.llm_primitives.llm_batch(
-            query_prompts, role=role, persona=persona, json_schema=schema,
+            [neutralise_control_tokens(q) for q in query_prompts], role=role, persona=persona, json_schema=schema,
         )
         result_entries = []
         retry_count = 0
@@ -458,7 +459,7 @@ class _CombinedOpsMixin:
                     current_raw,
                 )
                 retry_result = self.llm_primitives.llm_batch(
-                    [retry_prompt], role=role, persona=persona, json_schema=schema,
+                    [neutralise_control_tokens(retry_prompt)], role=role, persona=persona, json_schema=schema,
                 )
                 current_raw = retry_result[0] if retry_result else ""
                 ok, err, parsed = _validate_final_answer(current_raw, schema)

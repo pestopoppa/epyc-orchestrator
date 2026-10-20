@@ -41,6 +41,7 @@ from typing import Any, Optional
 import aiohttp
 
 from src.config import _registry_timeout
+from src.security.control_tokens import neutralise_control_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -850,7 +851,13 @@ class WorkerPoolManager:
         # `gemma-4-26B-A4B-it-Q4_K_M` from a Q4_K_M.gguf).
         from src.api.routes.chat_utils import apply_chat_template_for_model
         model_stem = Path(worker.config.model_path).stem
-        templated_prompt = apply_chat_template_for_model(model_stem, prompt)
+        # CT-12.3c: worker prompts embed delegated task text / document chunks.
+        # Neutralise BEFORE templating so (a) a spelling in the content cannot
+        # become a control token and (b) it cannot trip _is_already_templated;
+        # the template markers added below are ours and stay intact.
+        templated_prompt = apply_chat_template_for_model(
+            model_stem, neutralise_control_tokens(prompt)
+        )
 
         payload = {
             "prompt": templated_prompt,

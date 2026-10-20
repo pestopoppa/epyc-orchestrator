@@ -24,6 +24,7 @@ from starlette.background import BackgroundTask
 from src.api.dependencies import dep_app_state, dep_session_store
 from src.api.state import AppState
 from src.session.sqlite_store import SQLiteSessionStore
+from src.security.control_tokens import neutralise_control_tokens
 
 
 router = APIRouter()
@@ -248,8 +249,12 @@ async def voice_turn(
                 "Protected values must appear exactly, character for character, in the response: "
                 + json.dumps(body.must_preserve, ensure_ascii=False)
             )
-        context = "\n\n".join(context_lines)
-        prompt = (f"{context}\n\n" if context else "") + f"User: {body.user_request}"
+        # CT-12.3c: caller context, protected values and the spoken request are
+        # untrusted; neutralise BEFORE _direct_call_prompt adds our template markers.
+        context = neutralise_control_tokens("\n\n".join(context_lines))
+        prompt = (f"{context}\n\n" if context else "") + neutralise_control_tokens(
+            f"User: {body.user_request}"
+        )
         prompt = _direct_call_prompt(prompt, Role.FRONTDOOR, state.registry)
     except Exception:
         await lease_guard.__aexit__(None, None, None)
