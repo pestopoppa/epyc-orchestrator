@@ -72,6 +72,27 @@ class Wave:
     steps: list[dict[str, Any]]
 
 
+def _byte_stable_trunks() -> bool:
+    """KPF-25: order fan-out prompts shared-first (ORCHESTRATOR_PREFIX_INDEX on)."""
+    try:
+        from src.inference import prefix_index
+
+        return prefix_index.enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _persona_system_text(persona: str) -> str | None:
+    """The persona's system prompt (what ``llm_call`` would prepend), or None."""
+    try:
+        from src.persona_loader import get_persona_registry
+
+        cfg = get_persona_registry().get(persona)
+        return cfg.system_prompt if cfg else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def compute_waves(steps: list[dict[str, Any]]) -> list[Wave]:
     """Compute execution waves from step dependencies via topological sort.
 
@@ -385,7 +406,6 @@ class StepExecutor:
         from src.proactive_delegation import SubtaskResult, ReviewDecision
 
         step_id = step["id"]
-        prompt = self._build_step_prompt(task_ir, step)
 
         # Resolve persona: explicit step field → MemRL auto-selection → None
         # Gated behind features().personas flag
@@ -396,6 +416,15 @@ class StepExecutor:
             persona = step.get("persona") or step.get("persona_hint")
             if not persona and self.hybrid_router:
                 persona = self._auto_select_persona(task_ir, step, role)
+
+        persona_text = None
+        if persona and _byte_stable_trunks():
+            # KPF-25: llm_call would PREPEND the persona's system prompt, putting
+            # per-step text before the shared trunk. Place it after the trunk.
+            persona_text = _persona_system_text(persona)
+            if persona_text is not None:
+                persona = None
+        prompt = self._build_step_prompt(task_ir, step, persona_text=persona_text)
 
         start = time.monotonic()
         try:
@@ -474,29 +503,47 @@ class StepExecutor:
         self,
         task_ir: dict[str, Any],
         step: dict[str, Any],
+        *,
+        persona_text: str | None = None,
     ) -> str:
         """Build prompt for a step, injecting context from prior steps.
 
         Includes outputs from steps listed in ``step['inputs']`` that
         were completed in earlier waves.
+
+        With ``ORCHESTRATOR_PREFIX_INDEX`` on (KPF-25) the prompt is ordered
+        shared-first, so the steps of a wave share a byte-identical trunk the
+        server can fork from: objective, prior context (input keys sorted),
+        then the per-step persona, task and expected outputs. Flag off: the
+        original order, byte for byte.
         """
         parts: list[str] = []
         objective = task_ir.get("objective", "")
         action = step.get("action", "")
+        stable = _byte_stable_trunks()
 
-        parts.append(f"## Task\n{action}")
+        task_part = f"## Task\n{action}"
+        if not stable:
+            parts.append(task_part)
 
         if objective:
             parts.append(f"## Overall Objective\n{objective}")
 
         # Inject context from prior step outputs
         inputs = step.get("inputs", [])
+        if stable:
+            inputs = sorted(inputs, key=str)
         context_parts: list[str] = []
         for input_key in inputs:
             if input_key in self.step_outputs:
                 context_parts.append(f"### Output from {input_key}\n{self.step_outputs[input_key]}")
         if context_parts:
             parts.append("## Prior Context\n" + "\n\n".join(context_parts))
+
+        if stable:
+            if persona_text:
+                parts.append(persona_text.strip())
+            parts.append(task_part)
 
         # Expected outputs
         outputs = step.get("outputs", [])
