@@ -73,11 +73,14 @@ class Wave:
 
 
 def _byte_stable_trunks() -> bool:
-    """KPF-25: order fan-out prompts shared-first (ORCHESTRATOR_PREFIX_INDEX on)."""
+    """KPF-25: order fan-out prompts shared-first. Same condition as the fork
+    features: INDEX on AND ``ORCHESTRATOR_PREFIX_INDEX_FORK`` in {1, auto}
+    (``/props.slot_fork`` is not cheaply available in the executor path, so
+    ``auto`` is accepted without it). INDEX-only (shadow window) = unchanged."""
     try:
         from src.inference import prefix_index
 
-        return prefix_index.enabled()
+        return prefix_index.fork_requested()
     except Exception:  # noqa: BLE001
         return False
 
@@ -511,7 +514,7 @@ class StepExecutor:
         Includes outputs from steps listed in ``step['inputs']`` that
         were completed in earlier waves.
 
-        With ``ORCHESTRATOR_PREFIX_INDEX`` on (KPF-25) the prompt is ordered
+        With ``ORCHESTRATOR_PREFIX_INDEX`` and ``_FORK`` on (KPF-25) the prompt is ordered
         shared-first, so the steps of a wave share a byte-identical trunk the
         server can fork from: objective, prior context (input keys sorted),
         then the per-step persona, task and expected outputs. Flag off: the

@@ -80,6 +80,7 @@ def test_wave_prompts_flag_off_are_the_legacy_bytes():
 
 def test_wave_prompts_share_a_byte_identical_trunk_flag_on(monkeypatch):
     monkeypatch.setenv(pi.FLAG_ENV, "1")
+    monkeypatch.setenv(pi.FORK_ENV, "1")
     ex = _executor(OUTPUTS)
     steps = _wave_steps(4)
     prompts = [ex._build_step_prompt(TASK_IR, s) for s in steps]
@@ -103,8 +104,25 @@ def test_wave_prompts_flag_off_have_no_shared_trunk_before_the_objective():
     assert _shared_len(prompts) <= len("## Task\ndo thing number ")  # the finding KPF-25 fixes
 
 
+def test_index_on_fork_off_prompts_are_byte_identical_to_legacy(monkeypatch):
+    """The KPF-27d shadow window (INDEX on, FORK off) must not change prompts."""
+    ex = _executor(OUTPUTS)
+    step = _wave_steps(1)[0]
+    legacy = ex._build_step_prompt(TASK_IR, step)
+    monkeypatch.setenv(pi.FLAG_ENV, "1")
+    for fork in (None, "0"):
+        if fork is None:
+            monkeypatch.delenv(pi.FORK_ENV, raising=False)
+        else:
+            monkeypatch.setenv(pi.FORK_ENV, fork)
+        assert ex._build_step_prompt(TASK_IR, step) == legacy
+    monkeypatch.setenv(pi.FORK_ENV, "auto")
+    assert ex._build_step_prompt(TASK_IR, step) != legacy
+
+
 def test_persona_does_not_precede_the_trunk_flag_on(monkeypatch):
     monkeypatch.setenv(pi.FLAG_ENV, "1")
+    monkeypatch.setenv(pi.FORK_ENV, "1")
     import src.parallel_step_executor as pse
 
     monkeypatch.setattr(pse, "_persona_system_text", lambda p: f"PERSONA {p} " * 20)
