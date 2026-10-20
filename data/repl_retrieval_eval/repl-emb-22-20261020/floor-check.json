@@ -1,0 +1,34 @@
+{
+  "by_group": {
+    "agent_nav": {
+      "flagged": 10,
+      "in_primary": 23,
+      "n": 33,
+      "unflagged": 23,
+      "unlabelled": 0
+    },
+    "probe45": {
+      "flagged": 0,
+      "in_primary": 45,
+      "n": 45,
+      "unflagged": 0,
+      "unlabelled": 45
+    },
+    "synthetic_spill": {
+      "flagged": 204,
+      "in_primary": 278,
+      "n": 482,
+      "unflagged": 278,
+      "unlabelled": 0
+    }
+  },
+  "failures": [],
+  "n": 346,
+  "n_flagged_excluded": 214,
+  "n_min": 120,
+  "n_scored_nontrivial": 560,
+  "n_trace": 301,
+  "ok": true,
+  "rule": "primary set (answer_named_verbatim rows excluded): n >= n_min AND trace rows >= trace_min",
+  "trace_min": 75
+}

@@ -1,0 +1,36 @@
+{
+  "arm_id": "colgrep",
+  "bundles": {
+    "probe45:mwaskom/seaborn": {
+      "contended_not_for_selection": true,
+      "index_build_wall_s": 450.579,
+      "init_error": null,
+      "init_returncode": 0,
+      "ok": true
+    },
+    "probe45:pylint-dev/pylint": {
+      "contended_not_for_selection": true,
+      "index_build_wall_s": 18.056,
+      "init_error": null,
+      "init_returncode": 0,
+      "ok": true
+    },
+    "probe45:pytest-dev/pytest": {
+      "contended_not_for_selection": true,
+      "index_build_wall_s": 16.032,
+      "init_error": null,
+      "init_returncode": 0,
+      "ok": true
+    }
+  },
+  "invocations": [],
+  "not_applicable": {
+    "groups": [
+      "agent_nav",
+      "synthetic_spill",
+      "trivial_head"
+    ],
+    "n_queries": 537,
+    "reason": "ColGREP is code-only (tree-sitter); the trace bundles (agent_nav, synthetic_spill, spill_follow) are .txt"
+  }
+}

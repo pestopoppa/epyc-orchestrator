@@ -1,0 +1,681 @@
+{
+  "arm_id": "potion-code-16m-v2",
+  "bundles": {
+    "0ee76ec3922b62a8927feb9d5d054d918167d1eda88bcac9b29e8f243d5062b8": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0371,
+      "index_build_wall_s": 0.0141,
+      "n_chunks": 94,
+      "ok": true,
+      "reason": null
+    },
+    "13c06f1063e89e61c7e9c2046c689b2a7f9ee6f20c0fa7fc01cd51c24b080bdb": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0141,
+      "index_build_wall_s": 0.0036,
+      "n_chunks": 32,
+      "ok": true,
+      "reason": null
+    },
+    "1a8a7db83a1fc5cb2556b6bc338a1c252e209bcd76eff49a40e8f40ee3375f34": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.1058,
+      "index_build_wall_s": 0.035,
+      "n_chunks": 293,
+      "ok": true,
+      "reason": null
+    },
+    "204dbbef042fcf8b5159c2facff11423fd985350005b6ad427977977e66de88f": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0164,
+      "index_build_wall_s": 0.0049,
+      "n_chunks": 39,
+      "ok": true,
+      "reason": null
+    },
+    "23735e96cbc05c263657aeac91d2cbf971b5613b51c408c5602ded87b7eb21e2": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0148,
+      "index_build_wall_s": 0.0039,
+      "n_chunks": 31,
+      "ok": true,
+      "reason": null
+    },
+    "238163ffa2fd4b2ca2df9a4703f19b93482d7dfd1cdb465b025db7a1429a82dd": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.1054,
+      "index_build_wall_s": 0.0352,
+      "n_chunks": 313,
+      "ok": true,
+      "reason": null
+    },
+    "25efa28356f74f03131a597367488e0b5d289c74c9cfdadf835bce779654e05c": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0377,
+      "index_build_wall_s": 0.013,
+      "n_chunks": 90,
+      "ok": true,
+      "reason": null
+    },
+    "28154f4244b99299a609ee5296ac470be15d307816119b7edb483a1ae700b299": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.027,
+      "index_build_wall_s": 0.0089,
+      "n_chunks": 70,
+      "ok": true,
+      "reason": null
+    },
+    "2f2a5a1e9fbe7812f84d2b1eb6e7ea6a4d1e5987d9a633f8f0e2ce7b8c26832f": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.3293,
+      "index_build_wall_s": 0.1147,
+      "n_chunks": 894,
+      "ok": true,
+      "reason": null
+    },
+    "322abfc973f02252a7db4a9ab11d83088f5fe4417feefc9aaa5ca555e1f47cdd": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0243,
+      "index_build_wall_s": 0.0079,
+      "n_chunks": 54,
+      "ok": true,
+      "reason": null
+    },
+    "3230b03d37b111b9a2ff26939d3d843bae31152aed298f6d266f74e0ba50c24a": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.108,
+      "index_build_wall_s": 0.0382,
+      "n_chunks": 292,
+      "ok": true,
+      "reason": null
+    },
+    "34ad7db026f48aa915f6414786bcc2f2417a40d44ebaee51e8849065fde4fc56": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0761,
+      "index_build_wall_s": 0.023,
+      "n_chunks": 181,
+      "ok": true,
+      "reason": null
+    },
+    "3a26d749836742f818f93b00b29b1af31c9ec404a1cd95d9b439b3804a741a81": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0177,
+      "index_build_wall_s": 0.0057,
+      "n_chunks": 35,
+      "ok": true,
+      "reason": null
+    },
+    "3a74e599c6a56c342f6cef8f773fbf960c2309d6c15cb45d297caa237ffef829": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.22,
+      "index_build_wall_s": 0.0816,
+      "n_chunks": 571,
+      "ok": true,
+      "reason": null
+    },
+    "40e9653a273b5bac48698676f9ee3b608325c1b9686ccf6410c6a5be90c31b71": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0306,
+      "index_build_wall_s": 0.0112,
+      "n_chunks": 74,
+      "ok": true,
+      "reason": null
+    },
+    "4bf4a02d095bb1e8890d0f9de0e3ee16c3455e4fa298a981a7a655b17ce6c8ac": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.059,
+      "index_build_wall_s": 0.0201,
+      "n_chunks": 149,
+      "ok": true,
+      "reason": null
+    },
+    "51e88e1aecf49bdf9e7adeb86a42c728e89a0ae7b8d4abded735e3c2630bc9a1": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0686,
+      "index_build_wall_s": 0.0261,
+      "n_chunks": 173,
+      "ok": true,
+      "reason": null
+    },
+    "5e864b0ca2eeab09": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.4257,
+      "index_build_wall_s": 0.1628,
+      "n_chunks": 1073,
+      "ok": true,
+      "reason": null
+    },
+    "6287d4ba8c886a496b0682dadef4d16c27cdb3f50ec8c84cc9eb3ba59d16d08a": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.3192,
+      "index_build_wall_s": 0.1067,
+      "n_chunks": 901,
+      "ok": true,
+      "reason": null
+    },
+    "672eeb0804be0963b7f7f7e219ecf8cf96d8e854b2c07684aaf2916ac6171e49": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0794,
+      "index_build_wall_s": 0.0286,
+      "n_chunks": 218,
+      "ok": true,
+      "reason": null
+    },
+    "67fc4d7ace14fdde68ae39dd4dbc6303202bee8ed92dcafa0f4cec5228f36e0c": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0171,
+      "index_build_wall_s": 0.0066,
+      "n_chunks": 32,
+      "ok": true,
+      "reason": null
+    },
+    "6a09a01ef6191db1470837a19f050a7c89fac7983fde5eda048eca66a634bd32": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0811,
+      "index_build_wall_s": 0.0262,
+      "n_chunks": 239,
+      "ok": true,
+      "reason": null
+    },
+    "6a908a1f0162efe8ed486e8f07c109f0f40e649d186b19e3aa79785e31d458a6": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0275,
+      "index_build_wall_s": 0.0083,
+      "n_chunks": 77,
+      "ok": true,
+      "reason": null
+    },
+    "6c600ed6fc69a3eb": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.3742,
+      "index_build_wall_s": 0.1354,
+      "n_chunks": 970,
+      "ok": true,
+      "reason": null
+    },
+    "6eca74a8a1e9365f9dc277c67c6b398435ec72634373ba672d8c557db53cb744": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.2838,
+      "index_build_wall_s": 0.1004,
+      "n_chunks": 693,
+      "ok": true,
+      "reason": null
+    },
+    "6ee2aee1799faa16c0de841a1a03572dc9c99b87fb7154156094d39cb0672504": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.1,
+      "index_build_wall_s": 0.0366,
+      "n_chunks": 266,
+      "ok": true,
+      "reason": null
+    },
+    "732e7d1d2a48213be33cf88cfed35fd08e0e1fd1f48ba8a381c66c2bde1d08db": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0203,
+      "index_build_wall_s": 0.0063,
+      "n_chunks": 42,
+      "ok": true,
+      "reason": null
+    },
+    "7aa62038971c3d977affc261212d37c28a015757b322b0bafe5b90431f15ba53": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.015,
+      "index_build_wall_s": 0.0046,
+      "n_chunks": 32,
+      "ok": true,
+      "reason": null
+    },
+    "80258db7c01bbdd9bf949c3c1bc360ca03bc06dd09f9d23d0713cef36dc5fa8d": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0214,
+      "index_build_wall_s": 0.0063,
+      "n_chunks": 53,
+      "ok": true,
+      "reason": null
+    },
+    "8bbd1604095e1aeecb61be43f8d5297dd813ba67b0efaaf9e5ec1d748ff32ce4": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0329,
+      "index_build_wall_s": 0.0109,
+      "n_chunks": 88,
+      "ok": true,
+      "reason": null
+    },
+    "8f67e21db0c5e491": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.3415,
+      "index_build_wall_s": 0.1156,
+      "n_chunks": 923,
+      "ok": true,
+      "reason": null
+    },
+    "916286575dd3db2f6e90afecfc2fbad442982b547fb4762eb084f578cd7c5079": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0997,
+      "index_build_wall_s": 0.0315,
+      "n_chunks": 303,
+      "ok": true,
+      "reason": null
+    },
+    "977f29cd23837c8bdee5c3ea22543a01352e126ea7b392563b4132128705193d": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0329,
+      "index_build_wall_s": 0.0114,
+      "n_chunks": 89,
+      "ok": true,
+      "reason": null
+    },
+    "988edc9f6c24c4db9981e3d8ca9fb7bb178c1d65a950e12ea389183c9098a5fb": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0644,
+      "index_build_wall_s": 0.021,
+      "n_chunks": 169,
+      "ok": true,
+      "reason": null
+    },
+    "9cb9f2301e5a335c": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.3343,
+      "index_build_wall_s": 0.122,
+      "n_chunks": 856,
+      "ok": true,
+      "reason": null
+    },
+    "a24fb3ffb657e619a9845d11555ea6c615c3cc6976f7d63d8d1f329861d351e3": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0336,
+      "index_build_wall_s": 0.0119,
+      "n_chunks": 83,
+      "ok": true,
+      "reason": null
+    },
+    "a81a9912b7c2421f18a8e641471a535f8545088fc6be5df2949d8cd6009e9954": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0439,
+      "index_build_wall_s": 0.0157,
+      "n_chunks": 127,
+      "ok": true,
+      "reason": null
+    },
+    "a95dbcb2e62b822cdfe4cd861b79854ab2a805a07d93efbf615456c71ad528da": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.017,
+      "index_build_wall_s": 0.0057,
+      "n_chunks": 34,
+      "ok": true,
+      "reason": null
+    },
+    "afc635589f5d442fb06f3500df17559879e1adb866b55e5297f73516e5f77d7f": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0197,
+      "index_build_wall_s": 0.0057,
+      "n_chunks": 40,
+      "ok": true,
+      "reason": null
+    },
+    "b11f55989dd9a1171f67578e3c1b058373c15c00d341e17a95437fbce11069fc": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0181,
+      "index_build_wall_s": 0.0068,
+      "n_chunks": 38,
+      "ok": true,
+      "reason": null
+    },
+    "b3244f0773a543d2": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.2835,
+      "index_build_wall_s": 0.1042,
+      "n_chunks": 750,
+      "ok": true,
+      "reason": null
+    },
+    "b8991c732d0f200a767b171954e2c494f5145b6e2522b2bdfe210514b2608086": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0556,
+      "index_build_wall_s": 0.0193,
+      "n_chunks": 147,
+      "ok": true,
+      "reason": null
+    },
+    "c0c0fd27acf0e0cdd04f3db890f03ae8803e712a9764df9811477f7da7845980": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0311,
+      "index_build_wall_s": 0.0105,
+      "n_chunks": 81,
+      "ok": true,
+      "reason": null
+    },
+    "c2dda358fecbbcd186a94d44855ece8b07eb86de1fb26dae3ffe90505c918d4a": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0144,
+      "index_build_wall_s": 0.0045,
+      "n_chunks": 28,
+      "ok": true,
+      "reason": null
+    },
+    "c820d8dcb0981069": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.2818,
+      "index_build_wall_s": 0.1053,
+      "n_chunks": 710,
+      "ok": true,
+      "reason": null
+    },
+    "cbe824731c108cd047e100e8a4edad200311b33667a852c2108a51f2f36268c9": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0147,
+      "index_build_wall_s": 0.0043,
+      "n_chunks": 34,
+      "ok": true,
+      "reason": null
+    },
+    "ce94a1e621683aa8220a7eaf21fa29a6fadc73196521e26789b1033f3a2e0aba": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0294,
+      "index_build_wall_s": 0.01,
+      "n_chunks": 73,
+      "ok": true,
+      "reason": null
+    },
+    "cfaf0ff16800b8409a48830e3048630ca9163c2a5518e6dc0a108a922d156680": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0217,
+      "index_build_wall_s": 0.0069,
+      "n_chunks": 46,
+      "ok": true,
+      "reason": null
+    },
+    "cfb8db64f41295fd36517d90624317f7204c19e4a1d27403d2e19e6ffb0b81de": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0322,
+      "index_build_wall_s": 0.0102,
+      "n_chunks": 91,
+      "ok": true,
+      "reason": null
+    },
+    "d2212523023025ce1f93fc3df677e39740e8f243306ad21314874a161faee500": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0414,
+      "index_build_wall_s": 0.0146,
+      "n_chunks": 113,
+      "ok": true,
+      "reason": null
+    },
+    "d63c9b1e447cb3362ccba81f59234023f92ba0d5d418afa5674b90e0df4a879d": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0211,
+      "index_build_wall_s": 0.0062,
+      "n_chunks": 51,
+      "ok": true,
+      "reason": null
+    },
+    "d8f4c656a017d1b1225c0f3ad87035f3ccaa7cbad65f9b7f3ef52b7adb16786e": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0563,
+      "index_build_wall_s": 0.0197,
+      "n_chunks": 156,
+      "ok": true,
+      "reason": null
+    },
+    "df72d10eb5a6345273907439ad2ca09f8a04f73abd4e4e65c2d786e62762d6be": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0364,
+      "index_build_wall_s": 0.0122,
+      "n_chunks": 101,
+      "ok": true,
+      "reason": null
+    },
+    "dfa3e2c7e1a8f1b8": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.2725,
+      "index_build_wall_s": 0.103,
+      "n_chunks": 730,
+      "ok": true,
+      "reason": null
+    },
+    "e195961988aa1a20": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.2621,
+      "index_build_wall_s": 0.1016,
+      "n_chunks": 658,
+      "ok": true,
+      "reason": null
+    },
+    "e2c1b2f095c0fbc8": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.1889,
+      "index_build_wall_s": 0.0668,
+      "n_chunks": 475,
+      "ok": true,
+      "reason": null
+    },
+    "e584a6b36412c5a994ddae2a4bfe0864d463864c5eb3140af3169e624212eace": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0151,
+      "index_build_wall_s": 0.005,
+      "n_chunks": 30,
+      "ok": true,
+      "reason": null
+    },
+    "ed18f4fdf122bab5baba65cf8a5ad03d52460a3518cdf7f60fa1b03416c7aa97": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0249,
+      "index_build_wall_s": 0.0077,
+      "n_chunks": 65,
+      "ok": true,
+      "reason": null
+    },
+    "f2524bae7522565c6f4a7104de5907ae34a804fa83af0e4d8059527f8cd9d06e": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0335,
+      "index_build_wall_s": 0.011,
+      "n_chunks": 96,
+      "ok": true,
+      "reason": null
+    },
+    "f5f6019fbb99c53307e5610ae45daa65bbc06c1bb273b2a2409a4d60cbc96dcc": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0356,
+      "index_build_wall_s": 0.0125,
+      "n_chunks": 93,
+      "ok": true,
+      "reason": null
+    },
+    "f9997aced543c55cddcec919329c47c65b9290e58e6c3d76fd6881e4f6b9e79f": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.0348,
+      "index_build_wall_s": 0.0126,
+      "n_chunks": 83,
+      "ok": true,
+      "reason": null
+    },
+    "f9f8128d7a2c2ae4a9b6fb5d1f9530abf94e3d74b1398864d16f4e769ce6beef": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.5244,
+      "index_build_wall_s": 0.0295,
+      "n_chunks": 32,
+      "ok": true,
+      "reason": null
+    },
+    "probe45:mwaskom/seaborn": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.477,
+      "index_build_wall_s": 0.1596,
+      "n_chunks": 1339,
+      "ok": true,
+      "reason": null
+    },
+    "probe45:pylint-dev/pylint": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 0.6701,
+      "index_build_wall_s": 0.2172,
+      "n_chunks": 2094,
+      "ok": true,
+      "reason": null
+    },
+    "probe45:pytest-dev/pytest": {
+      "attempts": 1,
+      "contended_not_for_selection": true,
+      "dim": 256,
+      "index_build_cpu_s": 1.3244,
+      "index_build_wall_s": 0.1809,
+      "n_chunks": 1266,
+      "ok": true,
+      "reason": null
+    }
+  },
+  "dim": 256,
+  "identity_digest": "4d9d141767850a246fd9b99b8d220152b6881adbe9fb3e51ffb2e0a2d0708bbd",
+  "invocations": [
+    {
+      "adapter_calls": {
+        "document": {
+          "calls": 191,
+          "seconds": 2.658,
+          "texts": 20073
+        },
+        "query": {
+          "calls": 582,
+          "seconds": 0.118,
+          "texts": 582
+        }
+      },
+      "adapter_nonfinite_rows": 0,
+      "contended_not_for_selection": true,
+      "n_failed_hybrid": 0,
+      "n_queries_run": 582,
+      "ts": "2026-10-20T19:47:02Z"
+    }
+  ],
+  "kind": "static",
+  "model_id": "potion-code-16m-v2#4d9d14176785",
+  "registered": false
+}

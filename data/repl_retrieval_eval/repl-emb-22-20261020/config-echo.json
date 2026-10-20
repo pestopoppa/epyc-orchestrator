@@ -1,0 +1,246 @@
+{
+  "git_sha": "386985ddae83025305e3e4b49867b4ac58ab8c5f",
+  "harness_files_dirty": false,
+  "semble": "not_run (tool not available in the isolated venv)",
+  "stable": {
+    "arm_identities": {
+      "bge-large": {
+        "digest": "7e1292ad95b62f25eab0a70ed135c627da2e15fb238a8cda912711ceec5dfc7f",
+        "model_id": "BAAI/bge-large-en-v1.5#7e1292ad95b6"
+      },
+      "eg2-gguf-bf16-256": {
+        "digest": "61d01ad1211349156fc2a03d14609c78f1a78f8deb436ccb697c02aef5994264",
+        "model_id": "eg2-gguf-bf16-256#61d01ad12113"
+      },
+      "eg2-gguf-bf16-768": {
+        "digest": "8d88a0b65bea85610801cc7ea22a6c092bd50f2395484dd4f7f5984fd51bcef7",
+        "model_id": "eg2-gguf-bf16-768#8d88a0b65bea"
+      },
+      "granite-97m-r2": {
+        "digest": "5e40a83cb7784fb6bd2af145dbe63395ff0ef889cc857b433ad73a9400819069",
+        "model_id": "granite-97m-r2#5e40a83cb778"
+      },
+      "potion-base-8m": {
+        "digest": "f6d4716bb92f8446d9b09f3e045596a893d64543df4e4434688b786a684c34a6",
+        "model_id": "potion-base-8m#f6d4716bb92f"
+      },
+      "potion-code-16m-v2": {
+        "digest": "4d9d141767850a246fd9b99b8d220152b6881adbe9fb3e51ffb2e0a2d0708bbd",
+        "model_id": "potion-code-16m-v2#4d9d14176785"
+      }
+    },
+    "context_search_sha256": "6a4b18d6e243858a3964e29dbc1af4f74df431075226bed0e9fc174adbbf072f",
+    "freeze_sha256": "bba96c6c7b1094b86af866122f44ade39777ffd5681cb047a99b97f494ff506d",
+    "harness_sha256": {
+      "context_search.py": "6a4b18d6e243858a3964e29dbc1af4f74df431075226bed0e9fc174adbbf072f",
+      "repl_emb_arms.py": "efa3eb19253c30bc3782019e759395154bb9421eb907dedd2d4dc2d9a738c2ee",
+      "repl_emb_eval.py": "562fdf999b047c198363e3343ebc6ffddb2565ba8f5e8d3b1ba34c7b0dd25e43",
+      "repl_emb_stats.py": "8af2e63c34d720c132041edd0452a9492cb4dd690e0e4f73f512c5c25f02855b"
+    },
+    "predeclared": {
+      "code_intent_regex": "`|\\b[a-z]+_[a-z0-9_]+\\b|\\b[A-Z][a-z0-9]+[A-Z]\\w*\\b|\\w+\\(\\)|\\b\\w+\\.\\w+\\(",
+      "colgrep": {
+        "alpha": "0.95",
+        "bin": "/mnt/raid0/llm/UTILS/bin/colgrep-1.2.0",
+        "env": {
+          "NEXT_PLAID_FORCE_CPU": "1"
+        },
+        "expected_sha256": "833e52aa6c40d090142fa132e3c75d3e792a4707474682a2496e3471f646f956"
+      },
+      "context_search_constants": {
+        "BM25_B": 0.75,
+        "BM25_K1": 1.2,
+        "CANDIDATES_PER_RANKER": 64,
+        "CHUNK_MAX_CHARS": 800,
+        "DENSE_BATCH_CHUNKS": 128,
+        "DENSE_INPUT_MAX_CHARS": 800,
+        "INDEX_ADMISSION_WAIT_S": 2.0,
+        "MAX_DENSE_ATTEMPTS": 3,
+        "MAX_DENSE_CHUNKS": 4096,
+        "QUERY_ADMISSION_WAIT_S": 0.5,
+        "QUERY_TIMEOUT_S": 5.0,
+        "RRF_K": 60
+      },
+      "grep_stopwords": [
+        "a",
+        "about",
+        "above",
+        "after",
+        "again",
+        "all",
+        "also",
+        "am",
+        "an",
+        "and",
+        "any",
+        "are",
+        "as",
+        "at",
+        "be",
+        "because",
+        "been",
+        "before",
+        "being",
+        "below",
+        "between",
+        "both",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "doing",
+        "down",
+        "during",
+        "each",
+        "few",
+        "for",
+        "from",
+        "further",
+        "had",
+        "has",
+        "have",
+        "having",
+        "he",
+        "her",
+        "here",
+        "hers",
+        "him",
+        "his",
+        "how",
+        "i",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "itself",
+        "just",
+        "me",
+        "more",
+        "most",
+        "my",
+        "no",
+        "nor",
+        "not",
+        "of",
+        "off",
+        "on",
+        "once",
+        "only",
+        "or",
+        "other",
+        "our",
+        "out",
+        "over",
+        "own",
+        "same",
+        "she",
+        "should",
+        "so",
+        "some",
+        "such",
+        "than",
+        "that",
+        "the",
+        "their",
+        "them",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "through",
+        "to",
+        "too",
+        "under",
+        "until",
+        "up",
+        "very",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "who",
+        "whom",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+        "yours"
+      ],
+      "grep_stopwords_sha256": "385229eea93eb9eeafe116a33ad61a47d5afc3062d4b1f148bdd08cfd802a1c4",
+      "interpretations": {
+        "a_decision_set": "(a) The DECIDING set is the PRIMARY set: probe45 (45, no flag, all kept) plus the scored trace-derived queries (agent_nav, synthetic_spill and, if present, spill_follow) with every answer_named_verbatim row EXCLUDED, pooled; trivial_head is outside it. It needs n >= 120 AND at least 75 trace rows; with fewer its verdict is UNDERPOWERED/KILL per REPL-EMB-2.1 ('small n kills by design'). The pooled set including flagged rows and the without-synthetic sets are SECONDARY, labelled non-deciding. (Amended 2026-10-20, before any arm ran: first the single spill_follow source yielded n = 0 and the trace stratum became agent_nav + synthetic_spill; then the deciding set became the unflagged one, see (q).)",
+        "b_registered_hybrids": "(b) The kill rule is evaluated for EACH registered hybrid (hybrid-BGE, hybrid-Granite) against L; it PASSES iff at least one registered hybrid passes both conditions (mean diff >= M AND bootstrap CI lower bound > 0). Every individual result is reported. Hybrids over extension arms (EG2, potion) are evaluated afterwards; any changed verdict is flagged extension_only and never replaces the registered verdict.",
+        "c_selection": "(c) The selection rule applies only if the kill rule passed, and uses cpu_s_per_query supplied from the speed block (a JSON file argument). Without it the harness refuses to select and reports 'selection: pending speed block'.",
+        "d_selection_candidates": "(d) Selection candidates are the hybrid arms (registered and extension): the shipped context.search primitive is hybrid by construction, so dense-only, lexical, weighted and ColGREP rows are reported but not eligible. An arm with no cost row keeps selection pending.",
+        "e_incomplete": "(e) A verdict is computed only from arms that scored EVERY deciding query. If L's legs or every registered hybrid are incomplete the verdict is INCOMPLETE, never a pass or fail from partial data.",
+        "f_pointer_hit": "(f) A chunk pointer is (section, start_line, end_line): start = chunk.line; end = line + the number of newlines inside chunk.text after removing exactly ONE trailing newline (a chunk is a run of whole lines, so trailing blank lines stay counted). A pointer hits a query iff it has the same section (path) and overlaps a gold span by >= 1 line.",
+        "g_probe45_bundles": "(g) probe45 bundles, per repo: every *.py under the package root (seaborn/, pylint/, src/_pytest/) plus the gold files if outside it, read from the pinned checkout (HEAD must equal the rows' commit); section = repo-relative path; the shipped chunk_sections(..., 800); the chunk count must be <= 4096 (asserted, recorded).",
+        "h_code_intent": "(h) code_intent (applied only where the input value is null; blind to every arm's output) is True iff the query text matches the regex in CODE_INTENT_REGEX; the labelled file records the source ('input' | 'regex') of every label.",
+        "i_dense_hybrid": "(i) Dense-only and hybrid share ONE query embedding per query: the vector the shipped ContextSearchIndex.search embeds (captured by a delegating wrapper). Hybrid = the hits of idx.search(query, 10, section=None, embedder=adapter); dense-only = idx._dense_ranking(vector, None)[:10]. A search whose meta mode is not 'hybrid' (dense failure, invalid or degenerate vector, timeout, build failure) is a MISS for hybrid AND dense-only and increments n_failed.",
+        "j_groups": "(j) Groups: probe45 rows = group probe45; a trace row's group is its own `stratum` when that is agent_nav, synthetic_spill or spill_follow (any other label = spill_follow, the legacy default, recorded as group_source); the trivial-head files = group trivial_head, scored but reported outside the decision. A row with no gold span is scored:false and excluded everywhere.",
+        "k_offline_budget": "(k) The shipped index-build budget is disabled for the offline eval (INDEX_TIMEOUT_MIN_S = INDEX_TIMEOUT_MAX_S = 1e9) so it cannot censor an embedder; budget exposure belongs to the speed block. Every cost number produced here is flagged contended_not_for_selection.",
+        "l_weighted": "(l) weighted_hybrid (static arms only; reported, non-deciding): score = 0.75/(60+rank_dense) + 0.25/(60+rank_bm25) over the same two 64-candidate rankings; ties break on str(id) as rrf_fuse does; rrf_fuse itself is untouched.",
+        "m_colgrep": "(m) ColGREP is a registered arm on probe45 only (code-only, tree-sitter): the trace bundles (agent_nav, synthetic_spill, spill_follow) are .txt, so it is not_applicable there and is excluded from its n. It is reported against L on probe45 and takes no part in the kill rule.",
+        "n_sets": "(n) Sets: PRIMARY (deciding) = every scored non-trivial row EXCEPT those flagged answer_named_verbatim (probe45 has no flag and is kept whole). SECONDARY, labelled '(non-deciding)': pooled including flagged rows; without synthetic_spill with flagged rows excluded; without synthetic_spill with flagged rows included; each stratum separately (the per-stratum recall tables). A secondary set identical to an earlier one is not repeated. Every set gets its own L (the better of grep / BM25 on it), recall tables and kill-rule evidence with the n floor; the any-passes interpretation (b) applies within each set. Per-stratum paired diffs vs L, recall split by synthetic writer (A/B), and the answer_named_verbatim / intent_source cuts are descriptive and never gate.",
+        "o_synthetic_bias": "(o) Synthetic queries are LLM-written; they tend to share vocabulary with their source span, which favours lexical arms. The synthetic stratum therefore makes the kill rule conservative toward dense arms.",
+        "p_selection_primary_only": "(p) Selection is evaluated for the PRIMARY set only, gated by its own kill verdict; the speed block is shared. Secondary sets get no selection.",
+        "q_prerun_amendment_primary_unflagged": "(q) PRE-RUN AMENDMENT 2026-10-20, before any arm ran: the only deciding set is the PRIMARY set with every answer_named_verbatim row excluded (probe45 + agent_nav, synthetic_spill and spill_follow unflagged). Reason: the pooled set is 81% synthetic and 42% of the synthetic queries are flagged answer_named_verbatim; left in the deciding set, that leakage would let the lexical arm dominate and could kill dense retrieval through a query-writing artefact. The kill rule, L, the floors, selection, the bootstrap tables vs L and vs BGE and the extension-flip logic use the primary set alone; the earlier pooled with/without-synthetic sets stay as secondary, non-deciding reports. Floors, checked at freeze (loud warning) and at analyze (verdict UNDERPOWERED/KILL): primary n >= 120 AND trace rows (non-probe45, non-trivial_head) >= 75. Leakage is measured, not corrected: recall@{1,3,5,10} on the flagged and the unflagged subsets, flag rates by stratum, writer and intent_source."
+      },
+      "offline_overrides": {
+        "INDEX_TIMEOUT_MAX_S": 1000000000.0,
+        "INDEX_TIMEOUT_MIN_S": 1000000000.0
+      },
+      "probe_repos": {
+        "mwaskom/seaborn": {
+          "checkout": "seaborn",
+          "package_root": "seaborn"
+        },
+        "pylint-dev/pylint": {
+          "checkout": "pylint",
+          "package_root": "pylint"
+        },
+        "pytest-dev/pytest": {
+          "checkout": "pytest",
+          "package_root": "src/_pytest"
+        }
+      },
+      "stats": {
+        "M": 0.1,
+        "X": 0.05,
+        "ci_level": 0.95,
+        "k_primary": 5,
+        "ks": [
+          1,
+          3,
+          5,
+          10
+        ],
+        "n_min": 120,
+        "resamples": 10000,
+        "seed": 20261020,
+        "trace_min": 75,
+        "wilson_z": 1.959963984540054
+      },
+      "top_k": 10,
+      "weighted_hybrid": {
+        "k": 60,
+        "w_bm25": 0.25,
+        "w_dense": 0.75
+      }
+    },
+    "queries_labelled_sha256": "66463d139da03c3baeb662d65cfc77296c3dbd0e96867114863b0bd191d0c3ed"
+  }
+}
