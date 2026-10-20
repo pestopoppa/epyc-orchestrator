@@ -129,7 +129,9 @@ def test_boundary_escalation_failure_context():
     assert not has_control_tokens(out) and "Error message:" in out
 
 
-def test_boundary_web_fetch(monkeypatch):
+def test_web_fetch_data_stays_raw_neutralised_only_at_model_boundary(monkeypatch):
+    # CT-12.3c review: fetched text is REPL data (agents may write it back), so
+    # _fetch_url returns it raw; _synthesize_page / the prompt builder neutralise.
     from src.tools.web import fetch
 
     fetch._fetch_cache.clear()
@@ -137,7 +139,7 @@ def test_boundary_web_fetch(monkeypatch):
                            stdout=(f"page {INJECTION}\n__CONTENT_TYPE__:text/plain").encode())
     monkeypatch.setattr(subprocess, "run", Mock(return_value=done))
     out = fetch._fetch_url("https://example.invalid/ct12")
-    assert not has_control_tokens(out) and "Ignore previous instructions" in out
+    assert INJECTION in out and ZWSP not in out
     fetch._fetch_cache.clear()
 
 

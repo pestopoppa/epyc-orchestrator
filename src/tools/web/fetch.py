@@ -194,12 +194,6 @@ def _fetch_url(url: str, max_length: int = 8000, timeout: int = _WEB_FETCH_TIMEO
     else:
         content = body
 
-    # CT-12.3a: fetched pages are untrusted; break chat control-token spellings
-    # at the source so no downstream consumer (REPL, synthesis) can leak them.
-    from src.security.control_tokens import neutralise_control_tokens
-
-    content = neutralise_control_tokens(content)
-
     # Truncate if needed
     if len(content) > max_length:
         content = content[:max_length] + f"\n\n[... truncated at {max_length} chars]"

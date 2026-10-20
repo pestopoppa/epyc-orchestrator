@@ -22,7 +22,6 @@ import time
 import urllib.request
 import urllib.error
 
-from src.security.control_tokens import neutralise_value
 from src.tool_registry import Tool, ToolCategory, ToolRegistry
 from src.tools.base import safe_execute
 
@@ -174,8 +173,7 @@ def _search_duckduckgo(
                 results.append({"title": title, "url": raw_url, "snippet": snippet})
 
     logger.debug("Search engine=%s, results=%d", engine_used, len(results))
-    # CT-12.3c: titles/snippets are third-party text; break control-token spellings at the source.
-    return neutralise_value(results)
+    return results
 
 
 def _search_searxng(
@@ -231,8 +229,7 @@ def _search_searxng(
         "SearXNG search: results=%d, unresponsive=%d, query=%r",
         len(results), len(unresponsive), query,
     )
-    # CT-12.3c: titles/snippets are third-party text; break control-token spellings at the source.
-    return neutralise_value(results)
+    return results
 
 
 def _query_terms(query: str) -> set[str]:

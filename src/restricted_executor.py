@@ -51,7 +51,7 @@ except ImportError:
     utility_builtins = {}
 
 from src.config import _registry_timeout
-from src.security.control_tokens import neutralise_llm_args, neutralise_result
+from src.security.control_tokens import neutralise_llm_args
 
 # Default execution timeout from registry
 _RESTRICTED_TIMEOUT = int(_registry_timeout("repl", "restricted_executor", 120))
@@ -204,13 +204,11 @@ class RestrictedExecutor:
         self._final_answer: str | None = None
         self._exploration_calls = 0
 
-    @neutralise_result  # CT-12.3c
     def _peek(self, n: int = 500) -> str:
         """Return first n characters of context."""
         self._exploration_calls += 1
         return self.context[:n]
 
-    @neutralise_result  # CT-12.3c
     def _grep(self, pattern: str) -> list[str]:
         """Search context with regex."""
         import re
