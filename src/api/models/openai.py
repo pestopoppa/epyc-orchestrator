@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_serializer, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 
 class OpenAIMessage(BaseModel):
@@ -309,6 +309,26 @@ class OpenAIChatRequest(BaseModel):
         "bad value) and RECORDED ONLY. It never changes model selection. Ignored while the "
         "flag is off.",
     )
+
+    @field_validator("messages")
+    @classmethod
+    def _neutralise_message_control_tokens(
+        cls, messages: list[OpenAIMessage]
+    ) -> list[OpenAIMessage]:
+        """CT-12.3a: every client-supplied message (user, tool result, replayed
+        assistant turn, tool-call arguments) is untrusted content; break chat
+        control-token spellings so llama-server cannot parse them as specials."""
+        from src.security.control_tokens import neutralise_value
+
+        return [
+            m.model_copy(
+                update={
+                    "content": neutralise_value(m.content),
+                    "tool_calls": neutralise_value(m.tool_calls),
+                }
+            )
+            for m in messages
+        ]
 
     @model_validator(mode="after")
     def _refuse_conflicting_force_role_alias(self) -> "OpenAIChatRequest":

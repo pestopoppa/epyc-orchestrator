@@ -32,6 +32,7 @@ from src.roles import Role, chain_name_to_role, get_tier
 from src.runtime import routing_stage_timing
 from src.task_ir import canonicalize_task_ir
 from src.features import features as _get_features
+from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
 
 _log = logging.getLogger(__name__)
 _CORPUS_REGISTRY: Any | None = None
@@ -121,6 +122,19 @@ _ROLE_PROMPT_FALLBACKS = {
 if TYPE_CHECKING:
     from src.context_manager import ContextManager
     from src.escalation import EscalationContext, EscalationDecision
+
+
+
+class _NeutralisedFailureContext:
+    """Read-only proxy: string attributes of an escalation context come back with
+    chat control-token spellings broken (CT-12.3a); everything else passes through."""
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._inner, name)
+        return _ct_neutralise(value) if isinstance(value, str) else value
 
 
 class PromptBuilder:
@@ -230,6 +244,14 @@ class PromptBuilder:
         Returns:
             Prompt string or RootLMPrompt if as_structured=True
         """
+        # CT-12.3a: user task, REPL output/error, state previews and retrieved
+        # corpus context are untrusted; the system/tools/rules text is ours.
+        state = _ct_neutralise(state)
+        original_prompt = _ct_neutralise(original_prompt)
+        last_output = _ct_neutralise(last_output)
+        last_error = _ct_neutralise(last_error)
+        corpus_context = _ct_neutralise(corpus_context)
+
         prompt = RootLMPrompt(
             system=resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK),
             tools=self._resolve_tools(),
@@ -327,6 +349,12 @@ class PromptBuilder:
         Returns:
             Prompt string or EscalationPrompt if as_structured=True
         """
+        # CT-12.3a: task, state and the failed role's error/insight text are
+        # untrusted; neutralise the inputs, never the orchestrator's own text.
+        original_prompt = _ct_neutralise(original_prompt)
+        state = _ct_neutralise(state)
+        failure_context = _NeutralisedFailureContext(failure_context)
+
         # Handle both legacy (role) and new (current_role) attribute names
         role = getattr(failure_context, "current_role", None) or getattr(
             failure_context, "role", "unknown"
@@ -392,7 +420,7 @@ class PromptBuilder:
                 e.to_bullet() if hasattr(e, "to_bullet") else f"- {e}"
                 for e in scratchpad
             )
-            prompt.failure_info += f"\n\n## Previous Insights\n{insight_lines}"
+            prompt.failure_info += f"\n\n## Previous Insights\n{_ct_neutralise(insight_lines)}"
 
         if as_structured:
             return prompt
@@ -613,7 +641,8 @@ class PromptBuilder:
             ]
         )
 
-        return "\n".join(parts)
+        # CT-12.3a: draft summary, document excerpts and figure text are untrusted.
+        return _ct_neutralise("\n".join(parts))
 
     def get_system_prompt(self, role: Role) -> str:
         """Get the system prompt for a specific role.

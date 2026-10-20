@@ -170,6 +170,14 @@ class ChatRequest(BaseModel):
         "Used by comparative seeding to test specialist quality.",
     )
 
+    @field_validator("prompt", "context")
+    @classmethod
+    def _neutralise_control_tokens(cls, value: str) -> str:
+        """CT-12.3a: API content is untrusted; break chat control-token spellings."""
+        from src.security.control_tokens import neutralise_control_tokens
+
+        return neutralise_control_tokens(value)
+
     @field_validator("role", "force_role")
     @classmethod
     def _validate_role_fields(cls, value, info):
