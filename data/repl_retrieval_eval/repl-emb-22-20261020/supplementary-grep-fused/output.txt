@@ -1,0 +1,33 @@
+calibration: real vs top-10-reconstructed bm25 hybrid agree on 294 of 346 queries (recall@5 hit/miss)
+
+== primary(all) n= 346
+  grep (L)                                             recall@5 0.538
+  bm25                                                 recall@5 0.451
+  eg2-256 dense                                        recall@5 0.691  diff vs grep +0.153 CI [0.095, 0.211]
+  bm25+eg2-256 hybrid (REAL, frozen run)               recall@5 0.676  diff vs grep +0.139 CI [0.087, 0.191]
+  bm25+eg2-256 (top-10 lists refused, CALIBRATION)     recall@5 0.659  diff vs grep +0.121 CI [0.066, 0.179]
+  grep+eg2-256 fused (SUPPLEMENTARY, top-10 lists)     recall@5 0.682  diff vs grep +0.145 CI [0.101, 0.191]
+
+== probe45 n= 45
+  grep (L)                                             recall@5 0.644
+  bm25                                                 recall@5 0.578
+  eg2-256 dense                                        recall@5 0.778  diff vs grep +0.133
+  bm25+eg2-256 hybrid (REAL, frozen run)               recall@5 0.689  diff vs grep +0.044
+  bm25+eg2-256 (top-10 lists refused, CALIBRATION)     recall@5 0.778  diff vs grep +0.133
+  grep+eg2-256 fused (SUPPLEMENTARY, top-10 lists)     recall@5 0.800  diff vs grep +0.156
+
+== agent_nav n= 23
+  grep (L)                                             recall@5 0.435
+  bm25                                                 recall@5 0.696
+  eg2-256 dense                                        recall@5 0.565  diff vs grep +0.130
+  bm25+eg2-256 hybrid (REAL, frozen run)               recall@5 0.739  diff vs grep +0.304
+  bm25+eg2-256 (top-10 lists refused, CALIBRATION)     recall@5 0.696  diff vs grep +0.261
+  grep+eg2-256 fused (SUPPLEMENTARY, top-10 lists)     recall@5 0.652  diff vs grep +0.217
+
+== synthetic n= 278
+  grep (L)                                             recall@5 0.529
+  bm25                                                 recall@5 0.410
+  eg2-256 dense                                        recall@5 0.687  diff vs grep +0.158
+  bm25+eg2-256 hybrid (REAL, frozen run)               recall@5 0.669  diff vs grep +0.140
+  bm25+eg2-256 (top-10 lists refused, CALIBRATION)     recall@5 0.637  diff vs grep +0.108
+  grep+eg2-256 fused (SUPPLEMENTARY, top-10 lists)     recall@5 0.665  diff vs grep +0.137
