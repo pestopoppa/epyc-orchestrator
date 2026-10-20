@@ -1320,6 +1320,19 @@ def _normalize_text(text: str) -> str:
     return text
 
 
+_SPEC_SERVER_KEY = "speculative.n_max"
+
+
+def _bitwise_spec_n_max() -> int | None:
+    """Q38-T10: 0 when ``spec_off_bitwise_roles`` is ON, else None (payload unchanged)."""
+    try:
+        from src.spec_policy import bitwise_n_max
+
+        return bitwise_n_max()
+    except Exception:
+        return None
+
+
 def _score_llm_judge(answer: str, expected: str, config: dict[str, Any]) -> bool:
     """Score using a local LLM as semantic equivalence judge.
 
@@ -1518,6 +1531,9 @@ def request_llm_judge_text(
             eval_batch_id = str(config.get("_eval_batch_id") or "").strip()
             if eval_batch_id:
                 payload["batch_id"] = eval_batch_id
+            _spec_n_max = _bitwise_spec_n_max()
+            if _spec_n_max is not None:
+                payload["speculative_n_max"] = _spec_n_max
             resp = httpx.post(
                 f"{judge_url}/chat",
                 json=payload,
@@ -1559,6 +1575,10 @@ def request_llm_judge_text(
                     "type": "json_schema",
                     "json_schema": {"name": "llm_judge_verdict", "schema": output_schema},
                 }
+            _spec_n_max = _bitwise_spec_n_max()
+            if _spec_n_max is not None:
+                # Direct llama-server target: the flat per-request schema key.
+                raw_body[_SPEC_SERVER_KEY] = _spec_n_max
             resp = httpx.post(
                 f"{judge_url}/v1/chat/completions",
                 json=raw_body,

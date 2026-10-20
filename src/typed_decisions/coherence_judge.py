@@ -74,6 +74,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from src import spec_policy
 from src.runtime import measurement_windows
 from src.typed_decisions.types import DecisionResult, Question, QuestionKind
 
@@ -743,7 +744,7 @@ class CoherenceJudge:
             else contextlib.nullcontext()
         )
         try:
-            with _LOCAL_LOCK, ctx:
+            with _LOCAL_LOCK, ctx, spec_policy.bitwise_scope():
                 outcome = _score_local(
                     primitives,
                     state=state,

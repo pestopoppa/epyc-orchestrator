@@ -114,6 +114,9 @@ class InferenceRequest:
     # ("Probability semantics") for why grammar-constrained callers need
     # this. False everywhere except native.py's explicit opt-in.
     post_sampling_probs: bool = False
+    # Q38-T10: per-request llama-server ``speculative.n_max`` (0 = no speculation for this
+    # request). None = key omitted, payload byte-identical to legacy. See src/spec_policy.py.
+    speculative_n_max: int | None = None
     max_tokens: int | None = field(default=None, repr=False)
     # HS-4 P0.1: structured OpenAI chat payload (messages, tools, tool_choice) for
     # the /v1 client-executed tool mode. When set, llama-server backends send it

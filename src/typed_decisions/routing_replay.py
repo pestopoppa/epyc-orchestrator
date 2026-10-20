@@ -95,6 +95,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src import spec_policy
 from src.llm_primitives.stat_tests import (
     compute_calibration_metrics,
     wilson_interval,
@@ -1352,20 +1353,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"could not resolve a /tokenize endpoint for role {args.role!r} at "
                     f"{args.server_url}; refusing a live run that cannot bind codes natively"
                 )
-        receipt = run_replay(
-            rows,
-            snapshot_provenance=snapshot.provenance(),
-            primitives=primitives,
-            n=args.n,
-            seed=args.seed,
-            role=args.role,
-            tokenize_fn=tokenize_fn,
-            state_budget=args.state_budget_chars,
-            json_n_tokens=args.json_n_tokens,
-            receipt_path=args.receipt,
-            artifacts_dir=args.artifacts_dir,
-            dry_run=args.dry_run,
-        )
+        # Q38-T10: replay/judge CLIs are bitwise-required (no-op unless spec_off_bitwise_roles).
+        with spec_policy.bitwise_scope():
+            receipt = run_replay(
+                rows,
+                snapshot_provenance=snapshot.provenance(),
+                primitives=primitives,
+                n=args.n,
+                seed=args.seed,
+                role=args.role,
+                tokenize_fn=tokenize_fn,
+                state_budget=args.state_budget_chars,
+                json_n_tokens=args.json_n_tokens,
+                receipt_path=args.receipt,
+                artifacts_dir=args.artifacts_dir,
+                dry_run=args.dry_run,
+            )
     except (ReplayError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

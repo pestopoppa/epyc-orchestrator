@@ -75,6 +75,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src import spec_policy
 from src.typed_decisions.measure import (
     MeasurementError,
     _last_inference_meta,
@@ -1491,13 +1492,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (args.live and not args.dry_run)
             else None
         )
-        receipt = run_judge_redundancy(
-            primitives,
-            role=args.role,
-            receipt_path=args.receipt,
-            artifacts_dir=args.artifacts_dir,
-            dry_run=args.dry_run,
-        )
+        # Q38-T10: replay/judge CLIs are bitwise-required (no-op unless spec_off_bitwise_roles).
+        with spec_policy.bitwise_scope():
+            receipt = run_judge_redundancy(
+                primitives,
+                role=args.role,
+                receipt_path=args.receipt,
+                artifacts_dir=args.artifacts_dir,
+                dry_run=args.dry_run,
+            )
     except (MeasurementError, ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -34,6 +34,7 @@ from src.backends.context_overflow import (
     classify_error_body,
     classify_error_payload,
 )
+from src import spec_policy
 from src.model_server import InferenceRequest, InferenceResult, ModelBackend
 from src.registry_loader import RoleConfig
 
@@ -816,6 +817,7 @@ class LlamaServerBackend(ModelBackend):
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
         self._apply_schema_constraint(payload, request)
+        spec_policy.apply_to_payload(payload, getattr(request, "speculative_n_max", None))
 
         # J12: per-role chat-template kwargs (e.g. enable_thinking=False for
         # Qwen3.6 frontdoor / Qwen3.5 architect — load-bearing per
@@ -1588,6 +1590,9 @@ class LlamaServerBackend(ModelBackend):
         if "n_probs" not in payload and features().logit_probe and role_config.name == "frontdoor":
             payload["n_probs"] = 64
 
+        # Q38-T10: per-request speculation cap; no-op unless set (request field or context).
+        spec_policy.apply_to_payload(payload, getattr(request, "speculative_n_max", None))
+
         return payload
 
     def get_slots(self) -> list[SlotInfo]:
@@ -1758,6 +1763,7 @@ class LlamaServerBackend(ModelBackend):
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
         self._apply_schema_constraint(payload, request)
+        spec_policy.apply_to_payload(payload, getattr(request, "speculative_n_max", None))
 
         ctk = _chat_template_kwargs(role_config, request)
         if ctk:

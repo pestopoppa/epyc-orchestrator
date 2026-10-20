@@ -51,6 +51,7 @@ from src.prompt_builders import (
 )
 from src.prompt_builders.builder import build_corpus_context
 from src.prompt_builders.resolver import prompt_dir_override
+from src.spec_policy import speculative_n_max_override
 from src.api.services.memrl import (
     ensure_memrl_initialized,
     failure_disposition_meta,
@@ -297,7 +298,7 @@ async def chat(
             request_id=request.request_id or "",
             budget_s=request.timeout_s,
         )
-        with prompt_dir_override(prompt_dir):
+        with prompt_dir_override(prompt_dir), speculative_n_max_override(request.speculative_n_max):
             response = await _handle_chat(request, state, cancel_event=cancel_event)
         response.contention_gate = gate_observation.snapshot()
         if fence_carrier is not None:

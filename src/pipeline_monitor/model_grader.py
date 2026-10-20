@@ -18,6 +18,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from src import spec_policy
+
 logger = logging.getLogger(__name__)
 
 _SPECS_DIR: Path | None = None
@@ -232,6 +234,8 @@ def grade_answer(
             url=orchestrator_url,
             timeout=timeout,
             output_schema=output_schema,
+            # Q38-T10: bitwise-required; omitted (None) unless spec_off_bitwise_roles is ON.
+            **spec_policy.bitwise_call_kwargs(),
         )
     except Exception as e:
         logger.warning("Model grading call failed for %s: %s", spec_name, e)

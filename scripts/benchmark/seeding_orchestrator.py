@@ -814,6 +814,7 @@ def call_orchestrator_forced(
     watcher: Any | None = None,
     llama_port: int | None = None,
     eval_fence: bool | None = None,
+    speculative_n_max: int | None = None,
 ) -> dict[str, Any]:
     """Call orchestrator with forced role and mode routing.
 
@@ -862,6 +863,9 @@ def call_orchestrator_forced(
         llama_port: Optional explicit port hint for the target llama-server.
             When omitted, the watcher resolves it from force_role via
             /llama_fleet_ids.
+        speculative_n_max: Q38-T10 per-request speculation cap forwarded to
+            `/chat` as ``speculative_n_max`` (0 = no speculation). Omitted when
+            None (legacy payload shape, byte-identical).
 
     Returns:
         Response dict with answer, tokens, timing, etc. When a watcher is
@@ -992,6 +996,8 @@ def call_orchestrator_forced(
         payload["x_orchestrator_prompt_root"] = str(prompt_root)
     if eval_fence is not None:
         payload["eval_fence"] = bool(eval_fence)
+    if speculative_n_max is not None:
+        payload["speculative_n_max"] = max(0, int(speculative_n_max))
 
     def _timeout_result(exc: BaseException, reason: str) -> dict[str, Any]:
         _, detail = _classify_exc(exc)

@@ -112,6 +112,7 @@ flags:
   session_token_budget: baseline
   side_effect_tracking: baseline
   skillbank: baseline
+  spec_off_bitwise_roles: baseline
   specialist_routing: baseline
   staged_rewards: baseline
   state_history_snapshots: baseline

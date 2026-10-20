@@ -3999,6 +3999,22 @@ def score_math_rebaseline_answers(
     return out
 
 
+def _bitwise_spec_n_max() -> int | None:
+    """Q38-T10: 0 when ``spec_off_bitwise_roles`` is ON, else None (payload unchanged)."""
+    try:
+        from src.spec_policy import bitwise_n_max
+
+        return bitwise_n_max()
+    except Exception:
+        return None
+
+
+def _bitwise_spec_kwargs() -> dict[str, int]:
+    """``{"speculative_n_max": 0}`` when the flag is ON, else ``{}`` (call unchanged)."""
+    n_max = _bitwise_spec_n_max()
+    return {} if n_max is None else {"speculative_n_max": n_max}
+
+
 def _configured_rubric_judge_roles() -> list[str]:
     raw = os.environ.get("AUTOPILOT_RUBRIC_JUDGE_ROLES", "").strip()
     if not raw:
@@ -4617,6 +4633,8 @@ class EvalTower:
                 # `call_orchestrator_forced`'s own docstring); TD-21.15 only
                 # adds it when constraining is ON.
                 output_schema=RUBRIC_JUDGE_SCHEMA if constrain_judge_output else None,
+                # Q38-T10: bitwise-required; None (omitted) unless spec_off_bitwise_roles is ON.
+                **_bitwise_spec_kwargs(),
             )
             if resp.get("error"):
                 log.warning("rubric judge %s failed: %s", role, resp.get("error"))
@@ -4660,6 +4678,8 @@ class EvalTower:
                     watcher=getattr(self, "watcher", None),
                     eval_fence=_eval_fence_request_flag(),
                     output_schema=dict(schema),
+                    # Q38-T10: judge repair turn is machine-parsed too; {} unless flag ON.
+                    **_bitwise_spec_kwargs(),
                 )
                 if repair_resp.get("error"):
                     raise RuntimeError(str(repair_resp.get("error")))

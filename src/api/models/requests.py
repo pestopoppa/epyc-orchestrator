@@ -150,6 +150,17 @@ class ChatRequest(BaseModel):
             "instrumentation. Omitted by normal chat traffic."
         ),
     )
+    speculative_n_max: int | None = Field(
+        default=None,
+        ge=0,
+        le=64,
+        description=(
+            "Q38-T10: per-request llama-server speculation cap (0 = no speculation for "
+            "this request; forwarded as the flat key 'speculative.n_max'). Sent only by "
+            "bitwise-required callers when the spec_off_bitwise_roles flag is on. Omitted "
+            "by normal chat traffic."
+        ),
+    )
     role: str = Field(
         default="", description="Initial role to use (empty = auto-route via _classify_and_route)"
     )
