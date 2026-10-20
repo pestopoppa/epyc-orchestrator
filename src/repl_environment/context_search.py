@@ -46,6 +46,42 @@ the REPL's copy is ever searched):
 An index belongs to ONE embedding model (UFH-12 invariant 4): the dense vectors carry the
 model id they were made with, and a query embedded by a different model is never scored
 against them -- the dense side is rebuilt for the new model instead.
+
+**Prefixes (REPL-EMB-2.2 follow-on M12).** Some embedding models are trained with an
+instruction in front of the text. The seam is keyed by a lower-cased MARKER found in the
+embedder's ``model_id`` and has two sides, so the adapters need not (and must not) do it:
+
+* ``query_text(model_id, query, *, code_intent=False)`` -- the query-side prefix;
+* ``document_text(model_id, text)`` -- the document-side prefix, applied by ``ensure_dense`` to
+  every chunk. BGE and every unknown model: identity (documents unprefixed, as always).
+
+BGE (``bge-{large,base,small}-en-v1.5``): query ``Represent this sentence for searching relevant
+passages: `` + query, documents unprefixed -- byte-identical to every earlier version, including
+the clip order (BGE clips the already-prefixed query to ``DENSE_INPUT_MAX_CHARS``).
+
+EmbeddingGemma 2 (asymmetric, ``config_sentence_transformers.json`` of google/embeddinggemma-2):
+query ``task: search result | query: `` (default) or, only when the caller passes
+``code_intent=True`` to ``ContextSearchIndex.search``/``query_text``, ``task: code retrieval |
+query: ``; documents ``title: none | text: ``. For EG2 the clip is applied to the RAW text and
+the prefix goes on AFTER it -- the chunk is clipped to ``DENSE_INPUT_MAX_CHARS`` and then
+prefixed, and so is the query -- so a prefix never eats the 800-char budget and is never itself
+truncated (``dense_query_input`` owns the query-side order).
+
+Marker choice: ``embeddinggemma-2`` (what a production pool reports -- ``Path(model_path).name``
+of ``embeddinggemma-2-BF16.gguf`` / ``-Q8_0.gguf``) and the explicit token ``egemma2``. The
+benchmark harness (``scripts/benchmark/repl_emb_arms.py``, frozen by the REPL-EMB-2.2 run) names
+its EG2 arms ``eg2-st-...#<digest>`` / ``eg2-gguf-...#<digest>``: those ids contain NEITHER marker
+(``eg2`` alone is deliberately not one), so the harness adapters -- which add both prefixes
+themselves and tell the sides apart by ``admission_wait_s`` -- still receive unprefixed text from
+this module and never get a prefix twice. A new adapter whose ``model_id`` contains one of the
+markers must NOT also prefix. The strings the harness produced are exactly what this seam
+produces for a production id (adapter: ``prefix + text[:800]``; seam: clip, then prefix).
+
+The pool's sha256 chunk-vector cache keys on (model id, embedded text), so EG2's prefixed chunks
+never collide with unprefixed vectors, and BGE's cache entries stay valid.
+
+NOTE: the REPL-EMB-2.2 run pinned the pre-change sha256 of this file in its
+``FROZEN-AT-LAUNCH.sha256``; this change legitimately alters it after the run.
 """
 
 from __future__ import annotations
@@ -119,11 +155,31 @@ def mode_for(reason: str | None) -> str:
 
 _WORD = re.compile(r"[A-Za-z0-9_]+")
 #: Retrieval-query instructions for embedding models that were trained with one.
+#: EmbeddingGemma 2 strings (``config_sentence_transformers.json`` prompts of google/embeddinggemma-2).
+EG2_QUERY_PREFIX = "task: search result | query: "
+EG2_CODE_QUERY_PREFIX = "task: code retrieval | query: "
+EG2_DOCUMENT_PREFIX = "title: none | text: "
+#: ``model_id`` markers of EmbeddingGemma 2: the production pool's model name and an explicit
+#: token. NOT ``eg2`` -- the benchmark harness's arm ids start with it (see the module docstring).
+_EG2_MARKERS: tuple[str, ...] = ("embeddinggemma-2", "egemma2")
 _QUERY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("bge-large-en-v1.5", "Represent this sentence for searching relevant passages: "),
     ("bge-base-en-v1.5", "Represent this sentence for searching relevant passages: "),
     ("bge-small-en-v1.5", "Represent this sentence for searching relevant passages: "),
+    *((m, EG2_QUERY_PREFIX) for m in _EG2_MARKERS),
 )
+#: Query prefix for a code-intent query; only used when the caller asks for it explicitly.
+#: A model absent here falls back to ``_QUERY_PREFIXES``.
+_CODE_QUERY_PREFIXES: tuple[tuple[str, str], ...] = tuple(
+    (m, EG2_CODE_QUERY_PREFIX) for m in _EG2_MARKERS
+)
+#: Document (chunk) prefix. A model absent here gets documents unprefixed (BGE, unknown models).
+_DOCUMENT_PREFIXES: tuple[tuple[str, str], ...] = tuple(
+    (m, EG2_DOCUMENT_PREFIX) for m in _EG2_MARKERS
+)
+#: Models whose query is clipped BEFORE the prefix goes on. Every other model keeps the legacy
+#: order (prefix, then clip), which is what keeps BGE byte-identical.
+_CLIP_QUERY_BEFORE_PREFIX: tuple[str, ...] = _EG2_MARKERS
 
 
 # ───────────────────────────────────────────────────────────────────────────── chunker
@@ -289,12 +345,44 @@ def pool_dense_embedder() -> DenseEmbedder | None:
     return OutcomeEmbedder(sync.try_embed_many, sync.client.model_id)
 
 
-def query_text(model_id: str | None, query: str) -> str:
+def _prefix_for(table: tuple[tuple[str, str], ...], model_id: str | None) -> str:
     low = (model_id or "").lower()
-    for marker, prefix in _QUERY_PREFIXES:
+    for marker, prefix in table:
         if marker in low:
+            return prefix
+    return ""
+
+
+def query_text(model_id: str | None, query: str, *, code_intent: bool = False) -> str:
+    """``query`` with ``model_id``'s query prefix; no clipping (see ``dense_query_input``).
+
+    ``code_intent`` selects the code-retrieval form for a model that has one (EmbeddingGemma 2);
+    every other model, BGE included, gets its ordinary query prefix either way."""
+    if code_intent:
+        prefix = _prefix_for(_CODE_QUERY_PREFIXES, model_id)
+        if prefix:
             return prefix + query
-    return query
+    return _prefix_for(_QUERY_PREFIXES, model_id) + query
+
+
+def document_text(model_id: str | None, text: str) -> str:
+    """``text`` with ``model_id``'s document prefix; identity for BGE and unknown models.
+
+    No clipping: the caller clips the chunk to ``DENSE_INPUT_MAX_CHARS`` first, so the prefix
+    never eats the budget."""
+    return _prefix_for(_DOCUMENT_PREFIXES, model_id) + text
+
+
+def dense_query_input(model_id: str | None, query: str, *, code_intent: bool = False) -> str:
+    """The exact string ``search`` sends the embedder for ``query``.
+
+    BGE and unknown models: the legacy order, ``query_text(...)[:DENSE_INPUT_MAX_CHARS]`` (the
+    prefixed string is clipped). EmbeddingGemma 2: the raw query is clipped first and the prefix
+    goes on after it, the same order as a chunk, so the prefix is never truncated."""
+    low = (model_id or "").lower()
+    if any(m in low for m in _CLIP_QUERY_BEFORE_PREFIX):
+        return query_text(model_id, query[:DENSE_INPUT_MAX_CHARS], code_intent=code_intent)
+    return query_text(model_id, query, code_intent=code_intent)[:DENSE_INPUT_MAX_CHARS]
 
 
 # ───────────────────────────────────────────────────────────────────────────── index
@@ -368,7 +456,8 @@ class ContextSearchIndex:
                 break
             batch = self.chunks[self.dense_done : self.dense_done + DENSE_BATCH_CHUNKS]
             res = embedder.embed(
-                [c.text[:DENSE_INPUT_MAX_CHARS] for c in batch],
+                # clip the chunk, THEN prefix: the document prefix never eats the budget
+                [document_text(self.model_id, c.text[:DENSE_INPUT_MAX_CHARS]) for c in batch],
                 timeout_s=left,
                 admission_wait_s=INDEX_ADMISSION_WAIT_S,
             )
@@ -396,9 +485,18 @@ class ContextSearchIndex:
         return list(self._by_section.get(section, []))
 
     def search(
-        self, query: str, k: int, *, section: str | None, embedder: DenseEmbedder | None
+        self,
+        query: str,
+        k: int,
+        *,
+        section: str | None,
+        embedder: DenseEmbedder | None,
+        code_intent: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Fused pointers and a small meta record (mode, reason, timings)."""
+        """Fused pointers and a small meta record (mode, reason, timings).
+
+        ``code_intent`` only changes the query prefix of a model that has a code form
+        (EmbeddingGemma 2); the default is the ordinary search-result form."""
         from src.trace.navigation import rrf_fuse
 
         ids = self.candidates(section)
@@ -413,7 +511,7 @@ class ContextSearchIndex:
             t0 = time.perf_counter()
             assert embedder is not None
             q = embedder.embed(
-                [query_text(self.model_id, query)[:DENSE_INPUT_MAX_CHARS]],
+                [dense_query_input(self.model_id, query, code_intent=code_intent)],
                 timeout_s=QUERY_TIMEOUT_S,
                 admission_wait_s=QUERY_ADMISSION_WAIT_S,
             )
@@ -484,6 +582,8 @@ __all__ = [
     "SEARCH_DEFAULT_K",
     "SEARCH_MAX_K",
     "chunk_sections",
+    "dense_query_input",
+    "document_text",
     "index_build_timeout_s",
     "mode_for",
     "pool_dense_embedder",
