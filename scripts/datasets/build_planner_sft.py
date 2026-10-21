@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
+from scripts.datasets import poison_screen
 from scripts.datasets._common import load_jsonl, stable_hash, utc_now, write_jsonl, write_manifest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,16 +95,52 @@ def build_example(row: dict[str, Any], *, source_path: Path) -> dict[str, Any]:
     }
 
 
+def _screened_example(
+    row: dict[str, Any], *, source_path: Path, allowed_hosts: tuple[str, ...]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build one example and stamp it with its poison-screen result (F3-W3-P1)."""
+    example = build_example(row, source_path=source_path)
+    reasons = poison_screen.screen_row(row, allowed_hosts=allowed_hosts)
+    external = poison_screen.is_external(row)
+    example["poison_screen"] = poison_screen.screen_stamp(reasons)
+    example["trace_origin"] = "external" if external else "internal"
+    if external:
+        example["source_commit_sha"] = row.get("source_commit_sha")
+        example["source_sha256"] = row.get("source_sha256")
+    entry = {
+        "example_id": example["example_id"],
+        "source_line": example["source_archive_line"],
+        "external": external,
+        "reasons": reasons,
+    }
+    return example, entry
+
+
 def build_dataset(
     *,
     archive_path: Path,
     include_excluded: bool = False,
+    allowed_hosts: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = load_jsonl(archive_path)
-    examples = [build_example(row, source_path=archive_path) for row in rows]
+    examples: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        example, entry = _screened_example(row, source_path=archive_path, allowed_hosts=allowed_hosts)
+        examples.append(example)
+        entries.append(entry)
     counts: dict[str, Any] = {"source_rows": len(rows), "emitted": 0, "labels": {}}
     for example in examples:
         counts["labels"][example["label"]] = counts["labels"].get(example["label"], 0) + 1
+    report = poison_screen.build_report(
+        entries,
+        allowed_hosts=allowed_hosts,
+        external_total=sum(1 for e in entries if e["external"]),
+    )
+    counts["quarantined"] = report["quarantined"]
+    counts["poison_screen_report"] = report
+    # Quarantined rows are never emitted, not even under --include-excluded.
+    examples = [row for row in examples if row["poison_screen"]["status"] == "pass"]
     if not include_excluded:
         examples = [row for row in examples if row["exclude_reason"] == ""]
     counts["emitted"] = len(examples)
@@ -113,10 +151,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     archive_path = Path(args.archive).expanduser().resolve()
     output_path = Path(args.output).expanduser()
     manifest_path = Path(args.manifest).expanduser()
+    allowed_hosts = tuple(getattr(args, "allowed_host", None) or ())
     examples, counts = build_dataset(
         archive_path=archive_path,
         include_excluded=args.include_excluded,
+        allowed_hosts=allowed_hosts,
     )
+    report = counts.pop("poison_screen_report")
+    # Refuse BEFORE writing anything: unscreened rows or external rows lacking provenance.
+    poison_screen.assert_exportable(examples)
+    report_path = manifest_path.with_name(manifest_path.stem + ".poison_screen_report.json")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     written = write_jsonl(output_path, examples)
     generated_at = utc_now()
     write_manifest(
@@ -126,9 +172,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         source_path=archive_path,
         output_path=output_path,
         counts={**counts, "written": written},
-        options={"include_excluded": args.include_excluded},
+        options={
+            "include_excluded": args.include_excluded,
+            "allowed_hosts": list(allowed_hosts),
+            "poison_screen_version": poison_screen.SCREEN_VERSION,
+            "poison_screen_report": str(report_path),
+        },
     )
-    return {"output": str(output_path), "manifest": str(manifest_path), "counts": counts}
+    return {
+        "output": str(output_path),
+        "manifest": str(manifest_path),
+        "poison_screen_report": str(report_path),
+        "counts": counts,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -137,12 +193,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     parser.add_argument("--include-excluded", action="store_true")
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help="Host (and its subdomains) tool calls may reach; localhost is always allowed.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    print(json.dumps(run(args), sort_keys=True))
+    try:
+        result = run(args)
+    except poison_screen.UnscreenedExternalTraceError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 3
+    print(json.dumps(result, sort_keys=True))
     return 0
 
 
