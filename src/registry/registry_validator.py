@@ -465,6 +465,51 @@ def check_artifact_pins(registry: dict[str, Any]) -> tuple[list[str], list[str]]
                 malformed.append(f"roles.{role}.model.{field}={value!r} is not {shape}")
         if absent:
             missing.append(f"roles.{role}.model lacks {', '.join(absent)} ({path.rsplit('/', 1)[-1]})")
+        # SEC-ART-2: a split GGUF pins its non-first shards by basename.
+        shards = model.get("shard_sha256")
+        if shards is not None:
+            if not isinstance(shards, dict):
+                malformed.append(f"roles.{role}.model.shard_sha256 must be a mapping basename -> 64-hex sha256")
+            else:
+                for name, digest in shards.items():
+                    if not (isinstance(digest, str) and _SHA64_RE.match(digest)):
+                        malformed.append(f"roles.{role}.model.shard_sha256[{name!r}]={digest!r} is not 64 lowercase hex")
+    return malformed, missing
+
+
+def _has_gguf_model(cfg: dict[str, Any]) -> bool:
+    model = cfg.get("model")
+    path = model.get("path") if isinstance(model, dict) else model
+    return isinstance(path, str) and path.endswith(".gguf")
+
+
+def check_template_pins(registry: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """SEC-ART-4 over ``server_mode`` (the launched servers). Returns (malformed, missing).
+
+    The pin is ``server_mode.<role>.chat_template.served_template_sha256`` (64 lowercase hex): the sha256 of
+    the EFFECTIVE template (``chat_template_file`` bytes, else the GGUF's embedded template). The 12-hex
+    ``served_template_sha256_12`` read by the effort-certification check must be its prefix. Shape errors
+    are always errors; an absent pin on an alias-free GGUF-serving role is ``missing``.
+    """
+    malformed: list[str] = []
+    missing: list[str] = []
+    for role, cfg in sorted((registry.get("server_mode") or {}).items()):
+        if not isinstance(cfg, dict) or not _has_gguf_model(cfg):
+            continue
+        block = cfg.get("chat_template")
+        pin = block.get("served_template_sha256") if isinstance(block, dict) else None
+        if pin is None:
+            if not cfg.get("alias_of"):
+                missing.append(f"server_mode.{role}.chat_template.served_template_sha256")
+            continue
+        if not (isinstance(pin, str) and _SHA64_RE.match(pin)):
+            malformed.append(f"server_mode.{role}.chat_template.served_template_sha256={pin!r} is not 64 lowercase hex")
+            continue
+        short = block.get("served_template_sha256_12")
+        if short is not None and str(short) != pin[:12]:
+            malformed.append(
+                f"server_mode.{role}.chat_template.served_template_sha256_12={short!r} != first 12 of the 64-hex pin"
+            )
     return malformed, missing
 
 
@@ -489,7 +534,10 @@ def validate_all(
     errors += _check_gguf_port_consistency(registry)
     errors += _check_numa_ports_vs_topology(registry)
     errors += _check_drafter_selection(registry)
-    strict = artifact_pins_strict_from_env() if strict_artifact_pins is None else strict_artifact_pins
+    from src.registry import artifact_integrity as _ai
+    from src.registry.artifact_review import check_uploader_review
+
+    strict = _ai.strict_enabled(_ai.PINS_STRICT, registry) if strict_artifact_pins is None else strict_artifact_pins
     malformed, missing = check_artifact_pins(registry)
     errors += [f"artifact pin: {m}" for m in malformed]
     if strict:
@@ -500,6 +548,20 @@ def validate_all(
             "(warning until backfill; %s=1 makes this fatal): %s",
             len(missing), ARTIFACT_PINS_STRICT_ENV, "; ".join(missing),
         )
+    t_malformed, t_missing = check_template_pins(registry)
+    errors += [f"template pin: {m}" for m in t_malformed]
+    if _ai.strict_enabled(_ai.TEMPLATE_PINS_STRICT, registry):
+        errors += [f"template pin (strict): {m}" for m in t_missing]
+    elif t_missing:
+        log.warning(
+            "SEC-ART-4: %d launched role(s) lack served_template_sha256 (warning until backfill; "
+            "%s=1 makes this fatal): %s",
+            len(t_missing), _ai.TEMPLATE_PINS_STRICT[0], "; ".join(t_missing),
+        )
+    r_errors, r_warnings = check_uploader_review(registry, strict=strict)
+    errors += [f"artifact review: {m}" for m in r_errors]
+    for w in r_warnings:
+        log.warning("SEC-ART-3: %s", w)
     return errors
 
 

@@ -1194,6 +1194,42 @@ def _reasoning_effort_certifications_step(config: StackChangePipelineConfig) -> 
     )
 
 
+def _artifact_integrity_step(config: StackChangePipelineConfig) -> PipelineStep:
+    """SEC-ART-1/3/4: artifact pins, served-template pins and the community-uploader review gate.
+
+    Malformed pins and a community tool-bearing role without a complete review record are ALWAYS errors.
+    Missing pins are warnings until ``REGISTRY_ARTIFACT_PINS_STRICT`` / ``REGISTRY_TEMPLATE_PINS_STRICT``
+    (or ``runtime_defaults.artifact_integrity.{pins_strict,template_pins_strict}``) flip them to errors.
+    """
+    from src.registry import artifact_integrity as ai
+    from src.registry.artifact_review import check_uploader_review
+    from src.registry.registry_validator import check_artifact_pins, check_template_pins
+
+    try:
+        registry = yaml.safe_load(config.lean_registry.read_text()) or {}
+    except OSError as exc:  # the lean_registry step owns the missing-file finding
+        return PipelineStep(name="artifact_integrity", status="skipped", warnings=[f"lean registry unreadable: {exc}"])
+    except yaml.YAMLError as exc:
+        return PipelineStep(name="artifact_integrity", status="failed", errors=[f"lean registry is not valid YAML: {exc}"])
+    pins_strict = ai.strict_enabled(ai.PINS_STRICT, registry)
+    tmpl_strict = ai.strict_enabled(ai.TEMPLATE_PINS_STRICT, registry)
+    malformed, missing = check_artifact_pins(registry)
+    t_malformed, t_missing = check_template_pins(registry)
+    r_errors, r_warnings = check_uploader_review(registry, strict=pins_strict, repo_root=config.repo_root)
+    errors = [f"artifact pin: {m}" for m in malformed] + [f"template pin: {m}" for m in t_malformed]
+    errors += [f"artifact review: {m}" for m in r_errors]
+    warnings = list(r_warnings)
+    (errors if pins_strict else warnings).extend(f"artifact pin missing: {m}" for m in missing)
+    (errors if tmpl_strict else warnings).extend(f"template pin missing: {m}" for m in t_missing)
+    return PipelineStep(
+        name="artifact_integrity",
+        status="failed" if errors else "ok",
+        errors=errors,
+        warnings=warnings,
+        details=[f"pins_strict={pins_strict} template_pins_strict={tmpl_strict}"],
+    )
+
+
 def _promotion_gate_command() -> list[str]:
     # The pipeline can validate a fully isolated temporary stack world, where
     # ``config.repo_root`` is not a Python project. Run the unchanged gate suite
@@ -1551,6 +1587,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
         )
     )
     report.steps.append(_reasoning_effort_certifications_step(config))
+    report.steps.append(_artifact_integrity_step(config))
     report.steps.append(_serving_shape_capacity_step(config))
     report.steps.append(_stack_manifest_registry_step(config, prior_ok=report.ok))
     report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))

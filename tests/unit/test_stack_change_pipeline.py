@@ -399,6 +399,8 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard_all_surfaces",
         "guard_strict",
         "reasoning_effort_certifications",
+        # 2026-10-21 SEC-ART-1/3/4: artifact pins, served-template pins, community-uploader review gate.
+        "artifact_integrity",
         # 2026-10-03 STACKCHG-DFLASH2: the import-time capacity gate re-run in a fresh
         # process on the lean THIS run wrote (update was green over an over-capacity lean).
         "serving_shape_capacity",
