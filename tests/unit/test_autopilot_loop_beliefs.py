@@ -251,6 +251,26 @@ def test_missing_reader_is_refused_and_alarm_failure_is_recorded(tmp_path: Path)
     assert outcome.status == "refused" and outcome.reason == "reader_missing"
     assert runner.calls == []
     assert "alarm subcommand unavailable" in outcome.consumer_alarm["error"]
+    assert outcome.consumer_alarm["fallback"]["error"] == "alarm channel missing"
+
+
+def test_missing_reader_falls_back_to_the_root_alarm_channel(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    channel = root / "scripts" / "coordination" / "alarm_channel.py"
+    channel.parent.mkdir(parents=True)
+    channel.write_text("# stand-in; the FakeRunner never executes it\n")
+    settings = lb.BeliefSettings(root_repo=root, alarm_state=tmp_path / "s.json",
+                                 alarm_config=tmp_path / "c.yaml")
+    runner = FakeRunner()
+    outcome = lb.prepare(settings, [], runner=runner)
+    assert outcome.reason == "reader_missing"
+    assert len(runner.calls) == 1
+    argv = runner.calls[0]
+    assert argv[1] == str(channel) and "raise" in argv
+    assert argv[argv.index("--severity") + 1] == "critical"
+    assert argv[argv.index("--key") + 1] == "belief-ledger-not-current-escalated.autopilot.planner"
+    assert argv[argv.index("--state") + 1] == str(tmp_path / "s.json")
+    assert outcome.consumer_alarm["fallback"]["invoked"] is True
 
 
 def test_loop_prepares_before_planning_and_backs_off_without_planner() -> None:

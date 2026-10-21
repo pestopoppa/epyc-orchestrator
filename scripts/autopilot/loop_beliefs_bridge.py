@@ -251,6 +251,34 @@ class PrepareOutcome:
                 "last_known_good_digest": (self.last_known_good or {}).get("ledger_state_digest")}
 
 
+def _fallback_alarm(settings: BeliefSettings, reason: str, detail: str, run: Runner
+                    ) -> dict[str, Any]:
+    """The reader itself is missing, so its `alarm` subcommand is too: raise a CRITICAL alarm
+    straight through ROOT's alarm channel (a missing reader is a deployment defect, not a
+    transient). Best effort; never raises."""
+    channel = settings.reader.parents[2] / "scripts" / "coordination" / "alarm_channel.py"
+    out: dict[str, Any] = {"invoked": False, "channel": str(channel)}
+    if not channel.is_file():
+        out["error"] = "alarm channel missing"
+        return out
+    argv = [settings.python, str(channel)]
+    if settings.alarm_state is not None:
+        argv += ["--state", str(settings.alarm_state)]
+    if settings.alarm_config is not None:
+        argv += ["--config", str(settings.alarm_config)]
+    argv += ["raise", "--severity", "critical", "--key",
+             f"belief-ledger-not-current-escalated.{settings.consumer}", "--message",
+             f"{settings.consumer}: belief reader missing ({reason}); no new strategies are "
+             "being generated", "--evidence", json.dumps({"reason": reason,
+                                                         "detail": detail[:300]})]
+    try:
+        proc = run(argv, capture_output=True, text=True, check=False, timeout=ALARM_TIMEOUT_S)
+        out.update(invoked=True, returncode=getattr(proc, "returncode", None))
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
+
+
 def raise_alarm(settings: BeliefSettings, reason: str, detail: str, *,
                 runner: Runner | None = None) -> dict[str, Any]:
     """Best-effort `alarm` subcommand for a consumer-side failure. Never raises."""
@@ -258,7 +286,9 @@ def raise_alarm(settings: BeliefSettings, reason: str, detail: str, *,
     out: dict[str, Any] = {"reason": reason, "invoked": False}
     if not settings.reader.is_file():
         out["error"] = f"reader missing at {settings.reader}; alarm subcommand unavailable"
-        log.critical("BELIEF LEDGER ALARM UNDELIVERABLE (%s): %s", reason, out["error"])
+        out["fallback"] = _fallback_alarm(settings, reason, detail, run)
+        if not out["fallback"].get("invoked"):
+            log.critical("BELIEF LEDGER ALARM UNDELIVERABLE (%s): %s", reason, out["error"])
         return out
     argv = [settings.python, str(settings.reader), "alarm", "--consumer", settings.consumer,
             "--reason", reason, "--detail", detail[:500],
