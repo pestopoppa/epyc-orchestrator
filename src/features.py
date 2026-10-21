@@ -168,6 +168,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("reasoning_length_alarm", False, True, "REASONING_LENGTH_ALARM", "Retry verbose reasoning"),
     # Tool output compression
     FeatureSpec("tool_output_compression", False, False, "TOOL_OUTPUT_COMPRESSION", "Compress verbose output"),
+    # TOC-SP-6: chronological per-task trajectory artifact (also needs ORCHESTRATOR_TRAJECTORY_ARTIFACT_DIR)
+    FeatureSpec("trajectory_artifact", False, False, "TRAJECTORY_ARTIFACT", "Write a per-task chronological trajectory-artifact JSONL (TOC-SP-6)"),
     # Output spill
     FeatureSpec("output_spill_to_file", False, True, "OUTPUT_SPILL_TO_FILE", "Spill truncated output to file"),
     # Pipeline monitoring
@@ -692,6 +694,7 @@ class Features:
 
     # CMV-style output spill (Action 11): write truncated output/error to temp file with peek() pointer
     output_spill_to_file: bool = False  # Spill long REPL output/error to file + retrieval pointer
+    trajectory_artifact: bool = False  # TOC-SP-6: per-task trajectory-artifact JSONL writer (needs ORCHESTRATOR_TRAJECTORY_ARTIFACT_DIR)
 
     # Conversation Management (B-series cherry-picks from Hermes/OpenGauss)
     injection_scanning: bool = False  # B7: Prompt injection scanning on loaded context

@@ -45,6 +45,15 @@ def _record_session_turn(
     tool_calls: list[str] | None = None,
 ) -> None:
     """Record a turn to session log (in-memory + disk). Fail-silent."""
+    try:  # TOC-SP-6 trajectory artifact (default off; no-op and never raises)
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_turn(
+            state, role=role, code=code, output=output, error=error,
+            is_final=is_final, tool_calls=tool_calls,
+        )
+    except Exception:
+        pass
     if not state.session_log_path:
         return
     try:

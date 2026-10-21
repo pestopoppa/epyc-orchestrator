@@ -148,6 +148,47 @@ def set_layout(layout: dict[str, Any] | None) -> None:
         _current = layout
 
 
+def rebase_layout(final_prompt: str, base_prompt: str) -> None:
+    """Re-stage the staged layout against the prompt actually sent. Never raises.
+
+    The REPL path (``graph/helpers.py``) renders a builder prompt, then prepends a
+    ``cot_prefix``, appends riders (gathered context, workspace, session, nudges),
+    and may compress it on escalation.  The staged layout describes ``base_prompt``;
+    this moves it onto ``final_prompt``: block starts shift by where the builder text
+    landed, ``layout_chars`` becomes the end of the builder-covered span (riders lie
+    beyond it, ``tail_chars`` counts them), and the head hash is re-taken from what is
+    sent so ``fields_for_request`` matches.  If the builder text no longer occurs in
+    the final prompt (compression rewrote it) nothing is guessed: ``blocks`` is empty
+    and every block counts as unlocated.  A layout that does not belong to
+    ``base_prompt`` is left alone.
+    """
+    try:
+        if not enabled() or not isinstance(final_prompt, str) or not isinstance(base_prompt, str):
+            return
+        lay = peek_layout()
+        if not lay or lay.get("head_sha256_12") != h12(base_prompt[:HEAD_CHARS]) \
+                or lay.get("layout_chars") != len(base_prompt):
+            return
+        pos = final_prompt.find(base_prompt) if base_prompt else -1
+        if pos < 0:
+            lay.update(blocks=[], unlocated_blocks=lay.get("unlocated_blocks", 0) + len(lay["blocks"]),
+                       layout_chars=0, tail_chars=len(final_prompt), rebased=False)
+        else:
+            shifted = []
+            for b in lay["blocks"]:
+                b = dict(b, start=b["start"] + pos)
+                if b.get("chunks"):
+                    b["chunks"] = [dict(c, start=None if c.get("start") is None else c["start"] + pos)
+                                   for c in b["chunks"]]
+                shifted.append(b)
+            end = pos + len(base_prompt)
+            lay.update(blocks=shifted, layout_chars=end, tail_chars=len(final_prompt) - end, rebased=True)
+        lay["head_sha256_12"] = h12(final_prompt[:HEAD_CHARS])
+        set_layout(lay)
+    except Exception:
+        pass
+
+
 def peek_layout() -> dict[str, Any] | None:
     with _lock:
         return dict(_current) if _current else None
@@ -187,6 +228,8 @@ def fields_for_request(request: Any, layout: dict[str, Any] | None = None) -> di
         out.update(blocks=layout["blocks"], layout_chars=layout["layout_chars"],
                    unlocated_blocks=layout.get("unlocated_blocks", 0),
                    layout_schema=layout["schema"])
+        if "tail_chars" in layout:
+            out.update(tail_chars=layout["tail_chars"], rebased=layout.get("rebased"))
         return out
     except Exception:
         return {}

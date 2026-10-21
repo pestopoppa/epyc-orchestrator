@@ -87,6 +87,16 @@ def _write_spill_file(path: str, text: str) -> None:
             os.remove(tmp)
 
 
+def _note_trajectory_spill(state: TaskState, spill_path: str, text: str, label: str) -> None:
+    """TOC-SP-6: record the spill in the trajectory artifact (flag-off no-op, never raises)."""
+    try:
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_spill(state, spill_path, text, label)
+    except Exception:
+        pass
+
+
 def _spill_if_truncated(text: str, max_chars: int, label: str, state: TaskState) -> str:
     """Return a head + tail excerpt of *text* with an exact-recall pointer if it exceeds *max_chars*.
 
@@ -106,6 +116,7 @@ def _spill_if_truncated(text: str, max_chars: int, label: str, state: TaskState)
     spill_path = _spill_file_path(text, label, state)
     try:
         _write_spill_file(spill_path, text)
+        _note_trajectory_spill(state, spill_path, text, label)
 
         def _marker(omitted: int, start: int) -> str:
             return (

@@ -1054,6 +1054,64 @@ def _answer_force_due(state: Any) -> bool:
     return time.perf_counter() >= at
 
 
+def _trajectory_note_call(state: Any, role: Any, prompt: str, meta: dict[str, Any], deps: Any) -> None:
+    """TOC-SP-6: stash this turn's model-call counts for the trajectory artifact (default off)."""
+    try:
+        from src.graph import trajectory_artifact
+
+        if not trajectory_artifact.enabled():
+            return
+        getter = getattr(getattr(deps, "primitives", None), "get_request_id", None)
+        rid = getter() if callable(getter) else None
+        trajectory_artifact.note_call(state, role=role, prompt=prompt, meta=meta,
+                                      request_id=rid if isinstance(rid, str) else None)
+    except Exception:
+        pass
+
+
+def _trajectory_note_overflow(state: Any) -> None:
+    try:
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_context_overflow(state)
+    except Exception:
+        pass
+
+
+def _trajectory_note_compressor(state: Any, seconds: float) -> None:
+    try:
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_compressor_time(getattr(state, "task_id", None), seconds)
+    except Exception:
+        pass
+
+
+def _rebase_prompt_layout(final_prompt: str, base_prompt: str) -> None:
+    """RTE-LOG-1: move the builder's staged block layout onto the REPL prompt actually sent.
+
+    Handles a ``cot_prefix`` ahead of the builder text, riders after it and escalation
+    compression (see ``prompt_layout.rebase_layout``). Log-only; never raises.
+    """
+    try:
+        from src.backends import prompt_layout
+
+        prompt_layout.rebase_layout(final_prompt, base_prompt)
+    except Exception:
+        pass
+
+
+def _drop_stale_layout() -> None:
+    """RTE-LOG-1: an escalation prompt is not built by the builder, so a layout left
+    staged by an earlier turn must not be attributed to it."""
+    try:
+        from src.backends import prompt_layout
+
+        prompt_layout.clear_layout()
+    except Exception:
+        pass
+
+
 async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bool, dict]:
     """Execute one LLM → REPL turn.
 
@@ -1143,9 +1201,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     _edit_finish_sanctioned = False
 
     # Build prompt
+    _layout_base: str | None = None  # RTE-LOG-1: the builder text the staged layout describes
     if state.escalation_prompt:
         prompt = state.escalation_prompt
         state.escalation_prompt = ""
+        _drop_stale_layout()
     else:
         from src.prompt_builders.builder import PromptBuilder, build_corpus_context
         from src.prompt_builders.types import PromptConfig, PromptStyle
@@ -1188,8 +1248,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 if _root not in _sys.path:
                     _sys.path.insert(0, _root)
                 from compress_tool_output import compress_tool_output as _compress
+                import time as _time
+                _t_compress = _time.perf_counter()
                 _output_for_prompt = _compress(state.last_output, state.last_code)
                 _error_for_prompt = _compress(state.last_error, state.last_code)
+                _trajectory_note_compressor(state, _time.perf_counter() - _t_compress)
                 _out_orig = len(state.last_output)
                 _out_comp = len(_output_for_prompt)
                 _err_orig = len(state.last_error)
@@ -1227,6 +1290,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             corpus_context=corpus_ctx,
             solution_file=sol_file,
         )
+        _layout_base = prompt
         if gathered_context:
             prompt += "\n\n[Auto Gathered Context]\n" + gathered_context
         prompt += "\n\n" + _workspace_prompt_block(state)
@@ -1336,6 +1400,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # escalation text -- none of which carry orchestrator control tokens (templating
     # happens at the backend), so neutralise the assembled prompt once here.
     prompt = _ct_neutralise(prompt)
+    if _layout_base is not None:
+        _rebase_prompt_layout(prompt, _layout_base)
 
     # Apply GBNF grammar on first turn when tool use is required
     if state.tool_required and state.turns == 1 and deps.repl is not None:
@@ -1399,6 +1465,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             "Context overflow on turn %d (role=%s kind=%s n_prompt=%s n_ctx=%s)",
             state.turns, role, e.kind, e.n_prompt_tokens, e.n_ctx,
         )
+        _trajectory_note_overflow(state)
         msg = f"LLM call failed: {e}"
         _record_session_turn(state, role=str(role), error=msg)
         return "", msg, False, {}
@@ -1435,6 +1502,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         _replay_rec.record_turn(role=str(role), prompt=prompt, output=code, kwargs=llm_kwargs,
                                 force_answer=force_answer, meta=_turn_call_meta)
     _primary_call_meta = dict(_turn_call_meta)
+    _trajectory_note_call(state, role, prompt, _primary_call_meta, deps)
     _reasoning_retry_meta: dict[str, Any] | None = None
     _reasoning_retry_attempted = False
     _reasoning_retry_failed = False

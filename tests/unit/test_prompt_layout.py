@@ -210,6 +210,66 @@ def test_builder_stages_layout_for_root_lm_prompt():
     assert all(e1 <= s2 for (_, e1), (s2, _) in zip(ends, ends[1:]))
 
 
+def test_builder_emits_tool_output_block_and_it_does_not_overlap_context():
+    from src.prompt_builders.builder import PromptBuilder
+
+    for kw, head in (({"last_output": "hello out"}, "## Last Output"),
+                     ({"last_error": "Traceback boom"}, "## Last Error")):
+        text = PromptBuilder().build_root_lm_prompt(
+            state="x = 1", original_prompt="do it", turn=1,
+            routing_context="Role: frontdoor (Tier 1)", **kw)
+        lay = prompt_layout.peek_layout()
+        to = [b for b in lay["blocks"] if b["kind"] == "tool_output"]
+        assert len(to) == 1
+        seg = text[to[0]["start"]:to[0]["start"] + to[0]["length"]]
+        assert seg.startswith(head) and seg.endswith("```")
+        assert to[0]["sha256_12"] == prompt_layout.h12(seg)
+        ends = [(b["start"], b["start"] + b["length"]) for b in lay["blocks"]]
+        assert all(e1 <= s2 for (_, e1), (s2, _) in zip(ends, ends[1:]))
+        assert {"routing", "tool_output"} <= {b["kind"] for b in lay["blocks"]}
+    PromptBuilder().build_root_lm_prompt(state="x", original_prompt="t", turn=0)
+    assert not [b for b in prompt_layout.peek_layout()["blocks"] if b["kind"] == "tool_output"]
+
+
+def test_rebase_layout_cot_prefix_and_riders_then_compression():
+    from src.graph.helpers import _rebase_prompt_layout
+    from src.prompt_builders.builder import PromptBuilder
+
+    base = PromptBuilder().build_root_lm_prompt(
+        state="x = 1", original_prompt="do the thing", turn=3, last_output="out")
+    orig = {b["kind"]: b for b in prompt_layout.peek_layout()["blocks"]}
+    final = "Think step by step.\n" + base + "\n\n[Auto Gathered Context]\nfoo\n\n** DEADLINE **"
+    _rebase_prompt_layout(final, base)
+    fields = prompt_layout.fields_for_request(SimpleNamespace(prompt=final))
+    assert fields["layout_match"] is True and fields["rebased"] is True
+    off = len("Think step by step.\n")
+    assert fields["layout_chars"] == off + len(base) and fields["tail_chars"] == len(final) - off - len(base)
+    for b in fields["blocks"]:
+        assert b["start"] == orig[b["kind"]]["start"] + off
+        assert prompt_layout.h12(final[b["start"]:b["start"] + b["length"]]) == b["sha256_12"]
+    assert {"tool_output", "task"} <= {b["kind"] for b in fields["blocks"]}
+    # the old (unrebased) head would not have matched a cot_prefix prompt
+    # compression rewrote the builder text: nothing is guessed
+    prompt_layout.clear_layout()
+    PromptBuilder().build_root_lm_prompt(state="x = 1", original_prompt="do the thing", turn=3)
+    n = len(prompt_layout.peek_layout()["blocks"])
+    squeezed = "[compressed] " + base[:100]
+    _rebase_prompt_layout(squeezed, PromptBuilder().build_root_lm_prompt(
+        state="x = 1", original_prompt="do the thing", turn=3))
+    f2 = prompt_layout.fields_for_request(SimpleNamespace(prompt=squeezed))
+    assert f2["blocks"] == [] and f2["unlocated_blocks"] == n and f2["rebased"] is False
+
+
+def test_rebase_ignores_foreign_layout_and_kill_switch(monkeypatch):
+    prompt_layout.record_prompt("alpha " + "x" * 400, sections=[("system", 0, 5)])
+    prompt_layout.rebase_layout("pre " + "beta " + "y" * 400, "beta " + "y" * 400)
+    assert "tail_chars" not in prompt_layout.peek_layout()
+    base = "alpha " + "x" * 400
+    monkeypatch.setenv(prompt_layout.LOG_ENV, "off")
+    prompt_layout.rebase_layout("pre " + base, base)
+    assert "tail_chars" not in prompt_layout.peek_layout()
+
+
 # -- reader --------------------------------------------------------------------
 
 

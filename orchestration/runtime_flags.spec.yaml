@@ -132,6 +132,7 @@ flags:
   tool_output_compression: baseline
   tool_result_clearing: baseline
   tools: baseline
+  trajectory_artifact: baseline
   two_level_condensation: baseline
   typed_decisions: baseline
   typed_decisions_shadow: baseline

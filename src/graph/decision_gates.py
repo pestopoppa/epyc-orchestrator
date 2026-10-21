@@ -164,6 +164,12 @@ def _timeout_skip(ctx: Ctx, error_msg: str) -> bool:
 
 def _make_end_result(ctx: Ctx, answer: str, success: bool) -> End[TaskResult]:
     """Create an End node with a TaskResult."""
+    try:  # TOC-SP-6 trajectory artifact finalize (default off; no-op and never raises)
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.finalize(ctx.state, answer, success)
+    except Exception:
+        pass
     repl = ctx.deps.repl
     tool_outputs = []
     tools_used = 0

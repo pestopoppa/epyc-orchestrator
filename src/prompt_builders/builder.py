@@ -269,6 +269,7 @@ class PromptBuilder:
 
         # Build context section based on last output/error
         context_parts = []
+        _tool_output_block = ""  # RTE-LOG-1: the Last Error / Last Output block, for the layout log
         if last_error:
             error_preview = last_error[: self.config.max_error_preview]
             if len(last_error) > self.config.max_error_preview:
@@ -281,6 +282,7 @@ class PromptBuilder:
                     "```",
                 ]
             )
+            _tool_output_block = f"## Last Error\n```\n{error_preview}\n```"
             if solution_file:
                 context_parts.append(
                     f"Your previous code is saved at `{solution_file}`. "
@@ -305,6 +307,7 @@ class PromptBuilder:
                     "```",
                 ]
             )
+            _tool_output_block = f"## Last Output\n```\n{output_preview}\n```"
 
         if _get_features().deferred_tool_results:
             context_parts.append(
@@ -327,7 +330,7 @@ class PromptBuilder:
         # so REPL turns share a longer KV-cache prefix (see to_string docs).
         _stable = _get_features().prefix_stable_order
         text = prompt.to_string(prefix_stable=_stable)
-        _record_root_lm_layout(prompt, text, _stable, turn, routing_context)
+        _record_root_lm_layout(prompt, text, _stable, turn, routing_context, _tool_output_block)
         return text
 
     def build_escalation_prompt(
@@ -793,7 +796,8 @@ def build_stage2_review_prompt(
 
 
 def _record_root_lm_layout(
-    prompt: RootLMPrompt, text: str, prefix_stable: bool, turn: int, routing_context: str
+    prompt: RootLMPrompt, text: str, prefix_stable: bool, turn: int, routing_context: str,
+    tool_output: str = "",
 ) -> None:
     """RTE-LOG-1: stage the block layout of a rendered Root LM prompt (hashes only).
 
@@ -808,16 +812,19 @@ def _record_root_lm_layout(
         spans = prompt.section_spans(prefix_stable)
         routing = f"## Routing Intelligence\n{routing_context}" if routing_context else ""
         named = []
-        if routing:
-            rpos = text.rfind(routing)
+        # Carve each sub-block out of the context span so the kinds never overlap.
+        for kind_, sub in (("routing", routing), ("tool_output", tool_output)):
+            if not sub:
+                continue
+            rpos = text.rfind(sub)
             carved = []
             for kind, a, b in spans:
-                if kind == "context" and a <= rpos < b:
+                if kind == "context" and rpos >= 0 and a <= rpos and rpos + len(sub) <= b:
                     if rpos > a:
                         carved.append((kind, a, rpos))
-                    if rpos + len(routing) < b:
-                        carved.append((kind, rpos + len(routing), b))
-                    named.append(("routing", routing))
+                    if rpos + len(sub) < b:
+                        carved.append((kind, rpos + len(sub), b))
+                    named.append((kind_, sub))
                 else:
                     carved.append((kind, a, b))
             spans = carved
