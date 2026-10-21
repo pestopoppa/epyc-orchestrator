@@ -2,9 +2,9 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# noncanonical master input at /home/runner/work/epyc-root/epyc-root/research/orchestration/model_registry.yaml
+# noncanonical master input at /mnt/raid0/llm/worktrees/corpus-flagoff-research-20261021/orchestration/model_registry.yaml
 # canonical source of truth: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-# with drafter selection from /home/runner/work/epyc-root/epyc-root/app/orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/worktrees/corpus-flagoff-orch-20261021/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -13,8 +13,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-20T15:34:30+00:00
-# Cache key:   0a490e0b829f4fe3...
+# Compiled at: 2026-10-21T10:38:34+00:00
+# Cache key:   84eb227d5137eac7...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -51,7 +51,7 @@ runtime_defaults:
     kv_cache_type_v: f16
   agent_file_compression_operating_point: none
   corpus_retrieval:
-    enabled: true
+    enabled: false
     index_path: /mnt/raid0/llm/cache/corpus/v3_sharded
     max_snippets: 3
     max_chars: 3000
@@ -1826,7 +1826,7 @@ server_mode:
       spec_type: draft-mtp
       draft_max: 4
       lookup: false
-      corpus_retrieval: true
+      corpus_retrieval: false
     throughput: 40.22
     previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
   coder_escalation:
@@ -1856,7 +1856,7 @@ server_mode:
       type: none
       inherits_spec_from: architect_critic
       lookup: false
-      corpus_retrieval: true
+      corpus_retrieval: false
       spec_type: draft-dflash
       draft_model: /mnt/raid0/llm/models/Qwen3.8-27B-DFlash2-Q8_0.gguf
       draft_max: 7
@@ -1896,7 +1896,7 @@ server_mode:
       spec_type: draft-mtp
       draft_max: 4
       lookup: false
-      corpus_retrieval: true
+      corpus_retrieval: false
     throughput: 40.22
   worker_vision:
     url: http://localhost:8086
@@ -2125,7 +2125,7 @@ roles:
       draft_max: 4
       draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       lookup: false
-      corpus_retrieval: true
+      corpus_retrieval: false
     performance:
       baseline_tps: null
       optimized_tps: 40.22
@@ -2182,7 +2182,7 @@ roles:
       type: none
       inherits_spec_from: architect_critic
       lookup: false
-      corpus_retrieval: true
+      corpus_retrieval: false
       spec_type: draft-dflash
       draft_model: /mnt/raid0/llm/models/Qwen3.8-27B-DFlash2-Q8_0.gguf
       draft_max: 7
