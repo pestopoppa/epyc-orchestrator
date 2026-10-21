@@ -116,6 +116,25 @@ def resolve_client_class(
         return None, "derived", None
 
 
+_MODEL_KEYS = ("model_path", "launch_id", "launched_at", "argv_sha256", "binary_realpath", "identity_source")
+
+
+def model_identity(port: int | None) -> dict[str, Any]:
+    """Served-model identity for ``port`` from the stack's launch sidecar.
+
+    WP-15.2: which GGUF served a port on a date. No network call: the sidecar
+    (``logs/server_launches/<port>.json``, written by the stack at launch) is
+    stat-ed and re-read only when its mtime changes, so a server reload shows up
+    as a new ``launch_id`` / ``model_path`` without a per-request probe. Absence is
+    reported (``identity_source = "absent"``), never filled. Never raises.
+    """
+    try:
+        ident = serving_calls.server_identity(port)
+        return {k: ident[k] for k in _MODEL_KEYS if k in ident}
+    except Exception:
+        return {"identity_source": "error"}
+
+
 def config_digest(config: dict[str, Any]) -> str:
     canonical = json.dumps(
         serving_calls._json_safe(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -275,6 +294,7 @@ class DispatchLog:
             handle["instance"] = {
                 "key": key,
                 "port": meta.get("port"),
+                "model": model_identity(meta.get("port")),
                 "backend_url": meta.get("backend_url"),
                 "topology_idx": meta.get("instance_idx"),
                 "concurrency_idx": meta.get("concurrency_idx"),
@@ -459,7 +479,12 @@ def record_standalone(
                 "workload_class": workload_class,
                 "priority": priority,
                 "request": {"prompt_chars": prompt_chars, "n_tokens_budget": n_tokens_budget},
-                "instance": {"key": str(port) if port else None, "port": port, "backend_url": base_url},
+                "instance": {
+                    "key": str(port) if port else None,
+                    "port": port,
+                    "model": model_identity(port),
+                    "backend_url": base_url,
+                },
                 "fleet_at_arrival": None,
                 "fleet_at_dispatch": None,
                 "provenance": serving_calls.process_provenance(),
