@@ -32,6 +32,12 @@ from src.autopilot_core.sequential_replay import (  # noqa: E402
 )
 
 
+# Fitted on the 2026-10-21 journal snapshot, NOT a recorded fact: this bug tag was applied
+# retroactively, and the live null used its rows at trials below ~1225 (best single cutoff of
+# the journaled-z match count; 315 of 334 trials match with it, 236 without).
+RETRO_TAG_CUTOFFS = {"backend_connectivity_pollution_20260708": 1225}
+
+
 def journal_digest(journal_dir: Path) -> dict[str, Any]:
     h = hashlib.sha256()
     files = []
@@ -61,7 +67,14 @@ def main(argv: list[str] | None = None) -> int:
     jobs = {
         "mhs16": lambda: cumulative_drift_report(rows),
         "seq5": lambda: promotion_attempt_ledger(rows, era_before_ts=era_ts),
-        "seq6": lambda: frozen_null_replay(rows, era_before_ts=None),
+        "seq6": lambda: {
+            "all_groups_no_retro_tag_rule": frozen_null_replay(rows, era_before_ts=None),
+            "all_groups_with_retro_tag_rule": frozen_null_replay(
+                rows, era_before_ts=None, retro_tag_cutoffs=RETRO_TAG_CUTOFFS),
+            "matching_subset_with_retro_tag_rule": frozen_null_replay(
+                rows, era_before_ts=None, retro_tag_cutoffs=RETRO_TAG_CUTOFFS,
+                matching_subset_only=True),
+        },
         "seq7": lambda: paired_keep_replay(rows),
     }
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
         report = {"report": name, **header, "result": jobs[name]()}
         if name == "seq6" and era_ts is not None:
             report["result_with_era_fence"] = frozen_null_replay(rows, era_before_ts=era_ts)
+        if name == "seq6":
+            for sub in report["result"].values():
+                sub.pop("groups", None)
         path = args.out_dir / f"{name}.json"
         path.write_text(json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8")
         print(f"wrote {path}")

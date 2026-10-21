@@ -75,8 +75,13 @@ def incumbent_representative(row: Mapping[str, Any]) -> bool:
     )
 
 
-def _usable(row: Mapping[str, Any], era_before_ts: float | None) -> bool:
-    if row.get("bug_corrupted_by"):
+def _usable(
+    row: Mapping[str, Any],
+    era_before_ts: float | None,
+    allow_tags: frozenset[str] = frozenset(),
+) -> bool:
+    tag = row.get("bug_corrupted_by")
+    if tag and str(tag) not in allow_tags:
         return False
     if str(row.get("outcome_status") or "ok") in {"invalid", "skipped"}:
         return False
@@ -94,12 +99,23 @@ def _rolling_profile(
     era_before_ts: float | None,
     limit: int,
     incumbent_only: bool = True,
+    retro_tag_cutoffs: Mapping[str, int] | None = None,
 ) -> tuple[dict[str, float], int]:
-    """The live null: up to ``limit`` most recent eligible rows strictly before ``end``."""
+    """The live null: up to ``limit`` most recent eligible rows strictly before ``end``.
+
+    ``retro_tag_cutoffs`` maps a bug tag that was applied RETROACTIVELY to the trial id
+    before which the tag did not yet exist: a row carrying it still fed the live null at any
+    trial below the cutoff.
+    """
     trials: list[dict[str, bool]] = []
+    at = rows[end].get("trial_id") if end < len(rows) else None
+    allow = frozenset(
+        t for t, cut in (retro_tag_cutoffs or {}).items()
+        if isinstance(at, int) and at < cut
+    )
     for idx in range(end - 1, -1, -1):
         row = rows[idx]
-        if not _usable(row, era_before_ts) or _tier(row) != tier:
+        if not _usable(row, era_before_ts, allow) or _tier(row) != tier:
             continue
         if incumbent_only and not incumbent_representative(row):
             continue
@@ -218,14 +234,14 @@ def promotion_attempt_ledger(
 
 
 # --------------------------------------------------------------------------- SEQ-6
-def _match_rate(rows, groups, era_before_ts, limit, incumbent_only) -> tuple[int, int]:
+def _match_rate(rows, groups, era_before_ts, limit, incumbent_only, retro=None) -> tuple[int, int]:
     ok = tot = 0
     for (cand, tier), idxs in groups.items():
         for idx in idxs:
             omap = outcome_map(_details(rows[idx]).get("question_results"))
             if not omap:
                 continue
-            prof, _ = _rolling_profile(rows, idx, tier, era_before_ts, limit, incumbent_only)
+            prof, _ = _rolling_profile(rows, idx, tier, era_before_ts, limit, incumbent_only, retro)
             if not prof:
                 continue
             tot += 1
@@ -241,6 +257,8 @@ def frozen_null_replay(
     era_before_ts: float | None = None,
     profile_limit: int = BASELINE_PROFILE_LIMIT,
     incumbent_only: bool | None = None,
+    retro_tag_cutoffs: Mapping[str, int] | None = None,
+    matching_subset_only: bool = False,
 ) -> dict[str, Any]:
     """Recompute each candidate's quality z/E under ONE frozen null (as of its first trial).
 
@@ -265,7 +283,8 @@ def frozen_null_replay(
         groups[(str(seq["candidate"]), _tier(row))].append(idx)
 
     rates = {
-        flag: _match_rate(rows, groups, era_before_ts, profile_limit, flag) for flag in (True, False)
+        flag: _match_rate(rows, groups, era_before_ts, profile_limit, flag, retro_tag_cutoffs)
+        for flag in (True, False)
     }
     if incumbent_only is None:
         incumbent_only = rates[True][0] >= rates[False][0]
@@ -273,10 +292,12 @@ def frozen_null_replay(
     not_replayable: Counter[str] = Counter()
     out_groups: list[dict[str, Any]] = []
     for (cand, tier), idxs in sorted(groups.items(), key=lambda kv: kv[1][0]):
-        frozen, n_base = _rolling_profile(rows, idxs[0], tier, era_before_ts, profile_limit, incumbent_only)
+        frozen, n_base = _rolling_profile(
+            rows, idxs[0], tier, era_before_ts, profile_limit, incumbent_only, retro_tag_cutoffs)
         if not frozen:
             not_replayable["fewer_than_3_baseline_rows_at_first_trial"] += 1
             continue
+        group_has_mismatch = False
         live_obs: list[tuple[int | None, float]] = []
         roll_obs: list[tuple[int | None, float]] = []
         frozen_obs: list[tuple[int | None, float]] = []
@@ -291,16 +312,22 @@ def frozen_null_replay(
             except (TypeError, ValueError):
                 not_replayable["row_with_nonnumeric_z"] += 1
                 continue
-            rolling, _ = _rolling_profile(rows, idx, tier, era_before_ts, profile_limit, incumbent_only)
+            rolling, _ = _rolling_profile(
+                rows, idx, tier, era_before_ts, profile_limit, incumbent_only, retro_tag_cutoffs)
             if not rolling:
                 not_replayable["row_with_unrebuildable_rolling_null"] += 1
                 continue
+            if matching_subset_only and abs(quality_trial_statistic(omap, rolling).z - live_z) > 1e-4:
+                group_has_mismatch = True
             tid = row.get("trial_id")
             live_obs.append((tid, live_z))
             roll_obs.append((tid, quality_trial_statistic(omap, rolling).z))
             frozen_obs.append((tid, quality_trial_statistic(omap, frozen).z))
         if not live_obs:
             not_replayable["no_row_with_vector_and_z"] += 1
+            continue
+        if matching_subset_only and group_has_mismatch:
+            not_replayable["group_with_unreproduced_journal_z"] += 1
             continue
 
         def fold(obs):
@@ -336,6 +363,8 @@ def frozen_null_replay(
         "not_replayable": dict(not_replayable),
         "harness_validation": {
             "rule_used": "incumbent_only" if incumbent_only else "all_usable_same_tier_rows",
+            "retro_tag_cutoffs": dict(retro_tag_cutoffs or {}),
+            "matching_subset_only": matching_subset_only,
             "z_match_incumbent_only": {"matches": rates[True][0], "of": rates[True][1]},
             "z_match_all_usable_same_tier": {"matches": rates[False][0], "of": rates[False][1]},
             "note": "journaled z is reproduced only to the extent matches/of; the rest is harness infidelity, not a gate fact",
