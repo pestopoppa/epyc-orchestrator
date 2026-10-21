@@ -13,14 +13,24 @@ import subprocess
 import sys
 from pathlib import Path
 
+from loop_beliefs_bridge import resolve_root_repo
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
 DEFAULT_RESOLUTIONS = ORCH_ROOT / "orchestration" / "operator_hypothesis_resolutions.jsonl"
+# Kept for importers; the lookups below resolve through resolve_root_repo() at call time
+# (/workspace first, then the epyc-root-main view) because /workspace is a shared clone that can
+# lag origin/main for a long time and then lacks scripts/vidya entirely.
 DEFAULT_LOOKUP = Path("/workspace/scripts/vidya/autopilot_settled.py")
 DEFAULT_KVQ_LOOKUP = Path("/workspace/scripts/vidya/kvq_planner_context.py")
 LOOKUP_ENV = "AUTOPILOT_VIDYA_SETTLED_LOOKUP"
 TIMEOUT_ENV = "AUTOPILOT_VIDYA_SETTLED_TIMEOUT_S"
 KVQ_LOOKUP_ENV = "AUTOPILOT_VIDYA_KVQ_LOOKUP"
+
+
+def _resolved_lookup(name: str) -> Path:
+    """ROOT's scripts/vidya/<name> from the first epyc-root checkout that has the reader."""
+    return resolve_root_repo() / "scripts" / "vidya" / name
 
 
 def build_settled_ground_block(
@@ -36,7 +46,9 @@ def build_settled_ground_block(
     except OSError as exc:
         return f"  !! VIDYA SETTLED-GROUND LOOKUP UNAVAILABLE: cannot read ledger: {exc}"
 
-    lookup = lookup_path or Path(os.environ.get(LOOKUP_ENV, str(DEFAULT_LOOKUP)))
+    lookup = lookup_path or Path(
+        os.environ.get(LOOKUP_ENV) or _resolved_lookup("autopilot_settled.py")
+    )
     if not lookup.is_file():
         return f"  !! VIDYA SETTLED-GROUND LOOKUP UNAVAILABLE: missing {lookup}"
     timeout = timeout_s
@@ -82,7 +94,9 @@ def build_kvq_context(
                 "claim_ids": [],
                 "text": f"  !! VIDYA KV-QUANT EVIDENCE UNAVAILABLE: {reason}"}
 
-    lookup = lookup_path or Path(os.environ.get(KVQ_LOOKUP_ENV, str(DEFAULT_KVQ_LOOKUP)))
+    lookup = lookup_path or Path(
+        os.environ.get(KVQ_LOOKUP_ENV) or _resolved_lookup("kvq_planner_context.py")
+    )
     if not lookup.is_file():
         return unavailable(f"missing {lookup}")
     timeout = timeout_s

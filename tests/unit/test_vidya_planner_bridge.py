@@ -109,3 +109,57 @@ def test_kvq_malformed_manifest_fails_closed(tmp_path, monkeypatch):
     result = bridge.build_kvq_context(lookup_path=lookup)
     assert result["status"] == "unavailable"
     assert result["claim_ids"] == []
+
+
+def _fake_root(path):
+    for name in ("loop_beliefs.py", "kvq_planner_context.py", "autopilot_settled.py"):
+        f = path / "scripts" / "vidya" / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("# stand-in\n")
+    return path
+
+
+def test_default_lookups_fall_back_to_the_root_view_when_workspace_lags(tmp_path, monkeypatch):
+    import loop_beliefs_bridge as lb
+
+    lagging, view = tmp_path / "workspace", tmp_path / "view"
+    lagging.mkdir()
+    _fake_root(view)
+    monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", lagging)
+    monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))
+    monkeypatch.delenv(bridge.KVQ_LOOKUP_ENV, raising=False)
+    monkeypatch.delenv(bridge.LOOKUP_ENV, raising=False)
+    seen = []
+
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "stub"
+
+    monkeypatch.setattr(
+        bridge.subprocess, "run", lambda argv, **kw: seen.append(argv[1]) or Result()
+    )
+    bridge.build_kvq_context()
+    ledger = tmp_path / "resolutions.jsonl"
+    ledger.write_text('{"hypothesis_id":"h1"}\n')
+    bridge.build_settled_ground_block(resolutions_path=ledger)
+    assert seen == [
+        str(view / "scripts" / "vidya" / "kvq_planner_context.py"),
+        str(view / "scripts" / "vidya" / "autopilot_settled.py"),
+    ]
+
+
+def test_default_lookup_prefers_workspace_and_env_override_wins(tmp_path, monkeypatch):
+    import loop_beliefs_bridge as lb
+
+    workspace, view = _fake_root(tmp_path / "workspace"), _fake_root(tmp_path / "view")
+    monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", workspace)
+    monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))
+    monkeypatch.delenv(bridge.KVQ_LOOKUP_ENV, raising=False)
+    assert bridge._resolved_lookup("kvq_planner_context.py") == (
+        workspace / "scripts" / "vidya" / "kvq_planner_context.py"
+    )
+    override = tmp_path / "custom.py"
+    monkeypatch.setenv(bridge.KVQ_LOOKUP_ENV, str(override))
+    result = bridge.build_kvq_context()
+    assert result["status"] == "unavailable" and str(override) in result["reason"]
