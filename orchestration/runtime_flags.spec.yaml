@@ -97,6 +97,7 @@ flags:
   resume_tokens: baseline
   review_before_commit_consult: baseline
   review_before_commit_targeted_gate: baseline
+  replay_recording: baseline
   review_decision_enforce: baseline
   review_decision_shadow: baseline
   role_aware_compaction: baseline

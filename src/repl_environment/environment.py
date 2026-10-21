@@ -271,10 +271,19 @@ class REPLEnvironment(
             self._exploration_log.dependency_log = self._dependency_log
         # HIL-13a: step-level tool events for the L2 scan (default OFF; nothing is constructed when off).
         self._step_events = None
-        if getattr(self._features, "step_event_logging", False):
+        self._replay_recorder = None
+        _replay_on = bool(getattr(self._features, "replay_recording", False))   # HIL-16, default OFF
+        if getattr(self._features, "step_event_logging", False) or _replay_on:
             from src.trace.step_events import StepEventLog, trace_store_sink as _step_sink
 
             self._step_events = StepEventLog(str(self._session_id), role=self.role, sink=_step_sink())
+            if _replay_on:
+                from src.trace.replay.cas import CAS
+                from src.trace.replay.record import ReplayRecorder, trace_store_sink as _turn_sink
+
+                _cas = CAS()
+                self._step_events.cas = _cas
+                self._replay_recorder = ReplayRecorder(str(self._session_id), _cas, sink=_turn_sink(), role=self.role)
             self._exploration_log.step_events = self._step_events
             self._step_events.attach(self)
 

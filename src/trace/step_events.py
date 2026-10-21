@@ -102,6 +102,7 @@ class StepEventLog:
     role: str | None = None
     sink: Callable[[dict], None] | None = None
     ordinal: int = 0
+    cas: Any = None   # HIL-16: when set, args and output text are stored content-addressed (replay tier)
     records: list[dict] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _tl: threading.local = field(default_factory=threading.local, repr=False)
@@ -146,7 +147,12 @@ class StepEventLog:
             from src.trace.l2.detectors import state_hash
             from src.trace.l2.model import L2Step
             sh = state_hash(L2Step(idx=0, tool=name, args=args if isinstance(args, dict) else None, observation=text))
+            extra: dict[str, Any] = {}
+            if self.cas is not None:
+                extra = {"args_cas": self.cas.put(_canon(args if args is not None else {})),
+                         "output_cas": self.cas.put(text)}
             return self._emit(
+                **extra,
                 kind="tool_call", tool=name, args_hash=args_hash(args), ok=not err, error=bool(err),
                 error_class=cls, latency_ms=None if t0 is None else round((time.perf_counter() - t0) * 1000.0, 3),
                 output_bytes=len(text.encode("utf-8", "replace")), truncated=_is_truncated(text),

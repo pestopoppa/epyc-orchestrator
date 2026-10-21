@@ -31,6 +31,7 @@ Independent feature flags let us turn orchestration modules on and off without t
 | `structured_tool_output` | `ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT` | ToolOutput envelope (human + machine modes) | None |
 | `observed_dependency_logging` | `ORCHESTRATOR_OBSERVED_DEPENDENCY_LOGGING` | HIL-15: per-tool-call read/write resource edges, observed grade (default off) | None |
 | `step_event_logging` | `ORCHESTRATOR_STEP_EVENT_LOGGING` | HIL-13a: per-step tool events (args hash, ok/error, latency, output size, truncation, mutating) as `tool_step` trace-store rows for the L2 scan (default off) | None |
+| `replay_recording` | `ORCHESTRATOR_REPLAY_RECORDING` | HIL-16: per-turn model prompt/output and tool args/outputs stored content-addressed (`logs/replay_cas`, override `ORCHESTRATOR_REPLAY_CAS_DIR`) plus `model_turn` trace-store rows, for the prefix-preserving replay tier; implies step events (default off) | None |
 | `final_schema_validation` | `ORCHESTRATOR_FINAL_SCHEMA_VALIDATION` | Validate FINAL() value against caller-supplied JSON Schema; retry-with-error on failure (2026-05-20) | None |
 | `skillbank` | `ORCHESTRATOR_SKILLBANK` | SkillRL experience distillation | `memrl` |
 | `worker_call_budget` | `ORCHESTRATOR_WORKER_CALL_BUDGET` | Cap total REPL executions per task (default 30) | None |

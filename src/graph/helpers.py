@@ -1417,6 +1417,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             deps.primitives._early_stop_check = None
 
     _primary_llm_output = code
+    _replay_rec = getattr(deps.repl, "_replay_recorder", None)   # HIL-16, None unless replay_recording
+    if _replay_rec is not None:
+        _se = getattr(deps.repl, "_step_events", None)
+        _replay_rec.record_turn(role=str(role), prompt=prompt, output=code, kwargs=llm_kwargs,
+                                step_mark=_se.ordinal if _se is not None else 0)
     _primary_call_meta = dict(_turn_call_meta)
     _reasoning_retry_meta: dict[str, Any] | None = None
     _reasoning_retry_attempted = False
