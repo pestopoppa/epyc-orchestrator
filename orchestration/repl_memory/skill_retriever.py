@@ -176,6 +176,8 @@ class SkillRetriever:
             return ""
 
         max_chars = int(self.config.max_prompt_tokens * self._CHARS_PER_TOKEN)
+        if self._cache_friendly():
+            return self._format_cache_friendly(results, max_chars)
         sections: dict[str, list[str]] = {
             "general": [],
             "routing": [],
@@ -226,6 +228,42 @@ class SkillRetriever:
 
         output = "\n".join(lines).strip()
         return output if len(output) > len("## Learned Routing Skills") else ""
+
+    @staticmethod
+    def _cache_friendly() -> bool:
+        from src.prompt_builders.reusable_blocks import cache_friendly_enabled
+
+        return cache_friendly_enabled()
+
+    def _format_cache_friendly(
+        self, results: List[SkillRetrievalResult], max_chars: int
+    ) -> str:
+        """Flag-on layout: canonical items packed into content-addressed blocks.
+
+        The budget is applied in retrieval (rank) order BEFORE canonicalising, so
+        the kept item set is the same one the legacy path would keep; ordering of
+        the kept set then ignores score.  General skills are packed separately so
+        their blocks stay byte-identical across requests.
+        """
+        from src.prompt_builders.reusable_blocks import pack_blocks, render_blocks
+
+        header = "## Learned Routing Skills"
+        used = len(header)
+        general: list[str] = []
+        specific: list[str] = []
+        for r in results:
+            s = r.skill
+            entry = (
+                f"- [{s.skill_type}] {s.title}: {s.principle} "
+                f"Apply when: {s.when_to_apply}"
+            )
+            if used + len(entry) > max_chars:
+                break
+            used += len(entry)
+            (general if r.source == "general" else specific).append(entry)
+        blocks = pack_blocks(general) + pack_blocks(specific)
+        self.last_blocks = blocks  # for B7 hash logging; never in the prompt
+        return render_blocks(blocks, header=header)
 
     def _format_skill_entry(self, result: SkillRetrievalResult) -> str:
         """Format a single skill as a markdown bullet."""

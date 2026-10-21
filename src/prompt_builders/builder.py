@@ -33,6 +33,11 @@ from src.runtime import routing_stage_timing
 from src.task_ir import canonicalize_task_ir
 from src.features import features as _get_features
 from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
+from src.prompt_builders.reusable_blocks import (
+    cache_friendly_enabled,
+    pack_blocks,
+    render_blocks,
+)
 
 _log = logging.getLogger(__name__)
 _CORPUS_REGISTRY: Any | None = None
@@ -783,6 +788,27 @@ def build_stage2_review_prompt(
     )
 
 
+def _build_cache_friendly_routing_context(
+    role: str, tier_value: Any, results: list[Any], best: Any
+) -> str:
+    """Flag-on episodic recall: byte-stable memory blocks + small dynamic tail.
+
+    Per-memory text carries no Q-value/score/id/timestamp; the per-request
+    pieces (own role, suggestion) sit AFTER the blocks, outside them.
+    """
+    items = []
+    for r in results:
+        ctx = r.memory.context or {}
+        objective = " ".join(str(ctx.get("objective", "")).split())[:160]
+        mrole = ctx.get("role", r.memory.action)
+        items.append(f"Past task: {objective} -> {mrole} ({r.memory.outcome or '?'})")
+    blocks = pack_blocks(items)
+    tail = [f"Role: {role} (Tier {tier_value})"]
+    if best:
+        tail.append(f"Suggested: {best[0]} (conf={best[1]:.2f})")
+    return "\n".join([render_blocks(blocks, header="Similar past tasks:"), *tail])
+
+
 @routing_stage_timing.timed_stage("routing_context")
 def build_routing_context(
     role: str,
@@ -834,6 +860,8 @@ def build_routing_context(
             )
 
         best = hybrid_router.retriever.get_best_action(results)
+        if cache_friendly_enabled():
+            return _build_cache_friendly_routing_context(role, tier.value, results, best)
         routing_data = {
             "self": {"role": role, "tier": tier.value},
             "similar": similar,
