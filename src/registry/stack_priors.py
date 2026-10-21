@@ -1526,6 +1526,18 @@ def _runtime_flag_string_prior(
     return fallback
 
 
+def _template_pin_prior(
+    server_cfg: dict[str, Any] | None, role_cfg: dict[str, Any] | None
+) -> str | None:
+    """``chat_template.served_template_sha256`` (64 lowercase hex) from the server row, then the role."""
+    for cfg in (server_cfg, role_cfg):
+        block = cfg.get("chat_template") if isinstance(cfg, dict) else None
+        pin = block.get("served_template_sha256") if isinstance(block, dict) else None
+        if isinstance(pin, str) and len(pin) == 64:
+            return pin
+    return None
+
+
 def _runtime_flag_int_prior(
     server_cfg: dict[str, Any] | None,
     role_cfg: dict[str, Any] | None,
@@ -2548,6 +2560,14 @@ def _launch_runtime_record(
             # default would silently re-template every role.
             "chat_template_file": _runtime_flag_string_prior(
                 server_cfg, role_cfg, key="chat_template_file"
+            ),
+            # SEC-ART-4: 64-hex sha256 of the EFFECTIVE served template, declared as
+            # `server_mode.<role>.chat_template.served_template_sha256` (role-level block as
+            # fallback). Present only when declared; the launcher refuses a mismatch.
+            **(
+                {"served_template_sha256": template_pin}
+                if (template_pin := _template_pin_prior(server_cfg, role_cfg)) is not None
+                else {}
             ),
             "reasoning": _runtime_reasoning_prior(
                 server_cfg,

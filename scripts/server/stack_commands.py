@@ -610,6 +610,14 @@ _RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
         ("--chat-template-file",),
         "",
     ),
+    # SEC-ART-4: sha256 pin of the EFFECTIVE served template. Enforced at launch by
+    # src/registry/artifact_integrity.verify_launch_argv (before Popen); the live argv carries
+    # the template path, not its digest, so there is nothing for the cmdline walker to match.
+    "runtime.flags.served_template_sha256": (
+        "metadata",
+        (),
+        "enforced at launch (artifact_integrity); argv names the file, not its digest",
+    ),
     # section: runtime.flags.spec
     "runtime.flags.spec.enabled": ("dedicated", (), ""),
     "runtime.flags.spec.type": ("dedicated", (), ""),

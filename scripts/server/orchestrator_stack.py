@@ -32,6 +32,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -1780,7 +1781,61 @@ def build_server_command(
     # which launch shape a role happens to use.
     prior_flags = _runtime_flags(_stack_prior_launch(prior_role)[1]) if prior_role else None
     _append_device_args(cmd, prior_flags)
+    # SEC-ART-2/4: the FINAL argv is checked against the registry's GGUF sha256 pins and the served
+    # chat-template pin before anything can reach subprocess.Popen. Raises ArtifactIntegrityError.
+    _verify_artifact_integrity(cmd, prior_role, prior_flags)
     return cmd
+
+
+def _verify_artifact_integrity(
+    cmd: list[str], prior_role: str | None, prior_flags: dict[str, Any] | None
+) -> list[str]:
+    """Refuse a launch whose GGUF or served chat template does not match its registry pin.
+
+    Template-less launches (``prior_role`` None: embedders, ``worker_fast``, dev) get the GGUF check only.
+    Under pytest the check is skipped unless ``ARTIFACT_INTEGRITY_ENFORCE_IN_TESTS=1``, so unit tests that
+    build commands for fixture roles never hash or stat live weights.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and os.environ.get("ARTIFACT_INTEGRITY_ENFORCE_IN_TESTS") != "1":
+        return []
+    from src.registry import artifact_integrity as _ai
+
+    pin = (prior_flags or {}).get("served_template_sha256")
+    return _ai.verify_launch_argv(
+        cmd,
+        role=prior_role,
+        template_pin=pin if isinstance(pin, str) else None,
+        check_template=bool(prior_role),
+    )
+
+
+def _refuse_on_artifact_integrity_error(fn):
+    """Turn an ArtifactIntegrityError raised while building a launch into REFUSED + ``None``.
+
+    The raise happens inside ``build_server_command``, always before ``subprocess.Popen``; this wrapper
+    only converts it into the same "role did not start" result every other refusal returns, and records it.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from src.registry.artifact_integrity import ArtifactIntegrityError
+
+        try:
+            return fn(*args, **kwargs)
+        except ArtifactIntegrityError as exc:
+            roles = kwargs.get("roles") if "roles" in kwargs else (args[1] if len(args) > 1 else [])
+            print(f"  [REFUSED] {'/'.join(roles) if roles else '?'}: {exc}")
+            try:
+                LOG_DIR.mkdir(parents=True, exist_ok=True)
+                with open(LOG_DIR / "artifact_integrity_refusals.jsonl", "a") as fh:
+                    fh.write(json.dumps({
+                        "ts": datetime.now().isoformat(), "kind": type(exc).__name__,
+                        "roles": list(roles or []), "error": str(exc),
+                    }) + "\n")
+            except OSError:
+                pass
+            return None
+
+    return wrapper
 
 
 def _apply_diag_env_override(env: dict[str, str], diag_env_override: dict[str, str] | None) -> None:
@@ -1801,6 +1856,7 @@ def _apply_diag_env_override(env: dict[str, str], diag_env_override: dict[str, s
         print(f"    [EXPERIMENT] diagnostic env override: {diag_env_override}")
 
 
+@_refuse_on_artifact_integrity_error
 def start_server(
     port: int,
     roles: list[str],
