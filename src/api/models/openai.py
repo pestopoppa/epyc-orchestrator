@@ -230,8 +230,10 @@ class OpenAIChatRequest(BaseModel):
         pattern=_REQUEST_KEY_ID_PATTERN,
         description="Self-reported client class tag for serving-call attribution. Validated and "
         "recorded only in request metadata and native serving-call records; it does not verify "
-        "client identity or change routing. Omission remains unknown, with no class inferred "
-        "from workload_class or process configuration.",
+        "client identity or change routing. The header is never overwritten: when it is absent "
+        "the request metadata stays unknown, and the dispatch log (dispatch.v1) records a "
+        "separate server-derived class tagged client.class_source = 'derived' (header-supplied "
+        "classes are tagged 'header').",
     )
     x_user_id: str | None = Field(
         default=None,
