@@ -1,0 +1,275 @@
+{
+ "schema": "epyc.repl_preview_fixture.v1",
+ "task": "Variable `batch` is a list of order dicts (id, tag, qty). tag 'S' is a sale (adds qty), tag 'R' is a return (subtracts qty). Using `batch`, set FINAL to the net quantity over the WHOLE batch as an integer.",
+ "batch": [
+  {
+   "id": "ord-000",
+   "tag": "S",
+   "qty": 10
+  },
+  {
+   "id": "ord-001",
+   "tag": "S",
+   "qty": 11
+  },
+  {
+   "id": "ord-002",
+   "tag": "S",
+   "qty": 12
+  },
+  {
+   "id": "ord-003",
+   "tag": "S",
+   "qty": 13
+  },
+  {
+   "id": "ord-004",
+   "tag": "S",
+   "qty": 14
+  },
+  {
+   "id": "ord-005",
+   "tag": "S",
+   "qty": 15
+  },
+  {
+   "id": "ord-006",
+   "tag": "S",
+   "qty": 16
+  },
+  {
+   "id": "ord-007",
+   "tag": "S",
+   "qty": 17
+  },
+  {
+   "id": "ord-008",
+   "tag": "S",
+   "qty": 18
+  },
+  {
+   "id": "ord-009",
+   "tag": "S",
+   "qty": 19
+  },
+  {
+   "id": "ord-010",
+   "tag": "S",
+   "qty": 20
+  },
+  {
+   "id": "ord-011",
+   "tag": "S",
+   "qty": 21
+  },
+  {
+   "id": "ord-012",
+   "tag": "S",
+   "qty": 22
+  },
+  {
+   "id": "ord-013",
+   "tag": "S",
+   "qty": 23
+  },
+  {
+   "id": "ord-014",
+   "tag": "S",
+   "qty": 24
+  },
+  {
+   "id": "ord-015",
+   "tag": "S",
+   "qty": 25
+  },
+  {
+   "id": "ord-016",
+   "tag": "S",
+   "qty": 26
+  },
+  {
+   "id": "ord-017",
+   "tag": "S",
+   "qty": 27
+  },
+  {
+   "id": "ord-018",
+   "tag": "S",
+   "qty": 28
+  },
+  {
+   "id": "ord-019",
+   "tag": "S",
+   "qty": 29
+  },
+  {
+   "id": "ord-020",
+   "tag": "S",
+   "qty": 30
+  },
+  {
+   "id": "ord-021",
+   "tag": "S",
+   "qty": 31
+  },
+  {
+   "id": "ord-022",
+   "tag": "S",
+   "qty": 32
+  },
+  {
+   "id": "ord-023",
+   "tag": "S",
+   "qty": 33
+  },
+  {
+   "id": "ord-024",
+   "tag": "S",
+   "qty": 34
+  },
+  {
+   "id": "ord-025",
+   "tag": "S",
+   "qty": 35
+  },
+  {
+   "id": "ord-026",
+   "tag": "S",
+   "qty": 36
+  },
+  {
+   "id": "ord-027",
+   "tag": "R",
+   "qty": 37
+  },
+  {
+   "id": "ord-028",
+   "tag": "S",
+   "qty": 38
+  },
+  {
+   "id": "ord-029",
+   "tag": "S",
+   "qty": 39
+  },
+  {
+   "id": "ord-030",
+   "tag": "R",
+   "qty": 40
+  },
+  {
+   "id": "ord-031",
+   "tag": "S",
+   "qty": 41
+  },
+  {
+   "id": "ord-032",
+   "tag": "S",
+   "qty": 42
+  },
+  {
+   "id": "ord-033",
+   "tag": "R",
+   "qty": 43
+  },
+  {
+   "id": "ord-034",
+   "tag": "S",
+   "qty": 44
+  },
+  {
+   "id": "ord-035",
+   "tag": "S",
+   "qty": 45
+  },
+  {
+   "id": "ord-036",
+   "tag": "R",
+   "qty": 46
+  },
+  {
+   "id": "ord-037",
+   "tag": "S",
+   "qty": 47
+  },
+  {
+   "id": "ord-038",
+   "tag": "S",
+   "qty": 48
+  },
+  {
+   "id": "ord-039",
+   "tag": "R",
+   "qty": 49
+  },
+  {
+   "id": "ord-040",
+   "tag": "S",
+   "qty": 50
+  },
+  {
+   "id": "ord-041",
+   "tag": "S",
+   "qty": 51
+  },
+  {
+   "id": "ord-042",
+   "tag": "R",
+   "qty": 52
+  },
+  {
+   "id": "ord-043",
+   "tag": "S",
+   "qty": 53
+  },
+  {
+   "id": "ord-044",
+   "tag": "S",
+   "qty": 54
+  },
+  {
+   "id": "ord-045",
+   "tag": "R",
+   "qty": 55
+  },
+  {
+   "id": "ord-046",
+   "tag": "S",
+   "qty": 56
+  },
+  {
+   "id": "ord-047",
+   "tag": "S",
+   "qty": 57
+  },
+  {
+   "id": "ord-048",
+   "tag": "R",
+   "qty": 58
+  },
+  {
+   "id": "ord-049",
+   "tag": "S",
+   "qty": 59
+  }
+ ],
+ "renderings": {
+  "current": "  batch (list) = [{'id': 'ord-000', 'tag': 'S', 'qty': 10}, {'id': 'ord-001', 'tag': 'S', 'qty': ...",
+  "bounded_k3": "  batch = list(len=50, first 3: [{'id': 'ord-000', 'tag': 'S', 'qty': 10}, {'id': 'ord-001', 'tag': 'S', 'qty': 11}, {'id': 'ord-002', 'tag': 'S', 'qty': 12}], last 3: [{'id': 'ord-047', 'tag': 'S', 'qty': 57}, {'id': 'ord-048', 'tag': 'R', 'qty': 58}, {'id': 'ord-049', 'tag': 'S', 'qty': 59}])",
+  "half_first25": "  batch (list) = [{'id': 'ord-000', 'tag': 'S', 'qty': 10}, {'id': 'ord-001', 'tag': 'S', 'qty': 11}, {'id': 'ord-002', 'tag': 'S', 'qty': 12}, {'id': 'ord-003', 'tag': 'S', 'qty': 13}, {'id': 'ord-004', 'tag': 'S', 'qty': 14}, {'id': 'ord-005', 'tag': 'S', 'qty': 15}, {'id': 'ord-006', 'tag': 'S', 'qty': 16}, {'id': 'ord-007', 'tag': 'S', 'qty': 17}, {'id': 'ord-008', 'tag': 'S', 'qty': 18}, {'id': 'ord-009', 'tag': 'S', 'qty': 19}, {'id': 'ord-010', 'tag': 'S', 'qty': 20}, {'id': 'ord-011', 'tag': 'S', 'qty': 21}, {'id': 'ord-012', 'tag': 'S', 'qty': 22}, {'id': 'ord-013', 'tag': 'S', 'qty': 23}, {'id': 'ord-014', 'tag': 'S', 'qty': 24}, {'id': 'ord-015', 'tag': 'S', 'qty': 25}, {'id': 'ord-016', 'tag': 'S', 'qty': 26}, {'id': 'ord-017', 'tag': 'S', 'qty': 27}, {'id': 'ord-018', 'tag': 'S', 'qty': 28}, {'id': 'ord-019', 'tag': 'S', 'qty': 29}, {'id': 'ord-020', 'tag': 'S', 'qty': 30}, {'id': 'ord-021', 'tag': 'S', 'qty': 31}, {'id': 'ord-022', 'tag': 'S', 'qty': 32}, {'id': 'ord-023', 'tag': 'S', 'qty': 33}, {'id': 'ord-024', 'tag': 'S', 'qty': 34}]"
+ },
+ "expected": {
+  "correct": 965,
+  "retyping_loss_current": 10,
+  "retyping_loss_bounded": 91,
+  "retyping_loss_half": 550,
+  "blind_rule_fit": 1725
+ },
+ "visible_counts": {
+  "current": 1,
+  "bounded": 6,
+  "half": 25,
+  "total": 50
+ },
+ "scoring": "classify(answer, fixture, rendering)"
+}
