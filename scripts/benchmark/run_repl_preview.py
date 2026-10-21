@@ -163,6 +163,9 @@ def main(argv=None) -> int:
     ap.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     ap.add_argument("--deny-ports", default=DEFAULT_DENY_PORTS)
     ap.add_argument("--mock", action="store_true")
+    ap.add_argument("--cell-dir", help="persist every sample to <dir>/<role>__<rendering>.jsonl and RESUME from it (filler use)")
+    ap.add_argument("--stop-file", help="checked between samples: stop cleanly when it exists")
+    ap.add_argument("--deadline-epoch", type=float, help="checked between samples: no new sample after this epoch second")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
 
@@ -188,23 +191,47 @@ def main(argv=None) -> int:
 
     cells: dict[str, list[dict]] = {}
     t0 = time.time()
+    stopped = None
+
+    def should_stop():
+        if a.stop_file and Path(a.stop_file).exists():
+            return "stop-file"
+        if a.deadline_epoch and time.time() >= a.deadline_epoch:
+            return "deadline"
+        return None
+    if a.cell_dir:
+        Path(a.cell_dir).mkdir(parents=True, exist_ok=True)
     for name, url, _pid in roles:
         for rendering in renderings:
             rows = []
             prompt = build_prompt(fx, rendering)
-            for i in range(a.n):
+            cf = Path(a.cell_dir) / f"{name}__{rendering}.jsonl" if a.cell_dir else None
+            if cf is not None and cf.exists():
+                rows = [json.loads(x) for x in cf.read_text().splitlines() if x.strip()]
+            for i in range(len(rows), a.n):
+                stopped = should_stop()
+                if stopped:
+                    break
                 text = mock_reply(rendering, i) if a.mock else chat(url, prompt, a.temperature, a.max_tokens, seed=1000 + i)
                 ans, how = run_reply(text, fx["batch"])
                 rows.append({"i": i, "answer": ans, "how": how})
+                if cf is not None:
+                    with cf.open("a") as f:
+                        f.write(json.dumps(rows[-1]) + "\n")
             cells[f"{name}|{rendering}"] = rows
+            if stopped:
+                break
+        if stopped:
+            break
+    complete = all(len(r) == a.n for r in cells.values()) and len(cells) == len(roles) * len(renderings)
     res = {"schema": "epyc.repl_preview_result.v1", "mock": a.mock, "n_per_cell": a.n, "temperature": a.temperature,
            "roles": [r[0] for r in roles], "renderings": renderings, "fixture_expected": fx["expected"],
            "predeclared": "artifacts/queue-builders-3-20261021/dripreview1/PREDECLARED.md (root repo)",
-           "counts": tally(fx, cells), "rows": cells, "wall_s": round(time.time() - t0, 1),
+           "complete": complete, "stopped": stopped, "counts": tally(fx, cells), "rows": cells, "wall_s": round(time.time() - t0, 1),
            "note": "a mock result is plumbing only and must never be cited as a finding" if a.mock else ""}
     Path(a.out).write_text(json.dumps(res, indent=1) + "\n")
     print(json.dumps(res["counts"], indent=1))
-    return 0
+    return 0 if complete else 75     # 75 = partial (stop/deadline); rerun resumes from --cell-dir
 
 
 if __name__ == "__main__":

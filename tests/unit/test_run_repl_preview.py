@@ -47,3 +47,18 @@ def test_mock_end_to_end(tmp_path):
     assert cnt["mock_role|current"]["retyping_loss"] + cnt["mock_role|current"]["other"] == 4
     assert cnt["mock_role|half_first25"]["blind_rule_fit"] == 2 and cnt["mock_role|half_first25"]["retyping_loss"] == 2
     assert r["mock"] is True
+
+
+def test_resume_and_stop(tmp_path):
+    out, cells = tmp_path / "r.json", tmp_path / "cells"
+    stop = tmp_path / "STOP"
+    stop.write_text("")
+    assert M.main(["--mock", "--n", "4", "--cell-dir", str(cells), "--stop-file", str(stop), "--out", str(out)]) == 75
+    assert json.loads(out.read_text())["stopped"] == "stop-file"
+    stop.unlink()
+    assert M.main(["--mock", "--n", "4", "--cell-dir", str(cells), "--out", str(out)]) == 0
+    r = json.loads(out.read_text())
+    assert r["complete"] is True and all(c["n"] == 4 for c in r["counts"].values())
+    # a second pass over a finished cell dir adds no rows
+    assert M.main(["--mock", "--n", "4", "--cell-dir", str(cells), "--out", str(out)]) == 0
+    assert sum(len(p.read_text().splitlines()) for p in cells.glob("*.jsonl")) == 12
