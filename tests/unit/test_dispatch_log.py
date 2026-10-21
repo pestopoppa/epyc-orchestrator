@@ -122,3 +122,72 @@ def test_write_failure_is_swallowed(monkeypatch, tmp_path):
     cab, path = _make(monkeypatch, tmp_path, result=res)
     monkeypatch.setattr(dispatch_log, "write_record", lambda r: (_ for _ in ()).throw(OSError("disk")))
     assert cab.infer(SimpleNamespace(name="frontdoor"), _req()) is res
+
+
+# --- non-fleet lanes (direct single-server backend, passthrough) -------------
+
+
+class _DirectBackend:
+    def __init__(self, url, raises=None):
+        self.config = SimpleNamespace(base_url=url)
+        self._raises = raises
+
+    @serving_calls.recorded_call("infer")
+    def infer(self, role_config, request):
+        if self._raises:
+            raise self._raises
+        return SimpleNamespace(success=True)
+
+
+def _direct_env(monkeypatch, tmp_path):
+    path = tmp_path / "d.jsonl"
+    monkeypatch.setenv(dispatch_log.LOG_ENV, str(path))
+    monkeypatch.setenv(serving_calls.LOG_ENV, str(tmp_path / "sc.jsonl"))
+    dispatch_log._standalone_config_written.clear()
+    return path
+
+
+def test_direct_lane_record_has_null_fleet(monkeypatch, tmp_path):
+    path = _direct_env(monkeypatch, tmp_path)
+    serving_calls.stage_caller(role="architect_general", request_id="r9", session_id="S", client_class="codex")
+    res = _DirectBackend("http://localhost:8083").infer(SimpleNamespace(name="architect_general"), _req())
+    assert res.success is True
+    cfg, rec = _recs(path)
+    assert cfg["config"]["lane"] == "direct"
+    assert rec["backend_id"] == "lane:direct" and rec["instance"]["port"] == 8083
+    assert rec["fleet_at_arrival"] is None and rec["fleet_at_dispatch"] is None
+    assert rec["session"]["key"] == dispatch_log.session_key("S") and rec["client"]["class"] == "codex"
+    assert rec["record_sha256"] == serving_calls.record_digest(rec)
+
+
+def test_direct_lane_exception_unchanged(monkeypatch, tmp_path):
+    path = _direct_env(monkeypatch, tmp_path)
+    with pytest.raises(RuntimeError, match="x"):
+        _DirectBackend("http://localhost:8083", raises=RuntimeError("x")).infer(SimpleNamespace(name="r"), _req())
+    assert [r for r in _recs(path) if r["kind"] == "dispatch"][0]["outcome"] == "exception"
+
+
+def test_fleet_call_is_not_double_recorded(monkeypatch, tmp_path):
+    path = _direct_env(monkeypatch, tmp_path)
+    serving_calls.stage_caller(role="frontdoor")
+    serving_calls.annotate_staged(instance_idx=0, instance_full=True)  # what the fleet does
+    _DirectBackend("http://localhost:8070").infer(SimpleNamespace(name="frontdoor"), _req())
+    assert not path.exists()
+
+
+def test_passthrough_dispatch_record(monkeypatch, tmp_path):
+    from src.api.routes import passthrough as pt
+
+    path = _direct_env(monkeypatch, tmp_path)
+    call = SimpleNamespace(
+        role="coder_escalation", base_url="http://localhost:8083", t_staged=100.0, t_dispatch=100.5,
+        request_id="rq", session_id="sess", client_class="opencode", client_id="cid",
+        prompt_text="abcd", new_tokens=32, pool_exhausted=False, client_disconnected=False,
+        upstream_error=None, http_status=200,
+    )
+    pt._write_dispatch_record(call, None, 102.0)
+    rec = [r for r in _recs(path) if r["kind"] == "dispatch"][0]
+    assert rec["backend_id"] == "lane:passthrough" and rec["queue_wait_ms"] == 500.0
+    assert rec["service_ms"] == 1500.0 and rec["request"] == {"prompt_chars": 4, "n_tokens_budget": 32}
+    assert rec["client"]["class"] == "opencode" and rec["fleet_at_arrival"] is None
+    assert pt._tag("  ") is None and pt._tag(" a ") == "a" and pt._tag(3) is None

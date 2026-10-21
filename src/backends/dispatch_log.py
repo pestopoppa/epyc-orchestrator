@@ -307,3 +307,102 @@ class DispatchLog:
             )
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Non-fleet lanes (passthrough, direct single-server backend calls)
+# ---------------------------------------------------------------------------
+
+_standalone_config_written: set[str] = set()
+
+
+def record_standalone(
+    *,
+    lane: str,
+    role: str | None,
+    base_url: str | None,
+    port: int | None,
+    ts_arrival: float,
+    ts_dispatch: float | None,
+    ts_end: float,
+    request_id: str | None = None,
+    session_id: str | None = None,
+    client_class: str | None = None,
+    client_class_provenance: str | None = None,
+    client: str | None = None,
+    workload_class: str | None = None,
+    priority: str | None = None,
+    prompt_chars: int | None = None,
+    n_tokens_budget: int | None = None,
+    outcome: str = "ok",
+    error_type: str | None = None,
+    method: str | None = None,
+) -> None:
+    """One ``dispatch.v1`` record for a lane with no fleet placement.
+
+    ``lane`` is ``passthrough`` or ``direct`` (a single-server backend call that
+    did not go through ``ConcurrencyAwareBackend``). ``fleet_*`` are null: there is
+    no instance choice and no fleet accounting on these lanes. Never raises.
+    """
+    try:
+        if log_path() is None:
+            return
+        config = {"lane": lane, "dispatch_log_env": LOG_ENV}
+        cfg_sha = config_digest(config)
+        if lane not in _standalone_config_written:
+            _standalone_config_written.add(lane)
+            write_record(
+                {
+                    "schema": SCHEMA,
+                    "kind": "config",
+                    "record_id": uuid.uuid4().hex,
+                    "ts": serving_calls._iso(time.time()),
+                    "backend_id": f"lane:{lane}",
+                    "config": config,
+                    "config_sha256": cfg_sha,
+                    "provenance": serving_calls.process_provenance(),
+                }
+            )
+        write_record(
+            {
+                "schema": SCHEMA,
+                "kind": "dispatch",
+                "record_id": uuid.uuid4().hex,
+                "backend_id": f"lane:{lane}",
+                "config_sha256": cfg_sha,
+                "method": method or lane,
+                "role": role,
+                "request_id": request_id,
+                "task_id": None,
+                "ts_arrival": serving_calls._iso(ts_arrival),
+                "ts_dispatch": serving_calls._iso(ts_dispatch) if ts_dispatch else None,
+                "ts_end": serving_calls._iso(ts_end),
+                "queue_wait_ms": (
+                    round(max(0.0, (ts_dispatch - ts_arrival) * 1000.0), 3) if ts_dispatch else None
+                ),
+                "service_ms": (
+                    round(max(0.0, (ts_end - ts_dispatch) * 1000.0), 3) if ts_dispatch else None
+                ),
+                "completion_observed": True,
+                "outcome": outcome,
+                "error_type": error_type,
+                "session": {
+                    "key": session_key(session_id),
+                    "source": lane if session_id else None,
+                },
+                "client": {
+                    "class": client_class,
+                    "class_provenance": client_class_provenance,
+                    "id": client,
+                },
+                "workload_class": workload_class,
+                "priority": priority,
+                "request": {"prompt_chars": prompt_chars, "n_tokens_budget": n_tokens_budget},
+                "instance": {"key": str(port) if port else None, "port": port, "backend_url": base_url},
+                "fleet_at_arrival": None,
+                "fleet_at_dispatch": None,
+                "provenance": serving_calls.process_provenance(),
+            }
+        )
+    except Exception:
+        pass

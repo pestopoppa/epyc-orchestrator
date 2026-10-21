@@ -806,6 +806,46 @@ def _wrap_on_chunk(on_chunk: Callable[[str], Any] | None, notes: dict[str, Any])
     return _observed
 
 
+def _dispatch_direct(
+    staged: dict[str, Any] | None, request: Any, role_config: Any, backend: Any,
+    ts_start: float, result: Any, error: BaseException | None,
+) -> None:
+    """dispatch.v1 for a call that did NOT go through ``ConcurrencyAwareBackend``
+    (single-server GPU / non-fleet roles). Fleet calls staged an ``instance_idx`` and
+    are recorded by the fleet scope, so they are skipped here. Never raises."""
+    try:
+        if staged and "instance_idx" in staged:
+            return
+        from src.backends import dispatch_log
+
+        st = staged or {}
+        url = getattr(getattr(backend, "config", None), "base_url", None)
+        prompt = getattr(request, "prompt", None)
+        n_tokens = getattr(request, "n_tokens", None)
+        dispatch_log.record_standalone(
+            lane="direct",
+            role=st.get("role") or getattr(role_config, "name", None) or getattr(request, "role", None),
+            base_url=url,
+            port=_port_of(url),
+            ts_arrival=st.get("_ts0") or ts_start,
+            ts_dispatch=ts_start,
+            ts_end=time.time(),
+            request_id=st.get("request_id"),
+            session_id=st.get("session_id"),
+            client_class=st.get("client_class"),
+            client_class_provenance=st.get("client_class_provenance"),
+            client=st.get("client"),
+            workload_class=st.get("workload_class"),
+            priority=st.get("priority"),
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
+            n_tokens_budget=n_tokens if isinstance(n_tokens, int) else None,
+            outcome=classify_outcome(result, error, False),
+            error_type=type(error).__name__ if error is not None else None,
+        )
+    except Exception:
+        pass
+
+
 def recorded_call(method: str) -> Callable:
     """Decorate a backend entry point ``(self, role_config, request, ...)``.
 
@@ -856,6 +896,7 @@ def recorded_call(method: str) -> Callable:
                         notes=notes,
                     )
                     write_record(record)
+                    _dispatch_direct(staged, request, role_config, self, ts_start, result, error)
                     remember_served(record, prefix_ladder(request))
                     observe_prefix_index(record, request)
                 except Exception:

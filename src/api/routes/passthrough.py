@@ -276,6 +276,9 @@ class _Call:
     request_id: str
     client_id: str | None
     role_config: Any = None
+    # WP-15.1 / HSF-3.1a dispatch record: the client's own session / class tags.
+    session_id: str | None = None
+    client_class: str | None = None
     # The prompt-estimate text (``prompt_text(body)``), handed to the KV pool
     # gate for the KVU-15a cached-prefix credit. Never sent anywhere.
     prompt_text: str | None = field(default=None, repr=False)
@@ -838,8 +841,40 @@ def wire_prefix_key(endpoint: str, body: dict[str, Any]) -> str | None:
         return None
 
 
+def _tag(value: Any) -> str | None:
+    return value.strip() or None if isinstance(value, str) else None
+
+
+def _write_dispatch_record(call: _Call, error: BaseException | None, now: float) -> None:
+    """WP-15.1 / HSF-3.1a: the same ``dispatch.v1`` record the fleet writes, no fleet state."""
+    try:
+        from src.backends import dispatch_log
+
+        dispatch_log.record_standalone(
+            lane="passthrough",
+            role=call.role,
+            base_url=call.base_url,
+            port=_extract_port_of(call.base_url),
+            ts_arrival=call.t_staged,
+            ts_dispatch=call.t_dispatch,
+            ts_end=now,
+            request_id=call.request_id,
+            session_id=call.session_id,
+            client_class=call.client_class,
+            client_class_provenance="caller_supplied:x_client_class" if call.client_class else None,
+            client=call.client_id,
+            prompt_chars=len(call.prompt_text or ""),
+            n_tokens_budget=call.new_tokens,
+            outcome=outcome(call, error),
+            error_type=type(error).__name__ if error is not None else None,
+        )
+    except Exception:
+        pass
+
+
 def write_serving_record(call: _Call, error: BaseException | None) -> None:
     """One ``serving_call.v1`` record, ``caller.source = "passthrough"``. Never raises."""
+    _write_dispatch_record(call, error, time.time())
     try:
         now = time.time()
         dispatched = call.t_dispatch is not None
@@ -974,6 +1009,10 @@ async def _passthrough(endpoint: str, role: str, http_request: Request, state: A
         client_host=client_host,
         request_id=http_request.headers.get("x-request-id") or uuid.uuid4().hex,
         client_id=http_request.headers.get("x-client-id"),
+        session_id=_tag(body.get("x_session_id"))
+        or _tag(http_request.headers.get("x-dynamo-session-id"))
+        or _tag(http_request.headers.get("x-session-id")),
+        client_class=_tag(body.get("x_client_class")) or _tag(http_request.headers.get("x-client-class")),
         role_config=_role_config_for_backend(getattr(state, "registry", None), role_name),
         prompt_text=text,
         prefix_fp=wire_prefix_fingerprints(endpoint, body),
