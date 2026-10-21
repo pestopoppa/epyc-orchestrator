@@ -78,6 +78,21 @@ def _itt_delta_text(eval_result: EvalResult, reference_details: Mapping[str, Any
         return ""
 
 
+def _gold_self_check_header(eval_result: EvalResult) -> str:
+    """EV-19: header flagging evaluated suites whose scorer fails its own gold answers.
+
+    '' unless a gold self-check report exists and flags a suite this eval used."""
+    try:
+        from src.autopilot_core.gold_self_check import header_text
+
+        suites = set(getattr(eval_result, "per_suite_counts", None) or {}) | set(
+            getattr(eval_result, "per_suite_quality", None) or {}
+        )
+        return header_text(suites)
+    except Exception:  # noqa: BLE001 - report text only
+        return ""
+
+
 def generate_self_criticism(
     action: dict,
     eval_result: EvalResult,
@@ -130,6 +145,8 @@ def generate_self_criticism(
     # scorer-dependent delta. Additive text only; never changes keep/revert. The reference is
     # the previous journaled trial's `details` (the baseline object carries no counts).
     crit.keep_revert_reasoning += _itt_delta_text(eval_result, reference_details)
+    # EV-19: report header flag for suites whose scorer fails its own gold answers.
+    crit.keep_revert_reasoning = _gold_self_check_header(eval_result) + crit.keep_revert_reasoning
 
     # ── Analyze what went wrong ──────────────────────────────────
     if not verdict.passed:
