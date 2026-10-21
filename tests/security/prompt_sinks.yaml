@@ -1,0 +1,59 @@
+# CT-16 registry for tests/security/test_prompt_sink_coverage.py.
+# Static check: records that sanitisation / pinning is PRESENT, not that it is sufficient.
+# Wording rule (CT-20): any protection claim is `static-attack ASR on fixture set X`, never robustness.
+#
+# Every list is a ratchet. Adding an entry needs a one-line reason. flow_allowlist may only shrink.
+
+# Part A: functions that carry a completion-endpoint path literal (model-call entry points).
+# kind: post = issues the HTTP request; route = orchestrator-served route; table = path map;
+#       reference = metadata/telemetry/proof string, no prompt leaves here.
+sinks:
+  orchestration/repl_memory/distillation/teachers.py::distill: {kind: post, reason: "distillation teacher call; prompt = json.dumps(trajectories), offline (CT-19a path 17)"}
+  src/api/routes/chat_pipeline/scout_stage.py::complete: {kind: post, reason: "scout streaming completion, inputs neutralised in scout_stage"}
+  src/api/routes/chat_pipeline/scout_stage.py::prefill_trunk: {kind: post, reason: "scout prefill, same assembler"}
+  src/api/routes/chat_vision.py::_handle_vision_request: {kind: post, reason: "VL request, OCR/tool text neutralised in chat_vision"}
+  src/api/routes/chat_vision.py::_vision_react_mode_answer: {kind: post, reason: "VL react mode, same module"}
+  src/api/routes/openai_compat.py::_client_usage: {kind: reference, reason: "usage object type string, no prompt"}
+  src/api/routes/openai_compat.py::openai_chat_completions: {kind: route, reason: "OpenAIChatRequest messages neutralised (CT-12.3a)"}
+  src/api/routes/passthrough.py::<module>: {kind: table, reason: "passthrough path map; raw llama-server surface behind the gate"}
+  src/api/routes/passthrough.py::passthrough_chat_completions: {kind: route, reason: "raw passthrough route, operator-gated"}
+  src/backends/llama_server.py::_infer_chat_completions: {kind: post, reason: "backend sink, inputs neutralised upstream (llm_call wrapper / builders)"}
+  src/backends/llama_server.py::_infer_stream_text_chat_completions: {kind: post, reason: "backend sink (stream)"}
+  src/backends/llama_server.py::infer: {kind: post, reason: "backend sink /completion"}
+  src/backends/llama_server.py::infer_stream: {kind: post, reason: "backend sink /completion (stream)"}
+  src/backends/llama_server.py::infer_stream_text: {kind: post, reason: "backend sink /completion (stream text)"}
+  src/backends/openai.py::_make_request: {kind: post, reason: "cloud OpenAI-compatible backend"}
+  src/backends/openai.py::infer_stream: {kind: post, reason: "cloud OpenAI-compatible backend (stream)"}
+  src/backends/serving_calls.py::build_record: {kind: reference, reason: "telemetry endpoint prefix compare, no prompt"}
+  src/runtime/gpu_window_executor.py::serving_proof: {kind: reference, reason: "serving-proof strings, no prompt"}
+  src/services/worker_pool.py::_http_call: {kind: post, reason: "worker pool sink; neutralises before templating (test_worker_pool_http_call_neutralises_before_templating)"}
+  src/structured_output/repair.py::http_chat_completer: {kind: post, reason: "structured-output repair turn; text under repair is model output"}
+  src/tools/web/research.py::_worker_synthesis_target: {kind: post, reason: "web synthesis worker; neutralised and prompt marks content untrusted (research.py:772)"}
+  src/vision/analyzers/vl_describe.py::_analyze_with_server: {kind: post, reason: "VL describe of operator-supplied image"}
+
+# Part B: sink-reaching functions that interpolate an untrusted-source name without passing it to a
+# neutralise call in the same function. May only shrink.
+flow_allowlist:
+  src/api/routes/openai_compat.py::generate_stream: "`chunk` is the SSE delta being serialised to the client, not text bound for a model"
+  src/api/routes/openai_compat.py::openai_chat_completions: "`chunk` is the SSE delta being serialised to the client, not text bound for a model"
+
+# Part D: pinned call sites. A new caller needs a one-line reason here.
+scan_content_callers:
+  src/services/document_preprocessor.py::_filter_structured_context_for_injection: "document ingest, warn-only, flag-gated"
+  src/services/document_preprocessor.py::_scan_document_body_for_injection: "document ingest, warn-only, flag-gated"
+  src/user_modeling/profile_store.py::add_fact: "user profile write, rejects, flag-gated"
+
+  src/security/skill_scan.py::scan_fields: "CT-19b warn-only scan of model-authored stored text; flag-gated, never changes accept/reject"
+
+skillbank_store_callers:
+  orchestration/repl_memory/distillation/failure_bridge.py::sync_mitigations_to_skills: "FailureBridge writer; CT-19b adds a warn-only scan here"
+  orchestration/repl_memory/distillation/pipeline.py::_deduplicate_and_store: "distillation writer; CT-19b adds a warn-only scan here"
+
+# Part C: role prompt files that must carry the data-not-instructions sentence once DP-G decides it.
+role_prompt_files:
+  - orchestration/prompts/frontdoor.md
+  - orchestration/prompts/root_lm_system.md
+  - orchestration/prompts/roles/worker_general.md
+  - orchestration/prompts/roles/architect_general.md
+  - orchestration/prompts/roles/architect_coding.md
+  - orchestration/prompts/roles/coder_escalation.md
