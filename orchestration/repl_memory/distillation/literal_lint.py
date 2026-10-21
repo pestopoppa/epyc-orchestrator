@@ -53,6 +53,31 @@ _BACKTICK = re.compile(r"`([A-Za-z_][\w.\-]{1,40})`")
 _YEAR = re.compile(r"^(?:19|20)\d{2}$")
 
 
+# ── M-27 (a): negative-capability claims and unlabelled-success provenance ──
+# Kept OUT of RULES so the M-24 calibration numbers stay reproducible.
+_NEG_CAP_RE = re.compile(
+    r"\b(?:does(?:\s+not|n'?t)\s+(?:work|support|exist|apply)|do(?:es)?\s+not\s+(?:use|support)|"
+    r"cannot\s+(?:use|be\s+used|handle|run|access)|can'?t\s+(?:use|handle|run|access)|"
+    r"(?:is|are)\s+not\s+(?:supported|available|possible|allowed)|unable\s+to|never\s+works?|"
+    r"not\s+possible\s+to|fails?\s+to\s+(?:work|run))\b",
+    re.I,
+)
+
+
+def extract_negative_capability(text: str) -> list[str]:
+    """Matched negative-capability phrases ("X does not work", "cannot use Y"), with 40 chars of context."""
+    out = []
+    for m in _NEG_CAP_RE.finditer(text):
+        a, b = max(0, m.start() - 40), min(len(text), m.end() + 40)
+        out.append(" ".join(text[a:b].split()))
+    return out
+
+
+def unlabelled_success(source_outcome: str | None) -> bool:
+    """True when a skill's source trajectory did not end in a labelled success."""
+    return (source_outcome or "").strip().lower() != "success"
+
+
 def strip_frontmatter(text: str) -> str:
     if text.startswith("---"):
         end = text.find("\n---", 3)

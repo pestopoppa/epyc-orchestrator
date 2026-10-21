@@ -58,6 +58,10 @@ class DistillationReport:
     errors: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
     batch_latencies: List[Dict[str, Any]] = field(default_factory=list)
+    # M-27(d): teacher call and (approximate, chars//4) token totals for the run.
+    teacher_calls: int = 0
+    prompt_chars: int = 0
+    response_chars: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -73,6 +77,9 @@ class DistillationReport:
             "errors": self.errors,
             "duration_seconds": round(self.duration_seconds, 2),
             "batch_latencies": self.batch_latencies,
+            "teacher_calls": self.teacher_calls,
+            "approx_prompt_tokens": self.prompt_chars // 4,
+            "approx_response_tokens": self.response_chars // 4,
         }
 
 
@@ -204,8 +211,11 @@ class DistillationPipeline:
             import time as _time
 
             batch_start = _time.monotonic()
+            report.teacher_calls += 1
+            report.prompt_chars += len(prompt)
             try:
                 response = await self.teacher.distill(prompt)
+                report.response_chars += len(response or "")
             except Exception as e:
                 error_msg = f"Teacher error on {skill_type} batch {i}: {e}"
                 logger.error(error_msg)

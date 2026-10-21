@@ -2359,6 +2359,11 @@ def _action_distill_skillbank(action: dict[str, Any], ctx: _ActionContext):
             f" pool(teacher={teacher}, q>={pool.get('min_q_value')}): "
             f"total={pool.get('total')} by_outcome={pool.get('by_outcome')}"
         )
+        # M-27(d): planned teacher calls (default batch 20 per outcome category); token
+        # totals are only known after the run and are in the distill_skillbank report.
+        by_o = pool.get("by_outcome") or {}
+        planned = sum(-(-int(by_o.get(k, 0)) // 20) for k in ("success", "failure"))
+        pool_note += f" planned_teacher_calls={planned}"
     ctx.lab.checkpoint_state(
         trial_id=ctx.state.get("trial_counter", 0),
         notes="Pre-distillation checkpoint" + pool_note,
