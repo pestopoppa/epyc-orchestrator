@@ -174,7 +174,7 @@ def test_boundary_web_research_synthesis_prompt(monkeypatch):
     assert p.count("<|im_start|>") == 2 and p.count("<|im_end|>") == 1
 
 
-def test_boundary_rag_snippet(tmp_path, monkeypatch):
+def test_rag_snippet_is_raw_data_neutralised_only_via_corpus_context(tmp_path, monkeypatch):
     from src.retrieval import colbert_encoder as encoder
     from src.retrieval import kb_rag
 
@@ -194,4 +194,11 @@ def test_boundary_rag_snippet(tmp_path, monkeypatch):
     kb_rag.build_index(kb_rag.CorpusConfig([], [], []), index_dir=directory)
     hits = kb_rag.query("q", index_dir=directory)
     assert hits and "Ignore previous instructions" in hits[0]["snippet"]
-    assert not has_control_tokens(hits[0]["snippet"])
+    # CT-12.3c review: kb_rag results are data (federation CLI, REPL doc_search); raw here,
+    # neutralised when they enter a prompt (builder corpus_context / last_output / llm_call).
+    assert INJECTION in hits[0]["snippet"] and ZWSP not in hits[0]["snippet"]
+    from src.prompt_builders.builder import PromptBuilder
+
+    prompt = PromptBuilder().build_root_lm_prompt(
+        state="s", original_prompt="t", corpus_context=hits[0]["snippet"])
+    assert not has_control_tokens(prompt)

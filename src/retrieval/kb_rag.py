@@ -49,7 +49,6 @@ import numpy as np
 
 from src.retrieval import colbert_encoder, cross_encoder, kb_catalog_dependency, kb_rag_query_telemetry
 from src.retrieval.markdown_chunker import chunk_file
-from src.security.control_tokens import neutralise_control_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -1012,7 +1011,7 @@ def query(
             "file": r["file_path"],
             "heading_path": json.loads(r["heading_path"]),
             "line_range": (r["line_start"], r["line_end"]),
-            "snippet": neutralise_control_tokens(r["text_preview"]),  # CT-12.3a: RAG text is untrusted
+            "snippet": r["text_preview"],
             "score": round(blended, 4),
             "content_hash": r["content_hash"],
         }

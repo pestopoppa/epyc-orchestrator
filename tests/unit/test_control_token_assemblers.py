@@ -357,7 +357,7 @@ def test_repl_data_functions_return_raw_text(tmp_path):
 
 def test_data_plane_modules_do_not_neutralise():
     """Source/data modules stay raw; only model-bound boundaries neutralise."""
-    for rel in ("repl_document.py", "tools/web/fetch.py", "tools/web/search.py"):
+    for rel in ("repl_document.py", "tools/web/fetch.py", "tools/web/search.py", "retrieval/kb_rag.py"):
         assert "neutralis" not in (SRC / rel).read_text(), rel
 
 
