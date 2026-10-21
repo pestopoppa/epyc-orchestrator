@@ -71,6 +71,51 @@ def session_key(session_id: str | None) -> str | None:
     return hashlib.sha256(str(session_id).encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
+def resolve_client_class(
+    explicit: str | None,
+    explicit_provenance: str | None = None,
+    *,
+    lane: str,
+    workload_class: str | None = None,
+    priority: str | None = None,
+    trace_keys: Any = None,
+    client: str | None = None,
+    session_id: str | None = None,
+) -> tuple[str | None, str, str | None]:
+    """``(class, class_source, provenance)``; ``class_source`` is ``header`` or ``derived``.
+
+    A caller-supplied ``x_client_class`` always wins (``header``). Otherwise a
+    SERVER-SIDE label is derived from what the server itself knows about the call:
+    the lane, the scheduler workload class, request priority, whether the call
+    arrived on the typed /v1 surface (trace keys), the process-wide client id and
+    whether the call carries a session. A derived class is a label for analysis, not
+    an identity claim - readers that want only self-reported classes filter on
+    ``class_source == "header"``. Vocabulary: ``eval_harness`` (workload eval_batch),
+    ``campaign`` (workload campaign, e.g. autopilot /chat planner calls),
+    ``external:<client id>`` / ``external_passthrough`` (passthrough lane),
+    ``v1_client`` (typed /v1 request without a class tag), ``orchestrator_internal``
+    (everything else through the primitives layer or a direct backend call).
+    """
+    if explicit:
+        return explicit, "header", explicit_provenance
+    try:
+        if workload_class == "eval_batch":
+            return "eval_harness", "derived", "derived:workload_class=eval_batch"
+        if workload_class == "campaign":
+            return "campaign", "derived", "derived:workload_class=campaign"
+        if lane == "passthrough":
+            if client:
+                return f"external:{client}"[:64], "derived", "derived:lane=passthrough+x-client-id"
+            return "external_passthrough", "derived", "derived:lane=passthrough"
+        if isinstance(trace_keys, dict) and trace_keys:
+            return "v1_client", "derived", "derived:v1_trace_keys"
+        if priority == "background":
+            return "background", "derived", "derived:priority=background"
+        return "orchestrator_internal", "derived", f"derived:lane={lane}"
+    except Exception:
+        return None, "derived", None
+
+
 def config_digest(config: dict[str, Any]) -> str:
     canonical = json.dumps(
         serving_calls._json_safe(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -176,6 +221,13 @@ class DispatchLog:
             arrival = staged.get("_ts0") or now
             session_id = staged.get("session_id") or getattr(request, "session_id", None)
             lengths = _request_lengths(request)
+            cls, cls_source, cls_prov = resolve_client_class(
+                staged.get("client_class"), staged.get("client_class_provenance"),
+                lane="fleet", workload_class=staged.get("workload_class")
+                or getattr(request, "workload_class", None),
+                priority=staged.get("priority"), trace_keys=staged.get("trace_keys"),
+                client=staged.get("client"), session_id=session_id,
+            )
             with self._lock:
                 self._waiting += 1
             return {
@@ -190,8 +242,9 @@ class DispatchLog:
                     "staged" if staged.get("session_id")
                     else ("request" if session_id else None)
                 ),
-                "client_class": staged.get("client_class"),
-                "client_class_provenance": staged.get("client_class_provenance"),
+                "client_class": cls,
+                "client_class_source": cls_source,
+                "client_class_provenance": cls_prov,
                 "client": staged.get("client"),
                 "workload_class": staged.get("workload_class")
                 or getattr(request, "workload_class", None),
@@ -293,6 +346,7 @@ class DispatchLog:
                     },
                     "client": {
                         "class": handle["client_class"],
+                        "class_source": handle["client_class_source"],
                         "class_provenance": handle["client_class_provenance"],
                         "id": handle["client"],
                     },
@@ -337,6 +391,8 @@ def record_standalone(
     outcome: str = "ok",
     error_type: str | None = None,
     method: str | None = None,
+    trace_keys: Any = None,
+    completion_observed: bool = True,
 ) -> None:
     """One ``dispatch.v1`` record for a lane with no fleet placement.
 
@@ -347,6 +403,10 @@ def record_standalone(
     try:
         if log_path() is None:
             return
+        client_class, class_source, client_class_provenance = resolve_client_class(
+            client_class, client_class_provenance, lane=lane, workload_class=workload_class,
+            priority=priority, trace_keys=trace_keys, client=client, session_id=session_id,
+        )
         config = {"lane": lane, "dispatch_log_env": LOG_ENV}
         cfg_sha = config_digest(config)
         if lane not in _standalone_config_written:
@@ -383,7 +443,7 @@ def record_standalone(
                 "service_ms": (
                     round(max(0.0, (ts_end - ts_dispatch) * 1000.0), 3) if ts_dispatch else None
                 ),
-                "completion_observed": True,
+                "completion_observed": completion_observed,
                 "outcome": outcome,
                 "error_type": error_type,
                 "session": {
@@ -392,6 +452,7 @@ def record_standalone(
                 },
                 "client": {
                     "class": client_class,
+                    "class_source": class_source,
                     "class_provenance": client_class_provenance,
                     "id": client,
                 },

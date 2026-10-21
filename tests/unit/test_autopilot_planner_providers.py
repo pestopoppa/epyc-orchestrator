@@ -203,6 +203,7 @@ def test_local_planner_provider_posts_role_scoped_payload(monkeypatch) -> None:
         "stream": False,
         "x_orchestrator_role": "ingest_long_context",
         "x_disable_repl": True,
+        "x_client_class": "autopilot",
         "top_p": 0.9,
         "top_k": 40,
         "seed": 123,

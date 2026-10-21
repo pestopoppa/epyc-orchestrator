@@ -861,7 +861,9 @@ def _write_dispatch_record(call: _Call, error: BaseException | None, now: float)
             request_id=call.request_id,
             session_id=call.session_id,
             client_class=call.client_class,
-            client_class_provenance="caller_supplied:x_client_class" if call.client_class else None,
+            client_class_provenance=(
+                "caller_supplied:x_client_class|x-client-class" if call.client_class else None
+            ),
             client=call.client_id,
             prompt_chars=len(call.prompt_text or ""),
             n_tokens_budget=call.new_tokens,
