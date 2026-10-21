@@ -1,0 +1,179 @@
+# REPL Turn Efficiency - Active Gates
+
+**Status**: COMPACTED 2026-05-28 - core REPL efficiency changes landed; active gate is S4 Omega A/B.
+**Created**: 2026-04-09
+**Updated**: 2026-08-13
+**Priority**: MEDIUM
+**Categories**: agent_architecture
+**Depends on**: None
+**Parent index**: [research-evaluation-index.md](research-evaluation-index.md)
+**Completed ledger**: [repl-turn-efficiency-completed-through-2026-05-28.md](../completed/repl-turn-efficiency-completed-through-2026-05-28.md)
+
+## Executor Start Here
+
+Do not add new REPL tools before S4. **Exception (operator D2, 2026-09-26):** embedding-backed retrieval (`repl-embedding-retrieval.md`, UFH-12) is waived from this gate, conditional on its Phase 2 passing the pre-registered kill criterion; if it fails, the waiver lapses. The current risk is whether the shipped efficiency features reduce turns and token cost without accuracy loss. Treat the historical frecency, combined operation, dspy.RLM, and ColGREP implementation details as completed unless a regression is found.
+
+## Outstanding Tasks
+
+- [ ] **S4 Omega A/B**: measure turns per task, token cost per task, and accuracy delta. This gates suggestion, verbosity, and any extra tool-surface changes.
+  - [ ] **S4-T1 — BUG: turns per task are never recorded.** `ChatResponse.turns`
+    (`src/api/models/responses.py:97`) is populated on every path
+    (`chat_pipeline/stages.py:117`, `direct_stage.py:144,:287`) and `RoleResult.turns` exists
+    (`scripts/benchmark/seeding_types.py:579`), but the `RoleResult(...)` constructor in
+    `scripts/benchmark/seeding_eval.py:411-470` copies ~50 response fields and not `turns`, so
+    every seeding record carries `turns=0` and the S4 metric has never had data. Fix: add
+    `turns=resp.get("turns", 0)` beside `tokens_generated`; add a test asserting a REPL-mode
+    fixture response with `turns=3` lands as `RoleResult.turns == 3`; backfill is impossible
+    (never captured) — note the era boundary in the record. Acceptance: one seeding run shows
+    non-zero `turns` on `frontdoor:repl` rows. Zero inference to fix; one short run to prove.
+    **Comparability target (added 2026-09-24):** the AutoKernel opencode seat now records a per-call row,
+    `epyc.autokernel.actor_call_metrics.v1` (research `lane/ak-turns-20260924` `0bf2d7c2`,
+    `loop/actor_metrics.py`; INF-78 OAB-4m). It has steps, tool calls by name, compactions,
+    prompt/decoded/cache-read/cache-write tokens, first/max context, and predicted schema-valid/repair-ran. Where
+    S4-T1 adds fields beyond `turns`, use the same names and definitions, so the orchestrator and the opencode seat
+    land in comparable columns for INF-78 OAB-4. In particular, **"decoded" there means `tokens.output` summed over
+    steps, reasoning tokens included**: say which one `tokens_generated` means, and keep the two convertible. One
+    difference: the seat counts an opencode *step* (one assistant message), while `ChatResponse.turns` counts REPL
+    turns. Record which unit a row uses, and never equate the two. Vocabulary and traps:
+    `autokernel-orchestrator-actor-backend.md` → *Techniques learned in the opencode seat* §2.
+  - [ ] **S4-T2 — the Omega A/B has an ARM but no RUNNER.** The intervention prompt landed
+    2026-08-13 (box below, `orchestration/prompts/root_lm_system.s4_omega.md`), yet nothing selects
+    it per arm, pins the question set, or emits turns/tokens/accuracy per arm. Write
+    `scripts/benchmark/s4_omega_ab.py` (or a `seeding_eval` mode): two arms × one pinned suite,
+    same role/mode (`frontdoor:repl`), records `turns` (needs S4-T1), `tokens_generated`,
+    `prompt_tokens`, `passed`, elapsed. Acceptance: a dry run on 3 questions produces two arm
+    records with the four columns; the real run is inference-gated. Overlap: schema/parse failures
+    on this path are TD-21.1 (`typed-decision-plane.md`) — do not re-file; the orchestrator-backend
+    program (INF-78, [`autokernel-orchestrator-actor-backend.md`](autokernel-orchestrator-actor-backend.md))
+    consumes this same per-call `turns` field as its actor-cost metric.
+- [x] **ColGREP post-telemetry soak check**: 2026-06-14 warmed synthetic REPL soak closed the latency/fallback/quality portion; see telemetry below.
+- [x] **Cold-start daemon decision**: do not build now. The measured latency gate did not fire; revisit only if a future live workload trips the multi-search or sustained-call-rate gates.
+- [x] **Version/index hygiene**: `epyc-orchestrator` `9b209d3` pins the default runtime path to `/mnt/raid0/llm/UTILS/bin/colgrep-1.2.0`; no ColGREP re-index-on-commit hook for now.
+
+## Cold-Start Daemon Gate
+
+Do not implement a daemon unless at least one of these conditions is met during a representative seeding or REPL run:
+
+- p50 `code_search()` latency is at least 600 ms across a full run.
+- At least 20% of REPL turns issue two or more `code_search()` calls.
+- One role issues at least one `code_search()` call per second for at least 30 seconds.
+
+## Current Telemetry State
+
+2026-06-13 audit: historical logs were not sufficient to answer the daemon gate. `/mnt/raid0/llm/tmp/repl_tap.log` had no durable `code_search()` latency/fallback records, and the existing ColGREP path only wrote successful calls to the in-memory exploration log without latency. The code path is now instrumented in `epyc-orchestrator`: each ColGREP call appends `artifacts["_code_search_telemetry"]`, success responses include `latency_ms`, success exploration-log args include `engine=colgrep`, `latency_ms`, and `fallback=false`, and fallback paths log `fallback_reason` (`missing_binary`, `timeout`, `oserror`, `nonzero_exit`, `bad_json`) plus elapsed time. Do not make daemon decisions from pre-2026-06-13 data.
+
+2026-06-14 warmed synthetic soak: initialized the ColGREP index for `/mnt/raid0/llm/epyc-orchestrator/src` in 52s (`382` source units), then ran 32 `REPLEnvironment._code_search()` calls through the production wrapper with `REPL_COLGREP=1`, `REPL_COLGREP_BIN=/mnt/raid0/llm/UTILS/bin/colgrep`, and `REPL_COLGREP_PATH=/mnt/raid0/llm/epyc-orchestrator/src`. Results: `32/32` telemetry events, `0` wrapper fallbacks, p50 `208.5ms`, p90 `212ms`, p95 `213ms`, max `224ms`, every successful call returned 5 results, effective sequential throughput `2.44 calls/s`. A six-query quality smoke (`FinalSignal`, `ASTSecurityVisitor`, `create_repl_environment`, `_record_colgrep_telemetry`, `OpenAIChatRequest x_disable_repl`, and `execute_parallel_calls`) found the expected source file in top-5 for `6/6` queries. This closes the daemon latency gate for now: subprocess-per-query remains the default. Because this was a synthetic code-search soak, it does not prove future live turn-frequency behavior; revisit only if live `_exploration_log` data shows at least 20% of REPL turns issuing 2+ searches or a role sustaining at least 1 `code_search()`/s for 30s.
+
+2026-06-14 version/index hygiene: installed a local versioned binary copy at `/mnt/raid0/llm/UTILS/bin/colgrep-1.2.0` and pinned `COLGREP_BIN` to that path in `epyc-orchestrator` `9b209d3`; `REPL_COLGREP_BIN` remains the override/rollback escape hatch. Runtime metadata records `COLGREP_VERSION=1.2.0` and expected SHA-256 `833e52aa6c40d090142fa132e3c75d3e792a4707474682a2496e3471f646f956`. Decision: do not add a commit hook or PostToolUse hook for ColGREP indexing yet. The measured full `src/` init cost was 52s, warmed search is fast, ColGREP auto-updates on search, and there is no evidence that a hook's CPU contention would buy enough freshness over manual `colgrep init /mnt/raid0/llm/epyc-orchestrator/src` after large source reshapes.
+
+## Dependency Forks
+
+| Outcome | Next action |
+|---|---|
+| Omega shows fewer turns and neutral/better accuracy | Keep the feature path and consider the next narrow suggestion/verbosity change. |
+| Omega shows token savings but accuracy loss | Revert or gate the risky surface; keep only independently useful telemetry. |
+| ColGREP soak is clean and latency acceptable | Leave subprocess-per-query in place; version pinning is complete. |
+| ColGREP latency or call frequency trips daemon gate | Design the smallest daemon interface and add rollback controls before implementation. |
+
+## Completed Scope
+
+| Scope | Result | Ledger |
+|---|---|---|
+| S1 frecency | Landed. | [completed ledger](../completed/repl-turn-efficiency-completed-through-2026-05-28.md) |
+| S2 combined operations | Landed. | [completed ledger](../completed/repl-turn-efficiency-completed-through-2026-05-28.md) |
+| S3 contextual suggestions | Prototype landed, default-off, still Omega-gated. | [completed ledger](../completed/repl-turn-efficiency-completed-through-2026-05-28.md) |
+| S5 dspy.RLM gaps | `_batch_llm_query()`, `workspace_scan()` frecency fallback, and `STUCK("reason")` landed through NIB2 tasks on 2026-04-17. | [completed ledger](../completed/repl-turn-efficiency-completed-through-2026-05-28.md) |
+| S6 specialist bug fixes | Landed. | [completed ledger](../completed/repl-turn-efficiency-completed-through-2026-05-28.md) |
+| S7 ColGREP default-on | Landed with rollback via `REPL_COLGREP=0`. | [completed ledger](../completed/repl-turn-efficiency-completed-through-2026-05-28.md) |
+
+## Key Files
+
+- `/mnt/raid0/llm/epyc-orchestrator/src/repl_environment/`
+- `/mnt/raid0/llm/epyc-orchestrator/src/repl_environment/file_exploration.py`
+- `/mnt/raid0/llm/epyc-orchestrator/src/repl_environment/code_search.py`
+- `/mnt/raid0/llm/epyc-orchestrator/src/repl_environment/combined_ops.py`
+- `/mnt/raid0/llm/epyc-orchestrator/src/repl_environment/context.py`
+- [tool-output-compression.md](tool-output-compression.md)
+- [meta-harness-optimization.md](../completed/meta-harness-optimization.md)
+- [routing-and-optimization-index.md](routing-and-optimization-index.md)
+- [research-evaluation-index.md](research-evaluation-index.md)
+- [autopilot-continuous-optimization.md](autopilot-continuous-optimization.md)
+
+## Reporting Instructions
+
+After S4 or soak work, update this handoff with the exact run, sample size, turns/task, token cost/task, accuracy delta, latency percentiles, and rollback decision. Update [research-evaluation-index.md](research-evaluation-index.md) and [master-handoff-index.md](master-handoff-index.md) if priority or scope changes.
+
+## Research Intake Update — 2026-07-21 (RLM sub-call budget contracts + a verifiable span scorer)
+
+- **[intake-868] SkyRL `examples/train/rlm`** (Apache-2.0, NovaSky-AI/Berkeley Sky Computing Lab) and **[intake-867]** its companion write-up.
+  - Relevance: the training loop does not transfer (Ray + FSDP2 + vLLM engines, 4 GPUs), but the **REPL budget contracts are empirically-tuned and directly comparable to ours**: `rlm_query_batched` caps at **4 children per call**, a hard limit of **10 REPL rounds**, exactly **one repl block per response** (extras silently dropped), and a frozen-vs-policy switch for in-REPL sub-calls.
+  - Highest-value portable artifact: `compute_metrics_multipaper` — a **character-interval precision/recall/F1** reward over verbatim extracted spans (merge/intersect interval arithmetic), ~60 lines, dependency-free, Apache-2.0. It scores character intervals rather than string equality, which **structurally sidesteps the comma-brittle substring-scorer bug class that has bitten us**. It is also a *verifiable* scorer, which intake-874/875 argue we should prefer over rubric judges wherever an objective anchor exists.
+  - Context lives in a persistent Python REPL as a variable, never in the prompt — the same offloading model as our path.
+  - **Prefix-cache warning worth noting:** the RLM scaffold re-appends the user query at the end of every turn rather than accumulating it, so successive turns share **no prefix**. Every turn is a cache miss on the query suffix — a real cost on bandwidth-bound CPU decode, and an argument against copying that scaffold shape verbatim.
+
+- [ ] Candidate: port the interval-F1 span scorer as an eval-tower scorer for evidence-grounded retrieval (also relevant to [internal-kb-rag.md](internal-kb-rag.md)). [intake-868]
+
+## Deep-Dive Correction — 2026-07-21 (The scorer port is WITHDRAWN; take the prompt instead)
+
+Supersedes the actionable in the 2026-07-21 intake section above. A source-level read of the SkyRL repo (all 12 files fetched; note the directory has **no README** — the earlier framing could not have come from one) overturns the recommendation.
+
+**WITHDRAWN — do not port `compute_metrics_multipaper`.** Three findings, each sufficient on its own:
+1. **It is dead code upstream.** Zero call sites across the entire example directory (`evidence_rewards.py:57-73`). Its sibling `compute_child_rlm_metrics` is also never called.
+2. **SkyRL's actual reward is a closed-model LLM judge** — `judge_reward` (`:239-365`), `JUDGE_MODEL = "gpt-5.4-mini-2026-03-17"` against `api.openai.com`, hard-failing without `OPENAI_API_KEY`. The authors had the interval metric available and chose a rubric judge. That is evidence **against** the metric's sufficiency, not for it — inverting the intake-874/875 "prefer verifiable anchors" argument that justified the port.
+3. **It reproduces our brittleness scar with an added bug.** Offsets are `str.find`-recovered, not annotated. At `:176-180`, a predicted span that does not match exactly is **dropped from the precision denominator rather than penalized** — a model emitting 10 spans with 9 hallucinated and 1 exact scores **precision 1.0**. Symmetrically at `:167-169` unmatched GT spans drop from recall, and if none match the item scores 0.0, making infra failure indistinguishable from model failure. `find` also returns only the first occurrence, while the prompt explicitly demands extracting repeated facts separately.
+
+Correction to the earlier note: the blocker is NOT missing character-offset annotations (those are derived). It is that only **2 of ~30 adapters populate `context`** (`dataset_adapters.py:1550`, `:2435`), no suite stores span-level GT, and it grades a verbatim-quote-list task we do not run. The 58-line interval arithmetic (`:16-73`, stdlib-only) is correct and elegant, but it was never the hard part.
+
+**PROMOTED — `MULTIPAPER_CHILD_SYSTEM_PROMPT` (`evidence_rlm_env.py:120-224`) is the repo's real portable artifact.** It is a battle-tuned REPL-discipline prompt and it is exactly the S4 Omega A/B arm this handoff lacks: a turn **floor** as well as a ceiling ("HARD LIMIT of 10 rounds, aim for 5-7, do NOT return after only 2-3 rounds — that is too shallow", `:153-156`), a mandated 5-turn search→expand→extract→verify procedure (`:185-223`), and a same-block causality constraint (`:137-140` — cannot `extract_section()` on `search()` results in the same block; never `FINAL_VAR` in the same block as an extraction).
+
+Also correcting two earlier claims: the 4-children / 10-round budgets are **prompt text only, NOT enforced in code** (no `[:4]`/`max_rounds`/`max_turns` in `rlm_generator.py`), and the OpenRouter frozen model is **opt-in, not the default** (`frozen_openrouter_model: Optional[str] = None`, `rlm_config.py:20`).
+
+- [x] S4 Omega A/B candidate: adopt the turn-floor + mandated-procedure shape from `MULTIPAPER_CHILD_SYSTEM_PROMPT` as the intervention arm — this handoff previously had none. ✅ **ARM LANDED 2026-08-13** — orchestrator `orchestration/prompts/root_lm_system.s4_omega.md` (default-OFF; select via `PROMPT_VARIANT__root_lm_system=s4_omega`). Adopts the SkyRL `MULTIPAPER_CHILD_SYSTEM_PROMPT` shape adapted to our REPL surface: turn FLOOR ("HARD LIMIT of 10 rounds, aim for 5-7, do NOT return after only 2-3 rounds — that is too shallow"), a mandated gather→expand→verify→answer procedure, same-block causality (cannot use results before the block executes; never FINAL in the same block as a tool call whose result you need), and the one-block/no-comment/no-narration discipline. 3 new resolver tests (`tests/unit/test_prompt_resolver.py::TestS4OmegaInterventionArm`), 52 passed. Default prompt untouched; the A/B now has both arms.
+#### S4 arms — design note RUS-1: best-of-K REPL arm and selector-validity rules (2026-10-21, zero compute)
+
+A best-of-K REPL arm sits beside the fixed-plan arm (LRLM-1, next note) and the S4 Omega arm.
+
+- **K**: K trajectories per task, reported at widths K=1, 2, 4, 8 at least (see clause 2).
+- **Selection rule**: plurality-answer filter first, then argmax of summed log verbalised confidence times trace length. Implement the argmax: the formula text says lower is better, but only the argmax reading is consistent (intake-2284#record).
+- **Cost columns**: total tokens across K, wall-clock, decode versus prefill tokens, cache share. K parallel trajectories contend for the bandwidth-bound host, so wall-clock is measured with all K running, not extrapolated from K=1.
+
+Mandatory clauses:
+1. The selector table has a no-filter row beside the plurality-filter row, a shorter-length row (diagnostic only: unvalidated on our roles, no within-question data, RUS-2 2026-10-21), a lower review-ratio row (only for arms that record reasoning traces; answer-text ratios are not usable, RUS-2) and a lower failed-step-fraction row. The report states per task the share where oracle coverage exceeds selected accuracy and where the plurality is wrong (intake-2300#record).
+2. Any arm using a vote or plurality selector reports selected accuracy at three or more widths (K=1, 2, 4, 8 at least) beside oracle coverage, so a rise-then-fall curve is detectable: more calls can lower accuracy under plurality selection without a checker (intake-2312#record).
+3. Tasks with no deterministic checker are labelled verifier-free; the vote selector is the declared-weak arm and the single larger-role answer is the comparator (intake-2296#record).
+4. Best-of-K and any worker-versus-architect comparator are compared at equal measured wall-seconds, with K per model set by its own seconds per attempt.
+5. Pairwise discrete CAPA among the K samples is reported beside the distinct-answer count (intake-2323#record).
+6. Verbalised confidence is a selector candidate scored against the checker and never a claim-tuple field.
+
+#### S4 arms — design note LRLM-1: fixed-plan long-input arm (2026-10-21, zero compute)
+
+**Combinator map** (REPL helper to lambda-RLM combinator):
+- `_batch_llm_query` maps to Split-Map-Merge (split the input, map one sub-query over chunks in a batch, merge the answers).
+- `parallel_dispatch` maps to Split-Map-Parse-Cross (map over chunks or sources, parse each result, cross-reference across them).
+- workspace_scan maps to Split-Peek-Filter-Map (peek at each chunk cheaply, filter, map the full query only over survivors).
+
+**Long-input tasks with a fixed task-type plan**: summarise and aggregate tasks go to Split-Map-Merge; multi-source comparison tasks to Split-Map-Parse-Cross; needle and locate tasks to Split-Peek-Filter-Map. Tasks with no fixed task-type plan stay on the open-ended REPL only.
+
+**Arm definition**: a declared-parameter fixed-plan arm (task-type plan table plus declared chunk size, overlap and fan-out width, no model-chosen control flow) is run against the open-ended REPL on the same tasks. Contrast with the finding that regex over the context won with zero sub-LLM calls (intake-2241#record): the open-ended REPL can beat any fan-out plan, so the fixed-plan arm is compared against it and not assumed better.
+
+**Three definitions**:
+1. **Chunk-size search**: chunk size is chosen by sparse sampling of at least 5 samples per candidate size on a dev set, instead of a closed-form k*; the measured optimum and the closed form disagree (intake-2264#record).
+2. **Cross-chunk-dependence screen**: a single-shot versus chunked score gap on a small dev set, run before routing a task class to fan-out.
+3. **Digit-menu task-type classifier**: the model answers with one digit from a numbered menu of task types, and that digit feeds a deterministic plan table; a prototype definition (intake-2275#record).
+
+**Adapter estimate**: the reference code needs only an OpenAI-style client with a base_url, so pointing it at llama-server is an adapter of about 0.5 day, not a blocker.
+
+**Gating**: runs wait for the UFH-13 thesis experiment to unfreeze HS-19b-d.
+
+- [ ] Only if an evidence-retrieval suite is separately justified: plumb HotpotQA's already-loaded-but-DISCARDED `supporting_facts` (`dataset_adapters.py:1524`) into the emitted record to create our first span-level GT, and write the interval metric ourselves with a robust matcher that counts unmatched predictions as **false positives**. Do NOT adopt SkyRL's `find`-based recovery. **DISPOSITION 2026-08-13 (mainB): condition NOT met — do not implement.** The deep-dive correction above (line ~95) already established the blocker: only 2 of ~30 adapters populate `context`, **no suite stores span-level GT**, and it grades a verbatim-quote-list task we do not run. Re-verified at HEAD: `supporting_facts` is still loaded-and-dropped at `dataset_adapters.py:1525` (single occurrence, never emitted); the HotpotQA adapter is a QA benchmark (`scoring_method: f1` on `<answer>`), not an evidence-retrieval suite; the KB-RAG suite (`internal-kb-rag.md` K7) measures document recall@k over our wiki corpus with template cases, not span-level GT from real HotpotQA `supporting_facts`. Per the "price it first" discipline, wiring a span-level GT emitter with no consuming suite adds volume without warrant. Reopen only when a suite that consumes span-level evidence is separately justified.
+
+### Audit catch 2026-07-21 — two cheap levers from intake-867 that were never filed
+
+- [ ] **Strategy-prompt-length ablation.** intake-867 measured an explicit task-strategy prompt cutting Sonnet 4.6 rollout time **90s → 30s (3x)**, and a 200-token compressed variant converging *lower and less stably* than the 1500-token original. Both directions matter for us: our agent roles may be under-specified (leaving 3x turn-time on the table) or over-compressed (paying instability for token savings). Pure prompt-side A/B on existing roles — no training, modest inference. Candidate arm alongside the S4 Omega A/B above.
+- [ ] **Prefix-cache audit of our REPL scaffold.** intake-867's scaffold re-appends the user query every turn, so successive turns share NO prefix — every turn is a full-prompt cache miss, which on bandwidth-bound CPU decode is a real per-turn tax. Zero-inference first step: inspect our REPL loop's prompt construction and measure slot-cache hit rate across turns (llama-server `/slots` + `--slot-save-path` already exist). If our scaffold has the same shape, reordering the prompt layout is a free prefill win. **Pricing model (2026-09-07, intake-1333#02, dive-verified)**: our REPL scaffold re-appends the user query every turn so successive turns share no prefix, which under Eq. 4 means **paying full list price on the dominant term**. Restate the audit's success criterion as **"raise `h`"** (the cache-read fraction), using the journal-measured **h = 0.9845** on the Claude Code plane as the contrast case showing what a cache-shaped scaffold achieves — the same `h` DCP-9a computes in [`delegation-context-preassembly.md`](delegation-context-preassembly.md). The 2026-08-13 checkpoint below already verified the static premise with a *different* mechanism (per-turn `state`/`context`/first-turn-only `reference_code` rendered before the fixed task block), so this audit is **narrowing, not re-opening**. Zero compute.
+
+### RTE-Prefix audit checkpoint — 2026-08-13
+
+The static premise is verified, with a different mechanism than SkyRL: the frontdoor prompt renders per-turn `state`, `context`, and first-turn-only `reference_code` before the fixed task/instruction, so later turns share only the earlier system/tools/rules prefix. Orchestrator commits `d977454e` and `2c4087b7` correct the cache counters and add a default-off prefix-stable order plus an A/B script. The auditor reran the claimed focused suite: **353 passed**.
+
+- [x] **RTE-Prefix static prompt audit ✅ 2026-08-13**: verified live `graph/helpers.py` uses 

@@ -1,0 +1,8 @@
+{
+ "schema": "epyc.rte_pfx2.prefix.v1",
+ "file": "rte_pfx2_prefix.txt",
+ "chars": 24000,
+ "sha256": "d95770fbd35a31295e622715aed129e9c751c653c24a0ea1ce1500ff1c11357a",
+ "source": "epyc-root handoffs/active/repl-turn-efficiency.md @ e1ae53e03, first 24000 chars",
+ "why": "A real long project document of the kind a parallel_dispatch fan-out shares as context (a 6k-token stable prefix); NOT the production system prompt, so the probe tests the cache mechanism for a long shared prefix, not for a specific prompt. Token length is measured live via /tokenize, never assumed."
+}
