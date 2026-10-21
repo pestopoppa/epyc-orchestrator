@@ -438,17 +438,18 @@ class TestProductionRegistry:
         assert role.acceleration is not None
         assert role.acceleration.type == "none"
         assert role.acceleration.lookup is False
-        assert role.acceleration.corpus_retrieval is True
+        # Corpus retrieval retired 2026-07-04 (CPL-4/5; index deleted); flagged off 2026-10-21.
+        assert role.acceleration.corpus_retrieval is False
 
     def test_production_frontdoor_corpus_retrieval_matches_server_mode(self):
-        """Prompt-builder role config should keep the live corpus path enabled."""
+        """Prompt-builder role config keeps the retired corpus path OFF (index deleted 2026-07-04)."""
         loader = RegistryLoader(validate_paths=True)
 
         role = loader.get_role("frontdoor")
         assert role.acceleration is not None
         assert role.acceleration.lookup is False
-        assert role.acceleration.corpus_retrieval is True
+        assert role.acceleration.corpus_retrieval is False
 
         corpus_config = loader.get_corpus_config()
-        assert corpus_config["enabled"] is True
+        assert corpus_config["enabled"] is False
         assert corpus_config["min_score"] == 0.0
