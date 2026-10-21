@@ -38,10 +38,19 @@ def _rows(path: Path) -> Iterable[dict[str, Any]]:
 
 def evaluate(rows: Iterable[dict[str, Any]], *, since: float = 0.0, minimum: int = DEFAULT_MIN
              ) -> dict[str, Any]:
+    rows = list(rows)
+    # Rows produced BY a shadow call (tagged at source) or whose prompt hash is a recorded shadow
+    # prompt are never real drafts: ignore them, whatever else they claim.
+    shadow_hashes = {
+        str(((r.get("vidya_loop_beliefs") or {}).get("counterfactual") or {})
+            .get("shadow_prompt_sha256_16") or "") for r in rows} - {""}
     confirmed: dict[Any, dict[str, Any]] = {}
     considered = shadow_runs = shadow_failed = 0
     for row in rows:
         if float(row.get("ts") or 0) < since:
+            continue
+        if (row.get("shadow") is True or row.get("purpose") == "belief_counterfactual"
+                or str(row.get("prompt_sha256_16") or "") in shadow_hashes):
             continue
         kind = row.get("type")
         if kind == "belief_premise_skip" and row.get("reliance_confirmed") is True:

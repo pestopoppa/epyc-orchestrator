@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ import peaf
 from controller_io import (
     _append_planner_archive,
     _loads_json_payload,
+    planner_archive_tags,
     _open_planner_tap,
     action_repair_completer,
     extract_action,
@@ -27,6 +29,7 @@ from controller_io import (
 )
 from loop_beliefs_bridge import (
     ReadyBeliefs,
+    SHADOW_PURPOSE,
     SHADOW_TIMEOUT_S,
     SeedReviewToken,
     blank_belief_prompt,
@@ -818,7 +821,12 @@ def _run_shadow_draft(
         started = time.time()
         bound = max(1, int(min(float(timeout), SHADOW_TIMEOUT_S)))
         provider = provider_factory(draft_provider_name)
-        result = provider.invoke(blanked, role="draft", session_id=None, timeout=bound, cwd=cwd)
+        # Provider session archivers append their own rows; tag them at the source, and keep the
+        # prompt hash so a reader can also correlate by hash (providers log sha256(prompt)[:16]).
+        base["shadow_prompt_sha256_16"] = hashlib.sha256(blanked.encode()).hexdigest()[:16]
+        with planner_archive_tags(shadow=True, purpose=SHADOW_PURPOSE):
+            result = provider.invoke(blanked, role="draft", session_id=None, timeout=bound,
+                                     cwd=cwd)
         base["seconds"] = round(time.time() - started, 3)
         if not result.ok:
             return {**base, "status": "failed", "reason": _clip(getattr(result, "error", "")

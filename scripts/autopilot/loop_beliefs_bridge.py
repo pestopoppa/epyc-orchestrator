@@ -65,7 +65,9 @@ REVIEW_FLAGS_PATH = ORCH_ROOT / "logs" / "loop_beliefs_review_flags.jsonl"
 EXIT_READY, EXIT_REFUSED = 0, 3
 #: DESIGN §7.1 evidence tiers. Only `target` and `sibling` ids may be cited as premises; `host`
 #: (device/backend-only, e.g. INF-70 bandwidth ceilings) is background and is refused.
-TIERS = ("target", "sibling", "host")
+TIERS = ("knob", "target", "lineup", "sibling", "host")
+#: Tiers whose claim ids may be cited as premises (everything but host background).
+CITABLE_TIERS = ("knob", "target", "lineup", "sibling")
 
 Runner = Callable[..., Any]
 
@@ -837,16 +839,16 @@ def _value_lines(ev: Mapping[str, Any], section: str) -> list[str]:
     tiers = ev.get("tiers")
     if isinstance(tiers, Mapping):
         lines.append("  Evidence tiers: " + ", ".join(
-            f"{name} {int(_num(tiers.get(name)) or 0)}" for name in TIERS) + ".")
+            f"{name} {int(_num(tiers.get(name)) or 0)}" for name in TIERS if name in tiers) + ".")
         if ev.get("nonempty_target") is False:
             lines.append("  No belief is scoped to this turn's target; sibling/host lines are "
                          "context, not evidence about it.")
     rows = _claim_rows(ev)
     if any(r.get("tier") for r in rows):
-        citable = [str(r["claim_id"]) for r in rows if r.get("tier") in ("target", "sibling")]
+        citable = [str(r["claim_id"]) for r in rows if r.get("tier") in CITABLE_TIERS]
         host = [str(r["claim_id"]) for r in rows if r.get("tier") == "host"]
         if citable:
-            lines.append(f"  Citable in {REPLY_FIELD} (target/sibling tier): "
+            lines.append(f"  Citable in {REPLY_FIELD} (knob/target/lineup/sibling tier): "
                          + ", ".join(citable[:MAX_CITABLE_IDS])
                          + (f" (+{len(citable) - MAX_CITABLE_IDS} more)"
                             if len(citable) > MAX_CITABLE_IDS else ""))
@@ -889,6 +891,8 @@ PREMISE_SKIP_SCHEMA = "epyc.autopilot.belief_premise_skip.v1"
 RELIANCE_TIERS = ("knob", "target")
 #: Hard bound on the one extra planner call (never longer than the real draft's timeout).
 SHADOW_TIMEOUT_S = 300.0
+#: Stamped (with `shadow: true`) on every planner-archive row a shadow call produces.
+SHADOW_PURPOSE = "belief_counterfactual"
 
 
 def claim_knob_families(row: Mapping[str, Any]) -> set[str]:

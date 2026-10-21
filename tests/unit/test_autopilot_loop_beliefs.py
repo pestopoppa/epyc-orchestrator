@@ -893,7 +893,7 @@ def test_receipt_rejects_host_tier_reliance_and_records_the_tier_keys() -> None:
 def test_render_prompt_block_shows_tiers_citable_ids_and_the_tried_index() -> None:
     block = lb.render_prompt_block(lb.validate_ready(_ready_answer(**V2_EVIDENCE)))
     assert "Evidence tiers: target 1, sibling 1, host 1." in block
-    assert "Citable in vidya_claim_ids (target/sibling tier): clm_t1, clm_s1" in block
+    assert "Citable in vidya_claim_ids (knob/target/lineup/sibling tier): clm_t1, clm_s1" in block
     assert "NOT citable as a premise (host tier): clm_h1" in block
     assert "Tried mechanisms (id outcome): akm-a null · akm-b kept" in block
     assert block.index("Evidence tiers") < block.index("- clm_t1 [Judged]")
@@ -1224,3 +1224,45 @@ def test_scoped_ap3_gate_allows_only_spec_draft_and_kv_profile_on_the_three_role
     assert ca._ap3_scope_errors({"frontdoor_draft_max": 4})  # frontdoor now out of scope
     monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
     assert ca._ap3_role_restart_gate_mode() == "full"
+
+
+# ------------------------------------------------------------------------------ shadow markers + knob tier
+
+def test_check_answer_accepts_the_knob_and_lineup_tiers() -> None:
+    ev = {"tiers": {"knob": 2, "target": "1", "lineup": 0, "sibling": 1, "host": 1},
+          "tiers_shown": {"knob": 2, "target": 1, "lineup": 0, "sibling": 1, "host": 1},
+          "claim_ids": ["k1"],
+          "claims": [{"claim_id": "k1", "tier": "knob", "knob_family": ["spec_draft"]},
+                     {"claim_id": "l1", "tier": "lineup"}]}
+    ready = lb.validate_ready(_ready_answer(**ev))
+    block = lb.render_prompt_block(ready)
+    assert "Evidence tiers: knob 2, target 1, lineup 0, sibling 1, host 1." in block
+    assert "Citable in vidya_claim_ids" in block and "k1, l1" in block
+
+
+def test_shadow_call_rows_are_tagged_at_the_archive_and_checker_ignores_them(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import controller_io
+    import belief_pass_check as bpc
+
+    path = tmp_path / "planner_archive.jsonl"
+    monkeypatch.setattr(controller_io, "PLANNER_ARCHIVE_PATH", path)
+    controller_io._append_planner_archive({"provider": "claude", "id": "before"})
+    with controller_io.planner_archive_tags(shadow=True, purpose=lb.SHADOW_PURPOSE):
+        controller_io._append_planner_archive({"provider": "claude", "id": "during"})
+    controller_io._append_planner_archive({"provider": "claude", "id": "after"})
+    rows = {r["id"]: r for r in map(json.loads, path.read_text().splitlines())}
+    assert "shadow" not in rows["before"] and "shadow" not in rows["after"]
+    assert rows["during"]["shadow"] is True and rows["during"]["purpose"] == lb.SHADOW_PURPOSE
+
+    confirmed = {"type": "planner_coordinator", "trial_id": 1, "ts": 5.0,
+                 "vidya_loop_beliefs": {"qualifying_reliance_claim_ids": ["c"],
+                                        "reliance_confirmed": True,
+                                        "counterfactual": {"status": "ok", "dispatched": False,
+                                                           "reliance_confirmed": True,
+                                                           "shadow_prompt_sha256_16": "abc"}}}
+    shadow_rows = [{"type": "planner_coordinator", "shadow": True, "trial_id": 2, "ts": 6.0,
+                    "vidya_loop_beliefs": confirmed["vidya_loop_beliefs"]},
+                   {"type": "planner_coordinator", "prompt_sha256_16": "abc", "trial_id": 3,
+                    "ts": 7.0, "vidya_loop_beliefs": confirmed["vidya_loop_beliefs"]}]
+    assert bpc.evaluate([confirmed] + shadow_rows)["confirmed_turns"] == 1

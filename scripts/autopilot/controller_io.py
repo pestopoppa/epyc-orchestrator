@@ -240,6 +240,25 @@ def _open_planner_tap() -> Any:
         return None
 
 
+import contextlib
+import contextvars
+
+_ARCHIVE_TAGS: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "planner_archive_tags", default={})
+
+
+@contextlib.contextmanager
+def planner_archive_tags(**tags: Any):
+    """Stamp `tags` on EVERY planner-archive row appended (by any provider's session archiver)
+    inside this block, in this thread/context. Used to mark the DP-4(A) shadow draft's rows
+    (`shadow: True`, `purpose: "belief_counterfactual"`) so they are never read as a real draft."""
+    token = _ARCHIVE_TAGS.set({**_ARCHIVE_TAGS.get(), **tags})
+    try:
+        yield
+    finally:
+        _ARCHIVE_TAGS.reset(token)
+
+
 def _append_planner_archive(record: dict) -> None:
     """Append one planner-session record to the persistent JSONL archive.
 
@@ -249,6 +268,9 @@ def _append_planner_archive(record: dict) -> None:
     captured events, and final result.
     """
     try:
+        tags = _ARCHIVE_TAGS.get()
+        if tags:
+            record = {**record, **tags}
         PLANNER_ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(PLANNER_ARCHIVE_PATH, "a") as fh:
             fh.write(json.dumps(record, separators=(",", ":")) + "\n")
