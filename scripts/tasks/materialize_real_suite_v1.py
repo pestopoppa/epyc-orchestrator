@@ -81,8 +81,72 @@ def _row_sort_key(row: dict[str, Any]) -> tuple[int, str]:
     return outcome_rank, str(row.get("task_id") or "")
 
 
+def is_vacuous_code_substring(row: dict[str, Any] | None) -> bool:
+    """A `substring`-scored row that declares a programming `language`.
+
+    The needle ("def ") is contained in any Python answer, right or wrong, so the row has
+    no correctness oracle. debug_scorer._score_substring refuses it (PRB-T4, 2026-09-17).
+    """
+    if not row or str(row.get("scoring_method") or "") != "substring":
+        return False
+    config = row.get("scoring_config")
+    return isinstance(config, dict) and bool(config.get("language"))
+
+
+def rederive_vacuous_oracles(
+    questions: list[dict[str, Any]],
+    fresh_pool: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """EV-19 corpus fix: repair vacuous code-substring rows of an existing suite IN PLACE.
+
+    Each affected question is re-derived from its source row in ``fresh_pool`` (the pool as
+    rebuilt by the current adapter). If the source now carries an executable oracle
+    (``code_execution`` with ``test_code`` or ``entry_point_cases``) its prompt, expected and
+    scoring are copied. If the adapter dropped the source because no validated oracle exists,
+    the row is marked NOT SCORABLE: ``scoring_method: code_execution`` with no test oracle,
+    which the eval tower's ``_is_scoreable_question`` excises and the gold self-check reports
+    as ``not_checkable``. Returns one change record per touched question.
+    """
+    changes: list[dict[str, Any]] = []
+    for q in questions:
+        if not is_vacuous_code_substring(q):
+            continue
+        old = {"scoring_method": q["scoring_method"], "expected": q.get("expected")}
+        source = fresh_pool.get((str(q.get("source_suite") or ""), str(q.get("source_question_id") or "")))
+        cfg = source.get("scoring_config") if source else None
+        if (
+            source
+            and source.get("scoring_method") == "code_execution"
+            and isinstance(cfg, dict)
+            and (cfg.get("test_code") or cfg.get("entry_point_cases"))
+        ):
+            q["prompt"] = str(source["prompt"]).strip()
+            q["expected"] = str(source.get("expected") or "")
+            q["scoring_method"] = "code_execution"
+            q["scoring_config"] = cfg
+            action = "rederived_executable_oracle"
+        else:
+            language = (q.get("scoring_config") or {}).get("language")
+            q["expected"] = ""
+            q["scoring_method"] = "code_execution"
+            q["scoring_config"] = {
+                "language": language,
+                "timeout": (q.get("scoring_config") or {}).get("timeout", 30),
+                "not_scorable_reason": (
+                    "no validated executable oracle for the source problem; the former "
+                    "substring 'def ' oracle passed any python answer (EV-19, 2026-10-21)"
+                ),
+            }
+            action = "marked_not_scorable"
+        changes.append({"id": q["id"], "source_question_id": q.get("source_question_id"),
+                        "action": action, "was": old})
+    return changes
+
+
 def _has_scoreable_expected(source: dict[str, Any] | None) -> bool:
     if not source:
+        return False
+    if is_vacuous_code_substring(source):
         return False
     expected = source.get("expected")
     scoring_method = str(source.get("scoring_method") or "exact_match")
@@ -90,7 +154,7 @@ def _has_scoreable_expected(source: dict[str, Any] | None) -> bool:
     return (
         (expected is not None and str(expected) != "")
         or scoring_method == "programmatic"
-        or (scoring_method == "code_execution" and bool(scoring_config.get("test_code")))
+        or (scoring_method == "code_execution" and bool(scoring_config.get("test_code") or scoring_config.get("entry_point_cases")))
     )
 
 
@@ -279,7 +343,24 @@ def render_markdown(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def rederive_yaml(yaml_path: Path, question_pool_path: Path, version: str) -> dict[str, Any]:
+    """In-place EV-19 repair of an already-materialized suite YAML (see rederive_vacuous_oracles)."""
+    suite = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+    changes = rederive_vacuous_oracles(suite["questions"], load_question_pool(question_pool_path))
+    if changes:
+        suite["version"] = version
+        suite["corpus_revision_note"] = (
+            f"{version}: {len(changes)} vacuous code-substring rows repaired (EV-19): "
+            + ", ".join(f"{c['id']}={c['action']}" for c in changes)
+        )
+        yaml_path.write_text(yaml.safe_dump(suite, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    return {"yaml": str(yaml_path), "changes": changes, "version": suite.get("version")}
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    if args.rederive_vacuous_oracles:
+        return rederive_yaml(Path(args.yaml_output).expanduser(), Path(args.question_pool).expanduser(),
+                             args.rederive_version)
     reconstruction_path = Path(args.reconstruction).expanduser()
     question_pool_path = Path(args.question_pool).expanduser()
     yaml_output = Path(args.yaml_output).expanduser()
@@ -319,6 +400,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yaml-output", default=str(DEFAULT_YAML_OUTPUT))
     parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR))
     parser.add_argument("--total", type=int, default=DEFAULT_TOTAL)
+    parser.add_argument("--rederive-vacuous-oracles", action="store_true",
+                        help="EV-19: repair vacuous code-substring rows of --yaml-output in place from "
+                             "--question-pool (a pool rebuilt by the current adapters)")
+    parser.add_argument("--rederive-version", default="1.1")
     return parser
 
 

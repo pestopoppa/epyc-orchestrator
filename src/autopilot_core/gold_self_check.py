@@ -42,7 +42,29 @@ NOT_CHECKABLE_METHODS = {
     "llm_judge": "needs a judge model",
     "code_execution": "expected is not a reference solution",
 }
+#: Bump when the gold-rendering / outcome rules change, so reports stay comparable.
+#: 2: empty list gold (tulving_episodic "[]") is rendered as the answer the row's own
+#:    prompt asks for ("None"), not as the literal string "[]" (EV-19 corpus-fix).
+SELF_CHECK_VERSION = 2
 DEFAULT_REPORT = Path(__file__).resolve().parents[2] / "data" / "autopilot" / "gold_self_check.json"
+
+
+def render_gold(gold: str, method: str) -> tuple[str, str]:
+    """(answer_text, note): how a correct model would WRITE this gold.
+
+    Only list-typed golds need rendering. tulving_episodic stores an empty gold as ``[]``;
+    every such row's prompt says "If none, say 'None'", so ``None`` is the correct answer and the
+    literal string ``[]`` is a hallucinated one-item list. Scoring ``[]`` against ``[]`` made 40%
+    of tulving_episodic look like a corpus defect when it was the self-check's own artifact.
+    """
+    if method == "f1_list":
+        try:
+            parsed = json.loads(gold)
+        except ValueError:
+            return gold, ""
+        if isinstance(parsed, list) and not parsed:
+            return "None", "rendered:empty_list_as_None"
+    return gold, ""
 
 
 def classify(q: Mapping[str, Any], score) -> tuple[str, str]:
@@ -66,9 +88,10 @@ def classify(q: Mapping[str, Any], score) -> tuple[str, str]:
             return "scorer_error", "scoring_config_unparseable"
     gold = str(expected)
     try:
-        verdict, err = score(gold, gold, method, dict(config))
+        answer, note = render_gold(gold, method)
+        verdict, err = score(answer, gold, method, dict(config))
         if err is None and verdict:
-            return "ok_bare", ""
+            return "ok_bare", note
         first = err or "scored_false"
         for w in WRAPPERS:
             v, e = score(w.format(g=gold), gold, method, dict(config))
@@ -82,9 +105,12 @@ def classify(q: Mapping[str, Any], score) -> tuple[str, str]:
 def summarize(results: Iterable[tuple[str, str, str]]) -> dict[str, Any]:
     """results: (suite, outcome, detail). Per-suite table + flagged suites."""
     per: dict[str, Counter] = {}
+    rendered: Counter = Counter()
     reasons: dict[str, Counter] = {}
     for suite, outcome, detail in results:
         per.setdefault(suite, Counter())[outcome] += 1
+        if outcome == "ok_bare" and detail.startswith("rendered:"):
+            rendered[suite] += 1
         if outcome in ("wrong", "scorer_error", "not_checkable"):
             reasons.setdefault(suite, Counter())[f"{outcome}:{detail}"] += 1
     table = {}
@@ -97,6 +123,7 @@ def summarize(results: Iterable[tuple[str, str, str]]) -> dict[str, Any]:
             "checkable": checkable,
             "ok_bare": c["ok_bare"],
             "ok_wrapped": c["ok_wrapped"],
+            "ok_bare_rendered_gold": rendered[suite],
             "wrong": c["wrong"],
             "scorer_error": c["scorer_error"],
             "not_checkable": c["not_checkable"],
@@ -104,7 +131,7 @@ def summarize(results: Iterable[tuple[str, str, str]]) -> dict[str, Any]:
             "bare_wrong_rate": ((checkable - c["ok_bare"]) / checkable) if checkable else None,
             "top_reasons": dict(reasons.get(suite, Counter()).most_common(3)),
         }
-    return {"suites": table, "flagged": sorted(s for s, r in table.items() if r["rate"])}
+    return {"self_check_version": SELF_CHECK_VERSION, "suites": table, "flagged": sorted(s for s, r in table.items() if r["rate"])}
 
 
 def header_text(suites: Iterable[str], path: str | Path | None = None) -> str:

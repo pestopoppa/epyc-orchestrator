@@ -1,0 +1,501 @@
+{
+  "flagged": [
+    "livecodebench",
+    "mmlu_pro",
+    "real_suite_v1",
+    "tulving_episodic"
+  ],
+  "max_per_suite": 300,
+  "method": "stride sample, bare gold then 8 wrappers",
+  "pool": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl",
+  "pool_size_bytes": 1350221880,
+  "suites": {
+    "agentic": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 36,
+      "n": 44,
+      "not_checkable": 8,
+      "ok_bare": 36,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:no_expected": 8
+      },
+      "wrong": 0
+    },
+    "aime": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 60,
+      "n": 60,
+      "not_checkable": 0,
+      "ok_bare": 60,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "aime25": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 30,
+      "n": 30,
+      "not_checkable": 0,
+      "ok_bare": 30,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "bigcodebench": {
+      "bare_wrong_rate": null,
+      "checkable": 0,
+      "n": 300,
+      "not_checkable": 300,
+      "ok_bare": 0,
+      "ok_wrapped": 0,
+      "rate": null,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:code_execution": 300
+      },
+      "wrong": 0
+    },
+    "coder": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "cruxeval": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "debugbench": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "general": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "gpqa": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "gpqa_diamond": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 198,
+      "n": 198,
+      "not_checkable": 0,
+      "ok_bare": 198,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "gpqa_diamond_cot": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 198,
+      "n": 198,
+      "not_checkable": 0,
+      "ok_bare": 198,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "hotpotqa": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "instruction_precision": {
+      "bare_wrong_rate": null,
+      "checkable": 0,
+      "n": 300,
+      "not_checkable": 300,
+      "ok_bare": 0,
+      "ok_wrapped": 0,
+      "rate": null,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:no_expected": 300
+      },
+      "wrong": 0
+    },
+    "leval": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 167,
+      "n": 300,
+      "not_checkable": 133,
+      "ok_bare": 167,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:llm_judge": 133
+      },
+      "wrong": 0
+    },
+    "livecodebench": {
+      "bare_wrong_rate": 1.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 0,
+      "ok_wrapped": 0,
+      "rate": 1.0,
+      "scorer_error": 0,
+      "top_reasons": {
+        "wrong:scoring_unavailable: substring oracle on a 'python' code row (needle='def') cannot decide correctness; rebuild the pool so the row carries an executable code_execution oracle": 300
+      },
+      "wrong": 300
+    },
+    "long_context": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 44,
+      "n": 44,
+      "not_checkable": 0,
+      "ok_bare": 44,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "longbench": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "longcot_mini": {
+      "bare_wrong_rate": 1.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 0,
+      "ok_wrapped": 300,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "math": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "mmlu_pro": {
+      "bare_wrong_rate": 0.18,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 246,
+      "ok_wrapped": 0,
+      "rate": 0.18,
+      "scorer_error": 0,
+      "top_reasons": {
+        "wrong:scoring_unavailable: multiple_choice gold is unusable: expected='I' is neither a choice letter in A-H nor one of the 0 configured choices, so no verdict can be reached. Fix the corpus join or supply scoring_config['choices']; refusing to score the model wrong against a gold that cannot be resolved.": 23,
+        "wrong:scoring_unavailable: multiple_choice gold is unusable: expected='J' is neither a choice letter in A-H nor one of the 0 configured choices, so no verdict can be reached. Fix the corpus join or supply scoring_config['choices']; refusing to score the model wrong against a gold that cannot be resolved.": 31
+      },
+      "wrong": 54
+    },
+    "mode_advantage": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 33,
+      "n": 90,
+      "not_checkable": 57,
+      "ok_bare": 33,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:no_expected": 57
+      },
+      "wrong": 0
+    },
+    "mode_advantage_hard": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 52,
+      "n": 60,
+      "not_checkable": 8,
+      "ok_bare": 52,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:code_execution": 8
+      },
+      "wrong": 0
+    },
+    "needle_parameterized": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 25,
+      "n": 25,
+      "not_checkable": 0,
+      "ok_bare": 25,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "olympiadbench": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "omniscience": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "physics": {
+      "bare_wrong_rate": null,
+      "checkable": 0,
+      "n": 100,
+      "not_checkable": 100,
+      "ok_bare": 0,
+      "ok_wrapped": 0,
+      "rate": null,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:llm_judge": 100
+      },
+      "wrong": 0
+    },
+    "physreason": {
+      "bare_wrong_rate": null,
+      "checkable": 0,
+      "n": 300,
+      "not_checkable": 300,
+      "ok_bare": 0,
+      "ok_wrapped": 0,
+      "rate": null,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:llm_judge": 300
+      },
+      "wrong": 0
+    },
+    "real_suite_v1": {
+      "bare_wrong_rate": 0.10526315789473684,
+      "checkable": 38,
+      "n": 50,
+      "not_checkable": 12,
+      "ok_bare": 34,
+      "ok_wrapped": 1,
+      "rate": 0.07894736842105263,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:code_execution": 1,
+        "not_checkable:no_expected": 11,
+        "wrong:scoring_unavailable: substring oracle on a 'python' code row (needle='def') cannot decide correctness; rebuild the pool so the row carries an executable code_execution oracle": 3
+      },
+      "wrong": 3
+    },
+    "ruler": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 50,
+      "n": 50,
+      "not_checkable": 0,
+      "ok_bare": 50,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "scoring_verifiers": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "simpleqa": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "skill_transfer": {
+      "bare_wrong_rate": 0.05555555555555555,
+      "checkable": 36,
+      "n": 36,
+      "not_checkable": 0,
+      "ok_bare": 34,
+      "ok_wrapped": 2,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "thinking": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "tulving_episodic": {
+      "bare_wrong_rate": 0.39666666666666667,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 181,
+      "ok_wrapped": 0,
+      "rate": 0.39666666666666667,
+      "scorer_error": 0,
+      "top_reasons": {
+        "wrong:scored_false": 119
+      },
+      "wrong": 119
+    },
+    "usaco": {
+      "bare_wrong_rate": null,
+      "checkable": 0,
+      "n": 300,
+      "not_checkable": 300,
+      "ok_bare": 0,
+      "ok_wrapped": 0,
+      "rate": null,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:no_expected": 300
+      },
+      "wrong": 0
+    },
+    "vl": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 300,
+      "n": 300,
+      "not_checkable": 0,
+      "ok_bare": 300,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "web_research": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 50,
+      "n": 50,
+      "not_checkable": 0,
+      "ok_bare": 50,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {},
+      "wrong": 0
+    },
+    "zeroscrolls": {
+      "bare_wrong_rate": 0.0,
+      "checkable": 99,
+      "n": 300,
+      "not_checkable": 201,
+      "ok_bare": 99,
+      "ok_wrapped": 0,
+      "rate": 0.0,
+      "scorer_error": 0,
+      "top_reasons": {
+        "not_checkable:llm_judge": 201
+      },
+      "wrong": 0
+    }
+  }
+}

@@ -85,3 +85,21 @@ def test_self_criticism_header_is_prefix_and_absent_report_changes_nothing(tmp_p
     p.write_text(json.dumps(summarize([("a", "wrong", "r"), ("a", "ok_bare", "")])))
     monkeypatch.setenv("AUTOPILOT_GOLD_SELF_CHECK_PATH", str(p))
     assert _gold_self_check_header(er).startswith("SCORER GOLD SELF-CHECK")
+
+
+def test_empty_list_gold_is_rendered_as_none():
+    # tulving_episodic stores an empty gold as "[]"; the row's own prompt says "If none, say 'None'".
+    from src.autopilot_core.gold_self_check import render_gold
+
+    assert render_gold("[]", "f1_list") == ("None", "rendered:empty_list_as_None")
+    assert render_gold('["a"]', "f1_list") == ('["a"]', "")
+    assert render_gold("[]", "exact_match") == ("[]", "")
+
+    def _list_scorer(answer, expected, method, config):
+        return (answer.strip() == "None") if expected == "[]" else (answer == expected), None
+
+    q = {"suite": "t", "expected": "[]", "scoring_method": "f1_list", "scoring_config": {}}
+    assert classify(q, _list_scorer) == ("ok_bare", "rendered:empty_list_as_None")
+    table = summarize([("t", *classify(q, _list_scorer))])
+    assert table["suites"]["t"]["ok_bare_rendered_gold"] == 1 and table["flagged"] == []
+    assert table["self_check_version"] == 2

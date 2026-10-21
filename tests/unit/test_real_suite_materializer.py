@@ -149,3 +149,34 @@ def test_materializer_writes_scoreable_yaml_and_prompt_free_manifest(tmp_path: P
     assert any(question["scoring_method"] == "code_execution" for question in suite["questions"])
     assert "prompt" not in manifest[0]
     assert "expected" not in manifest[0]
+
+
+def _vacuous(qid: str, source_id: str) -> dict:
+    return {
+        "id": qid, "tier": 2, "prompt": "old", "expected": "def ", "scoring_method": "substring",
+        "scoring_config": {"language": "python", "timeout": 30, "case_sensitive": True, "substring": "def "},
+        "source_suite": "livecodebench", "source_question_id": source_id,
+    }
+
+
+def test_rederive_vacuous_oracles_repairs_or_marks_not_scorable() -> None:
+    fresh = {
+        ("livecodebench", "leetcode_good"): {
+            "prompt": "new prompt\n", "expected": "solve", "scoring_method": "code_execution",
+            "scoring_config": {"entry_point": "solve", "entry_point_cases": [{"args": [1], "expected": 1}]},
+        }
+    }
+    keep = {"id": "k", "scoring_method": "substring", "scoring_config": {"case_sensitive": False}, "expected": "x"}
+    qs = [_vacuous("a", "leetcode_good"), _vacuous("b", "leetcode_dropped"), keep]
+    changes = materializer.rederive_vacuous_oracles(qs, fresh)
+    assert [(c["id"], c["action"]) for c in changes] == [
+        ("a", "rederived_executable_oracle"), ("b", "marked_not_scorable")]
+    assert qs[0]["scoring_method"] == "code_execution" and qs[0]["expected"] == "solve"
+    assert qs[1]["scoring_method"] == "code_execution" and qs[1]["expected"] == ""
+    assert "not_scorable_reason" in qs[1]["scoring_config"]
+    assert qs[2]["scoring_method"] == "substring"  # non-code substring rows untouched
+    assert not any(materializer.is_vacuous_code_substring(q) for q in qs)
+
+
+def test_vacuous_code_substring_source_is_never_selectable() -> None:
+    assert not materializer._has_scoreable_expected(_vacuous("a", "x") | {"expected": "def "})
