@@ -77,6 +77,12 @@ def child_env(extra: dict[str, str] | None = None, task_id: str | None = None) -
     env["HOME"] = home
     env["XDG_CACHE_HOME"] = os.path.join(home, ".cache")
     env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+    try:  # SEC-EXEC-6: loud, rate-limited warning if an HF token file reappears (flag-independent)
+        from src.repl_environment.exec_sandbox import warn_if_hf_token_files
+
+        warn_if_hf_token_files()
+    except Exception:  # noqa: BLE001 - a warning must never break a tool call
+        logging.getLogger(__name__).debug("hf token check failed", exc_info=True)
     if flag_enabled("exec_containment"):
         # SEC-EXEC-5: a token-free HF_HOME. The shared cache (with its token files) is never
         # named in the child; an HF client in the child sees an empty cache and no network.

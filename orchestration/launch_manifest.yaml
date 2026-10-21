@@ -712,7 +712,9 @@ docker_services:
     # Separate index subdir to avoid cross-contamination (different models = incompatible embeddings)
     volumes:
       - "{project_root}/cache/next-plaid/code-indices:/data/indices"
-      - "{cache_dir}/huggingface:/root/.cache/huggingface"
+      # SEC-EXEC-6: mount ONLY hub/ (model weights). The cache root holds token files and must never
+      # be visible to a third-party container; mounting the root again would re-expose them.
+      - "{cache_dir}/huggingface/hub:/root/.cache/huggingface/hub"
     args: ["--host", "0.0.0.0", "--port", "8080", "--index-dir", "/data/indices",
            "--model", "lightonai/LateOn-Code", "--int8"]
   - name: nextplaid-docs
@@ -722,7 +724,9 @@ docker_services:
     description: Multi-vector doc retrieval (ColBERT)
     volumes:
       - "{project_root}/cache/next-plaid/docs-indices:/data/indices"
-      - "{cache_dir}/huggingface:/root/.cache/huggingface"
+      # SEC-EXEC-6: mount ONLY hub/ (model weights). The cache root holds token files and must never
+      # be visible to a third-party container; mounting the root again would re-expose them.
+      - "{cache_dir}/huggingface/hub:/root/.cache/huggingface/hub"
       - /mnt/raid0/llm/models/gte-moderncolbert-v1-onnx:/models/gte-moderncolbert-v1-onnx:ro
     args: ["--host", "0.0.0.0", "--port", "8080", "--index-dir", "/data/indices",
            "--model", "/models/gte-moderncolbert-v1-onnx", "--int8"]

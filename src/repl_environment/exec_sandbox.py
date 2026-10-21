@@ -97,18 +97,65 @@ def _home_dirs(env: dict[str, str]) -> list[str]:
     return [h for h in homes if h and h != "/"]
 
 
+def _hf_roots(env: dict[str, str], homes: Iterable[str]) -> set[str]:
+    roots = {SHARED_HF_HOME}
+    if env.get("HF_HOME"):
+        roots.add(env["HF_HOME"])
+    if env.get("XDG_CACHE_HOME"):
+        roots.add(os.path.join(env["XDG_CACHE_HOME"], "huggingface"))
+    for h in homes:
+        roots.add(os.path.join(h, ".cache", "huggingface"))
+    return roots
+
+
+_TOKEN_WARN_EVERY_S = 600.0
+_token_warned: dict[str, float] = {}
+
+
+def reappeared_hf_token_files(env: dict[str, str] | None = None, homes: Iterable[str] | None = None) -> list[str]:
+    """Existing ``token`` / ``stored_tokens`` files under any HF root (existence only, never read).
+
+    SEC-EXEC-6: the operator revoked and deleted the shared-cache token. Containment denies these
+    paths to model children, but a standing credential reappearing (a `huggingface-cli login`, a
+    copied cache) is itself the finding, so it is reported loudly.
+    """
+    env = dict(os.environ) if env is None else env
+    homes = list(homes) if homes is not None else _home_dirs(env)
+    found = []
+    for root in sorted(_hf_roots(env, homes)):
+        for name in ("token", "stored_tokens"):
+            path = os.path.join(root, name)
+            if os.path.lexists(path):
+                found.append(path)
+    if env.get("HF_TOKEN_PATH") and os.path.lexists(env["HF_TOKEN_PATH"]):
+        found.append(env["HF_TOKEN_PATH"])
+    return found
+
+
+def warn_if_hf_token_files(env: dict[str, str] | None = None, homes: Iterable[str] | None = None) -> list[str]:
+    """Log an ERROR per reappeared token file (rate-limited per path); returns the paths."""
+    found = reappeared_hf_token_files(env, homes)
+    now = time.monotonic()
+    for path in found:
+        last = _token_warned.get(path)
+        if last is None or now - last >= _TOKEN_WARN_EVERY_S:
+            _token_warned[path] = now
+            logger.error(
+                "SEC-EXEC-6: HF TOKEN FILE PRESENT at %s -- the shared-cache token was revoked and "
+                "deleted (2026-10-21). Find out who recreated it; revoke it on huggingface.co if it "
+                "is not intended. Model-exec children are denied this path, but nextplaid mounts and "
+                "download wrappers can still see it.", path,
+            )
+    return found
+
+
 def credential_paths(env: dict[str, str] | None = None, homes: Iterable[str] | None = None) -> list[str]:
     """Absolute credential locations to deny (existing or not; sorted, de-duplicated)."""
     env = dict(os.environ) if env is None else env
     homes = list(homes) if homes is not None else _home_dirs(env)
     out: set[str] = set()
-    hf_roots = {SHARED_HF_HOME}
-    if env.get("HF_HOME"):
-        hf_roots.add(env["HF_HOME"])
-    if env.get("XDG_CACHE_HOME"):
-        hf_roots.add(os.path.join(env["XDG_CACHE_HOME"], "huggingface"))
+    hf_roots = _hf_roots(env, homes)
     for h in homes:
-        hf_roots.add(os.path.join(h, ".cache", "huggingface"))
         for rel in _HOME_RELATIVE:
             out.add(os.path.join(h, rel))
     for root in hf_roots:
@@ -219,6 +266,7 @@ def wrap(
     """
     from src.repl_environment import fence_kernel
 
+    warn_if_hf_token_files()
     caps = capabilities()
     if not caps["landlock"]:
         raise ContainmentUnavailable(
