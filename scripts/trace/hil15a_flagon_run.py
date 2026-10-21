@@ -284,6 +284,11 @@ def main(argv=None) -> int:
     manifest["runs"] = results
     progress = write_progress_log(out, results)
     manifest["label_classes"] = sorted({str(bool(v[1])) for v in labels.values()})
+    manifest["warnings"] = []
+    if len(manifest["label_classes"]) < 2:
+        manifest["warnings"].append("single-class labels: auc_table will be 'insufficient'; use a harder --tasks set so some runs fail")
+    if not a.mock_llm and len({k for k, _ in (v for v in labels.values())}) < a.min_task_keys:
+        manifest["warnings"].append("fewer task keys than --min-task-keys")
 
     jn = join_accounting(paths["db"], progress)
     manifest["join"] = jn
