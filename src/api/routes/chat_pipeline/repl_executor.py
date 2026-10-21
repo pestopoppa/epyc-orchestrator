@@ -392,7 +392,11 @@ async def _execute_repl_body(
 
     # Inject SkillBank skill context if available (SkillRL §3.2)
     if routing.skill_context:
-        combined_context = f"{routing.skill_context}\n\n{combined_context}"
+        # Neutralised at the site (idempotent: downstream builder/helpers passes are no-ops
+        # on already-escaped text), so safety does not depend on their ordering.
+        combined_context = (
+            f"{neutralise_control_tokens(routing.skill_context)}\n\n{combined_context}"
+        )
 
     # Derive tool context for cascading policy (WS-3: deny web for reasoning domains)
     from src.tool_policy import NO_WEB_TASK_TYPES
@@ -408,6 +412,13 @@ async def _execute_repl_body(
 
         # Use searchable text as REPL context, prepend the user's question
         doc_text = doc_result.to_searchable_text()
+        # Scan-flagged body: show the flag to the model as a marked note ("" when clean).
+        from src.services.document_preprocessor import format_injection_flag_note
+
+        doc_text = (
+            format_injection_flag_note(getattr(routing.document_result, "injection_flags", None))
+            + doc_text
+        )
         combined_context = f"Question: {request.prompt}\n\n{doc_text}"
 
         repl = DocumentREPLEnvironment(

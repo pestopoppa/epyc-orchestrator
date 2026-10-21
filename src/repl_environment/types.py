@@ -18,8 +18,31 @@ TOOL_OUTPUT_START = "<<<TOOL_OUTPUT>>>"
 TOOL_OUTPUT_END = "<<<END_TOOL_OUTPUT>>>"
 
 
+_TOOL_MARKER_ZWSP = "\u200b"  # same escape char as security.control_tokens.ZWSP
+
+
+def neutralise_tool_markers(text: str) -> str:
+    """Break any literal TOOL_OUTPUT begin/end marker inside ``text``.
+
+    Content wrapped by :func:`wrap_tool_output` may come from attacker-controlled
+    pages or documents; an embedded ``<<<END_TOOL_OUTPUT>>>`` would close the block
+    early and let the tail pose as orchestrator structure.  A ZWSP is inserted
+    after the first ``<`` of each marker (as ``control_tokens`` does for chat
+    tokens).  Idempotent (the escaped form no longer matches) and a no-op, same
+    object returned, for text without a marker.
+    """
+    if not text or "<<<" not in text:
+        return text
+    out = text.replace(TOOL_OUTPUT_START, "<" + _TOOL_MARKER_ZWSP + TOOL_OUTPUT_START[1:])
+    out = out.replace(TOOL_OUTPUT_END, "<" + _TOOL_MARKER_ZWSP + TOOL_OUTPUT_END[1:])
+    return text if out == text else out
+
+
 def wrap_tool_output(output: str) -> str:
     """Wrap a tool output string with structured delimiters.
+
+    Any begin/end marker already present in ``output`` is neutralised first so the
+    content cannot terminate the block early.
 
     Args:
         output: The raw tool output string.
@@ -27,7 +50,7 @@ def wrap_tool_output(output: str) -> str:
     Returns:
         Delimited output string for reliable stripping.
     """
-    return f"{TOOL_OUTPUT_START}{output}{TOOL_OUTPUT_END}"
+    return f"{TOOL_OUTPUT_START}{neutralise_tool_markers(output)}{TOOL_OUTPUT_END}"
 
 
 class REPLError(Exception):

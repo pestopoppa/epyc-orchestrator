@@ -56,6 +56,11 @@ _INVISIBLE_RE = re.compile(
     "[" + "".join(re.escape(c) for c in sorted(_INVISIBLE_CHARS)) + "]"
 )
 
+# The control-token neutraliser (``security.control_tokens``) escapes a spelling
+# by inserting U+200B right after ``<``.  That is orchestrator-authored, not a
+# hidden-text signal, so the scanner discounts exactly that ``<`` + ZWSP pair.
+_NEUTRALISER_ZWSP_RE = re.compile("<\u200b")
+
 # ---------------------------------------------------------------------------
 # Threat patterns — (category, compiled regex, description)
 # ---------------------------------------------------------------------------
@@ -134,7 +139,7 @@ def scan_content(text: str, source: str = "<unknown>") -> ScanResult:
     details: list[str] = []
 
     # Check for invisible unicode
-    invisible_matches = _INVISIBLE_RE.findall(scan_text)
+    invisible_matches = _INVISIBLE_RE.findall(_NEUTRALISER_ZWSP_RE.sub("<", scan_text))
     if invisible_matches:
         threats.append("invisible_unicode")
         details.append(
