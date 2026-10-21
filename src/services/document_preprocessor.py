@@ -123,6 +123,17 @@ Now analyze this figure:
 Be concise but informative. Focus on the specific content visible in the figure."""
 
 
+def format_injection_flag_note(flags: list[str] | tuple[str, ...] | None) -> str:
+    """Marked, factual note for a document the body injection scan flagged.
+
+    Returns ``""`` for no flags (so clean documents get byte-identical prompt text).
+    States only what the scan found; it carries no instruction to the model.
+    """
+    if not flags:
+        return ""
+    return "[INJECTION-SCAN FLAG on document body: " + "; ".join(flags) + "]\n\n"
+
+
 @dataclass
 class PreprocessingConfig:
     """Configuration for document preprocessing."""
@@ -155,6 +166,10 @@ class PreprocessingResult:
     error: str | None = None
     warnings: list[str] = field(default_factory=list)
     job_id: str | None = None  # For async processing
+    # Structured injection-scan flags on the document body ("page 3: prompt_injection").
+    # Empty for clean documents and whenever body scanning is off. Policy is unchanged
+    # (the text is still used); consumers render these as a marked note.
+    injection_flags: list[str] = field(default_factory=list)
 
 
 class DocumentPreprocessor:
@@ -374,15 +389,20 @@ class DocumentPreprocessor:
         self,
         ocr_result: object,
         warnings: list[str],
-    ) -> None:
-        """Warn on unsafe primary OCR body text without mutating document text."""
+    ) -> list[str]:
+        """Warn on unsafe primary OCR body text without mutating document text.
+
+        Returns the structured flags (one ``"page N: threat, ..."`` entry per flagged
+        page) so the caller can surface them to the model as a marked note.
+        """
         from src.features import features
 
+        flags: list[str] = []
         if not features().injection_scanning:
-            return
+            return flags
 
         if self._document_body_injection_policy(warnings) != DOCUMENT_BODY_INJECTION_POLICY_WARN:
-            return
+            return flags
 
         from src.security.injection_scanner import scan_content
 
@@ -399,6 +419,14 @@ class DocumentPreprocessor:
                     "Document body injection scan warning "
                     f"(page {page_number}: {threats})"
                 )
+                flags.append(f"page {page_number}: {threats}")
+                logger.warning(
+                    "Document body flagged by injection scan (page %s: %s); text kept, "
+                    "flag will be shown to the model",
+                    page_number,
+                    threats,
+                )
+        return flags
 
     def needs_preprocessing(self, task_ir: dict[str, Any]) -> bool:
         """Check if a TaskIR needs document preprocessing.
@@ -502,6 +530,7 @@ class DocumentPreprocessor:
                 document_result=result.document_result,
                 error=result.error,
                 warnings=warnings,
+                injection_flags=list(result.injection_flags),
             )
 
         try:
@@ -533,7 +562,7 @@ class DocumentPreprocessor:
                 structured_doc,
                 warnings,
             )
-            self._scan_document_body_for_injection(ocr_result, warnings)
+            injection_flags = self._scan_document_body_for_injection(ocr_result, warnings)
 
             # Chunk the document
             document_result = chunk_document(
@@ -594,6 +623,7 @@ class DocumentPreprocessor:
                 success=True,
                 document_result=document_result,
                 warnings=warnings,
+                injection_flags=injection_flags,
             )
 
         except OCRServerUnavailable as e:

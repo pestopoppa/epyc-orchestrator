@@ -26,6 +26,7 @@ from src.repl_environment.types import (
     REPLSecurityError,
     REPLTimeout,
     wrap_tool_output,
+    neutralise_tool_markers,
 )
 from src.repl_environment.parallel_dispatch import (
     _ParallelCall,
@@ -603,9 +604,18 @@ class REPLEnvironment(
         return False, f"Path not in allowed locations: {allowed_prefixes}"
 
     def _maybe_wrap_tool_output(self, output: str) -> str:
-        """Return wrapped tool output in legacy mode, raw output in deferred mode."""
+        """Return wrapped tool output in legacy mode, raw output in deferred mode.
+
+        Deferred mode emits NO TOOL_OUTPUT markers, so there is no block for content
+        to close or spoof; the raw value stays in a REPL variable and reaches a
+        prompt only if the model prints it, via ``last_output`` (control-token
+        neutralised in ``builder.py``).  Legacy mode escapes markers inside the
+        content, and records the escaped form so the exact-string strip fallback
+        still matches what was emitted.
+        """
         if self._deferred_tool_results:
             return output
+        output = neutralise_tool_markers(output)
         self.artifacts.setdefault("_tool_outputs", []).append(output)
         return wrap_tool_output(output)
 
