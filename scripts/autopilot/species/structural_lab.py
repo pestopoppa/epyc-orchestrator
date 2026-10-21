@@ -405,10 +405,12 @@ class StructuralLab:
                         "cost_metrics": {},
                     }
                 )
+            pool = self._distill_pool_composition(trajectories, min_q_value)
             if not trajectories:
                 return {
                     "status": "ok",
                     "report": {"total_trajectories": 0, "skills_stored": 0},
+                    "pool": pool,
                     "note": f"no memories with Q >= {min_q_value}; nothing to distill",
                 }
 
@@ -437,12 +439,59 @@ class StructuralLab:
                     "skills_stored": report.skills_stored,
                     "skills_merged": report.skills_merged,
                     "skills_rejected": report.skills_rejected,
+                    # M-25: label the pool. All-failure pools distil worst
+                    # (intake-2190#09), so an unlabelled pool is not comparable.
+                    "success_trajectories": report.success_trajectories,
+                    "failure_trajectories": report.failure_trajectories,
+                    "escalation_trajectories": report.escalation_trajectories,
                     "duration_seconds": round(report.duration_seconds, 1),
                     "errors": report.errors[:5],
                 },
+                "pool": pool,
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    @staticmethod
+    def _distill_pool_composition(
+        trajectories: list[dict[str, Any]], min_q_value: float
+    ) -> dict[str, Any]:
+        """Outcome composition of a distillation pool (read-only, M-25)."""
+        by_outcome: dict[str, int] = {}
+        for t in trajectories:
+            key = str(t.get("outcome") or "unknown")
+            by_outcome[key] = by_outcome.get(key, 0) + 1
+        return {
+            "total": len(trajectories),
+            "by_outcome": by_outcome,
+            "min_q_value": min_q_value,
+        }
+
+    def distill_pool_preview(
+        self, max_trajectories: int = 200, min_q_value: float = 0.7
+    ) -> dict[str, Any]:
+        """Composition of the pool ``distill_skillbank`` would draw. Read-only; no inference.
+
+        Uses the same zero-vector Q-ranked retrieval as ``distill_skillbank``.
+        Returns ``{}`` when the store is unavailable, so callers can use it in
+        a checkpoint note without a new failure mode.
+        """
+        try:
+            import numpy as np
+
+            from orchestration.repl_memory.episodic_store import EpisodicStore
+
+            memories = EpisodicStore().retrieve_by_similarity(
+                np.zeros(1024, dtype=np.float32),
+                k=max_trajectories,
+                min_q_value=min_q_value,
+            )
+            return self._distill_pool_composition(
+                [{"outcome": m.outcome} for m in memories], min_q_value
+            )
+        except Exception as e:  # noqa: BLE001 - note-only helper, never blocks
+            log.warning("distill_pool_preview unavailable: %s", e)
+            return {}
 
     # ── memory reset ─────────────────────────────────────────────
 

@@ -4052,3 +4052,44 @@ def test_action_context_is_dataclass() -> None:
     assert ctx.seeder == "s"
     assert ctx.strategy_store is None
     assert ctx.evo is None
+
+
+def test_distill_skillbank_checkpoint_note_labels_pool() -> None:
+    """M-25: the pre-distillation checkpoint note carries the pool composition."""
+
+    class FakeLab:
+        def __init__(self):
+            self.checkpoints = []
+
+        def distill_pool_preview(self):
+            return {"total": 3, "by_outcome": {"success": 2, "failure": 1}, "min_q_value": 0.7}
+
+        def checkpoint_state(self, **kwargs):
+            self.checkpoints.append(kwargs)
+
+        def distill_skillbank(self, *, teacher, categories):
+            return {"status": "not_available"}
+
+    lab = FakeLab()
+    actions._action_distill_skillbank(
+        {"type": "distill_skillbank", "teacher": "mock", "categories": ["routing"]},
+        _ctx(lab=lab, tower=None, state={"trial_counter": 1}),
+    )
+
+    note = lab.checkpoints[0]["notes"]
+    assert note.startswith("Pre-distillation checkpoint")
+    assert "total=3" in note and "'failure': 1" in note and "teacher=mock" in note
+
+
+def test_distill_pool_composition_counts_outcomes() -> None:
+    from scripts.autopilot.species.structural_lab import StructuralLab
+
+    pool = StructuralLab._distill_pool_composition(
+        [{"outcome": "success"}, {"outcome": "failure"}, {"outcome": "success"}, {"outcome": None}],
+        0.7,
+    )
+    assert pool == {
+        "total": 4,
+        "by_outcome": {"success": 2, "failure": 1, "unknown": 1},
+        "min_q_value": 0.7,
+    }

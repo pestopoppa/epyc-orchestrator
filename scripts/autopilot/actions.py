@@ -2328,9 +2328,18 @@ def _action_distill_skillbank(action: dict[str, Any], ctx: _ActionContext):
     # "teacher" in the action still wins.
     teacher = action.get("teacher") or os.environ.get("AUTOPILOT_DISTILL_TEACHER", "claude")
     categories = action.get("categories", ["routing"])
+    # M-25: the first re-distil must not be an unlabelled pool.
+    preview_fn = getattr(ctx.lab, "distill_pool_preview", None)
+    pool = preview_fn() if callable(preview_fn) else {}
+    pool_note = ""
+    if isinstance(pool, dict) and pool:
+        pool_note = (
+            f" pool(teacher={teacher}, q>={pool.get('min_q_value')}): "
+            f"total={pool.get('total')} by_outcome={pool.get('by_outcome')}"
+        )
     ctx.lab.checkpoint_state(
         trial_id=ctx.state.get("trial_counter", 0),
-        notes="Pre-distillation checkpoint",
+        notes="Pre-distillation checkpoint" + pool_note,
     )
     result = ctx.lab.distill_skillbank(teacher=teacher, categories=categories)
     log.info("Distillation result: %s", result)
