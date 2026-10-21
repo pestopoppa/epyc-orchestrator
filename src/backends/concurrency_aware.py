@@ -1916,6 +1916,15 @@ class ConcurrencyAwareBackend:
                 "full_slot_aligned": self._full_slot_aligned,
                 "per_region_locks": self._per_region_locks_enabled(),
                 "dispatch_log_env": dispatch_log.LOG_ENV,
+                # WP-15.2: served model identity per instance, read ONCE here from the
+                # stack launch sidecar (no network); dispatch records carry the live
+                # sidecar identity of the chosen instance, which tracks reloads.
+                "served_models": {
+                    str(port): dispatch_log.model_identity(port)
+                    for port in [self._full_port or _extract_port(self._full_url)]
+                    + [_extract_port(u) for u in self._quarter_urls]
+                    if port
+                },
             }
             return dispatch_log.DispatchLog(
                 f"{self._topology_role}:{self._full_port}:{id(self):x}", config

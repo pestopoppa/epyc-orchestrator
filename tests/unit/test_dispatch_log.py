@@ -228,3 +228,28 @@ def test_round_robin_streaming_is_recorded_as_handed_off(monkeypatch, tmp_path):
     rec = [r for r in _recs(path) if r["kind"] == "dispatch"][0]
     assert rec["method"] == "infer_streaming" and rec["outcome"] == "handed_off"
     assert rec["completion_observed"] is False and rec["fleet_at_arrival"] is None
+
+
+# --- WP-15.2: served model identity -----------------------------------------
+
+
+def test_served_model_in_config_echo_and_dispatch_record(monkeypatch, tmp_path):
+    logdir = tmp_path / "logs"
+    (logdir / "server_launches").mkdir(parents=True)
+    for port, gguf in ((8070, "/m/A-Q8_0.gguf"), (8080, "/m/A-Q8_0.gguf")):
+        (logdir / "server_launches" / f"{port}.json").write_text(
+            json.dumps({"model_path": gguf, "launch_id": f"L{port}", "argv_sha256": "ab"})
+        )
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(logdir))
+    cab, path = _make(monkeypatch, tmp_path, result=SimpleNamespace(success=True))
+    cab.infer(SimpleNamespace(name="frontdoor"), _req())
+    cfg, rec = _recs(path)
+    sm = cfg["config"]["served_models"]
+    assert sm["8070"]["model_path"] == "/m/A-Q8_0.gguf" and sm["8070"]["identity_source"] == "stack_sidecar"
+    assert sm["8180"] == {"identity_source": "absent"}  # absent is reported, never filled
+    assert rec["instance"]["model"]["launch_id"] == "L8070"
+
+
+def test_model_identity_never_raises(monkeypatch):
+    monkeypatch.setattr(serving_calls, "server_identity", lambda p: (_ for _ in ()).throw(OSError()))
+    assert dispatch_log.model_identity(8070) == {"identity_source": "error"}
