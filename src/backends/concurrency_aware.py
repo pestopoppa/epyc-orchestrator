@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.backends import kv_slot_files as _kv_slot_files
-from src.backends import serving_calls
+from src.backends import dispatch_log, serving_calls
 from src.runtime.quiescence import suppress as _quiescence_suppress
 from src.scheduling import gate_observation
 
@@ -405,6 +405,10 @@ class ConcurrencyAwareBackend:
         self._inflight_slot_files: set[str] = set()
         self._last_slot_sweep: float | None = None
         self._maybe_sweep_slot_files()  # startup sweep (report-only unless enabled)
+
+        # WP-15.1 / HSF-3.1a: additive dispatch log (arrival, queue wait, chosen
+        # instance, fleet state, session key + client class). Never affects routing.
+        self._dispatch_log = self._build_dispatch_log()
 
     # === KV-migration slot files (disk-leak audit 2026-09-27) ===
 
@@ -1896,12 +1900,73 @@ class ConcurrencyAwareBackend:
                     self._role, chosen_idx, exc,
                 )
 
+    # === Dispatch log (WP-15.1 / HSF-3.1a; additive, failures swallowed) ===
+
+    def _build_dispatch_log(self) -> "dispatch_log.DispatchLog | None":
+        try:
+            config = {
+                "role": self._role,
+                "topology_role": self._topology_role,
+                "full_port": self._full_port,
+                "full_url": self._full_url,
+                "quarter_urls": list(self._quarter_urls),
+                "quarter_topology_idx": list(self._quarter_topology_idx),
+                "quarter_preference_order": list(self._quarter_preference_order),
+                "native_batch_width": self._native_batch_width,
+                "full_slot_aligned": self._full_slot_aligned,
+                "per_region_locks": self._per_region_locks_enabled(),
+                "dispatch_log_env": dispatch_log.LOG_ENV,
+            }
+            return dispatch_log.DispatchLog(
+                f"{self._topology_role}:{self._full_port}:{id(self):x}", config
+            )
+        except Exception:
+            return None
+
+    @contextmanager
+    def _dispatch_log_scope(self, request: Any, method: str, logical_role: str | None):
+        """Record one dispatch. Yields a scope with ``dispatched()`` and ``result``.
+
+        Exceptions pass through untouched (the scope records and re-raises).
+        """
+        log = self._dispatch_log
+        handle = None
+        if log is not None:
+            handle = log.begin(request, method=method, role=logical_role or self._role)
+
+        class _Scope:
+            result: Any = None
+            observed = True
+
+            def dispatched(_self, idx: int, backend: Any) -> None:
+                if log is None or handle is None:
+                    return
+                try:
+                    log.dispatched(
+                        handle,
+                        meta=self._tap_dispatch_metadata(idx, backend, logical_role=logical_role),
+                    )
+                except Exception:
+                    pass
+
+        scope = _Scope()
+        try:
+            yield scope
+        except BaseException as exc:
+            if log is not None:
+                log.end(handle, error=exc)
+            raise
+        else:
+            if log is not None:
+                log.end(handle, result=scope.result, completion_observed=scope.observed)
+
     def infer(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
         logical_role = getattr(request, "role", None)
         _placement_t0 = time.perf_counter()
-        with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
+        with self._dispatch_log_scope(request, "infer", logical_role) as _dl, self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
+            _dl.dispatched(_idx, backend)
             serving_calls.annotate_staged(
                 instance_idx=_idx,
                 instance_full=_is_full,
@@ -1915,6 +1980,7 @@ class ConcurrencyAwareBackend:
             # raw exceptions are cancellation/lock control flow and must
             # not trip the circuit) — mirrors the primitives-layer policy.
             result = backend.infer(role_config, request)
+            _dl.result = result
             self._record_endpoint_result(_idx, result)
             return result
 
@@ -1922,7 +1988,9 @@ class ConcurrencyAwareBackend:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
         logical_role = getattr(request, "role", None)
-        with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
+        with self._dispatch_log_scope(request, "infer_streaming", logical_role) as _dl, self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
+            _dl.dispatched(_idx, backend)
+            _dl.observed = False  # a streaming handle: completion is the consumer's
             self._annotate_current_tap_dispatch(
                 _idx, backend, logical_role=logical_role, request=request
             )
@@ -1935,7 +2003,8 @@ class ConcurrencyAwareBackend:
         mb = self._extract_migration_budget_ms(request)
         logical_role = getattr(request, "role", None)
         _placement_t0 = time.perf_counter()
-        with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
+        with self._dispatch_log_scope(request, "infer_stream_text", logical_role) as _dl, self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
+            _dl.dispatched(_idx, backend)
             serving_calls.annotate_staged(
                 instance_idx=_idx,
                 instance_full=_is_full,
@@ -1945,6 +2014,7 @@ class ConcurrencyAwareBackend:
                 _idx, backend, logical_role=logical_role, request=request
             )
             result = backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
+            _dl.result = result
             self._record_endpoint_result(_idx, result)
             return result
 
