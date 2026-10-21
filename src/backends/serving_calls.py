@@ -251,6 +251,15 @@ def annotate_staged(**fields: Any) -> None:
         pass
 
 
+def peek_staged() -> dict[str, Any] | None:
+    """A copy of the staged caller without consuming it (read-only; never raises)."""
+    try:
+        staged = _STAGED.get()
+        return dict(staged) if staged else None
+    except Exception:
+        return None
+
+
 def clear_staged() -> None:
     """Drop a staged caller that no backend call consumed (e.g. a cache hit)."""
     _STAGED.set(None)
