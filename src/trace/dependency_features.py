@@ -68,6 +68,9 @@ def _oof(X: np.ndarray, y: np.ndarray, groups: list[str], k: int = 5, seed: int 
     from sklearn.pipeline import make_pipeline
     out = np.zeros(len(y))
     for tr, te in GroupKFold(n_splits=min(k, len(set(groups)))).split(X, y, groups):
+        if len(set(y[tr])) < 2:   # a training fold with one class cannot fit; predict its base rate (uninformative)
+            out[te] = float(y[tr].mean())
+            continue
         m = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)).fit(X[tr], y[tr])
         out[te] = m.predict_proba(X[te])[:, 1]
     return out
