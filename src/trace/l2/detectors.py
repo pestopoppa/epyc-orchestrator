@@ -64,6 +64,8 @@ class Detection:
 
 
 def state_hash(step: L2Step) -> str:
+    if step.state_digest:      # captured at call time by the same function (HIL-13a)
+        return step.state_digest
     obs = _VOLATILE.sub("#", " ".join((step.observation or "").split()))
     args = json.dumps(step.args, sort_keys=True, default=str) if step.args is not None else (step.args_raw or "")
     return hashlib.sha1(f"{step.tool}\x1f{args}\x1f{obs}".encode("utf-8", "replace")).hexdigest()
@@ -106,13 +108,17 @@ def detect(t: L2Trace, cfg: DetectorConfig | None = None) -> list[Detection]:
             out.append(Detection("tool_error", s.idx, "error_flag" if s.error else f"exit_status"))
         if (s.truncated is True or s.finish_reason in ("length", "max_tokens")
                 or (cfg.byte_cap and s.observation is not None
-                    and len(s.observation.encode("utf-8", "replace")) >= cfg.byte_cap)):
+                    and len(s.observation.encode("utf-8", "replace")) >= cfg.byte_cap)
+                or (cfg.byte_cap and s.observation is None and s.output_bytes is not None
+                    and s.output_bytes >= cfg.byte_cap)):
             out.append(Detection("truncation", s.idx,
                                  "flag" if s.truncated else ("finish_reason" if s.finish_reason else "byte_cap")))
         # invalid_invocation
-        if s.args is None and s.args_raw:
+        if s.invocation_error:
+            out.append(Detection("invalid_invocation", s.idx, f"registry:{s.invocation_error}"))
+        elif s.args is None and s.args_raw:
             out.append(Detection("invalid_invocation", s.idx, "unparseable_args"))
-        elif cfg.schemas and s.tool is not None:
+        elif cfg.schemas and s.tool is not None and not (s.args is None and s.args_hash):
             sch = cfg.schemas.get(s.tool)
             if sch is None:
                 out.append(Detection("invalid_invocation", s.idx, "unknown_tool"))

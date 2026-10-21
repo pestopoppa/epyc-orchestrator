@@ -269,6 +269,14 @@ class REPLEnvironment(
 
             self._dependency_log = DependencyLog(str(self._session_id), sink=trace_store_sink())
             self._exploration_log.dependency_log = self._dependency_log
+        # HIL-13a: step-level tool events for the L2 scan (default OFF; nothing is constructed when off).
+        self._step_events = None
+        if getattr(self._features, "step_event_logging", False):
+            from src.trace.step_events import StepEventLog, trace_store_sink as _step_sink
+
+            self._step_events = StepEventLog(str(self._session_id), role=self.role, sink=_step_sink())
+            self._exploration_log.step_events = self._step_events
+            self._step_events.attach(self)
 
         # INF-78 OAB-7: a request-carried context bundle (attach_context_bundle). None ==
         # the historical string `context`, unchanged.

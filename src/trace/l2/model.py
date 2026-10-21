@@ -7,6 +7,9 @@ from typing import Any
 STEP_FIELDS = (
     "idx", "kind", "tool", "args", "args_raw", "observation", "exit_status", "error",
     "truncated", "finish_reason", "tokens_in", "is_final", "mutating", "verifying",
+    # HIL-13a capture (src/trace/step_events.py): arguments/observations are not stored, so these
+    # carry what the detectors need instead of the raw text.
+    "args_hash", "state_digest", "invocation_error", "output_bytes", "latency_ms", "error_class",
 )
 TRACE_FIELDS = (
     "trace_id", "task_key", "role", "model_pin", "arm", "source", "outcome", "status",
@@ -30,6 +33,12 @@ class L2Step:
     is_final: bool = False
     mutating: bool | None = None
     verifying: bool | None = None
+    args_hash: str | None = None         # args unobserved: schema checks are skipped, see detect()
+    state_digest: str | None = None      # precomputed state_hash(tool, args, normalised observation)
+    invocation_error: str | None = None  # registry verdict at call time: unknown_tool | invalid_arguments
+    output_bytes: int | None = None
+    latency_ms: float | None = None
+    error_class: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "L2Step":

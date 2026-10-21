@@ -3,6 +3,7 @@
 
   l2_scan.py --progress-logs 'logs/progress/*.jsonl' --out report.json
   l2_scan.py --normalised traces.jsonl --out report.json
+  l2_scan.py --step-db events.sqlite [--progress-logs GLOB] --out report.json   # HIL-13a step events
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from src.trace.l2.detectors import DetectorConfig  # noqa: E402
-from src.trace.l2.loaders import load_normalised_jsonl, load_progress_logs  # noqa: E402
+from src.trace.l2.loaders import load_normalised_jsonl, load_progress_logs, load_step_events, merge_step_traces  # noqa: E402
 from src.trace.l2.report import dumps, scan  # noqa: E402
 from src.trace.l2.schemas import export_tool_schemas  # noqa: E402
 
@@ -35,6 +36,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--progress-logs", help="glob of logs/progress/*.jsonl")
     ap.add_argument("--normalised", help="JSONL of L2Trace dicts")
+    ap.add_argument("--step-db", help="trace-store sqlite holding HIL-13a tool_step rows (flag step_event_logging); "
+                    "outcomes are joined from --progress-logs by run id = task id")
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--boot", type=int, default=1000)
@@ -45,6 +48,11 @@ def main(argv=None) -> int:
     traces = []
     if a.progress_logs:
         traces += list(load_progress_logs(sorted(glob.glob(a.progress_logs))))
+    if a.step_db:
+        steps = list(load_step_events(a.step_db, {t.trace_id: t for t in traces}))
+        joined = sum(1 for t in steps if t.outcome != "unknown")
+        traces = merge_step_traces(traces, steps)
+        print(f"step-bearing runs: {len(steps)} ({joined} with a joined outcome)", file=sys.stderr)
     if a.normalised:
         traces += list(load_normalised_jsonl(a.normalised))
     if not traces:

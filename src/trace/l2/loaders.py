@@ -157,3 +157,55 @@ def load_claude_session(path: Path | str) -> L2Trace:
         if d.get("type") == "assistant" and msg.get("stop_reason") == "max_tokens" and steps:
             steps[-1].finish_reason = "length"
     return L2Trace(trace_id=sid, task_key=sid, outcome="unknown", source="claude_session", steps=steps)
+
+
+def load_step_events(db_path: Path | str, outcomes: dict[str, L2Trace] | None = None) -> Iterator[L2Trace]:
+    """HIL-13a: ``tool_step`` rows of the unified trace store -> one ``L2Trace`` per run (session).
+
+    ``outcomes`` optionally maps a run id (= task id) to a task-level trace from
+    ``load_progress_logs``; outcome / status / exception / role are taken from it. Without a match
+    the outcome is ``unknown`` (never inferred from the steps).
+
+    Derived flags, named here: ``error`` is the capture-time ok/error verdict EXCEPT when the
+    registry rejected the invocation itself (``invocation_error``), which is invalid_invocation, not
+    a tool failure. ``exit_status`` is not captured and stays None. ``step_cap``, ``ctx_limit`` and
+    ``tokens_in`` are not captured, so the near-context-limit wrap-up signature is not computable
+    from these traces; ``tool_required`` defaults to False.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute("select detail_json from event where category='tool_step' order by id").fetchall()
+    finally:
+        conn.close()
+    runs: dict[str, list[dict]] = {}
+    for (dj,) in rows:
+        rec = json.loads(dj)
+        runs.setdefault(rec["run_id"], []).append(rec)
+    for rid, recs in runs.items():
+        recs.sort(key=lambda r: r["idx"])
+        steps = []
+        for r in recs:
+            inv = r.get("error_class") if r.get("error_class") in ("unknown_tool", "invalid_arguments") else None
+            steps.append(L2Step(
+                idx=r["idx"], kind=r["kind"], tool=r.get("tool"),
+                error=bool(r.get("error")) and inv is None, truncated=bool(r.get("truncated")),
+                is_final=bool(r.get("is_final")), mutating=r.get("mutating"),
+                args_hash=r.get("args_hash"), state_digest=r.get("state_hash"), invocation_error=inv,
+                output_bytes=r.get("output_bytes"), latency_ms=r.get("latency_ms"), error_class=r.get("error_class"),
+            ))
+        base = (outcomes or {}).get(rid)
+        yield L2Trace(
+            trace_id=rid, task_key=base.task_key if base else rid,
+            outcome=base.outcome if base else "unknown",
+            role=(base.role if base and base.role else recs[0].get("role")),
+            source="step_events", status=base.status if base else None,
+            exception=base.exception if base else None, steps=steps,
+        )
+
+
+def merge_step_traces(progress: list[L2Trace], steps: list[L2Trace]) -> list[L2Trace]:
+    """Progress-log traces whose id has step events are replaced by the step-bearing trace."""
+    have = {t.trace_id for t in steps}
+    return [t for t in progress if t.trace_id not in have] + steps

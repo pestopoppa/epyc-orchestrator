@@ -99,6 +99,14 @@ def scan(traces: list[L2Trace], cfg: DetectorConfig | None = None, seed: int = 0
         "categories_judge_only_unimplemented": list(JUDGE_ONLY),
         "crosswalk": CROSSWALK,
     }
+    # HIL-13a: state where the steps came from, only when step events were an input (older reports unchanged)
+    n_step = sum(1 for t in traces if t.source == "step_events")
+    if n_step:
+        rep["step_events"] = {
+            "runs": n_step,
+            "with_joined_outcome": sum(1 for t in traces if t.source == "step_events" and t.outcome != "unknown"),
+            "not_captured": ["exit_status", "tokens_in", "ctx_limit", "step_cap", "tool_required"],
+        }
     # (1) domain split
     dom = Counter(domain_of(t) for t in failed)
     rep["domain_split"] = {"denominator_failed": len(failed), "counts": dict(sorted(dom.items()))}

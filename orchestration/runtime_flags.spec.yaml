@@ -121,6 +121,7 @@ flags:
   specialist_routing: baseline
   staged_rewards: baseline
   state_history_snapshots: baseline
+  step_event_logging: baseline
   streaming: baseline
   structured_delimiters: baseline
   structured_tool_output: baseline

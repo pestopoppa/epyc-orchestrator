@@ -570,6 +570,7 @@ class _StateMixin:
         # Restore exploration log
         self._exploration_log = ExplorationLog()
         self._exploration_log.dependency_log = getattr(self, "_dependency_log", None)
+        self._exploration_log.step_events = getattr(self, "_step_events", None)  # HIL-13a
         self._exploration_log.total_exploration_tokens = checkpoint.get("exploration_tokens", 0)
         for event_data in checkpoint.get("exploration_events", []):
             event = ExplorationEvent(
@@ -695,6 +696,7 @@ class _StateMixin:
         self._exploration_calls = 0
         self._exploration_log = ExplorationLog()  # Reset exploration log
         self._exploration_log.dependency_log = getattr(self, "_dependency_log", None)
+        self._exploration_log.step_events = getattr(self, "_step_events", None)  # HIL-13a
         self._grep_hits_buffer = []  # Clear grep history for two-stage pipeline
         self._findings_buffer = []  # Clear findings buffer
         # Reset research context

@@ -485,6 +485,9 @@ class _ContextMixin:
         _t0 = _time.perf_counter()
         _ok = True
         _result: Any = None
+        _steps = getattr(self, "_step_events", None)
+        if _steps is not None:  # HIL-13a, default off
+            _steps.enter()
         try:
             _result = self._dispatch_tool(tool_name, **kwargs)
             return _result
@@ -492,6 +495,8 @@ class _ContextMixin:
             _ok = False
             raise
         finally:
+            if _steps is not None:  # HIL-13a, default off
+                self._observe_step(_steps, tool_name, kwargs, _result, _t0)
             _records = getattr(self, "_invoked_tools", None)
             if _records is not None:
                 # Mirror the registry's ToolInvocation semantics regardless of the
@@ -535,6 +540,42 @@ class _ContextMixin:
                     )
                 except Exception:  # telemetry must never fail a tool call
                     pass
+
+    def _observe_step(self, steps: Any, tool_name: str, kwargs: dict, result: Any, t0: float) -> None:
+        """HIL-13a: close one call's nesting scope and record it if outermost. Never raises."""
+        from src.trace.step_events import exc_in_flight
+
+        try:
+            outermost = steps.exit() == 0
+            if outermost:
+                tools = getattr(getattr(self, "tool_registry", None), "_tools", None)
+                tool = tools.get(tool_name) if isinstance(tools, dict) else None
+                steps.observe_call(
+                    tool_name, kwargs, result, exc=exc_in_flight(), t0=t0,
+                    side_effects=list(getattr(tool, "side_effects", []) or []),
+                )
+        except Exception:  # telemetry must never fail a tool call
+            pass
+
+    def _registry_invoke_observed(self, tool_name: str, **kwargs) -> Any:
+        """``tool_registry.invoke(name, role, caller_type="direct", **kwargs)`` for the combined ops.
+
+        Identical to the bare call when step events are off. When on, the call is recorded as a
+        step (these sites bypass ``_invoke_tool``).
+        """
+        steps = getattr(self, "_step_events", None)
+        if steps is None:
+            return self.tool_registry.invoke(tool_name, self.role, caller_type="direct", **kwargs)
+        import time as _time
+
+        t0 = _time.perf_counter()
+        result: Any = None
+        steps.enter()
+        try:
+            result = self.tool_registry.invoke(tool_name, self.role, caller_type="direct", **kwargs)
+            return result
+        finally:
+            self._observe_step(steps, tool_name, kwargs, result, t0)
 
     def _dispatch_tool(self, tool_name: str, **kwargs) -> Any:
         """Dispatch a tool call. Telemetry is captured by _invoke_tool."""

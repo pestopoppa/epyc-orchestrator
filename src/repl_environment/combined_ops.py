@@ -115,10 +115,8 @@ class _CombinedOpsMixin:
         if self.tool_registry is None:
             return "[ERROR: No tool registry configured — cannot invoke web_search]"
         try:
-            result = self.tool_registry.invoke(
+            result = self._registry_invoke_observed(
                 "web_search",
-                self.role,
-                caller_type="direct",
                 query=query,
                 max_results=max_results,
             )
@@ -163,10 +161,8 @@ class _CombinedOpsMixin:
         results = {}
         for query in queries:
             try:
-                result = self.tool_registry.invoke(
+                result = self._registry_invoke_observed(
                     "web_search",
-                    self.role,
-                    caller_type="direct",
                     query=query,
                     max_results=max_results,
                 )
@@ -226,10 +222,8 @@ class _CombinedOpsMixin:
 
         # Step 1: web search
         try:
-            web_result = self.tool_registry.invoke(
+            web_result = self._registry_invoke_observed(
                 "web_search",
-                self.role,
-                caller_type="direct",
                 query=query,
                 max_results=max_results,
             )
@@ -238,10 +232,8 @@ class _CombinedOpsMixin:
 
         # Step 2: wikipedia verification
         try:
-            wiki_result = self.tool_registry.invoke(
+            wiki_result = self._registry_invoke_observed(
                 "search_wikipedia",
-                self.role,
-                caller_type="direct",
                 query=query,
             )
         except Exception as e:
