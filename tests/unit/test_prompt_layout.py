@@ -326,3 +326,34 @@ def test_reader_cli_json_roundtrip(tmp_path, capsys):
     assert reader.main(["--format", "json", str(f)]) == 0
     rep = json.loads(capsys.readouterr().out)
     assert rep["schema"] == reader.REPORT_SCHEMA and rep["inputs"]["analysed_requests"] == 3
+
+
+# -- live-record check (runs on the first real records) -------------------------
+
+
+def _load_live_check():
+    p = Path(__file__).resolve().parents[2] / "scripts" / "analysis" / "prompt_layout_live_check.py"
+    spec = importlib.util.spec_from_file_location("prompt_layout_live_check", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_live_check_verdicts(tmp_path):
+    lc = _load_live_check()
+    blk = [{"kind": "state", "start": 0, "length": 5, "sha256_12": "a" * 12},
+           {"kind": "tool_output", "start": 5, "length": 9, "sha256_12": "b" * 12}]
+    good = {"kind": "dispatch", "ts_arrival": "1", "blocks": blk, "layout_chars": 14, "prompt_tokens": 10,
+            "cached_prompt_tokens": 0, "source": "benchmark", "rebased": True}
+    bad = {"kind": "serving_call", "ts_start": "2", "blocks": blk, "layout_chars": 14, "prompt_tokens": None,
+           "cached_prompt_tokens": 3, "source": None}
+    nob = {"kind": "dispatch", "ts_arrival": "3"}
+    f = tmp_path / "r.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in (good, nob)) + "\n")
+    rep = lc.check([f])
+    assert rep["verdict"] == "pass" and rep["repl_blocks"]["rebased"] == 1 and rep["repl_blocks"]["with_tool_output"] == 1
+    f.write_text("\n".join(json.dumps(r) for r in (good, bad)) + "\n")
+    rep = lc.check([f])
+    assert rep["verdict"] == "fail" and rep["problems"][0]["missing"] == ["prompt_tokens"] and rep["unlabelled_source"] == 1
+    f.write_text(json.dumps(nob) + "\n")
+    assert lc.check([f])["verdict"] == "no_records" and lc.main([str(f)]) == 2
