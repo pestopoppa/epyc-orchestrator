@@ -881,8 +881,109 @@ def render_prompt_block(ready: ReadyBeliefs) -> str:
         "claims are still enforced against declared premises before dispatch)")
 
 
+# ------------------------------------------------------------------------------ DP-4(A) shadow draft
+
+COUNTERFACTUAL_SCHEMA = "epyc.autopilot.belief_counterfactual.v1"
+PREMISE_SKIP_SCHEMA = "epyc.autopilot.belief_premise_skip.v1"
+#: Tiers whose claims can confirm reliance (DESIGN §12.6(A): "knob- or target-tier").
+RELIANCE_TIERS = ("knob", "target")
+#: Hard bound on the one extra planner call (never longer than the real draft's timeout).
+SHADOW_TIMEOUT_S = 300.0
+
+
+def claim_knob_families(row: Mapping[str, Any]) -> set[str]:
+    """`knob_family` (str) and/or `knob_families` (list) on a claim row; empty when absent."""
+    out: set[str] = set()
+    one = row.get("knob_family")
+    if isinstance(one, str) and one:
+        out.add(one)
+    many = row.get("knob_families")
+    if isinstance(many, (list, tuple)):
+        out |= {str(f) for f in many if isinstance(f, str) and f}
+    return out
+
+
+def accepted_reliance_ids(ready: ReadyBeliefs, declared: Iterable[str]) -> list[str]:
+    """Declared ids that were presented as usable (host-tier excluded), sorted."""
+    ev = ready.evidence
+    host = host_claim_ids(ev)
+    usable = {str(c) for c in ev.get("claim_ids") or [] if str(c) not in host}
+    return sorted(set(str(c) for c in declared) & usable)
+
+
+def accepted_reliance_claims(ready: ReadyBeliefs, declared: Iterable[str]
+                             ) -> list[dict[str, Any]]:
+    """Per accepted id: its tier and knob_family (None when the reader sent none)."""
+    rows = {str(r["claim_id"]): r for r in _claim_rows(ready.evidence)}
+    out = []
+    for cid in accepted_reliance_ids(ready, declared):
+        row = rows.get(cid, {})
+        families = sorted(claim_knob_families(row))
+        out.append({"claim_id": cid, "tier": row.get("tier"),
+                    "knob_family": families[0] if len(families) == 1 else None,
+                    "knob_families": families})
+    return out
+
+
+def qualifying_reliance_ids(ready: ReadyBeliefs, declared: Iterable[str], action: Any
+                            ) -> list[str]:
+    """Accepted ids that are knob- or target-tier AND whose knob family equals one of the chosen
+    action's families -- the turns on which a shadow draft can confirm reliance."""
+    families = set(action_knob_families(action))
+    if not families:
+        return []
+    return [c["claim_id"] for c in accepted_reliance_claims(ready, declared)
+            if c["tier"] in RELIANCE_TIERS and families & set(c["knob_families"])]
+
+
+def empty_belief_block(ready: ReadyBeliefs) -> str:
+    """The belief block with the evidence withheld: the same verified-ledger header, then the
+    empty-target banner. This is what the shadow draft sees instead of the section."""
+    state = ready.ledger_state
+    fresh = state.get("freshness") or {}
+    header = (f"  Ledger verified current for this turn: {state.get('frame_count')} frames, head "
+              f"seq {state.get('head_seq')} ({str(state.get('head_hash'))[:23]}), state "
+              f"{ready.ledger_state_digest[:23]}; sync_action={fresh.get('sync_action')}.")
+    return _neutralise(f"{header}\n  No beliefs are scoped to this turn's targets.")
+
+
+def blank_belief_prompt(prompt: str, ready: ReadyBeliefs) -> str | None:
+    """`prompt` with this turn's rendered belief block replaced by the empty banner; None when
+    the block is not found verbatim (then no honest shadow can be built)."""
+    block = render_prompt_block(ready)
+    if not block or prompt.count(block) != 1:
+        return None
+    return prompt.replace(block, empty_belief_block(ready), 1)
+
+
+def shadow_differs(action: Any, shadow_action: Any) -> bool:
+    """True when the shadow proposes a different action, or the same action with a different value
+    on any param (type + sorted params compared)."""
+    return action_config_key(action) != action_config_key(shadow_action)
+
+
+def record_premise_skip(trial_id: Any, reason: str, action: Any, premise_ids: Iterable[str],
+                        *, sink: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    """A premise skip that blocked a dispatch counts as 1 confirmed reliance (§12.6(A)). Appended
+    to the planner archive as its own row; never raises."""
+    row = {"ts": time.time(), "type": "belief_premise_skip", "schema": PREMISE_SKIP_SCHEMA,
+           "trial_id": trial_id, "reason": str(reason)[:300],
+           "premise_claim_ids": [str(p) for p in premise_ids],
+           "action_type": action.get("type") if isinstance(action, Mapping) else None,
+           "reliance_confirmed": True}
+    try:
+        if sink is None:
+            from controller_io import _append_planner_archive as sink  # type: ignore[assignment]
+        sink(row)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("premise skip record failed (%s)", type(exc).__name__)
+    return row
+
+
 def build_planner_receipt(ready: ReadyBeliefs | None, declared: Iterable[str],
-                          *, seed_review: SeedReviewToken | None = None) -> dict[str, Any]:
+                          *, seed_review: SeedReviewToken | None = None,
+                          action: Any = None,
+                          counterfactual: Mapping[str, Any] | None = None) -> dict[str, Any]:
     declared = [str(c) for c in declared]
     if seed_review is not None:
         return {"schema": RECEIPT_SCHEMA, "status": "degraded_seed_review",
@@ -920,6 +1021,13 @@ def build_planner_receipt(ready: ReadyBeliefs | None, declared: Iterable[str],
         "declared_reliance_claim_ids": sorted(set(declared)),
         "accepted_reliance_claim_ids": accepted, "rejected_reliance": rejected,
         "reliance_status": "planner_declared" if accepted else "not_declared",
+        # DP-4(A): what each accepted claim is, the chosen action's knob families, and the
+        # shadow-draft result (None when the turn did not qualify or no shadow ran).
+        "accepted_reliance_claims": accepted_reliance_claims(ready, declared),
+        "action_knob_families": action_knob_families(action),
+        "qualifying_reliance_claim_ids": qualifying_reliance_ids(ready, declared, action),
+        "counterfactual": dict(counterfactual) if counterfactual else None,
+        "reliance_confirmed": (counterfactual or {}).get("reliance_confirmed"),
     }
 
 
@@ -1087,6 +1195,8 @@ def receipt_id(trial_id: Any, item_id: str) -> str:
 __all__ = [
     "BeliefContextRefused", "BeliefSettings", "DegradedSelection", "PrepareOutcome",
     "ReadyBeliefs", "SeedReviewToken", "build_planner_receipt", "check_seeds",
+    "accepted_reliance_claims", "accepted_reliance_ids", "blank_belief_prompt",
+    "empty_belief_block", "qualifying_reliance_ids", "record_premise_skip", "shadow_differs",
     "declared_premises", "action_config_key", "action_knob_families", "ap3_role_families",
     "lineup_target", "role_targets", "trial_belief_scope", "degraded_excluded_ids", "degraded_row", "host_claim_ids",
     "known_good_flags",

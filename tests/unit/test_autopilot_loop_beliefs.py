@@ -1036,3 +1036,191 @@ def test_the_post_trial_hook_records_belief_scope_before_journal_record() -> Non
     hook = source.index("trial_belief_scope(")
     assert hook < source.index("journal.record(journal_entry)", hook)
     assert "stack_regime_loader" in source
+
+
+# ------------------------------------------------------------------------------ P1-N (DP-4 = A)
+
+SPEC_ACTION = {"type": "numeric_trial", "surface": "role",
+               "params": {"role_restart.frontdoor_draft_max": 6}}
+SHADOW_ACTION = {"type": "numeric_trial", "surface": "role",
+                 "params": {"role_restart.frontdoor_draft_max": 4}}
+KNOB_EVIDENCE = {
+    "claim_ids": ["clm_k1", "clm_t2", "clm_s1"],
+    "claims": [{"claim_id": "clm_k1", "tier": "knob", "knob_family": "spec_draft"},
+               {"claim_id": "clm_t2", "tier": "target", "knob_family": "kv_profile"},
+               {"claim_id": "clm_s1", "tier": "sibling", "knob_family": "spec_draft"}],
+    "section": "- clm_k1 [Judged] spec draft 6 -> +3%",
+}
+
+
+def test_receipt_records_each_accepted_claims_tier_and_family_and_the_actions_family() -> None:
+    ready = lb.validate_ready(_ready_answer(**KNOB_EVIDENCE))
+    receipt = lb.build_planner_receipt(ready, ["clm_k1", "clm_s1"], action=SPEC_ACTION)
+    assert receipt["action_knob_families"] == ["spec_draft"]
+    assert {c["claim_id"]: (c["tier"], c["knob_family"])
+            for c in receipt["accepted_reliance_claims"]} == {
+        "clm_k1": ("knob", "spec_draft"), "clm_s1": ("sibling", "spec_draft")}
+    # only knob/target tier in the action's family qualifies; sibling does not
+    assert receipt["qualifying_reliance_claim_ids"] == ["clm_k1"]
+    assert receipt["counterfactual"] is None and receipt["reliance_confirmed"] is None
+    other = lb.build_planner_receipt(ready, ["clm_t2"], action=SPEC_ACTION)
+    assert other["qualifying_reliance_claim_ids"] == []  # kv_profile claim, spec_draft action
+
+
+def test_blank_belief_prompt_replaces_exactly_the_rendered_block_or_returns_none() -> None:
+    ready = lb.validate_ready(_ready_answer(**KNOB_EVIDENCE))
+    block = lb.render_prompt_block(ready)
+    prompt = f"before\n{block}\nafter"
+    blanked = lb.blank_belief_prompt(prompt, ready)
+    assert blanked is not None and "clm_k1" not in blanked
+    assert blanked.startswith("before\n") and blanked.endswith("\nafter")
+    assert "No beliefs are scoped" in blanked and "Ledger verified current" in blanked
+    assert lb.blank_belief_prompt("no block here", ready) is None
+    assert lb.blank_belief_prompt(prompt + "\n" + block, ready) is None  # ambiguous
+
+
+def test_shadow_differs_on_action_or_on_a_knob_value() -> None:
+    assert lb.shadow_differs(SPEC_ACTION, SHADOW_ACTION)
+    assert not lb.shadow_differs(SPEC_ACTION, json.loads(json.dumps(SPEC_ACTION)))
+    assert lb.shadow_differs(SPEC_ACTION, NUMERIC)
+
+
+def _shadow_run(ready: Any, shadow_text: str | None, *, declared=("clm_k1",),
+                ok: bool = True, raises: bool = False, action=SPEC_ACTION):
+    block = lb.render_prompt_block(ready)
+    prompt = f"PLAN\n{block}\nEND"
+    provider = FakeProvider("claude", [PlannerProviderResult(
+        provider="claude", role="draft", ok=ok, text=shadow_text or "")])
+    if raises:
+        provider.invoke = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    cf = planner_coordinator._run_shadow_draft(
+        prompt, belief_context=ready, declared=list(declared), action=action,
+        draft_provider_name="claude", provider_factory=lambda _n: provider,
+        timeout=900, cwd=None)
+    return cf, provider
+
+
+def _fence(action: dict) -> str:
+    return "```json:autopilot_actions\n" + json.dumps(action) + "\n```\n"
+
+
+def test_shadow_draft_confirms_reliance_when_the_blanked_prompt_changes_the_action() -> None:
+    ready = lb.validate_ready(_ready_answer(**KNOB_EVIDENCE))
+    cf, provider = _shadow_run(ready, _fence(SHADOW_ACTION))
+    assert cf["status"] == "ok" and cf["dispatched"] is False
+    assert cf["reliance_confirmed"] is True and cf["counterfactual_action"] == SHADOW_ACTION
+    assert len(provider.calls) == 1 and "clm_k1" not in provider.calls[0]["prompt"]
+    same, _ = _shadow_run(ready, _fence(SPEC_ACTION))
+    assert same["status"] == "ok" and same["reliance_confirmed"] is False
+
+
+def test_shadow_draft_is_skipped_unless_the_turn_qualifies() -> None:
+    ready = lb.validate_ready(_ready_answer(**KNOB_EVIDENCE))
+    cf, provider = _shadow_run(ready, _fence(SHADOW_ACTION), declared=["clm_s1"])  # sibling only
+    assert cf is None and provider.calls == []
+    cf, provider = _shadow_run(ready, _fence(SHADOW_ACTION), declared=[])
+    assert cf is None and provider.calls == []
+
+
+@pytest.mark.parametrize("kwargs,status", [
+    ({"shadow_text": "", "ok": False}, "failed"),
+    ({"shadow_text": "no action here"}, "unparsed"),
+    ({"shadow_text": None, "raises": True}, "error"),
+])
+def test_shadow_failure_is_recorded_never_raised(kwargs: dict, status: str) -> None:
+    ready = lb.validate_ready(_ready_answer(**KNOB_EVIDENCE))
+    cf, _ = _shadow_run(ready, **kwargs)
+    assert cf["status"] == status and cf["reliance_confirmed"] is None
+    assert cf["dispatched"] is False
+
+
+def test_shadow_unavailable_when_the_block_is_not_in_the_prompt() -> None:
+    ready = lb.validate_ready(_ready_answer(**KNOB_EVIDENCE))
+    provider = FakeProvider("claude", [])
+    cf = planner_coordinator._run_shadow_draft(
+        "a prompt without the block", belief_context=ready, declared=["clm_k1"],
+        action=SPEC_ACTION, draft_provider_name="claude", provider_factory=lambda _n: provider,
+        timeout=60, cwd=None)
+    assert cf["status"] == "unavailable" and provider.calls == []
+
+
+def test_plan_with_providers_archives_the_counterfactual_without_dispatching(
+        _no_live_side_effects: list[dict[str, Any]]) -> None:
+    # A real, valid numeric action (family `orchestrator`) so the coordinator's own validation
+    # accepts the draft; the claim is a knob-tier one in that family.
+    shadow = {**NUMERIC, "params": {"memrl_retrieval.semantic_k": 20}}
+    ready = lb.validate_ready(_ready_answer(
+        claim_ids=["clm_k1"],
+        claims=[{"claim_id": "clm_k1", "tier": "knob", "knob_family": "orchestrator"}],
+        section="- clm_k1 [Judged] semantic_k 15"))
+    prompt = f"PLAN\n{lb.render_prompt_block(ready)}\nEND"
+    real = ("```json:autopilot_actions\n" + json.dumps(NUMERIC) + "\n```\n"
+            "```json:autopilot_rationale\n"
+            + json.dumps({"falsifier": "f", "rubric_scores": {}, "vidya_claim_ids": ["clm_k1"]})
+            + "\n```\n")
+    claude = FakeProvider("claude", [
+        PlannerProviderResult(provider="claude", role="draft", ok=True, text=real),
+        PlannerProviderResult(provider="claude", role="draft", ok=True, text=_fence(shadow))])
+    decision = planner_coordinator.plan_with_providers(
+        prompt, session_id=None, provider_factory=lambda _n: claude,
+        settings=PlannerSettings(mode="single"), belief_context=ready)
+    assert decision.action == NUMERIC  # the shadow never replaces the real action
+    assert len(claude.calls) == 2
+    assert "clm_k1" in claude.calls[0]["prompt"] and "clm_k1" not in claude.calls[1]["prompt"]
+    receipt = _no_live_side_effects[-1]["vidya_loop_beliefs"]
+    assert receipt["counterfactual"]["counterfactual_action"] == shadow
+    assert receipt["counterfactual"]["dispatched"] is False
+    assert receipt["reliance_confirmed"] is True
+    assert receipt["accepted_reliance_claims"][0]["knob_family"] == "orchestrator"
+
+
+def test_premise_skip_is_recorded_as_one_confirmed_reliance() -> None:
+    rows: list[dict[str, Any]] = []
+    row = lb.record_premise_skip(7, "vidya premise withdrawn: claim_id=c1", NUMERIC, ["c1"],
+                                 sink=rows.append)
+    assert rows == [row] and row["reliance_confirmed"] is True and row["trial_id"] == 7
+    assert row["type"] == "belief_premise_skip"
+    assert "record_premise_skip(" in inspect.getsource(autopilot._run_loop_inner)
+
+
+def test_pass_checker_counts_confirmed_turns_and_skips() -> None:
+    import belief_pass_check as bpc
+
+    def turn(tid: int, confirmed: bool | None, status: str = "ok") -> dict[str, Any]:
+        cf = {"status": status, "dispatched": False, "reliance_confirmed": confirmed}
+        return {"type": "planner_coordinator", "trial_id": tid, "ts": 10.0 + tid,
+                "vidya_loop_beliefs": {"qualifying_reliance_claim_ids": ["c"],
+                                       "counterfactual": cf, "reliance_confirmed": confirmed,
+                                       "action_knob_families": ["spec_draft"]}}
+    rows = [turn(1, True), turn(2, False), turn(3, True, status="failed"),
+            {"type": "planner_coordinator", "trial_id": 4, "ts": 14.0,
+             "vidya_loop_beliefs": {"qualifying_reliance_claim_ids": []}},
+            {"type": "belief_premise_skip", "trial_id": 5, "ts": 15.0,
+             "reliance_confirmed": True, "premise_claim_ids": ["c9"]}]
+    out = bpc.evaluate(rows)
+    assert out["confirmed_turns"] == 2 and out["pass"] is False
+    assert out["qualifying_turns_seen"] == 3 and out["shadow_not_ok"] == 1
+    out = bpc.evaluate(rows + [turn(6, True)])
+    assert out["confirmed_turns"] == 3 and out["pass"] is True
+    assert bpc.evaluate(rows + [turn(6, True)], since=100.0)["confirmed_turns"] == 0
+
+
+def test_scoped_ap3_gate_allows_only_spec_draft_and_kv_profile_on_the_three_roles(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import config_applicator as ca
+
+    monkeypatch.delenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", raising=False)
+    assert ca._ap3_role_restart_gate_mode() == "off"  # the default stays OFF
+    res = ca.apply_role_restart_params({"role_restart.frontdoor_draft_max": 4})
+    assert res["status"] == "error" and "scoped" in res["errors"][0]
+    monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "scoped")
+    assert ca._ap3_role_restart_gate_mode() == "scoped"
+    assert not ca._ap3_role_restart_gate_enabled()  # the unscoped gate is still off
+    for name, spec in ca.AP3_ROLE_RESTART_KNOB_SPECS.items():
+        assert spec.role in ca.AP3_SCOPED_ROLES
+        assert ca.ap3_knob_family(spec) in ca.AP3_SCOPED_FAMILIES
+        assert ca._ap3_scope_errors({name: 1}) == []
+    monkeypatch.setattr(ca, "AP3_SCOPED_ROLES", frozenset({"architect_critic"}))
+    assert ca._ap3_scope_errors({"frontdoor_draft_max": 4})  # frontdoor now out of scope
+    monkeypatch.setenv("AUTOPILOT_AP3_ROLE_RESTART_ENABLE", "1")
+    assert ca._ap3_role_restart_gate_mode() == "full"

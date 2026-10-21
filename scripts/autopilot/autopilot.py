@@ -10092,6 +10092,9 @@ def _run_loop_inner(
                         trial_counter,
                         pre_dispatch_skip.reason,
                     )
+                    # DP-4(A): a blocked dispatch is one confirmed reliance.
+                    _loop_beliefs.record_premise_skip(
+                        trial_counter, pre_dispatch_skip.reason, action, belief_premise_ids)
 
         if belief_seed_review is not None:
             _record_belief_degraded_dispatch(

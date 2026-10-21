@@ -1441,6 +1441,46 @@ def _ap3_role_restart_gate_enabled() -> bool:
     }
 
 
+#: DP-4(A) scoped enable (2026-10-21): `AUTOPILOT_AP3_ROLE_RESTART_ENABLE=scoped` allows ONLY the
+#: `spec_draft` and `kv_profile` knob families on the 27B (architect_critic) and the Qwen3.6-35B
+#: (frontdoor, worker_general) roles. Any other AP3 knob or role is refused. The default stays OFF;
+#: the full gate (`=1`) is unchanged and unscoped. The operator sets it at autopilot spin-up.
+AP3_SCOPED_ENABLE_VALUE = "scoped"
+AP3_SCOPED_ROLES = frozenset({"architect_critic", "frontdoor", "worker_general"})
+AP3_SCOPED_FAMILIES = frozenset({"spec_draft", "kv_profile"})
+
+
+def ap3_knob_family(spec: Any) -> str:
+    """`kv_profile` for a `*_kv_profile` knob, else `spec_draft` (the same rule the belief
+    target derivation uses for AP3 specs)."""
+    return "kv_profile" if str(getattr(spec, "name", "")).endswith("_kv_profile") else "spec_draft"
+
+
+def _ap3_role_restart_gate_mode() -> str:
+    """`full` (=1/true/yes/on), `scoped` (=scoped), or `off` (anything else, the default)."""
+    import os
+
+    raw = os.environ.get(_AP3_ROLE_RESTART_ENABLE_ENV, "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return "full"
+    return "scoped" if raw == AP3_SCOPED_ENABLE_VALUE else "off"
+
+
+def _ap3_scope_errors(params: dict[str, Any]) -> list[str]:
+    """Under the scoped gate: one error per knob outside the allowed families/roles."""
+    errors: list[str] = []
+    for key in params:
+        spec = AP3_ROLE_RESTART_KNOB_SPECS.get(key) or _AP3_ROLE_RESTART_BY_APPLY_KEY.get(key)
+        if spec is None:
+            continue
+        family = ap3_knob_family(spec)
+        if spec.role not in AP3_SCOPED_ROLES or family not in AP3_SCOPED_FAMILIES:
+            errors.append(f"{key}: outside the scoped AP-3 enable (role {spec.role!r}, "
+                          f"family {family!r}); allowed families {sorted(AP3_SCOPED_FAMILIES)} "
+                          f"on roles {sorted(AP3_SCOPED_ROLES)}")
+    return errors
+
+
 def _ap3_role_restart_groups(params: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], list[str]]:
     groups: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
@@ -1484,11 +1524,17 @@ def apply_role_restart_params(
         return {"status": "error", "errors": errors, "per_role": {}}
     if not groups:
         return {"status": "no_changes", "per_role": {}}
-    if not _ap3_role_restart_gate_enabled():
+    gate_mode = _ap3_role_restart_gate_mode()
+    if gate_mode == "scoped":
+        scope_errors = _ap3_scope_errors(params)
+        if scope_errors:
+            return {"status": "error", "errors": scope_errors, "per_role": {}}
+    if gate_mode == "off":
         return {
             "status": "error",
             "errors": [
-                f"AP-3 role restart requires {_AP3_ROLE_RESTART_ENABLE_ENV}=1"
+                f"AP-3 role restart requires {_AP3_ROLE_RESTART_ENABLE_ENV}=1 "
+                f"(or ={AP3_SCOPED_ENABLE_VALUE} for spec_draft/kv_profile on the 27B and 35B roles)"
             ],
             "per_role": {},
             "registry_override_keys": sorted(

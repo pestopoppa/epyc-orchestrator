@@ -20,14 +20,21 @@ from controller_io import (
     _loads_json_payload,
     _open_planner_tap,
     action_repair_completer,
+    extract_action,
     extract_action_with_repair,
     extract_rationale_with_repair,
     validate_single_variable,
 )
 from loop_beliefs_bridge import (
     ReadyBeliefs,
+    SHADOW_TIMEOUT_S,
     SeedReviewToken,
+    blank_belief_prompt,
     build_planner_receipt,
+    qualifying_reliance_ids,
+    shadow_differs,
+    COUNTERFACTUAL_SCHEMA,
+    action_knob_families,
     require_ready,
     require_seed_review,
 )
@@ -760,10 +767,71 @@ def plan_with_providers(
             if not decision.fallback_reason
             else f"{decision.fallback_reason}; {guard_reason}"
         )
+    counterfactual = None
+    if decision.action is not None and decision.draft_action == decision.action:
+        # Only an unsubstituted draft carries its own premises (same rule as `_archive_decision`).
+        declared_ids = decision.rationale.get("vidya_claim_ids", [])
+        counterfactual = _run_shadow_draft(
+            prompt, belief_context=belief_context,
+            declared=[c for c in declared_ids if isinstance(c, str)]
+            if isinstance(declared_ids, list) else [],
+            action=decision.action, draft_provider_name=draft_provider_name,
+            provider_factory=provider_factory, timeout=timeout, cwd=cwd)
     _archive_decision(decision, planner_state, trial_id=trial_id,
                       vidya_kvq_context=vidya_kvq_context,
-                      belief_context=belief_context)
+                      belief_context=belief_context, counterfactual=counterfactual)
     return decision
+
+
+def _run_shadow_draft(
+    prompt: str,
+    *,
+    belief_context: ReadyBeliefs,
+    declared: Iterable[str],
+    action: dict[str, Any] | None,
+    draft_provider_name: str,
+    provider_factory: ProviderFactory,
+    timeout: int,
+    cwd: Path | str | None,
+) -> dict[str, Any] | None:
+    """DP-4(A) counterfactual: re-run the DRAFT with the belief section blanked, on turns whose
+    accepted reliance includes a knob/target-tier claim in the chosen action's family.
+
+    Observability only. It is never dispatched, never journaled, never stored, never feeds the
+    planner circuit breaker or session state, makes ONE provider call with a hard timeout (no
+    repair turn), and any failure is recorded in the returned dict -- never raised."""
+    try:
+        qualifying = qualifying_reliance_ids(belief_context, declared, action)
+        if not qualifying:
+            return None
+        base: dict[str, Any] = {
+            "schema": COUNTERFACTUAL_SCHEMA, "dispatched": False, "provider": draft_provider_name,
+            "qualifying_claim_ids": qualifying,
+            "action_knob_families": action_knob_families(action),
+            "chosen_action": action, "counterfactual_action": None,
+            "reliance_confirmed": None,
+        }
+        blanked = blank_belief_prompt(prompt, belief_context)
+        if blanked is None:
+            return {**base, "status": "unavailable",
+                    "reason": "belief block not found verbatim in the prompt"}
+        started = time.time()
+        bound = max(1, int(min(float(timeout), SHADOW_TIMEOUT_S)))
+        provider = provider_factory(draft_provider_name)
+        result = provider.invoke(blanked, role="draft", session_id=None, timeout=bound, cwd=cwd)
+        base["seconds"] = round(time.time() - started, 3)
+        if not result.ok:
+            return {**base, "status": "failed", "reason": _clip(getattr(result, "error", "")
+                                                               or "provider not ok")}
+        shadow = extract_action(result.text)
+        if not isinstance(shadow, dict):
+            return {**base, "status": "unparsed", "reason": "no action in shadow draft"}
+        differs = shadow_differs(action, shadow)
+        return {**base, "status": "ok", "counterfactual_action": shadow,
+                "reliance_confirmed": differs}
+    except Exception as exc:  # noqa: BLE001 -- the shadow must never fail the real turn
+        return {"schema": COUNTERFACTUAL_SCHEMA, "dispatched": False, "status": "error",
+                "reason": f"{type(exc).__name__}: {exc}"[:300], "reliance_confirmed": None}
 
 
 SEED_REVIEW_PROVIDER = "preseeded"
@@ -1834,6 +1902,7 @@ def _archive_decision(
     vidya_kvq_context: dict[str, Any] | None = None,
     belief_context: ReadyBeliefs | None = None,
     seed_review: SeedReviewToken | None = None,
+    counterfactual: dict[str, Any] | None = None,
 ) -> None:
     critique = decision.critique
     context = vidya_kvq_context or {}
@@ -1866,7 +1935,8 @@ def _archive_decision(
                 "reliance_status": "planner_declared" if relied_on else "not_declared",
             },
             "vidya_loop_beliefs": build_planner_receipt(
-                belief_context, declared, seed_review=seed_review
+                belief_context, declared, seed_review=seed_review,
+                action=decision.action, counterfactual=counterfactual,
             ),
             "mode": decision.mode,
             "draft_provider": decision.draft_provider,
