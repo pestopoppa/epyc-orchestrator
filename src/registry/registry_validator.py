@@ -50,6 +50,9 @@ starting anything if it raises.
 
 from __future__ import annotations
 
+import logging
+import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -58,6 +61,24 @@ from typing import Any
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+log = logging.getLogger(__name__)
+
+# SEC-ART-1 (handoffs/active/model-artifact-integrity.md): every lineup role's GGUF is
+# traceable to a pinned upstream revision and a recorded sha256. The three fields live on
+# `roles.<role>.model` (they pass through registry_compiler.compile_lean unchanged).
+# Missing fields WARN until the backfill lands; set REGISTRY_ARTIFACT_PINS_STRICT=1 (or pass
+# strict_artifact_pins=True / --strict-artifact-pins) to make them errors. MALFORMED values
+# are always errors -- a wrong pin is worse than none.
+ARTIFACT_PIN_FIELDS = ("hf_repo", "hf_revision", "sha256")
+ARTIFACT_PINS_STRICT_ENV = "REGISTRY_ARTIFACT_PINS_STRICT"
+_HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA64_RE = re.compile(r"^[0-9a-f]{64}$")
+_ARTIFACT_PIN_SHAPES = {
+    "hf_repo": (_HF_REPO_RE, "<org>/<repo>"),
+    "hf_revision": (_SHA40_RE, "40 lowercase hex (resolved commit sha, never a branch name)"),
+    "sha256": (_SHA64_RE, "64 lowercase hex (file sha256 / HF LFS oid)"),
+}
 
 
 # Fields that, if declared in BOTH `server_mode.X` and `roles.X`,
@@ -413,10 +434,49 @@ def _check_drafter_selection(
     return check_lean(registry, selection)
 
 
-def validate_all(registry_path: str | Path) -> list[str]:
+def artifact_pins_strict_from_env() -> bool:
+    return os.environ.get(ARTIFACT_PINS_STRICT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def check_artifact_pins(registry: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """SEC-ART-1 over the registry's `roles`. Returns (malformed, missing).
+
+    Lineup roles = roles with a local GGUF (`model.path` ending `.gguf`). `malformed` lists a
+    present-but-invalid hf_repo/hf_revision/sha256; `missing` lists absent ones (null counts as
+    absent). Callers decide whether `missing` is a warning or an error.
+    """
+    malformed: list[str] = []
+    missing: list[str] = []
+    for role, cfg in sorted((registry.get("roles") or {}).items()):
+        model = cfg.get("model") if isinstance(cfg, dict) else None
+        if not isinstance(model, dict):
+            continue
+        path = model.get("path") or model.get("full_path")
+        if not (isinstance(path, str) and path.endswith(".gguf")):
+            continue
+        absent = []
+        for field in ARTIFACT_PIN_FIELDS:
+            value = model.get(field)
+            if value is None or value == "":
+                absent.append(field)
+                continue
+            pattern, shape = _ARTIFACT_PIN_SHAPES[field]
+            if not (isinstance(value, str) and pattern.match(value)):
+                malformed.append(f"roles.{role}.model.{field}={value!r} is not {shape}")
+        if absent:
+            missing.append(f"roles.{role}.model lacks {', '.join(absent)} ({path.rsplit('/', 1)[-1]})")
+    return malformed, missing
+
+
+def validate_all(
+    registry_path: str | Path, *, strict_artifact_pins: bool | None = None
+) -> list[str]:
     """Run all checks. Returns list of error strings. Empty list = OK.
 
     Caller should print the errors and exit non-zero if any returned.
+
+    `strict_artifact_pins=None` reads REGISTRY_ARTIFACT_PINS_STRICT; missing pin fields are
+    then errors, otherwise one aggregated log warning (see `check_artifact_pins`).
     """
     path = Path(registry_path)
     if not path.exists():
@@ -429,6 +489,17 @@ def validate_all(registry_path: str | Path) -> list[str]:
     errors += _check_gguf_port_consistency(registry)
     errors += _check_numa_ports_vs_topology(registry)
     errors += _check_drafter_selection(registry)
+    strict = artifact_pins_strict_from_env() if strict_artifact_pins is None else strict_artifact_pins
+    malformed, missing = check_artifact_pins(registry)
+    errors += [f"artifact pin: {m}" for m in malformed]
+    if strict:
+        errors += [f"artifact pin (strict): {m}" for m in missing]
+    elif missing:
+        log.warning(
+            "SEC-ART-1: %d lineup role(s) lack hf_repo/hf_revision/sha256 pins "
+            "(warning until backfill; %s=1 makes this fatal): %s",
+            len(missing), ARTIFACT_PINS_STRICT_ENV, "; ".join(missing),
+        )
     return errors
 
 
@@ -445,11 +516,15 @@ def validate_or_raise(registry_path: str | Path) -> None:
 if __name__ == "__main__":
     # `sys` is imported at module scope (the topology cross-check needs it on
     # sys.path); the former local `import sys` here would shadow it.
-    target = sys.argv[1] if len(sys.argv) > 1 else (
+    _args = [a for a in sys.argv[1:] if a != "--strict-artifact-pins"]
+    target = _args[0] if _args else (
         str(_REPO_ROOT / "orchestration/model_registry.yaml")
     )
+    logging.basicConfig(format="WARN: %(message)s")
     try:
-        errors = validate_all(target)
+        errors = validate_all(
+            target, strict_artifact_pins=True if "--strict-artifact-pins" in sys.argv else None
+        )
     except RegistryValidationError as exc:
         print(f"FAIL: {exc}")
         sys.exit(2)
