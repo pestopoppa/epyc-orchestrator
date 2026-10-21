@@ -2089,6 +2089,15 @@ def _run_loop_inner_seq_harness(
             self.passed = True
             self.categories: list[str] = []
             self.violations: list[str] = []
+            self.warnings: list[str] = []
+            # Mirror safety_gate.SafetyVerdict (ETR-5 0399c3fef: reliability_blocked /
+            # quality_unmeasured; autopilot.py reads `retry_not_revert` since 15e5b52ec).
+            self.reliability_blocked = False
+            self.quality_unmeasured = False
+
+        @property
+        def retry_not_revert(self) -> bool:
+            return self.reliability_blocked or self.quality_unmeasured
 
         def __bool__(self) -> bool:
             return self.passed
