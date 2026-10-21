@@ -78,6 +78,7 @@ flags:
   mock_mode: baseline
   model_fallback: baseline
   model_grading: baseline
+  observed_dependency_logging: baseline
   openai_compat: baseline
   output_formalizer: baseline
   output_spill_to_file: baseline

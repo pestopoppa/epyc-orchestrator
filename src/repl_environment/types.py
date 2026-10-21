@@ -96,6 +96,8 @@ class ExplorationLog:
 
     events: list[ExplorationEvent] = field(default_factory=list)
     total_exploration_tokens: int = 0
+    # HIL-15: optional observed-dependency tracker (src/trace/dependency_log.py). None == off.
+    dependency_log: Any = None
 
     def add_event(
         self,
@@ -126,6 +128,8 @@ class ExplorationLog:
         )
         self.events.append(event)
         self.total_exploration_tokens += token_estimate
+        if self.dependency_log is not None:
+            self.dependency_log.observe(function, args, result, ok=(result != "refused"))
 
     def get_strategy_summary(self) -> dict[str, Any]:
         """Get a summary of the exploration strategy used."""

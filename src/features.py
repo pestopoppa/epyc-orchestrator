@@ -139,6 +139,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # OpenClaw/Lobster concepts
     FeatureSpec("side_effect_tracking", False, True, "SIDE_EFFECT_TRACKING", "Tool side effect declarations"),
     FeatureSpec("structured_tool_output", False, True, "STRUCTURED_TOOL_OUTPUT", "ToolOutput envelope"),
+    FeatureSpec("observed_dependency_logging", False, False, "OBSERVED_DEPENDENCY_LOGGING", "HIL-15: log resource reads/writes per tool call (observed grade)"),
     FeatureSpec("model_fallback", False, True, "MODEL_FALLBACK", "Same-tier alternatives on circuit-open"),
     FeatureSpec("content_cache", False, False, "CONTENT_CACHE", "SHA-256 keyed response cache"),
     FeatureSpec("session_compaction", False, True, "SESSION_COMPACTION", "Summarize old context"),
@@ -619,6 +620,7 @@ class Features:
     # OpenClaw/Lobster concept integration
     side_effect_tracking: bool = False  # Declare tool side effects for safety reasoning
     structured_tool_output: bool = False  # ToolOutput envelope (human + machine modes)
+    observed_dependency_logging: bool = False  # HIL-15: per-call read/write resource edges (default off)
     model_fallback: bool = False  # Try same-tier alternatives on circuit-open
     content_cache: bool = False  # SHA-256 keyed response cache for LLM calls
     session_compaction: bool = False  # Summarize old context on long conversations

@@ -262,6 +262,13 @@ class REPLEnvironment(
         from src.features import features as _get_features
         self._features = _get_features()
         self._deferred_tool_results = bool(self._features.deferred_tool_results)
+        # HIL-15: observed dependency logging (default OFF; nothing is constructed when off).
+        self._dependency_log = None
+        if getattr(self._features, "observed_dependency_logging", False):
+            from src.trace.dependency_log import DependencyLog, trace_store_sink
+
+            self._dependency_log = DependencyLog(str(self._session_id), sink=trace_store_sink())
+            self._exploration_log.dependency_log = self._dependency_log
 
         # INF-78 OAB-7: a request-carried context bundle (attach_context_bundle). None ==
         # the historical string `context`, unchanged.

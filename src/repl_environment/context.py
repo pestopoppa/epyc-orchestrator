@@ -526,6 +526,15 @@ class _ContextMixin:
                         result=_res,
                     )
                 )
+            _dep = getattr(self, "_dependency_log", None)
+            if _dep is not None:  # HIL-15, default off
+                try:
+                    _dep.observe(
+                        tool_name, kwargs, getattr(_result, "output", _result),
+                        ok=bool(getattr(_result, "ok", _ok)),
+                    )
+                except Exception:  # telemetry must never fail a tool call
+                    pass
 
     def _dispatch_tool(self, tool_name: str, **kwargs) -> Any:
         """Dispatch a tool call. Telemetry is captured by _invoke_tool."""
