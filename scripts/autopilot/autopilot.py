@@ -9138,7 +9138,10 @@ def _run_loop_inner(
             phase.set("belief_prepare", trial_id=trial_counter)
             _belief_outcome = _loop_beliefs.prepare(
                 belief_settings,
-                targets=_loop_beliefs.derive_targets(hypotheses_loader=_load_operator_hypotheses),
+                targets=_loop_beliefs.derive_targets(
+                    hypotheses_loader=_load_operator_hypotheses,
+                    stack_regime_loader=lambda: (_infra_fingerprint_for_trial() or {}).get(
+                        "digest")),
             )
             if _belief_outcome.ready is not None:
                 belief_ready = _belief_outcome.ready
@@ -11387,6 +11390,11 @@ def _run_loop_inner(
             except Exception as exc:
                 log.warning("Crossover feature metadata unavailable (%s)", type(exc).__name__)
         _sync_segment_snapshot_scope(journal, state)  # W3
+        try:  # P1-M: regime scope for FUTURE belief projection (never back-filled)
+            journal_entry.belief_scope = _loop_beliefs.trial_belief_scope(
+                trial_infra_fingerprint, effective_action)
+        except Exception as exc:  # noqa: BLE001 -- provenance must not fail a trial
+            log.warning("belief scope not recorded (%s)", type(exc).__name__)
         journal.record(journal_entry)
         baseline_update = _reconcile_promotion_with_journal(
             gate,

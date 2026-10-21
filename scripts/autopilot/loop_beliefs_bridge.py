@@ -178,6 +178,85 @@ def stack_targets(records: Mapping[str, Any] | None = None) -> list[dict[str, An
     return sorted(out, key=lambda t: (t["backend"], t["model_path"], t["quant"]))
 
 
+#: Knob families (DESIGN §12.1) a role's action space can reach. The AP3 role-restart specs are the
+#: source of truth (`config_applicator.AP3_ROLE_RESTART_KNOB_SPECS`, each spec carries `role=`); this
+#: table is only the fallback when that module cannot be imported standalone.
+_AP3_FALLBACK_FAMILIES: dict[str, tuple[str, ...]] = {
+    "frontdoor": ("kv_profile", "spec_draft"), "worker_general": ("kv_profile", "spec_draft"),
+    "architect_critic": ("kv_profile", "spec_draft"),
+}
+#: `chat.long_context_threshold_chars` routes requests to this role; the model that role loads
+#: carries the `routing` family for every role sharing it (the 27B architect server).
+ROUTING_TARGET_ROLE = "ingest_long_context"
+LINEUP_FAMILIES = ("kv_compaction", "orchestrator")
+
+
+def ap3_role_families() -> dict[str, tuple[str, ...]]:
+    """role -> knob families from the AP3 specs: `*_kv_profile` -> `kv_profile`, any other spec ->
+    `spec_draft`. Falls back to the static table when `config_applicator` is not importable."""
+    try:
+        import config_applicator  # sibling module (scripts/autopilot on sys.path)
+        specs = config_applicator.AP3_ROLE_RESTART_KNOB_SPECS.values()
+        found: dict[str, set[str]] = {}
+        for spec in specs:
+            role = str(getattr(spec, "role", "") or "")
+            if role:
+                found.setdefault(role, set()).add(
+                    "kv_profile" if str(spec.name).endswith("_kv_profile") else "spec_draft")
+        if found:
+            return {r: tuple(sorted(f)) for r, f in found.items()}
+    except Exception:  # noqa: BLE001 -- families are advisory scope; never crash target derivation
+        pass
+    return dict(_AP3_FALLBACK_FAMILIES)
+
+
+def role_targets(records: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """One target per (role, model): `{model_path, quant, backend, role, knob_families, label}`.
+    Families come from the action space: AP3 specs for the role (`spec_draft`, `kv_profile`),
+    `routing` for roles on the model that `ROUTING_TARGET_ROLE` loads, `placement` for gpu roles.
+    A role without a model path is skipped. Same-model roles are separate targets that share one
+    `prepare` call."""
+    if records is None:
+        from src.registry.stack_priors import live_stack_role_records
+
+        records = live_stack_role_records()
+    base: list[tuple[str, dict[str, Any], tuple[str, str, str]]] = []
+    for role, record in (records or {}).items():
+        if not isinstance(record, Mapping):
+            continue
+        launch = ((record.get("serving") or {}).get("launch") or {})
+        model_path = str((launch.get("requirements") or {}).get("model_path") or "").strip()
+        if not model_path:
+            continue
+        quant = str((record.get("model") or {}).get("quant") or "").strip()
+        backend = _role_backend(launch.get("runtime") or {})
+        name = str(record.get("role") or role)
+        base.append((name, {"model_path": model_path, "quant": quant, "backend": backend},
+                     (Path(model_path).name, quant.upper(), backend)))
+    routed = {key for name, _, key in base if name == ROUTING_TARGET_ROLE}
+    ap3 = ap3_role_families()
+    out = []
+    for name, target, key in sorted(base, key=lambda b: b[0]):
+        families = set(ap3.get(name, ()))
+        if key in routed:
+            families.add("routing")
+        if target["backend"] == "gpu":
+            families.add("placement")
+        entry = {**target, "role": name, "label": f"role:{name}"}
+        if families:
+            entry["knob_families"] = sorted(families)
+        out.append(entry)
+    return out
+
+
+def lineup_target(stack_regime: str | None) -> dict[str, Any] | None:
+    """The lineup-wide target keyed by the infra_fingerprint digest, or None without one."""
+    if not stack_regime:
+        return None
+    return {"scope": "lineup", "stack_regime": str(stack_regime),
+            "knob_families": list(LINEUP_FAMILIES), "label": "lineup"}
+
+
 def hypothesis_targets(hypotheses: Iterable[Any]) -> list[dict[str, Any]]:
     """Targets an OPEN operator hypothesis names explicitly in its `proposed_action`: a
     `model_path`/`model_file` ending in .gguf plus an explicit `backend` (cpu|gpu). Anything less
@@ -203,14 +282,18 @@ def hypothesis_targets(hypotheses: Iterable[Any]) -> list[dict[str, Any]]:
 
 def derive_targets(*, records: Mapping[str, Any] | None = None,
                    hypotheses: Iterable[Any] | None = None,
-                   hypotheses_loader: Callable[[], Iterable[Any]] | None = None
+                   hypotheses_loader: Callable[[], Iterable[Any]] | None = None,
+                   stack_regime: str | None = None,
+                   stack_regime_loader: Callable[[], str | None] | None = None
                    ) -> list[dict[str, Any]]:
-    """Targets for this turn's `prepare`: the live stack plus models open hypotheses name.
-    Deduplicated on (model file, quant, backend). Never raises: an empty or unreadable stack
-    logs a warning and yields [] (the planner then gets ledger-wide flags only)."""
+    """Targets for this turn's `prepare`: one per live (role, model) with the knob families that
+    role's action space reaches, models open hypotheses name (deduplicated against the stack on
+    (model file, quant, backend)), and one lineup-wide target keyed by `stack_regime` when the
+    regime digest is known. Never raises: an empty or unreadable stack logs a warning and yields
+    [] (the planner then gets ledger-wide flags only)."""
     targets: list[dict[str, Any]] = []
     try:
-        targets = stack_targets(records)
+        targets = role_targets(records)
     except Exception as exc:  # noqa: BLE001 -- belief context must not crash the loop
         log.warning("belief targets: live stack unreadable (%s: %s)", type(exc).__name__, exc)
     if not targets:
@@ -230,7 +313,78 @@ def derive_targets(*, records: Mapping[str, Any] | None = None,
         if key not in seen:
             seen.add(key)
             targets.append(target)
+    try:
+        regime = stack_regime if stack_regime is not None else (
+            stack_regime_loader() if stack_regime_loader is not None else None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("belief targets: stack regime unavailable (%s: %s)", type(exc).__name__, exc)
+        regime = None
+    lineup = lineup_target(regime)
+    if lineup is not None:
+        targets.append(lineup)
     return targets
+
+
+# ------------------------------------------------------------------------------ journal scope
+
+BELIEF_SCOPE_SCHEMA = "epyc.autopilot.belief_scope.v1"
+
+
+def action_config_key(action: Any) -> str:
+    """Canonical, order-independent key for the config an action changes: `type|k=v|k=v`."""
+    if not isinstance(action, Mapping):
+        return ""
+    params = action.get("params")
+    parts = [str(action.get("type") or "")]
+    if isinstance(params, Mapping):
+        parts += [f"{k}={json.dumps(params[k], sort_keys=True, default=str)}"
+                  for k in sorted(params, key=str)]
+    return "|".join(parts)
+
+
+def action_knob_families(action: Any) -> list[str]:
+    """Knob families (§12.1) the action's params touch: AP3 role-restart keys -> `spec_draft` /
+    `kv_profile`, `kv.*` -> `kv_compaction`, `placement_policy.*` -> `placement`,
+    `chat.long_context_threshold_chars` -> `routing`, any other dotted section -> `orchestrator`."""
+    params = action.get("params") if isinstance(action, Mapping) else None
+    if not isinstance(params, Mapping):
+        return []
+    families: set[str] = set()
+    for key in params:
+        key = str(key)
+        name = key.removeprefix("role_restart.")
+        if key.startswith("role_restart.") or name.endswith("_kv_profile") or "_draft_" in name \
+                or name.endswith(("_spec_type", "_threads_draft")) or "_ngram_mod_" in name:
+            families.add("kv_profile" if name.endswith("_kv_profile") else "spec_draft")
+        elif key.startswith("kv."):
+            families.add("kv_compaction")
+        elif key.startswith("placement_policy."):
+            families.add("placement")
+        elif key == "chat.long_context_threshold_chars":
+            families.add("routing")
+        elif "." in key:
+            families.add("orchestrator")
+    return sorted(families)
+
+
+def trial_belief_scope(infra_fingerprint: Any, action: Any) -> dict[str, Any]:
+    """The regime scope a journal row carries FOR THE FUTURE (P1-M; never back-filled): the
+    recorded infra_fingerprint digest as `stack_regime`, role -> model file from its `models`
+    component, plus `config_key` and `knob_families` of the action. {} when the trial carried no
+    fingerprint digest (a regime cannot be invented)."""
+    fp = infra_fingerprint if isinstance(infra_fingerprint, Mapping) else {}
+    digest = str(fp.get("digest") or "")
+    if not digest:
+        return {}
+    models = ((fp.get("components") or {}).get("models") or {}).get("roles") or {}
+    role_models = {}
+    for slot, row in (models.items() if isinstance(models, Mapping) else ()):
+        if isinstance(row, Mapping) and row.get("model_path"):
+            role_models[str(slot).split("@", 1)[0]] = Path(str(row["model_path"])).name
+    return {"schema": BELIEF_SCOPE_SCHEMA, "stack_regime": digest,
+            "role_models": dict(sorted(role_models.items())),
+            "config_key": action_config_key(action),
+            "knob_families": action_knob_families(action)}
 
 
 # ------------------------------------------------------------------------------ sealed answers
@@ -933,7 +1087,8 @@ def receipt_id(trial_id: Any, item_id: str) -> str:
 __all__ = [
     "BeliefContextRefused", "BeliefSettings", "DegradedSelection", "PrepareOutcome",
     "ReadyBeliefs", "SeedReviewToken", "build_planner_receipt", "check_seeds",
-    "declared_premises", "degraded_excluded_ids", "degraded_row", "host_claim_ids",
+    "declared_premises", "action_config_key", "action_knob_families", "ap3_role_families",
+    "lineup_target", "role_targets", "trial_belief_scope", "degraded_excluded_ids", "degraded_row", "host_claim_ids",
     "known_good_flags",
     "mint_seed_review", "operator_seed_items", "premise_flag_reason", "prepare", "raise_alarm",
     "recovery_recheck", "render_prompt_block", "require_ready", "require_seed_review",

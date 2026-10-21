@@ -787,7 +787,8 @@ def test_open_hypothesis_models_are_added_once_and_only_when_explicit() -> None:
         "hypothesis:h-new"]
     extra = next(t for t in targets if t["label"] == "hypothesis:h-new")
     assert extra["context_tokens"] == 32768 and extra["backend"] == "gpu"
-    assert len(targets) == 5  # the duplicate of a stack model adds nothing
+    # 6 pathed roles (one target each) + h-new; the duplicate of a stack model adds nothing
+    assert len(targets) == 7
 
 
 @pytest.mark.parametrize("records", [{}, None])
@@ -934,3 +935,104 @@ def test_reader_shape_decimal_strings_and_not_evidence_lists() -> None:
     assert "refuted" in lb.premise_flag_reason(["clm_r1"], flags)
     assert "host-tier" in lb.premise_flag_reason(["clm_h1"], flags)
     assert "Evidence tiers: target 1, sibling 1, host 1." in lb.render_prompt_block(ready)
+
+
+# ------------------------------------------------------------------------------ P1-J / P1-M
+
+REGIME = "sha256:" + "ab" * 32
+LIVE = {
+    "architect_critic": _role("architect_critic", "/m/Qwen3.8-27B-Q8_0.gguf", "Q8_0",
+                              device="ROCm0", layers="all"),
+    "ingest_long_context": _role("ingest_long_context", "/m/Qwen3.8-27B-Q8_0.gguf", "Q8_0",
+                                 device="ROCm0", layers="all"),
+    "frontdoor": _role("frontdoor", "/m/Qwen3.6-35B-A3B-MTP-Q8_0.gguf", "Q8_0"),
+    "worker_general": _role("worker_general", "/m/Qwen3.6-35B-A3B-MTP-Q8_0.gguf", "Q8_0"),
+    "vision": _role("vision", "/m/VL-Q4_K_M.gguf", "Q4_K_M", device="none"),
+}
+
+
+def test_role_targets_carry_the_families_the_roles_action_space_reaches() -> None:
+    by_role = {t["role"]: t for t in lb.role_targets(LIVE)}
+    assert set(by_role) == set(LIVE)  # one per (role, model); same-model roles stay separate
+    assert by_role["architect_critic"]["knob_families"] == [
+        "kv_profile", "placement", "routing", "spec_draft"]
+    assert by_role["ingest_long_context"]["knob_families"] == ["placement", "routing"]
+    assert by_role["frontdoor"]["knob_families"] == ["kv_profile", "spec_draft"]
+    assert by_role["worker_general"]["knob_families"] == ["kv_profile", "spec_draft"]
+    assert "knob_families" not in by_role["vision"]  # no role-scoped knob reaches it
+    assert by_role["frontdoor"]["model_path"].endswith("Qwen3.6-35B-A3B-MTP-Q8_0.gguf")
+    json.dumps(list(by_role.values()))
+
+
+def test_ap3_role_families_come_from_the_specs() -> None:
+    fams = lb.ap3_role_families()
+    for role in ("frontdoor", "worker_general", "architect_critic"):
+        assert fams[role] == ("kv_profile", "spec_draft")
+
+
+def test_derive_targets_adds_one_lineup_target_only_with_a_regime() -> None:
+    with_regime = lb.derive_targets(records=LIVE, stack_regime=REGIME)
+    lineup = [t for t in with_regime if t.get("scope") == "lineup"]
+    assert lineup == [{"scope": "lineup", "stack_regime": REGIME,
+                       "knob_families": ["kv_compaction", "orchestrator"], "label": "lineup"}]
+    assert not [t for t in lb.derive_targets(records=LIVE) if t.get("scope") == "lineup"]
+    assert not [t for t in lb.derive_targets(records=LIVE, stack_regime_loader=lambda: None)
+                if t.get("scope") == "lineup"]
+
+
+def test_a_failing_regime_loader_never_crashes_target_derivation() -> None:
+    def boom():
+        raise RuntimeError("fingerprint exploded")
+    targets = lb.derive_targets(records=LIVE, stack_regime_loader=boom)
+    assert len(targets) == len(LIVE) and all("scope" not in t for t in targets)
+
+
+def test_hypothesis_models_still_dedup_against_role_targets() -> None:
+    hyps = [_Hyp("h-dup", {"model_file": "Qwen3.8-27B-Q8_0.gguf", "backend": "gpu",
+                           "quant": "Q8_0"})]
+    assert len(lb.derive_targets(records=LIVE, hypotheses=hyps)) == len(LIVE)
+
+
+def test_action_config_key_and_families() -> None:
+    action = {"type": "numeric_trial", "params": {"memrl_retrieval.semantic_k": 15,
+                                                  "chat.long_context_threshold_chars": 9000}}
+    assert lb.action_config_key(action) == (
+        "numeric_trial|chat.long_context_threshold_chars=9000|memrl_retrieval.semantic_k=15")
+    assert lb.action_knob_families(action) == ["orchestrator", "routing"]
+    role = {"type": "config", "params": {"role_restart.frontdoor_draft_max": 6,
+                                         "role_restart.worker_kv_profile": "q4_0",
+                                         "kv.keep_ratio": 0.5,
+                                         "placement_policy.lease_eval_weight": 1.0}}
+    assert lb.action_knob_families(role) == ["kv_compaction", "kv_profile", "placement",
+                                             "spec_draft"]
+    assert lb.action_config_key(None) == "" and lb.action_knob_families(None) == []
+
+
+def test_trial_belief_scope_binds_the_recorded_regime_and_never_invents_one() -> None:
+    fp = {"digest": REGIME, "components": {"models": {"roles": {
+        "frontdoor@8080": {"model_path": "/m/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"},
+        "architect_critic@8083": {"model_path": "/m/Qwen3.8-27B-Q8_0.gguf"}}}}}
+    scope = lb.trial_belief_scope(fp, NUMERIC)
+    assert scope["schema"] == lb.BELIEF_SCOPE_SCHEMA and scope["stack_regime"] == REGIME
+    assert scope["role_models"] == {"architect_critic": "Qwen3.8-27B-Q8_0.gguf",
+                                    "frontdoor": "Qwen3.6-35B-A3B-MTP-Q8_0.gguf"}
+    assert scope["config_key"] == lb.action_config_key(NUMERIC)
+    assert scope["knob_families"] == ["orchestrator"]
+    assert lb.trial_belief_scope({}, NUMERIC) == {}
+    assert lb.trial_belief_scope(None, NUMERIC) == {}
+    assert lb.trial_belief_scope({"digest": ""}, NUMERIC) == {}
+
+
+def test_journal_entry_round_trips_belief_scope_and_old_rows_stay_empty() -> None:
+    import dataclasses
+    import experiment_journal as ej
+    fields = {f.name for f in dataclasses.fields(ej.JournalEntry)}
+    assert "belief_scope" in fields
+    assert ej.JournalEntry.__dataclass_fields__["belief_scope"].default_factory() == {}
+
+
+def test_the_post_trial_hook_records_belief_scope_before_journal_record() -> None:
+    source = inspect.getsource(autopilot._run_loop_inner)
+    hook = source.index("trial_belief_scope(")
+    assert hook < source.index("journal.record(journal_entry)", hook)
+    assert "stack_regime_loader" in source

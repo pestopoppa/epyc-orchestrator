@@ -591,6 +591,12 @@ class JournalEntry:
     # heuristic meaning (config_diff, PEAF, BSV, Pareto consume it); `lineage` records the
     # rule-named ACCEPTED parent. Empty on legacy rows; never back-filled.
     lineage: dict[str, Any] = field(default_factory=dict)
+    # 2026-10-21 (belief redesign P1-M): the regime scope a belief projection needs --
+    # {stack_regime (the infra_fingerprint digest), role_models, config_key, knob_families}, from
+    # `loop_beliefs_bridge.trial_belief_scope`. Written for trials from this date on; empty on
+    # every earlier row and never back-filled (a regime invented at read time would claim a
+    # scope the trial never recorded).
+    belief_scope: dict[str, Any] = field(default_factory=dict)
 
 
 LINEAGE_SCHEMA_VERSION = 1
@@ -1117,6 +1123,7 @@ class ExperimentJournal:
                     # AP-63(a): absent on rows written before 2026-09-17; never back-filled.
                     run_manifest=data.get("run_manifest", {}) or {},
                     lineage=data.get("lineage", {}) or {},
+                    belief_scope=data.get("belief_scope", {}) or {},
                 )
                 self._entries.append(entry)
 
