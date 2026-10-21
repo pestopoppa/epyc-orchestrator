@@ -151,6 +151,13 @@ class StepEventLog:
             if self.cas is not None:
                 extra = {"args_cas": self.cas.put(_canon(args if args is not None else {})),
                          "output_cas": self.cas.put(text)}
+                # HIL-16b: what a replay needs to hand the REPL back the SAME kind of object (str vs a
+                # JSON-able dict/list vs a ToolOutput envelope) and to re-raise the SAME exception.
+                extra["output_kind"] = ("none" if payload is None else "str" if isinstance(payload, str) else "json")
+                if envelope:
+                    extra["envelope"] = {"ok": bool(result.ok), "status": str(getattr(result, "status", "success"))}
+                if exc is not None:
+                    extra["exc"] = {"type": type(exc).__name__, "message_cas": self.cas.put(str(exc))}
             return self._emit(
                 **extra,
                 kind="tool_call", tool=name, args_hash=args_hash(args), ok=not err, error=bool(err),

@@ -683,7 +683,9 @@ async def consolidate_segment(
         # Fallback: join granular blocks (still shorter than full re-summarization)
         consolidated_text = "; ".join(granular_blocks)
 
-    now = time.time()
+    from src.trace.replay.clock import time as _replay_time   # HIL-16b: tape-aware, == time.time() with no tape
+
+    now = _replay_time()
     return ConsolidatedSegment(
         turn_range=turn_range,
         granular_blocks=list(granular_blocks),
@@ -858,6 +860,8 @@ def build_turn_record(
     tool_success_ratio: float = 1.0,
 ) -> TurnRecord:
     """Factory to build a TurnRecord from execution results."""
+    from src.trace.replay.clock import now_hms as _replay_now_hms
+
     # Classify outcome
     if is_final:
         outcome = "final"
@@ -875,7 +879,7 @@ def build_turn_record(
     return TurnRecord(
         turn=turn,
         role=role,
-        timestamp=datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        timestamp=_replay_now_hms(),   # HIL-16b: tape-aware, == datetime.now(utc) with no tape
         code_hash=_code_hash(code),
         code_first_line=_first_non_comment_line(code),
         code_last_line=_last_line(code),

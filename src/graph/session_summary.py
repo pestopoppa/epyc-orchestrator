@@ -188,7 +188,8 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
             from src.graph.session_log import ConsolidatedSegment, _extract_topic_tags
             import time as _time
 
-            now = _time.time()
+            from src.trace.replay.clock import time as _replay_time   # HIL-16b
+            now = _replay_time()
             segment = ConsolidatedSegment(
                 turn_range=turn_range,
                 granular_blocks=list(state.pending_granular_blocks),
@@ -216,7 +217,8 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
             from src.graph.session_log import ConsolidatedSegment, _extract_topic_tags
             import time as _time
 
-            now = _time.time()
+            from src.trace.replay.clock import time as _replay_time   # HIL-16b
+            now = _replay_time()
             fallback_text = "; ".join(state.pending_granular_blocks)
             segment = ConsolidatedSegment(
                 turn_range=turn_range,

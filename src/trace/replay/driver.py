@@ -48,9 +48,13 @@ class ToolServer:
         self._steps = [s for s in (turn.steps if turn else []) if s.kind == "tool_call"]
         self._cas, self._live, self._i = cas, live, 0
         self._turn = turn.turn if turn else -1
+        self.live = live
+        self.last = None            # HIL-16b: the recorded step served by the latest call (output_kind / envelope / exc)
+        self.names: list[str] = []  # tool names called through this server, in order
 
     def call(self, tool: str, args: dict[str, Any] | None, live_fn: Callable[[], str] | None = None) -> str:
         ah = _args_hash(args)
+        self.names.append(tool)
         if self._live:
             if live_fn is None:
                 raise RuntimeError("live tool call without a live_fn")
@@ -59,6 +63,7 @@ class ToolServer:
             raise PrefixDivergence(self._turn, "extra_tool_call", f"{tool}")
         rec = self._steps[self._i]
         self._i += 1
+        self.last = rec
         if rec.tool != tool or rec.args_hash != ah:
             raise PrefixDivergence(self._turn, "tool_call_mismatch",
                                    f"recorded {rec.tool}/{rec.args_hash} vs {tool}/{ah}")
@@ -122,11 +127,12 @@ class ReplayDriver:
         for t in self.run.turns[:k]:
             try:
                 want = self.cas.get(t.prompt_cas)
+                tools = ToolServer(t, self.cas, live=False)
+                self._bind(tools)
                 got = self.harness.build_prompt().encode("utf-8")
                 if not hmac.compare_digest(want, got):
                     raise PrefixDivergence(t.turn, "prompt_bytes_differ", f"{len(want)} vs {len(got)} bytes")
                 out = self.cas.get_text(t.output_cas)
-                tools = ToolServer(t, self.cas, live=False)
                 outcome = self.harness.execute(out, tools)
                 tools.finish()
                 for s in (x for x in t.steps if x.kind == "tool_call"):
@@ -138,6 +144,13 @@ class ReplayDriver:
                 return PrefixResult(False, t.turn, h.hexdigest(), {"turn": e.turn, "what": e.what, "detail": e.detail})
         return PrefixResult(True, k, "sha256:" + h.hexdigest())
 
+    def _bind(self, tools: "ToolServer") -> None:
+        """Optional harness hook: a graph harness makes tool calls (auto-gather peeks) while it builds the
+        prompt, before ``execute``, so it needs the turn's ToolServer first."""
+        b = getattr(self.harness, "bind_tools", None)
+        if b is not None:
+            b(tools)
+
     def check_prefix(self, k: int) -> PrefixResult:
         """No inference: replay turns < k and compare bytes."""
         return self._replay_prefix(k)
@@ -146,17 +159,21 @@ class ReplayDriver:
                  llm_kwargs: dict[str, Any] | None = None) -> ReplayRunResult:
         prefix = self._replay_prefix(k)
         res = ReplayRunResult(prefix=prefix)
+        if hasattr(self.harness, "bind_llm"):    # HIL-16b: harnesses whose turn makes auxiliary model calls
+            self.harness.bind_llm(llm)
         if not prefix.ok:
             return res           # never spend inference on a diverged prefix
         recorded = self.run.turns
         for turn in range(k, max_turns):
             base = recorded[turn] if turn < len(recorded) else recorded[-1]
+            tools = ToolServer(None, self.cas, live=True)
+            self._bind(tools)
             prompt = self.harness.build_prompt()
             if turn == k and patch is not None:
                 prompt = patch.apply(prompt)
             kwargs = {**base.kwargs, **(llm_kwargs or {})}
             out = llm(prompt, role=base.role, **kwargs)
-            outcome = self.harness.execute(out, ToolServer(None, self.cas, live=True))
+            outcome = self.harness.execute(out, tools)
             res.transcript.append({"turn": turn, "prompt_sha": hashlib.sha256(prompt.encode()).hexdigest()[:16],
                                    "output": out, "calls": [c.tool for c in outcome.calls]})
             res.turns_run += 1

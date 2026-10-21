@@ -1045,6 +1045,9 @@ def answer_force_at(primitives: Any, now: float | None = None) -> float | None:
 def _answer_force_due(state: Any) -> bool:
     import time
 
+    forced = getattr(state, "_replay_force_answer", None)   # HIL-16b: set only by the replay harness
+    if isinstance(forced, bool):
+        return forced
     at = getattr(state, "answer_force_at_s", None)
     if not isinstance(at, (int, float)) or isinstance(at, bool):
         return False
@@ -1066,6 +1069,17 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     state.turns += 1
     log.debug("_execute_turn: turn=%d, role=%s", state.turns, role)
+
+    # HIL-16b: replay recording context (None unless replay_recording; nothing below runs when off).
+    _replay_rec = getattr(deps.repl, "_replay_recorder", None) if deps.repl is not None else None
+    if _replay_rec is not None:
+        from src.trace.replay.seed import capture_seed
+
+        _se0 = getattr(deps.repl, "_step_events", None)
+        _replay_rec.begin_turn(
+            primitives=deps.primitives, step_mark=_se0.ordinal if _se0 is not None else 0,
+            seed_fn=lambda: capture_seed(state, deps, role, _replay_rec.cas),
+        )
 
     # Full state snapshot (LangGraph pre-migration)
     from src.features import features as _get_features
@@ -1417,11 +1431,9 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             deps.primitives._early_stop_check = None
 
     _primary_llm_output = code
-    _replay_rec = getattr(deps.repl, "_replay_recorder", None)   # HIL-16, None unless replay_recording
-    if _replay_rec is not None:
-        _se = getattr(deps.repl, "_step_events", None)
+    if _replay_rec is not None:   # HIL-16 / HIL-16b
         _replay_rec.record_turn(role=str(role), prompt=prompt, output=code, kwargs=llm_kwargs,
-                                step_mark=_se.ordinal if _se is not None else 0)
+                                force_answer=force_answer, meta=_turn_call_meta)
     _primary_call_meta = dict(_turn_call_meta)
     _reasoning_retry_meta: dict[str, Any] | None = None
     _reasoning_retry_attempted = False

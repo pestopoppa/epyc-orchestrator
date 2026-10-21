@@ -8,12 +8,16 @@ when it is given a CAS. Default OFF behind ``replay_recording``; with it off not
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import os
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from src.trace.replay.cas import CAS
+from src.trace.replay.clock import ClockTape, activate as _activate_clock
 
 CATEGORY = "model_turn"
 SCHEMA = "model_turn/v1"
@@ -28,6 +32,38 @@ def _jsonable(kwargs: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(kwargs, sort_keys=True, default=str))
 
 
+_ACTIVE: ContextVar["ReplayRecorder | None"] = ContextVar("replay_active_recorder", default=None)
+_SECRET_RE = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_ENV_EXACT = ("TOOL_DEFINITION_VARIANT", "PYTHONHASHSEED")
+
+
+def prompt_env_snapshot() -> dict[str, str]:
+    """Environment that can change prompt bytes: ORCHESTRATOR_* plus the few non-prefixed knobs; never secrets."""
+    return {k: v for k, v in sorted(os.environ.items())
+            if (k.startswith("ORCHESTRATOR_") or k in _ENV_EXACT) and not any(w in k.upper() for w in _SECRET_RE)}
+
+
+def _wrap_llm_call(primitives: Any) -> None:
+    """Wrap ``primitives.llm_call`` ONCE so every model call made while a recorder is active (in this
+    contextvar scope) is noted. Recorder-less callers pass straight through. Flag-on only."""
+    orig = primitives.llm_call
+    if getattr(orig, "_replay_wrapped", False):
+        return
+
+    @functools.wraps(orig)
+    def _wrapped(*a: Any, **kw: Any) -> Any:
+        out = orig(*a, **kw)
+        # contextvar first; executors that do not copy context (run_in_executor) fall back to the latest
+        # recorder begun on these primitives (ambiguous only if two runs share one primitives object)
+        rec = _ACTIVE.get() or getattr(primitives, "_replay_last_recorder", None)
+        if rec is not None:
+            rec.note_llm_call(a[0] if a else kw.get("prompt", ""), kw.get("role"), {k: v for k, v in kw.items() if k != "role"}, out)
+        return out
+
+    _wrapped._replay_wrapped = True   # type: ignore[attr-defined]
+    primitives.llm_call = _wrapped
+
+
 @dataclass
 class ReplayRecorder:
     run_id: str
@@ -37,15 +73,60 @@ class ReplayRecorder:
     turn: int = 0
     chain: str = GENESIS
     records: list[dict] = field(default_factory=list)
+    tape: ClockTape = field(default_factory=ClockTape)
+    _tape_mark: int = 0
+    _calls: list[dict] = field(default_factory=list)
+    _seed: dict | None = None
+    step_mark: int = 0
+
+    # -- HIL-16b: per-turn context (all flag-on only) ---------------------------------------------
+    def begin_turn(self, *, primitives: Any, step_mark: int, seed_fn: Callable[[], dict] | None = None) -> None:
+        """Called at the top of ``_execute_turn``: activate this run's clock tape and LLM-call tap, take the
+        step mark BEFORE any pre-prompt tool call (auto-gather peeks), and capture the seed on the first turn."""
+        try:
+            self.step_mark, self._calls = step_mark, []
+            _ACTIVE.set(self)
+            _activate_clock(self.tape)
+            if primitives is not None and callable(getattr(primitives, "llm_call", None)):
+                _wrap_llm_call(primitives)
+                primitives._replay_last_recorder = self
+            if self.turn == 0 and self._seed is None and seed_fn is not None:
+                self._seed = seed_fn()
+        except Exception:   # recording must never fail a turn
+            pass
+
+    def note_llm_call(self, prompt: str, role: str | None, kwargs: dict[str, Any], output: Any) -> None:
+        try:
+            self._calls.append({"prompt_cas": self.cas.put(prompt), "output_cas": self.cas.put(output if isinstance(output, str) else str(output)),
+                                "role": role, "kwargs": _jsonable(kwargs)})
+        except Exception:
+            pass
 
     def record_turn(self, *, role: str | None, prompt: str, output: str, kwargs: dict[str, Any] | None,
-                    step_mark: int) -> dict | None:
+                    step_mark: int | None = None, force_answer: bool | None = None,
+                    meta: dict[str, Any] | None = None) -> dict | None:
         try:
             p, o = self.cas.put(prompt), self.cas.put(output)
             self.chain = chain_next(self.chain, p, o)
             rec = {"schema": SCHEMA, "run_id": self.run_id, "turn": self.turn, "role": role or self.role,
                    "prompt_cas": p, "output_cas": o, "kwargs": _jsonable(kwargs or {}),
-                   "step_mark": step_mark, "chain": self.chain}
+                   "step_mark": self.step_mark if step_mark is None else step_mark, "chain": self.chain}
+            # every model call this turn before the main one (session summary, consolidation, compaction)
+            main = next((i for i in range(len(self._calls) - 1, -1, -1) if self._calls[i]["prompt_cas"] == p), None)
+            aux = self._calls[:main] if main is not None else list(self._calls)
+            if aux:
+                rec["aux"] = aux
+            reads = self.tape.reads[self._tape_mark:]
+            self._tape_mark = len(self.tape.reads)
+            if reads:
+                rec["clock"] = reads
+            if meta:
+                rec["meta"] = _jsonable(meta)
+            if force_answer is not None:
+                rec["force_answer"] = bool(force_answer)
+            if self.turn == 0 and self._seed is not None:
+                rec["seed"] = self._seed
+            self._calls = []
             self.turn += 1
             self.records.append(rec)
             if self.sink is not None:

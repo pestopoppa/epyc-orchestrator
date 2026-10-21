@@ -42,6 +42,8 @@ def main() -> int:
     ap.add_argument("--original-outcome", default="fail"); ap.add_argument("--task-key")
     ap.add_argument("--out")
     a = ap.parse_args()
+    if a.cas_dir:
+        os.environ["ORCHESTRATOR_REPLAY_CAS_DIR"] = a.cas_dir   # harness factories build their own CAS() from it
     cas, run = CAS(a.cas_dir), load_run(a.db, a.run_id)
     if a.cmd == "verify":
         problems = verify_integrity(run, cas)

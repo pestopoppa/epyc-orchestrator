@@ -21,6 +21,7 @@ class StepRec:
     output_cas: str | None
     ok: bool
     error_class: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)   # HIL-16b: output_kind / envelope / exc
 
 
 @dataclass
@@ -33,12 +34,17 @@ class TurnRec:
     step_mark: int
     chain: str
     steps: list[StepRec] = field(default_factory=list)
+    aux: list[dict[str, Any]] = field(default_factory=list)   # HIL-16b: other LLM calls made before the main call
+    clock: list[float] = field(default_factory=list)          # HIL-16b: wall-clock reads since the previous row
+    meta: dict[str, Any] = field(default_factory=dict)        # HIL-16b: the call's inference meta (token counts feed budgets)
+    force_answer: bool | None = None                          # HIL-16b: the (wall-time derived) forced-answer decision
 
 
 @dataclass
 class RecordedRun:
     run_id: str
     turns: list[TurnRec]
+    seed: dict[str, Any] = field(default_factory=dict)   # HIL-16b: initial state/env of the recorded run
 
 
 def _rows(conn: sqlite3.Connection, run_id: str, category: str) -> list[dict]:
@@ -56,14 +62,17 @@ def load_run(db_path: Path | str, run_id: str) -> RecordedRun:
     if not turns_raw:
         raise ValueError(f"no model_turn rows for run {run_id!r} (was it recorded with replay_recording on?)")
     turns = [TurnRec(r["turn"], r.get("role"), r["prompt_cas"], r["output_cas"], r.get("kwargs") or {},
-                     r["step_mark"], r["chain"]) for r in turns_raw]
+                     r["step_mark"], r["chain"],
+                     aux=list(r.get("aux") or []), clock=list(r.get("clock") or []),
+                     force_answer=r.get("force_answer"), meta=dict(r.get("meta") or {})) for r in turns_raw]
     for i, t in enumerate(turns):
         hi = turns[i + 1].step_mark if i + 1 < len(turns) else None
         for s in steps_raw:
             if s["idx"] >= t.step_mark and (hi is None or s["idx"] < hi):
                 t.steps.append(StepRec(s["idx"], s["kind"], s.get("tool"), s.get("args_hash"), s.get("args_cas"),
-                                       s.get("output_cas"), bool(s.get("ok")), s.get("error_class")))
-    return RecordedRun(run_id, turns)
+                                       s.get("output_cas"), bool(s.get("ok")), s.get("error_class"),
+                                       {k: s[k] for k in ("output_kind", "envelope", "exc") if k in s}))
+    return RecordedRun(run_id, turns, seed=dict(turns_raw[0].get("seed") or {}))
 
 
 def verify_integrity(run: RecordedRun, cas: CAS) -> list[str]:
