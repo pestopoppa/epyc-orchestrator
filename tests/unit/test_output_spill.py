@@ -238,3 +238,59 @@ class TestExactRecallThroughRepl:
         assert repl.artifacts["ct"] == "789"
         repl.execute("artifacts['d'] = peek(3)")
         assert repl.artifacts["d"] == "012"
+
+
+class TestSpillErrorPreserve:
+    """TOC-SP-8: error-bearing output is never worker-summarised (flag default off)."""
+
+    @staticmethod
+    def _repl(tmp_path, worker):
+        from src.repl_environment import REPLConfig, REPLEnvironment
+
+        cfg = REPLConfig(output_cap=100, spill_dir=str(tmp_path))
+        return REPLEnvironment(context="t", config=cfg, llm_primitives=worker)
+
+    @staticmethod
+    def _worker():
+        from unittest.mock import MagicMock
+
+        w = MagicMock()
+        w.llm_call.return_value = "WORKER SUMMARY"
+        return w
+
+    ERR = "ok line\n" * 100 + "[STDERR]\nTraceback (most recent call last):\nboom\n"
+    OK = "ok line\n" * 100
+
+    def test_flag_on_error_keeps_head_tail_and_peek_marker_no_worker(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", "1")
+        w = self._worker()
+        out = self._repl(tmp_path, w)._spill_output(self.ERR)
+        w.llm_call.assert_not_called()
+        assert "WORKER SUMMARY" not in out and "boom" in out
+        assert 'peek(2000, file_path="' in out
+        assert "chars omitted" in out
+        assert len(out.split("\n...[")[0].split("\n", 1)[1]) <= 300
+
+    def test_flag_on_success_still_summarised(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", "1")
+        w = self._worker()
+        out = self._repl(tmp_path, w)._spill_output(self.OK)
+        w.llm_call.assert_called_once()
+        assert "WORKER SUMMARY" in out
+
+    def test_structured_error_argument_counts(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", "1")
+        w = self._worker()
+        out = self._repl(tmp_path, w)._spill_output(self.OK, error="ValueError: x")
+        w.llm_call.assert_not_called()
+        assert "chars omitted" in out
+
+    def test_flag_off_is_byte_identical_for_errors(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", raising=False)
+        w = self._worker()
+        r = self._repl(tmp_path, w)
+        a = r._spill_output(self.ERR)
+        w.llm_call.assert_called_once()
+        assert "WORKER SUMMARY" in a
+        b = r._spill_output(self.ERR, error="e")  # flag off: error kwarg is inert
+        assert a.split("\n")[1:-1] == b.split("\n")[1:-1] == ["WORKER SUMMARY"]

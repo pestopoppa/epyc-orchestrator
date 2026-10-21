@@ -10,6 +10,7 @@ import ast
 import io
 import logging
 import os
+import re
 import signal
 import threading
 import uuid
@@ -747,7 +748,23 @@ class REPLEnvironment(
             _log.warning("context bundle: print accounting failed: %s", exc)
         return shown
 
-    def _spill_output(self, output: str) -> str:
+    # TOC-SP-8: error-bearing output is never LLM-summarised (flag default OFF).
+    _ERROR_MARKER_RE = re.compile(
+        r"\[STDERR\]|^Traceback \(most recent call last\)"
+        r"|^\[?exit(?: code| status)?[:= ]+[1-9]\d*\]?",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    _ERROR_HEAD_CHARS = 300
+    _ERROR_TAIL_CHARS = 200  # head+tail == the 500-char error budget (graph/helpers.py)
+
+    @staticmethod
+    def _spill_error_preserve_enabled() -> bool:
+        return os.environ.get("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE") == "1"
+
+    def _is_error_bearing(self, output: str, error: str | None) -> bool:
+        return bool(error) or bool(self._ERROR_MARKER_RE.search(output))
+
+    def _spill_output(self, output: str, error: str | None = None) -> str:
         """Write full output to file when it exceeds output_cap, return summary.
 
         Uses a rolling summary pattern: each spill passes the previous summary
@@ -783,6 +800,16 @@ class REPLEnvironment(
             f'Use peek(2000, file_path="{spill_path}") or '
             f'grep("<pattern>", file_path="{spill_path}") to inspect.'
         )
+
+        # 1b. TOC-SP-8 (default off): error-bearing output keeps head+tail and the
+        #     executable peek marker; it is never worker-summarised or aged out.
+        if self._spill_error_preserve_enabled() and self._is_error_bearing(output, error):
+            omitted = len(output) - self._ERROR_HEAD_CHARS - self._ERROR_TAIL_CHARS
+            return (
+                f"{header}\n{output[: self._ERROR_HEAD_CHARS]}\n"
+                f"...[{omitted} chars omitted]...\n"
+                f"{output[-self._ERROR_TAIL_CHARS:]}\n{footer}"
+            )
 
         # 2. Try worker summary. role="worker" resolves to worker_general, an alias
         #    on frontdoor's :8070 fleet (Qwen3.6-35B-A3B MTP Q8, CPU) since the
