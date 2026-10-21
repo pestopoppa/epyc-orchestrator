@@ -14,3 +14,12 @@ Quality scale in the journal is 0-3 per suite.
 
 Also outside the journal: the PRB-T4 TALE run (research b4d38ebc) excluded mmlu_pro (ScoringUnavailable).
 Other result stores (benchmarks/results, eval-tower captures) were not enumerated.
+
+## Addendum: corpus-ev19b-20261021 (same day, same era E20)
+
+22 `thinking` ARC rows (source labels 1-4, e.g. `arc_NYSEDREGENTS_2008_8_34`) were unscoreable
+(gold with no configured choices; the scorer refuses, so they were EXCLUDED, never scored wrong).
+Re-derived in `corpus-ev19b-20261021` (relabelled A-D, gold mapped by source position). Effect on
+journaled results: at most 22 of 11,214 `thinking` rows (0.2%) were missing from the denominator;
+no score was deflated or inflated by them. Historical scores stand. Pool sha
+`73a2ed5aa87c38e554c818aff4b8c6dd865621c6134b4abacebfa9070a818f8b` (prior ev19 pool `f8b53663...`).
