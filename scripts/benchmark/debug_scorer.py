@@ -2056,6 +2056,24 @@ _F1_LIST_BULLET_RE = re.compile(r"^[\s]*[-•*]\s*(.+)$", re.MULTILINE)
 _F1_LIST_NUMBERED_RE = re.compile(r"^[\s]*\d+[.)]\s*(.+)$", re.MULTILINE)
 
 
+_F1_LIST_ABSTENTION_PREFIX_RE = re.compile(r"^(?:[-*\u2022]\s*|answer\s*:\s*)+", re.IGNORECASE)
+_F1_LIST_ABSTENTION_SUFFIX_RE = re.compile(r"[\s.!?;,:]+$")
+
+
+def _normalize_abstention_candidate(response: str) -> str:
+    """Normalise a reply ONLY for the whole-reply abstention test (EV-19.5).
+
+    Strips surrounding whitespace, any leading bullet (``-``, ``*``, ``\u2022``) and/or an
+    ``Answer:`` prefix (any case, any order, repeated), and trailing punctuation, so
+    ``None`` / ``- None`` / ``None.`` / ``Answer: None`` all reach the abstention regex as
+    ``None``. This is a *prefix/suffix* normaliser: the regex is still applied with
+    ``fullmatch``, so ``None`` buried in a longer reply ("None of the above...", or a bullet
+    list that names events) is NOT an abstention and still scores on its items.
+    """
+    text = _F1_LIST_ABSTENTION_PREFIX_RE.sub("", response.strip())
+    return _F1_LIST_ABSTENTION_SUFFIX_RE.sub("", text)
+
+
 def _parse_gold_list(expected: str) -> list[str]:
     """Parse the tulving gold (a JSON list) into a list of item strings.
 
@@ -2087,7 +2105,7 @@ def _extract_list_items_with_fallback(response: str) -> tuple[list[str], bool]:
     ``_score_f1_list`` treats as a model-side parse failure when the
     resulting F1 also misses threshold.
     """
-    if _F1_LIST_ABSTENTION_RE.fullmatch(response.strip()):
+    if _F1_LIST_ABSTENTION_RE.fullmatch(_normalize_abstention_candidate(response)):
         return [], False
     bullets = _F1_LIST_BULLET_RE.findall(response)
     if bullets:
