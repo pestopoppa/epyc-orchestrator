@@ -255,14 +255,23 @@ def kernel_fenced_paths(roots: Any, mounts: list[tuple[str, str, str]] | None = 
     return with_mount_aliases(raw, read_mounts() if mounts is None else mounts)
 
 
-def build_landlock_rules(fenced: set[str], root: str = "/") -> list[list[Any]]:
-    """Allow-list: READ_DIR on ``root``, READ_FILE on everything not fenced."""
+KIND_PROC = 4  # "/proc": the shim grants non-numeric entries + its own pid dir at exec time
+
+
+def build_landlock_rules(fenced: set[str], root: str = "/", special: dict[str, int] | None = None) -> list[list[Any]]:
+    """Allow-list: READ_DIR on ``root``, READ_FILE on everything not fenced.
+
+    ``special`` maps a path to a rule kind that replaces the ordinary grant for that entry
+    (SEC-EXEC-5 uses ``{"/proc": KIND_PROC}``). A fenced path need not exist: its parent is still
+    descended, so a file created there later has no rule and stays denied.
+    """
     fenced = {f.rstrip("/") or "/" for f in fenced}
-    fenced_list = sorted(fenced)
+    special = {k.rstrip("/") or "/": v for k, v in (special or {}).items()}
+    marks = sorted(fenced | set(special))
 
     def contains(path: str) -> bool:
         prefix = path.rstrip("/") + "/"
-        return any(f.startswith(prefix) for f in fenced_list)
+        return any(f.startswith(prefix) for f in marks)
 
     rules: list[list[Any]] = [[root, KIND_DIR_ONLY]]
     if not contains(root):
@@ -277,6 +286,9 @@ def build_landlock_rules(fenced: set[str], root: str = "/") -> list[list[Any]]:
         for entry in entries:
             path = entry.path
             if path in fenced:
+                continue
+            if path in special:
+                rules.append([path, special[path]])
                 continue
             try:
                 if entry.is_symlink():
@@ -336,8 +348,22 @@ def _write_cached(payload: str, kind: str) -> str:
     return str(path)
 
 
-def wrap_command(argv: list[str], *, extra_allow: Iterable[str] = ()) -> tuple[list[str], dict[str, str], str]:
-    """(argv, extra env, level) for an ARMED child. ``hook-only`` leaves argv as is."""
+def wrap_command(
+    argv: list[str], *, extra_allow: Iterable[str] = (), policy: Any = None,
+) -> tuple[list[str], dict[str, str], str]:
+    """(argv, extra env, level) for an ARMED child. ``hook-only`` leaves argv as is.
+
+    With a SEC-EXEC ``policy`` (``exec_sandbox.Policy``) the fence's fenced set is merged with the
+    containment policy and enforcement is Landlock-or-refuse: ``exec_sandbox.ContainmentUnavailable``
+    is raised rather than degrading to a weaker level.
+    """
+    if policy is not None:
+        from src.repl_environment import exec_sandbox
+        from src.repl_environment.knowledge_fence import fence_roots
+
+        roots = fence_roots()
+        wrapped, env = exec_sandbox.wrap(argv, policy=policy, extra_allow=extra_allow, fence_roots=roots)
+        return wrapped, env, LANDLOCK
     level = probe_enforcement()
     if level == HOOK_ONLY:
         return list(argv), {}, level

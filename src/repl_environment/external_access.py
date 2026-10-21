@@ -59,6 +59,7 @@ class _ExternalAccessMixin:
             tool, text=text, cwd=aud.get("cwd", cwd), started=started, outcome=outcome,
             exit_code=aud.get("exit"), refusal=refusal,
             role=getattr(self, "role", None), request_id=getattr(self, "task_id", None),
+            write_outside_root=aud.get("write_outside_root"), spawned_process=aud.get("spawned_process"),
         )
 
     def _web_fetch(self, url: str, max_chars: int = 10000) -> str:
@@ -91,11 +92,23 @@ class _ExternalAccessMixin:
             return "[ERROR: Only http/https URLs are allowed]"
 
         try:
-            resp = requests.get(
-                url,
-                timeout=30,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)"},
-            )
+            _headers = {"User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)"}
+            from src.repl_environment.exec_containment import flag_enabled
+
+            if flag_enabled("web_fetch_guard"):
+                # SEC-EXEC-3: private/loopback/link-local/metadata deny, re-checked per redirect
+                # hop and at connect time. Refusals are logged and audited with their reason.
+                from src.repl_environment import web_guard
+
+                try:
+                    resp = web_guard.fetch(url, _headers, 30)
+                except web_guard.WebGuardRefusal as refusal:
+                    web_guard.log_refusal("web_fetch", url, str(refusal))
+                    aud["outcome"] = "refused"
+                    aud["refusal"] = str(refusal)
+                    return f"[ERROR: WEB_FETCH DENIED: {refusal}]"
+            else:
+                resp = requests.get(url, timeout=30, headers=_headers)
             resp.raise_for_status()
 
             content_type = resp.headers.get("Content-Type", "")
@@ -274,11 +287,35 @@ class _ExternalAccessMixin:
             # production, the launch is unchanged.
             from src.repl_environment.knowledge_fence import shell_fence_command
 
-            shell_argv, shell_env, shell_scratch = shell_fence_command(shlex.split(cmd))
-            if shell_env is None:  # SEC-EXEC-1: unfenced children get the minimal env too
-                from src.repl_environment.exec_containment import child_env
+            from src.repl_environment import exec_sandbox
 
-                shell_env = child_env(task_id=getattr(self, "task_id", None))
+            _policy = exec_sandbox.current_policy()
+            try:
+                shell_argv, shell_env, shell_scratch = shell_fence_command(shlex.split(cmd))
+                if shell_env is None:  # SEC-EXEC-1: unfenced children get the minimal env too
+                    from src.repl_environment.exec_containment import child_env
+
+                    shell_env = child_env(task_id=getattr(self, "task_id", None))
+                    if _policy is not None:  # SEC-EXEC-3/5: Landlock + seccomp, or refuse
+                        shell_argv, _extra = exec_sandbox.wrap(
+                            shell_argv, policy=_policy, extra_allow=[shell_env["HOME"], _shell_cwd],
+                        )
+                        shell_env.update(_extra)
+            except exec_sandbox.ContainmentUnavailable as exc:
+                reason = exec_sandbox.describe_refusal(exc)
+                logger.warning("run_shell REFUSED: %s", reason)
+                aud["outcome"] = "refused"
+                aud["refusal"] = reason
+                return f"[ERROR: {reason}]"
+            from src.repl_environment.exec_containment import flag_enabled as _flag
+
+            if _flag("exec_write_flags"):  # SEC-EXEC-7 (static: run_shell has no shell syntax)
+                from src.repl_environment import write_audit
+
+                aud["write_outside_root"] = write_audit.shell_write_flag(
+                    parts, str(_shell_cwd),
+                    write_audit.allowed_write_roots([shell_env.get("HOME")]),
+                )
             try:
                 result = subprocess.run(
                     shell_argv,
@@ -295,6 +332,15 @@ class _ExternalAccessMixin:
                     shutil.rmtree(shell_scratch, ignore_errors=True)
 
             aud["exit"] = result.returncode
+            _shim_note = (
+                exec_sandbox.shim_failure_note(result.returncode, result.stderr) if _policy is not None else None
+            )
+            if _shim_note is not None:  # the kernel layer could not be applied: visible refusal
+                reason = exec_sandbox.describe_refusal(_shim_note)
+                logger.warning("run_shell REFUSED: %s", reason)
+                aud["outcome"] = "refused"
+                aud["refusal"] = reason
+                return f"[ERROR: {reason}]"
             output = result.stdout
             if result.stderr:
                 output += "\n[STDERR]\n" + result.stderr
@@ -380,6 +426,13 @@ class _ExternalAccessMixin:
 
         fence_run_dir = python_fence_run_dir(tmp_dir)
         script_dir = fence_run_dir or tmp_dir
+        from src.repl_environment import exec_sandbox
+        from src.repl_environment.exec_containment import flag_enabled as _flag
+
+        _policy = exec_sandbox.current_policy()
+        _write_flags = _flag("exec_write_flags")
+        side_file = None
+        _write_roots: list[str] = []
         try:
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".py", dir=script_dir, delete=False,
@@ -394,27 +447,60 @@ class _ExternalAccessMixin:
             from src.repl_environment.exec_containment import child_env
 
             aud["cwd"] = tmp_dir if fence_run_dir is None else script_dir
-            fence_launch = python_fence_launch(script_path, script_dir)
-            if fence_launch is None:
-                result = subprocess.run(
-                    ["python3", script_path],
-                    input=stdin_data or None,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    cwd=tmp_dir,
-                    env=child_env(task_id=getattr(self, "task_id", None)),  # SEC-EXEC-1: no inherited API secrets
-                )
-            else:
-                result = subprocess.run(
-                    fence_launch.argv,
-                    input=stdin_data or None,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    cwd=script_dir,
-                    env=fence_launch.env,
-                )
+            try:
+                fence_launch = python_fence_launch(script_path, script_dir)
+                if fence_launch is None:
+                    _env = child_env(task_id=getattr(self, "task_id", None))  # SEC-EXEC-1: no inherited API secrets
+                    _argv = ["python3", script_path]
+                    if _write_flags:  # SEC-EXEC-7: audit-hook bootstrap + side file (flag off: unchanged launch)
+                        from src.repl_environment import write_audit
+
+                        _fd, side_file = tempfile.mkstemp(prefix=".write_audit.", dir=tmp_dir)
+                        os.close(_fd)
+                        _env[write_audit.SIDE_FILE_ENV] = side_file
+                        _argv = write_audit.python_argv(script_path)
+                        _write_roots = write_audit.allowed_write_roots([_env.get("HOME"), tmp_dir])
+                    if _policy is not None:  # SEC-EXEC-3/5: Landlock + seccomp, or refuse
+                        _argv, _extra = exec_sandbox.wrap(
+                            _argv, policy=_policy, extra_allow=[_env["HOME"], tmp_dir],
+                        )
+                        _env.update(_extra)
+                    result = subprocess.run(
+                        _argv,
+                        input=stdin_data or None,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        cwd=tmp_dir,
+                        env=_env,
+                    )
+                else:
+                    result = subprocess.run(
+                        fence_launch.argv,
+                        input=stdin_data or None,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        cwd=script_dir,
+                        env=fence_launch.env,
+                    )
+            except exec_sandbox.ContainmentUnavailable as exc:
+                reason = exec_sandbox.describe_refusal(exc)
+                logger.warning("run_python_code REFUSED: %s", reason)
+                aud["outcome"] = "refused"
+                aud["refusal"] = reason
+                return f"[ERROR: {reason}]"
+
+            _shim_note = (
+                exec_sandbox.shim_failure_note(result.returncode, result.stderr) if _policy is not None else None
+            )
+            if _shim_note is not None:  # the kernel layer could not be applied: visible refusal
+                reason = exec_sandbox.describe_refusal(_shim_note)
+                logger.warning("run_python_code REFUSED: %s", reason)
+                aud["exit"] = result.returncode
+                aud["outcome"] = "refused"
+                aud["refusal"] = reason
+                return f"[ERROR: {reason}]"
 
             aud["exit"] = result.returncode
             output = result.stdout
@@ -439,6 +525,16 @@ class _ExternalAccessMixin:
             logger.debug("run_python_code failed", exc_info=True)
             return f"[ERROR: {type(e).__name__}: {e}]"
         finally:
+            if side_file is not None:
+                from src.repl_environment import write_audit
+
+                aud["write_outside_root"], aud["spawned_process"] = write_audit.read_python_flags(
+                    side_file, _write_roots,
+                )
+                try:
+                    os.unlink(side_file)
+                except OSError:
+                    pass
             try:
                 os.unlink(script_path)
             except Exception:

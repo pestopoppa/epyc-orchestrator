@@ -23,6 +23,23 @@ Spec: ``{"mode": "landlock"|"mountns", "rules": [[path, kind], ...],
 ``EPYC_FENCE_KERNEL_EXTRA`` may name extra full-access paths as a JSON list:
 the per-call script and run directory.
 
+SEC-EXEC-3/5 extensions (production model-exec containment, driven by ``exec_sandbox``):
+
+``--probe netdeny``
+    Exit 0 when the seccomp socket filter really denies ``socket(AF_INET, ...)`` while
+    ``socketpair(AF_UNIX)`` still works.
+
+Spec keys ``netdeny`` (true: seccomp-deny every ``socket()`` plus io_uring/ptrace/process_vm/
+pidfd_getfd/unshare/setns, allow only ``socketpair(AF_UNIX)``; AND Landlock TCP bind/connect
+handling with no rules when the ABI has it) and ``scope`` (true: Landlock abstract-unix-socket
+and signal scoping when ABI >= 6, so the child cannot signal processes outside its domain).
+Rule kind 4 (``/proc`` only) is expanded HERE, at exec time: every non-numeric /proc entry and
+this process's own pid directory are granted, so other processes' ``/proc/<pid>/environ`` and
+``/proc/<pid>/mem`` stay unreadable. The shim execs in place, so the pid it grants is the pid
+the command runs under; descendants forked later see their own /proc/<pid> denied (accepted).
+Any failure to apply a requested restriction still exits 126: the shim never runs the command
+with less than was asked for.
+
 Landlock grants READ_FILE and READ_DIR only on allow-listed paths. Execute and
 write rights are not handled, so they behave as before. Cross-directory
 rename/link is implicitly refused by Landlock (REFER), so a fenced file cannot
@@ -56,6 +73,33 @@ _K_REFER = 1 << 13     # ABI >= 2
 _K_TRUNCATE = 1 << 14  # ABI >= 3
 _K_PR_SET_NO_NEW_PRIVS = 38
 _K_FULL, _K_DIR_ONLY, _K_FILE = 1, 2, 3
+_K_PROC = 4  # expanded at exec time (own pid + non-numeric /proc entries)
+# Landlock ABI 4 (net) / ABI 6 (scope) bits.
+_K_NET_BIND_TCP = 1 << 0
+_K_NET_CONNECT_TCP = 1 << 1
+_K_SCOPE_ABSTRACT_UNIX = 1 << 0
+_K_SCOPE_SIGNAL = 1 << 1
+_K_PR_SET_SECCOMP = 22
+_K_SECCOMP_MODE_FILTER = 2
+_K_SECCOMP_RET_KILL = 0x80000000
+_K_SECCOMP_RET_ALLOW = 0x7FFF0000
+_K_SECCOMP_RET_ERRNO = 0x00050000
+_K_EACCES = 13
+_K_AF_UNIX = 1
+# classic-BPF opcodes
+_K_BPF_LD_W_ABS = 0x20
+_K_BPF_JEQ_K = 0x15
+_K_BPF_JSET_K = 0x45
+_K_BPF_RET_K = 0x06
+_K_AUDIT_ARCH_X86_64 = 0xC000003E
+_K_AUDIT_ARCH_AARCH64 = 0xC00000B7
+_K_X32_BIT = 0x40000000
+# Per-arch: audit arch, socketpair nr, and syscalls denied outright
+# (socket, io_uring_setup, ptrace, process_vm_readv/writev, pidfd_getfd, unshare, setns).
+_K_SECCOMP_ARCH = {
+    "x86_64": (_K_AUDIT_ARCH_X86_64, 53, (41, 425, 101, 310, 311, 438, 272, 308)),
+    "aarch64": (_K_AUDIT_ARCH_AARCH64, 199, (198, 425, 117, 270, 271, 438, 97, 268)),
+}
 
 # Read-only masks: the ABI-1 fallback used by --probe and by a spec that carries
 # no explicit masks. The parent normally passes handled/full/file masks widened
@@ -82,31 +126,76 @@ def _k_fail(msg):
     _k_os._exit(126)
 
 
-class _KRulesetAttr(_k_ctypes.Structure):
-    _fields_ = [("handled_access_fs", _k_ctypes.c_uint64)]
-
-
 class _KPathBeneath(_k_ctypes.Structure):
     _pack_ = 1
     _fields_ = [("allowed_access", _k_ctypes.c_uint64), ("parent_fd", _k_ctypes.c_int32)]
 
 
-def _k_landlock_restrict(rules, extra, masks=None):
+class _KRulesetAttrV6(_k_ctypes.Structure):
+    _fields_ = [
+        ("handled_access_fs", _k_ctypes.c_uint64),
+        ("handled_access_net", _k_ctypes.c_uint64),
+        ("scoped", _k_ctypes.c_uint64),
+    ]
+
+
+def _k_abi(libc):
+    nums = _K_SYS.get(_k_platform.machine())
+    if nums is None:
+        return 0
+    abi = libc.syscall(nums[0], None, _k_ctypes.c_size_t(0), _k_ctypes.c_uint32(_K_CREATE_RULESET_VERSION))
+    return int(abi) if abi > 0 else 0
+
+
+def _k_proc_rules():
+    """Grants for /proc: every non-numeric entry and this process's own pid directory."""
+    me = str(_k_os.getpid())
+    out = []
+    with _k_os.scandir("/proc") as it:
+        for entry in it:
+            name = entry.name
+            if name.isdigit() and name != me:
+                continue
+            try:
+                if entry.is_symlink():
+                    continue  # self / thread-self resolve into the granted own-pid directory
+                out.append(("/proc/" + name, _K_FULL if entry.is_dir(follow_symlinks=False) else _K_FILE))
+            except OSError:
+                continue
+    return out
+
+
+def _k_landlock_restrict(rules, extra, masks=None, netdeny=False, scope=False):
     nums = _K_SYS.get(_k_platform.machine())
     if nums is None:
         raise OSError(_k_errno.ENOSYS, "landlock syscall numbers unknown for this arch")
     create, add, restrict = nums
     libc = _k_libc()
-    handled = int((masks or {}).get("handled") or _K_RO_HANDLED)
-    full = int((masks or {}).get("full") or _K_RO_FULL)
-    file_access = int((masks or {}).get("file") or _K_RO_FILE)
-    attr = _KRulesetAttr(handled)
-    ruleset = libc.syscall(create, _k_ctypes.byref(attr), _k_ctypes.c_size_t(8), _k_ctypes.c_uint32(0))
+    m = masks or {}
+    handled = int(m["handled"]) if "handled" in m else _K_RO_HANDLED
+    full = int(m["full"]) if "full" in m else _K_RO_FULL
+    file_access = int(m["file"]) if "file" in m else _K_RO_FILE
+    abi = _k_abi(libc)
+    handled_net = (_K_NET_BIND_TCP | _K_NET_CONNECT_TCP) if (netdeny and abi >= 4) else 0
+    scoped = (_K_SCOPE_ABSTRACT_UNIX | _K_SCOPE_SIGNAL) if (scope and abi >= 6) else 0
+    if not (handled or handled_net or scoped):
+        return  # nothing for Landlock to enforce on this ABI (seccomp may still apply)
+    attr = _KRulesetAttrV6(handled, handled_net, scoped)
+    size = 8 if abi < 4 else (16 if abi < 6 else 24)
+    ruleset = libc.syscall(create, _k_ctypes.byref(attr), _k_ctypes.c_size_t(size), _k_ctypes.c_uint32(0))
     if ruleset < 0:
         e = _k_ctypes.get_errno()
         raise OSError(e, "landlock_create_ruleset: " + _k_os.strerror(e))
     try:
-        entries = [(p, k) for p, k in rules] + [(p, _K_FULL) for p in extra]
+        entries = []
+        for p, k in rules:
+            if k == _K_PROC:
+                entries.extend(_k_proc_rules())
+            else:
+                entries.append((p, k))
+        entries += [(p, _K_FULL) for p in extra]
+        if not handled:
+            entries = []  # no filesystem right is handled: path rules would be EINVAL
         for path, kind in entries:
             try:
                 fd = _k_os.open(path, _K_O_PATH | _k_os.O_CLOEXEC)
@@ -139,6 +228,70 @@ def _k_landlock_restrict(rules, extra, masks=None):
             raise OSError(e, "landlock_restrict_self: " + _k_os.strerror(e))
     finally:
         _k_os.close(ruleset)
+
+
+class _KSockFilter(_k_ctypes.Structure):
+    _fields_ = [
+        ("code", _k_ctypes.c_uint16),
+        ("jt", _k_ctypes.c_uint8),
+        ("jf", _k_ctypes.c_uint8),
+        ("k", _k_ctypes.c_uint32),
+    ]
+
+
+class _KSockFprog(_k_ctypes.Structure):
+    _fields_ = [("len", _k_ctypes.c_uint16), ("filter", _k_ctypes.POINTER(_KSockFilter))]
+
+
+def _k_seccomp_netdeny():
+    """Deny every socket() (EACCES) and the syscalls that could borrow a socket or a peer's memory.
+
+    Allowed: ``socketpair(AF_UNIX, ...)`` only (asyncio/multiprocessing self-pipes). An
+    unexpected architecture / x32 / compat syscall is killed or denied, never allowed.
+    """
+    machine = _k_platform.machine()
+    cfg = _K_SECCOMP_ARCH.get(machine)
+    if cfg is None:
+        raise OSError(_k_errno.ENOSYS, "no seccomp table for arch %s" % machine)
+    arch, socketpair_nr, deny_nrs = cfg
+    prog = []
+    labels = {}
+
+    def emit(code, k=0, jt=0, jf=0):
+        prog.append([code, jt, jf, k])
+
+    emit(_K_BPF_LD_W_ABS, 4)                     # seccomp_data.arch
+    emit(_K_BPF_JEQ_K, arch, 1, 0)
+    emit(_K_BPF_RET_K, _K_SECCOMP_RET_KILL)      # wrong arch: kill, never allow
+    emit(_K_BPF_LD_W_ABS, 0)                     # seccomp_data.nr
+    if machine == "x86_64":
+        emit(_K_BPF_JSET_K, _K_X32_BIT, "deny", 0)
+    for nr in deny_nrs:
+        emit(_K_BPF_JEQ_K, nr, "deny", 0)
+    emit(_K_BPF_JEQ_K, socketpair_nr, 0, "allow")
+    emit(_K_BPF_LD_W_ABS, 16)                    # args[0] (low word): the socket domain
+    emit(_K_BPF_JEQ_K, _K_AF_UNIX, "allow", "deny")
+    labels["allow"] = len(prog)
+    emit(_K_BPF_RET_K, _K_SECCOMP_RET_ALLOW)
+    labels["deny"] = len(prog)
+    emit(_K_BPF_RET_K, _K_SECCOMP_RET_ERRNO | _K_EACCES)
+    for idx, ins in enumerate(prog):
+        for pos in (1, 2):
+            if isinstance(ins[pos], str):
+                off = labels[ins[pos]] - idx - 1
+                if not 0 <= off <= 255:
+                    raise OSError(_k_errno.EINVAL, "seccomp jump out of range")
+                ins[pos] = off
+    n = len(prog)
+    arr = (_KSockFilter * n)(*[_KSockFilter(c, jt, jf, k) for c, jt, jf, k in prog])
+    fprog = _KSockFprog(n, _k_ctypes.cast(arr, _k_ctypes.POINTER(_KSockFilter)))
+    libc = _k_libc()
+    if libc.prctl(_K_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        e = _k_ctypes.get_errno()
+        raise OSError(e, "prctl(NO_NEW_PRIVS): " + _k_os.strerror(e))
+    if libc.prctl(_K_PR_SET_SECCOMP, _K_SECCOMP_MODE_FILTER, _k_ctypes.byref(fprog), 0, 0) != 0:
+        e = _k_ctypes.get_errno()
+        raise OSError(e, "prctl(SECCOMP_MODE_FILTER): " + _k_os.strerror(e))
 
 
 def _k_write(path, text):
@@ -186,6 +339,24 @@ def _k_main(argv):
             if mode == "mountns":
                 _k_mountns_restrict([])
                 return 0
+            if mode == "netdeny":
+                import socket as _k_socket
+
+                _k_seccomp_netdeny()
+                try:
+                    _k_socket.socket(_k_socket.AF_INET, _k_socket.SOCK_STREAM).close()
+                    return 3  # a socket was created: the filter is not live
+                except PermissionError:
+                    pass
+                try:
+                    _k_socket.socket(_k_socket.AF_INET6, _k_socket.SOCK_DGRAM).close()
+                    return 3
+                except PermissionError:
+                    pass
+                a, b = _k_socket.socketpair(_k_socket.AF_UNIX, _k_socket.SOCK_STREAM)
+                a.close()
+                b.close()
+                return 0
         except OSError:
             return 2
         return 2
@@ -201,7 +372,10 @@ def _k_main(argv):
         extra = _k_json.loads(_k_os.environ.pop("EPYC_FENCE_KERNEL_EXTRA", "") or "[]")
         mode = spec.get("mode")
         if mode == "landlock":
-            _k_landlock_restrict(spec.get("rules") or [], extra, spec.get("masks"))
+            _k_landlock_restrict(spec.get("rules") or [], extra, spec.get("masks"),
+                                 bool(spec.get("netdeny")), bool(spec.get("scope")))
+            if spec.get("netdeny"):
+                _k_seccomp_netdeny()
         elif mode == "mountns":
             _k_mountns_restrict(spec.get("fenced") or [])
         else:

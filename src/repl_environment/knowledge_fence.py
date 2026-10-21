@@ -725,7 +725,11 @@ def shell_fence_command(argv: list[str]) -> tuple[list[str], dict[str, str] | No
         return argv, None, None
     from src.repl_environment import fence_kernel
 
-    wrapped, extra_env, level = fence_kernel.wrap_command(argv)
+    from src.repl_environment import exec_sandbox
+
+    # SEC-EXEC-3/5: with exec_containment on, the fence and the containment share one Landlock
+    # domain (Landlock-or-refuse); ContainmentUnavailable is turned into a refusal by the caller.
+    wrapped, extra_env, level = fence_kernel.wrap_command(argv, policy=exec_sandbox.current_policy())
     _record_enforcement(carrier, level)
     if level == fence_kernel.HOOK_ONLY:
         return argv, None, None
@@ -768,13 +772,20 @@ def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | N
 
     env = child_env({FENCE_CONFIG_ENV: config_file})
     argv = ["python3", "-c", python_fence_bootstrap(), script_path]
+    from src.repl_environment import exec_sandbox
+
+    policy = exec_sandbox.current_policy()
     if carrier.armed:
-        argv, extra_env, level = fence_kernel.wrap_command(argv, extra_allow=[tmp_dir])
+        argv, extra_env, level = fence_kernel.wrap_command(argv, extra_allow=[tmp_dir], policy=policy)
         env.update(extra_env)
         # tempfile in the child lands inside the granted run dir, never in an
         # inherited TMPDIR such as <llm>/tmp.
         env.update(armed_tmp_env(os.path.join(tmp_dir, "tmp")))
         _record_enforcement(carrier, level)
+    elif policy is not None:
+        # Control arm (hook records, never refuses): the production containment still applies.
+        argv, extra_env = exec_sandbox.wrap(argv, policy=policy, extra_allow=[tmp_dir, env.get("HOME")])
+        env.update(extra_env)
     return PythonFenceLaunch(argv=argv, env=env, touched_file=touched_file)
 
 
