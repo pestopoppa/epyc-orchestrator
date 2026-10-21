@@ -24,10 +24,28 @@ _ENV_ALLOW_EXACT = frozenset({
 _ENV_ALLOW_PREFIX = ("LC_",)
 
 
-def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+def _scratch_home(base: str, task_id: str | None) -> str:
+    """Per-task scratch HOME under ``base`` (mode 0700); fresh mkdtemp if that fails."""
+    import tempfile
+
+    safe = "".join(c for c in (task_id or "shared") if c.isalnum() or c in "-_")[:64] or "shared"
+    try:
+        home = os.path.join(base, f"epyc-exec-home-{os.getuid()}", safe)
+        os.makedirs(home, mode=0o700, exist_ok=True)
+        if os.access(home, os.W_OK):
+            return home
+    except OSError:
+        pass
+    return tempfile.mkdtemp(prefix="epyc-exec-home-")
+
+
+def child_env(extra: dict[str, str] | None = None, task_id: str | None = None) -> dict[str, str]:
     """Minimal environment for a model-exec child: allowlisted parent vars plus ``extra``.
 
-    ``extra`` carries the fence variables (explicit, never inherited wholesale).
+    ``extra`` carries the fence variables (explicit, never inherited wholesale). HOME is a
+    per-task scratch dir (never the real home with its credential files), with XDG cache/config
+    dirs under it, so expanduser/git/pip behave. PYTHONPATH and VIRTUAL_ENV are not passed:
+    nothing in run_python_code relies on them (the interpreter is resolved via PATH).
     """
     env = {
         k: v
@@ -36,6 +54,13 @@ def child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     }
     if extra:
         env.update(extra)
+    import tempfile
+
+    base = env.get("TMPDIR") or tempfile.gettempdir()
+    home = _scratch_home(base, task_id)
+    env["HOME"] = home
+    env["XDG_CACHE_HOME"] = os.path.join(home, ".cache")
+    env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
     return env
 
 

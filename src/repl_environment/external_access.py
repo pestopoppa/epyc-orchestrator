@@ -278,7 +278,7 @@ class _ExternalAccessMixin:
             if shell_env is None:  # SEC-EXEC-1: unfenced children get the minimal env too
                 from src.repl_environment.exec_containment import child_env
 
-                shell_env = child_env()
+                shell_env = child_env(task_id=getattr(self, "task_id", None))
             try:
                 result = subprocess.run(
                     shell_argv,
@@ -403,7 +403,7 @@ class _ExternalAccessMixin:
                     text=True,
                     timeout=timeout,
                     cwd=tmp_dir,
-                    env=child_env(),  # SEC-EXEC-1: no inherited API secrets
+                    env=child_env(task_id=getattr(self, "task_id", None)),  # SEC-EXEC-1: no inherited API secrets
                 )
             else:
                 result = subprocess.run(

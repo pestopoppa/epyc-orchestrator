@@ -113,3 +113,18 @@ def test_timeout_and_secret_redaction_audited(audit):
     assert recs[0]["outcome"] == "timeout" and recs[0]["tool"] == "run_python_code"
     assert recs[1]["exit"] == 0
     assert "A" * 40 not in json.dumps(recs[1])
+
+
+def test_child_home_is_scratch_not_real_home_and_writable(tmp_path, monkeypatch):
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    repl = REPLEnvironment(context="t")
+    out = repl._run_python_code(
+        "import os\nh=os.environ['HOME']\nopen(os.path.join(h,'w'),'w').write('x')\n"
+        "print('HOME='+h, 'XDG='+os.environ['XDG_CACHE_HOME'], 'PP' in os.environ)"
+    )
+    import os as _os
+
+    real = _os.path.expanduser("~")
+    assert "HOME=" + real + " " not in out
+    assert "HOME=" + str(tmp_path) in out and "/.cache" in out
+    assert "Traceback" not in out
