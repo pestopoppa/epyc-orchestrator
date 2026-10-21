@@ -2720,6 +2720,11 @@ class PromptForge:
         self._attach_prompt_effect(mutation)
         if not mutation.safety_valid:
             mutation.mutated_content = mutation.original_content
+        else:
+            # MHS-15: GEPA candidates get the same warn-only interference lint.
+            mutation.safety_warnings = list(mutation.safety_warnings) + prompt_interference_lint(
+                mutation.original_content, mutation.mutated_content
+            )
         return mutation
 
     def apply_mutation(self, mutation: PromptMutation) -> dict[str, Any]:

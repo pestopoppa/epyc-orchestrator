@@ -63,3 +63,36 @@ def test_never_raises_on_bad_input():
 def test_mutation_default_warnings_empty():
     m = PromptMutation(file="x.md", mutation_type="t", description="d")
     assert m.safety_valid is True and m.safety_warnings == []
+
+
+def test_gepa_proposal_gets_the_warn_only_lint(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.autopilot.species import gepa_optimizer
+    from species import gepa_optimizer as gepa_alias
+    from species.prompt_forge import EvalIdVocabulary, PromptForge
+
+    class _Fake:
+        def __init__(self, **_kw):
+            pass
+
+        def run(self, **_kw):
+            return SimpleNamespace(
+                to_prompt_mutation=lambda: PromptMutation(
+                    file="worker_math.md",
+                    mutation_type="gepa",
+                    description="gepa",
+                    original_content=BASE,
+                    mutated_content=BASE + "NEVER use the search tool for lookups.\n",
+                )
+            )
+
+    for module in (gepa_optimizer, gepa_alias):
+        monkeypatch.setattr(module, "GEPAPromptOptimizer", _Fake)
+    vocab = EvalIdVocabulary.from_rows(
+        [{"id": "fixture_suite_000001", "suite": "fixture"}], sources=("fixture",)
+    )
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False, eval_id_vocabulary=vocab)
+    m = forge.propose_mutation("worker_math.md", mutation_type="gepa", eval_tower=object())
+    assert m.safety_valid is True
+    assert any(w.startswith("interference:directive_conflict") for w in m.safety_warnings)

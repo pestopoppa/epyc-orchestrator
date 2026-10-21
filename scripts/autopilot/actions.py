@@ -1713,6 +1713,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         eval_result = ctx.tower.hybrid_eval()
         return eval_result, "prompt_forge"
 
+    _stash_prompt_interference(ctx, mutation)
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_mutation(mutation)
