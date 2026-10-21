@@ -282,6 +282,50 @@ _FIND_WRITE_ACTIONS = frozenset({
 })
 
 
+def check_shell_exec(parts: list[str]) -> str | None:
+    """Command-execution refusals for a ``run_shell`` argv, scoped or not (SEC-EXEC-2).
+
+    Interpreters and the exec/IO forms of find/awk/sed run arbitrary code or write files, so
+    they are refused in production too, not only under a task_root scope. ``run_python_code``
+    is the sanctioned Python path.
+    """
+    if not parts:
+        return None
+    from src.repl_environment import _fence_rules as _rules
+    from src.repl_environment.knowledge_fence import (
+        _AWK_IO_RE,
+        _script_program,
+        _sed_does_io,
+    )
+
+    base = parts[0].split("/")[-1]
+    args = parts[1:]
+
+    def _refuse(why: str) -> str:
+        return f"EXEC CONTAINMENT: run_shell {base} refused \u2014 {why}"
+
+    def _cluster(a: str, letter: str) -> bool:
+        return a.startswith("-") and not a.startswith("--") and letter in a[1:]
+
+    if base.startswith(_rules.PYTHON_EXECUTABLE_PREFIXES):
+        return _refuse("arbitrary code execution is not available; use run_python_code")
+    if base == "sed":
+        program = _script_program(base, args)
+        if program is not None and _sed_does_io(program):
+            return _refuse("program performs file or command I/O")
+        if any(a in {"-f", "--file"} or a.startswith("--file=") or _cluster(a, "f") for a in args):
+            return _refuse("-f program files cannot be inspected")
+    if base in {"awk", "gawk", "mawk", "nawk"}:
+        program = _script_program(base, args)
+        if program is not None and _AWK_IO_RE.search(program):
+            return _refuse("program performs file or command I/O")
+        if any(a in {"-f", "--file"} or a.startswith("--file=") or _cluster(a, "f") for a in args):
+            return _refuse("-f program files cannot be inspected")
+    if base == "find" and any(a in _FIND_WRITE_ACTIONS for a in args):
+        return _refuse("-delete/-exec/-fprint actions can write or run commands")
+    return None
+
+
 def check_shell_scope(parts: list[str], cwd: str) -> str | None:
     """Refusal text for a ``run_shell`` argv under this request's scope, else None."""
     scope = _scope.get()

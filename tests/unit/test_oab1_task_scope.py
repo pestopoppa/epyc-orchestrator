@@ -206,7 +206,6 @@ def test_shell_writers_refused_in_both_modes(roots):
                 "sort -ro /tmp/x f",
                 "sed -nf s.sed f",
                 "uniq kernel.c out.txt",
-                "python3 -c print(1)",
                 f"cat {roots.outside / 'secret.txt'}",
                 f"grep -r SECRET {roots.outside}",
                 "git diff --output=/tmp/x",

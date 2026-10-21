@@ -250,8 +250,9 @@ def test_run_shell_denies_fenced_paths_and_python(tree: Path) -> None:
     with patch("subprocess.run") as run:
         out = _ExternalAccessMixin._run_shell(env, f"cat {wiki_file}")
         assert out.startswith(f"[ERROR: {kf.DENY_PREFIX}")
+        # SEC-EXEC-2: python3 is no longer on the run_shell allowlist at all.
         out = _ExternalAccessMixin._run_shell(env, "python3 -c 'print(1)'")
-        assert out.startswith(f"[ERROR: {kf.DENY_PREFIX}")
+        assert out.startswith("[ERROR: Command 'python3' not in allowlist")
         out = _ExternalAccessMixin._run_shell(env, "git show HEAD:README.md")
         assert out.startswith(f"[ERROR: {kf.DENY_PREFIX}")
         run.assert_not_called()
@@ -743,7 +744,7 @@ def test_run_python_code_unfenced_is_unchanged(llm_root: Path, monkeypatch) -> N
     out = _run_python(code)
     assert len(seen) == 1
     cmd, kwargs = seen[0]
-    assert cmd[0] == "python3" and len(cmd) == 2 and "env" not in kwargs
+    assert cmd[0] == "python3" and len(cmd) == 2 and "OPENAI_API_KEY" not in kwargs["env"]  # SEC-EXEC-1: minimal env
     assert "SECRET wiki content" in out and "True __main__" in out
     assert 'raise ValueError' in out and "ValueError: boom" in out
 
@@ -1138,7 +1139,7 @@ def test_unarmed_python_launch_is_output_identical(llm_root: Path, monkeypatch) 
     out = _run_python(code)
     assert len(seen) == 1
     cmd, kwargs = seen[0]
-    assert cmd[0] == "python3" and len(cmd) == 2 and "env" not in kwargs
+    assert cmd[0] == "python3" and len(cmd) == 2 and "OPENAI_API_KEY" not in kwargs["env"]  # SEC-EXEC-1: minimal env
     assert "SECRET wiki content" in out
 
 

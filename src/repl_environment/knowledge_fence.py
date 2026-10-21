@@ -730,7 +730,9 @@ def shell_fence_command(argv: list[str]) -> tuple[list[str], dict[str, str] | No
     if level == fence_kernel.HOOK_ONLY:
         return argv, None, None
     scratch = tempfile.mkdtemp(prefix="epyc-fence-tmp-", dir=fence_kernel.SCRATCH_ROOT)
-    return wrapped, {**os.environ, **extra_env, **armed_tmp_env(scratch)}, scratch
+    from src.repl_environment.exec_containment import child_env
+
+    return wrapped, child_env({**extra_env, **armed_tmp_env(scratch)}), scratch
 
 
 def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | None:
@@ -762,7 +764,9 @@ def python_fence_launch(script_path: str, tmp_dir: str) -> PythonFenceLaunch | N
     config_file = os.path.join(tmp_dir, ".fence_config.json")
     with open(config_file, "w", encoding="utf-8") as fh:
         json.dump(config, fh)
-    env = {**os.environ, FENCE_CONFIG_ENV: config_file}
+    from src.repl_environment.exec_containment import child_env
+
+    env = child_env({FENCE_CONFIG_ENV: config_file})
     argv = ["python3", "-c", python_fence_bootstrap(), script_path]
     if carrier.armed:
         argv, extra_env, level = fence_kernel.wrap_command(argv, extra_allow=[tmp_dir])
