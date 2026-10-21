@@ -127,4 +127,6 @@ def user_conclude(
     if store.add_fact(user_id, user_fact):
         return f"Saved: [{category}] {fact}"
     else:
+        if store.admission is not None and store.last_rejection:
+            return f"Rejected: admission schema ({store.last_rejection})."
         return "Rejected: fact failed injection safety scan."

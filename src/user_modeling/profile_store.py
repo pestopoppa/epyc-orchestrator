@@ -22,6 +22,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.user_modeling.admission import AdmissionPolicy, check_admission
+
 logger = logging.getLogger(__name__)
 
 # Entry delimiter (Hermes convention: § section sign)
@@ -67,6 +69,11 @@ class UserFact:
     category: str = "general"  # general, format, workflow, style, domain
     source: str = "user"       # user, deriver, session
     created_at: float = 0.0
+    # Admission-schema inputs (HS-PROF-1). Unused unless the store has a policy;
+    # not persisted.
+    kind: str = ""  # identity, attribute, relationship, instruction
+    inferred: bool = False
+    evidence_span_days: float | None = None
 
 
 @dataclass
@@ -95,6 +102,7 @@ class ProfileStore:
         self,
         db_path: str | Path | None = None,
         max_profile_chars: int = DEFAULT_MAX_PROFILE_CHARS,
+        admission: AdmissionPolicy | None = None,
     ):
         if db_path is None:
             db_dir = Path(DEFAULT_DB_DIR)
@@ -102,6 +110,8 @@ class ProfileStore:
             db_path = db_dir / "user_profiles.db"
         self._db_path = str(db_path)
         self._max_chars = max_profile_chars
+        self.last_rejection = ""
+        self.admission = admission  # None = legacy behaviour, unchanged
         self._lock = threading.Lock()
         self._init_db()
 
@@ -141,6 +151,19 @@ class ProfileStore:
 
         now = time.time()
         with self._lock, self._connect() as conn:
+            if self.admission is not None:
+                n = conn.execute(
+                    "SELECT COUNT(*) FROM user_facts WHERE user_id = ?", (user_id,)
+                ).fetchone()[0]
+                decision = check_admission(
+                    fact.fact, fact.category, kind=fact.kind, inferred=fact.inferred,
+                    evidence_span_days=fact.evidence_span_days,
+                    current_entries=n, policy=self.admission,
+                )
+                if not decision.admit:
+                    logger.info("Admission rejected fact for %s: %s", user_id, decision.reason)
+                    self.last_rejection = decision.reason
+                    return False
             # Ensure profile row exists
             conn.execute(
                 "INSERT OR IGNORE INTO user_profiles (user_id, updated_at) VALUES (?, ?)",
@@ -310,7 +333,9 @@ def get_profile_store() -> ProfileStore:
     if _store is None:
         with _store_lock:
             if _store is None:
-                _store = ProfileStore()
+                # Admission schema is opt-in (HS-PROF-1 extra arm).
+                on = os.environ.get("ORCHESTRATOR_PROFILE_ADMISSION", "") == "1"
+                _store = ProfileStore(admission=AdmissionPolicy() if on else None)
     return _store
 
 
