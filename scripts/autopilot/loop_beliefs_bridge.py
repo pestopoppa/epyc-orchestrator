@@ -63,6 +63,9 @@ DEGRADED_LOG_PATH = ORCH_ROOT / "logs" / "loop_beliefs_degraded.jsonl"
 REVIEW_FLAGS_PATH = ORCH_ROOT / "logs" / "loop_beliefs_review_flags.jsonl"
 
 EXIT_READY, EXIT_REFUSED = 0, 3
+#: DESIGN §7.1 evidence tiers. Only `target` and `sibling` ids may be cited as premises; `host`
+#: (device/backend-only, e.g. INF-70 bandwidth ceilings) is background and is refused.
+TIERS = ("target", "sibling", "host")
 
 Runner = Callable[..., Any]
 
@@ -278,6 +281,32 @@ def _check_answer(answer: Any) -> None:
         raise ValueError("belief context lacks a verified ledger state")
     if not answer.get("ledger_state_digest"):
         raise ValueError("belief context lacks a ledger_state_digest")
+    _check_v2_keys(answer["evidence"])
+
+
+def _check_v2_keys(evidence: Mapping[str, Any]) -> None:
+    """DESIGN §7.4 answer keys (`tiers`, `tried_index`, `nonempty_target`, `banner`, per-claim
+    `tier`). ALL OPTIONAL: an older answer carries none and passes. A key that is present must
+    have its documented shape, so a malformed one is refused instead of rendered."""
+    tiers = evidence.get("tiers")
+    if tiers is not None and (not isinstance(tiers, Mapping) or any(
+            k not in TIERS or isinstance(v, bool) or not isinstance(v, int)
+            for k, v in tiers.items())):
+        raise ValueError("belief evidence.tiers is malformed")
+    index = evidence.get("tried_index")
+    if index is not None and not isinstance(index, (str, list, tuple, Mapping)):
+        raise ValueError("belief evidence.tried_index is malformed")
+    nonempty = evidence.get("nonempty_target")
+    if nonempty is not None and not isinstance(nonempty, bool):
+        raise ValueError("belief evidence.nonempty_target is malformed")
+    claims = evidence.get("claims")
+    if claims is not None:
+        if not isinstance(claims, (list, tuple)):
+            raise ValueError("belief evidence.claims is malformed")
+        for row in claims:
+            if isinstance(row, Mapping) and row.get("tier") is not None \
+                    and row.get("tier") not in TIERS:
+                raise ValueError(f"belief evidence claim tier {row.get('tier')!r} is unknown")
 
 
 def validate_ready(answer: Any) -> ReadyBeliefs:
@@ -543,7 +572,17 @@ def known_good_flags(ready: ReadyBeliefs) -> dict[str, Any]:
             aliases = dict(body.get("aliases") or {})
             source = "known_good_snapshot"
     return {"contested": contested, "withdrawn": withdrawn, "aliases": aliases,
-            "source": source, "ledger_state_digest": ready.ledger_state_digest}
+            "host": host_claim_ids(ev), "source": source,
+            "ledger_state_digest": ready.ledger_state_digest}
+
+
+def _claim_rows(ev: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    return [r for r in ev.get("claims") or () if isinstance(r, Mapping) and r.get("claim_id")]
+
+
+def host_claim_ids(ev: Mapping[str, Any]) -> set[str]:
+    """Ids this answer labelled `tier: host`. An older answer labels none, so none is refused."""
+    return {str(r["claim_id"]) for r in _claim_rows(ev) if r.get("tier") == "host"}
 
 
 def declared_premises(rationale: Any) -> list[str]:
@@ -560,7 +599,10 @@ def premise_flag_reason(premises: Iterable[str], flags: Mapping[str, Any] | None
     aliases = flags.get("aliases") or {}
     withdrawn = set(flags.get("withdrawn") or ())
     contested = set(flags.get("contested") or ())
-    for status, bucket in (("withdrawn", withdrawn), ("contested", contested)):
+    host = set(flags.get("host") or ())
+    # `host` is last: a withdrawn/contested host claim still reports the stronger reason.
+    for status, bucket in (("withdrawn", withdrawn), ("contested", contested),
+                           ("host-tier (background only, not a premise)", host)):
         hits = [p for p in premises if aliases.get(p, p) in bucket]
         if hits:
             return f"vidya premise {status}: claim_id={','.join(sorted(set(hits)))}"
@@ -578,6 +620,63 @@ def _neutralise(text: str) -> str:
     return neutralise_control_tokens(text)
 
 
+#: Bounds for the lines this bridge adds around the reader's own section (which has its own cap).
+MAX_CITABLE_IDS = 30
+MAX_HOST_IDS = 6
+MAX_INDEX_CHARS = 3000
+
+
+def _tried_index_text(index: Any) -> str:
+    """The tried-mechanisms index as one bounded line. The reader sends a string or a list of
+    ids / `{mechanism_id, outcome}` rows; anything else renders nothing."""
+    if isinstance(index, str):
+        text = index.strip()
+    elif isinstance(index, (list, tuple)):
+        parts = []
+        for item in index:
+            if isinstance(item, Mapping):
+                mech = str(item.get("mechanism_id") or item.get("id") or "").strip()
+                outcome = str(item.get("outcome") or "").strip()
+                if mech:
+                    parts.append(f"{mech} {outcome}".strip())
+            elif isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+        text = " · ".join(parts)
+    else:
+        return ""
+    return text[:MAX_INDEX_CHARS]
+
+
+def _value_lines(ev: Mapping[str, Any], section: str) -> list[str]:
+    """The DESIGN §7.4 additions, rendered under the ledger header. Empty for an older answer."""
+    lines: list[str] = []
+    tiers = ev.get("tiers")
+    if isinstance(tiers, Mapping):
+        lines.append("  Evidence tiers: " + ", ".join(
+            f"{name} {int(tiers.get(name) or 0)}" for name in TIERS) + ".")
+        if ev.get("nonempty_target") is False:
+            lines.append("  No belief is scoped to this turn's target; sibling/host lines are "
+                         "context, not evidence about it.")
+    rows = _claim_rows(ev)
+    if any(r.get("tier") for r in rows):
+        citable = [str(r["claim_id"]) for r in rows if r.get("tier") in ("target", "sibling")]
+        host = [str(r["claim_id"]) for r in rows if r.get("tier") == "host"]
+        if citable:
+            lines.append(f"  Citable in {REPLY_FIELD} (target/sibling tier): "
+                         + ", ".join(citable[:MAX_CITABLE_IDS])
+                         + (f" (+{len(citable) - MAX_CITABLE_IDS} more)"
+                            if len(citable) > MAX_CITABLE_IDS else ""))
+        if host:
+            lines.append("  Background only, NOT citable as a premise (host tier): "
+                         + ", ".join(host[:MAX_HOST_IDS])
+                         + (f" (+{len(host) - MAX_HOST_IDS} more)"
+                            if len(host) > MAX_HOST_IDS else ""))
+    tried = _tried_index_text(ev.get("tried_index"))
+    if tried and "Tried on" not in section:
+        lines.append(f"  Tried mechanisms (id outcome): {tried}")
+    return lines
+
+
 def render_prompt_block(ready: ReadyBeliefs) -> str:
     state = ready.ledger_state
     fresh = state.get("freshness") or {}
@@ -586,6 +685,10 @@ def render_prompt_block(ready: ReadyBeliefs) -> str:
               f"{ready.ledger_state_digest[:23]}; sync_action={fresh.get('sync_action')}.")
     ev = ready.evidence
     section = str(ev.get("section") or "")
+    extra = _value_lines(ev, section)
+    if extra:
+        header = header + "\n" + "\n".join(extra)
+    # Every belief-derived string (section, ids, index text) funnels through ONE neutralise call.
     if section.strip():
         return _neutralise(f"{header}\n{section}")
     return _neutralise(
@@ -608,14 +711,16 @@ def build_planner_receipt(ready: ReadyBeliefs | None, declared: Iterable[str],
         return {"schema": RECEIPT_SCHEMA, "status": "absent", "ledger_state": None,
                 "ledger_state_digest": None, "declared_reliance_claim_ids": declared}
     ev = ready.evidence
-    usable = [str(c) for c in ev.get("claim_ids") or []]
+    host = host_claim_ids(ev)
+    # Host-tier ids were shown (as background) but are never usable premises.
+    usable = [str(c) for c in ev.get("claim_ids") or [] if str(c) not in host]
     contested = [str(c) for c in ev.get("contested_claim_ids") or []]
     withdrawn = [str(c) for c in ev.get("withdrawn_claim_ids") or []]
     accepted = sorted(set(declared) & set(usable))
     rejected = []
     for cid in sorted(set(declared) - set(usable)):
         reason = ("withdrawn" if cid in withdrawn else "contested" if cid in contested
-                  else "not_presented")
+                  else "host_tier" if cid in host else "not_presented")
         rejected.append({"claim_id": cid, "reason": reason})
     return {
         "schema": RECEIPT_SCHEMA, "status": "ready", "consumer": ready.answer.get("consumer"),
@@ -624,6 +729,10 @@ def build_planner_receipt(ready: ReadyBeliefs | None, declared: Iterable[str],
         "evidence_status": ev.get("status"), "section_sha256": ev.get("section_sha256") or "",
         "exposed_usable_claim_ids": usable, "exposed_contested_claim_ids": contested,
         "exposed_withdrawn_claim_ids": withdrawn,
+        "exposed_host_claim_ids": sorted(host),
+        "evidence_tiers": dict(ev["tiers"]) if isinstance(ev.get("tiers"), Mapping) else None,
+        "nonempty_target": ev.get("nonempty_target"),
+        "section_bytes": ev.get("section_bytes"),
         "declared_reliance_claim_ids": sorted(set(declared)),
         "accepted_reliance_claim_ids": accepted, "rejected_reliance": rejected,
         "reliance_status": "planner_declared" if accepted else "not_declared",
@@ -794,7 +903,8 @@ def receipt_id(trial_id: Any, item_id: str) -> str:
 __all__ = [
     "BeliefContextRefused", "BeliefSettings", "DegradedSelection", "PrepareOutcome",
     "ReadyBeliefs", "SeedReviewToken", "build_planner_receipt", "check_seeds",
-    "declared_premises", "degraded_excluded_ids", "degraded_row", "known_good_flags",
+    "declared_premises", "degraded_excluded_ids", "degraded_row", "host_claim_ids",
+    "known_good_flags",
     "mint_seed_review", "operator_seed_items", "premise_flag_reason", "prepare", "raise_alarm",
     "recovery_recheck", "render_prompt_block", "require_ready", "require_seed_review",
     "select_degraded_item", "validate_ready",

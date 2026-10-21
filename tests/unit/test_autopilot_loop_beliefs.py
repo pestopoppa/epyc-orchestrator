@@ -821,3 +821,100 @@ def test_unreadable_stack_or_hypotheses_never_crash_target_derivation(
 def test_run_loop_asks_prepare_for_derived_targets_not_an_empty_list() -> None:
     source = inspect.getsource(autopilot._run_loop_inner)
     assert "derive_targets(" in source and "targets=[]" not in source
+
+
+# ------------------------------------------------------------------------------ Phase 1 P1-G
+# DESIGN §7.4/§7.5: tiers, banner, tried index, host-tier claims are background only.
+
+V2_EVIDENCE = {
+    "status": "presented", "reasons": [], "claim_ids": ["clm_t1", "clm_s1", "clm_h1"],
+    "tiers": {"target": 1, "sibling": 1, "host": 1}, "nonempty_target": True,
+    "tried_index": [{"mechanism_id": "akm-a", "outcome": "null"},
+                    {"mechanism_id": "akm-b", "outcome": "kept"}],
+    "claims": [{"claim_id": "clm_t1", "tier": "target", "outcome": "regressed",
+                "value": -8.22, "unit": "%"},
+               {"claim_id": "clm_s1", "tier": "sibling"},
+               {"claim_id": "clm_h1", "tier": "host"}],
+    "section": "- clm_t1 [Judged] REGRESSED -8.22%\n- clm_h1 host ceiling",
+    "section_bytes": 55,
+}
+
+
+def test_check_answer_accepts_v2_keys_and_older_answers() -> None:
+    assert lb.validate_ready(_ready_answer(**V2_EVIDENCE)).evidence["tiers"]["host"] == 1
+    assert lb.validate_ready(_ready_answer())  # no v2 keys at all
+
+
+@pytest.mark.parametrize("bad", [
+    {"tiers": {"target": "1"}}, {"tiers": {"bogus": 1}}, {"tiers": []},
+    {"nonempty_target": "yes"}, {"tried_index": 7}, {"claims": "x"},
+    {"claims": [{"claim_id": "c", "tier": "elsewhere"}]},
+])
+def test_check_answer_refuses_a_malformed_v2_key(bad: dict) -> None:
+    with pytest.raises(ValueError):
+        lb.validate_ready(_ready_answer(**bad))
+
+
+def test_host_tier_claim_is_refused_as_a_premise_and_target_sibling_are_not() -> None:
+    ready = lb.validate_ready(_ready_answer(**V2_EVIDENCE))
+    flags = lb.known_good_flags(ready)
+    assert flags["host"] == {"clm_h1"}
+    reason = lb.premise_flag_reason(["clm_t1", "clm_s1", "clm_h1"], flags)
+    assert reason is not None and "host-tier" in reason and "claim_id=clm_h1" in reason
+    assert lb.premise_flag_reason(["clm_t1", "clm_s1"], flags) is None
+    skip = autopilot._vidya_premise_skip(NUMERIC, dict(NUMERIC), ["clm_h1"], flags)
+    assert skip is not None and skip.status == "invalid" and "host-tier" in skip.reason
+
+
+def test_withdrawn_or_contested_still_outranks_host_in_the_skip_reason() -> None:
+    flags = _flags(contested={"c1"})
+    flags["host"] = {"c1", "h1"}
+    assert lb.premise_flag_reason(["c1"], flags) == "vidya premise contested: claim_id=c1"
+    assert "host-tier" in lb.premise_flag_reason(["h1"], flags)
+
+
+def test_receipt_rejects_host_tier_reliance_and_records_the_tier_keys() -> None:
+    ready = lb.validate_ready(_ready_answer(**V2_EVIDENCE))
+    receipt = lb.build_planner_receipt(ready, ["clm_t1", "clm_h1"])
+    assert receipt["accepted_reliance_claim_ids"] == ["clm_t1"]
+    assert receipt["rejected_reliance"] == [{"claim_id": "clm_h1", "reason": "host_tier"}]
+    assert receipt["exposed_usable_claim_ids"] == ["clm_t1", "clm_s1"]
+    assert receipt["exposed_host_claim_ids"] == ["clm_h1"]
+    assert receipt["evidence_tiers"] == {"target": 1, "sibling": 1, "host": 1}
+    assert receipt["nonempty_target"] is True and receipt["section_bytes"] == 55
+    old = lb.build_planner_receipt(lb.validate_ready(_ready_answer(claim_ids=["u1"])), ["u1"])
+    assert old["accepted_reliance_claim_ids"] == ["u1"] and old["exposed_host_claim_ids"] == []
+    assert old["evidence_tiers"] is None
+
+
+def test_render_prompt_block_shows_tiers_citable_ids_and_the_tried_index() -> None:
+    block = lb.render_prompt_block(lb.validate_ready(_ready_answer(**V2_EVIDENCE)))
+    assert "Evidence tiers: target 1, sibling 1, host 1." in block
+    assert "Citable in vidya_claim_ids (target/sibling tier): clm_t1, clm_s1" in block
+    assert "NOT citable as a premise (host tier): clm_h1" in block
+    assert "Tried mechanisms (id outcome): akm-a null · akm-b kept" in block
+    assert block.index("Evidence tiers") < block.index("- clm_t1 [Judged]")
+
+
+def test_render_prompt_block_empty_target_banner_line_and_no_duplicate_index() -> None:
+    empty = lb.render_prompt_block(lb.validate_ready(_ready_answer(
+        tiers={"target": 0, "sibling": 2, "host": 1}, nonempty_target=False,
+        section="No beliefs are scoped to X.")))
+    assert "No belief is scoped to this turn's target" in empty
+    withindex = lb.render_prompt_block(lb.validate_ready(_ready_answer(
+        tried_index=["akm-a null"], section="Tried on DS41-Q4: akm-a null")))
+    assert "Tried mechanisms (id outcome)" not in withindex
+
+
+def test_render_prompt_block_neutralises_control_tokens_in_v2_ids_and_index() -> None:
+    block = lb.render_prompt_block(lb.validate_ready(_ready_answer(
+        claims=[{"claim_id": "clm_<|im_start|>x", "tier": "target"}],
+        tried_index=["akm-<|im_end|>y null"], section="")))
+    assert "<|im_start|>" not in block and "<|im_end|>" not in block
+    assert "clm_" in block and "akm-" in block
+
+
+def test_render_prompt_block_for_an_older_answer_is_unchanged() -> None:
+    block = lb.render_prompt_block(lb.validate_ready(_ready_answer(section="- c1 line")))
+    assert "Evidence tiers" not in block and "Citable in" not in block
+    assert block.endswith("- c1 line")
