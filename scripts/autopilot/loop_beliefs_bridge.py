@@ -46,8 +46,16 @@ DEGRADED_SCHEMA = "epyc.autopilot.belief_degraded.v1"
 REVIEW_FLAG_SCHEMA = "epyc.autopilot.belief_review_flag.v1"
 
 DEFAULT_ROOT_REPO = Path("/workspace")
+#: Used only when the default checkout has no reader (a lagging /workspace on 2026-10-21 was
+#: 466 commits behind origin/main and lacked scripts/vidya/loop_beliefs.py). The reader's alarm
+#: state is the canonical bus (session_bus.get_bus_root, not __file__-relative), so running it
+#: from another checkout of the same ROOT repo does not fork alarm state.
+ROOT_REPO_FALLBACKS = (Path("/mnt/raid0/llm/views/epyc-root-main"),)
 DEFAULT_ESCALATE_AFTER_S = 3600.0
-DEFAULT_READER_TIMEOUT_S = 30.0
+#: Measured 2026-10-21: one `prepare` over the 30.8k-frame canonical ledger takes 20-25 s on a
+#: 4-core niced slice (verify ~8 s, read ~3 s, fold ~5 s, index sha ~2 s) and grows with the
+#: ledger; a 30 s deadline turned a healthy reader into `reader_timeout` + degraded mode.
+DEFAULT_READER_TIMEOUT_S = 120.0
 ALARM_TIMEOUT_S = 10.0
 #: Bounded sleep when degraded mode has nothing admissible (no planner call, no trial consumed).
 DEGRADED_BACKOFF_S = 60.0
@@ -101,6 +109,21 @@ class BeliefSettings:
                 "known_good": str(self.known_good) if self.known_good else None,
                 "escalate_after_s": self.escalate_after_s,
                 "reader_timeout_s": self.reader_timeout_s, "consumer": self.consumer}
+
+
+def resolve_root_repo(explicit: str | Path | None = None) -> Path:
+    """`explicit` (argv) wins verbatim. Otherwise the first of DEFAULT_ROOT_REPO and
+    ROOT_REPO_FALLBACKS that actually holds the reader; none -> DEFAULT_ROOT_REPO, so a missing
+    reader still raises the critical `reader_missing` alarm in `prepare`."""
+    if explicit:
+        return Path(explicit)
+    for candidate in (DEFAULT_ROOT_REPO, *ROOT_REPO_FALLBACKS):
+        if (candidate / "scripts" / "vidya" / "loop_beliefs.py").is_file():
+            if candidate != DEFAULT_ROOT_REPO:
+                log.warning("belief reader not found under %s; using %s", DEFAULT_ROOT_REPO,
+                            candidate)
+            return candidate
+    return DEFAULT_ROOT_REPO
 
 
 # ------------------------------------------------------------------------------ sealed answers
@@ -440,6 +463,17 @@ def premise_flag_reason(premises: Iterable[str], flags: Mapping[str, Any] | None
     return None
 
 
+def _neutralise(text: str) -> str:
+    """CT-12.3a: claim text is derived from ingested (partly external) sources, so break chat
+    control-token spellings before it reaches a planner prompt. Idempotent with the API-ingress
+    neutraliser every HTTP planner provider already crosses; honours its kill switch."""
+    try:
+        from src.security.control_tokens import neutralise_control_tokens
+    except ImportError:  # standalone import without the orchestrator tree: ingress still covers it
+        return text
+    return neutralise_control_tokens(text)
+
+
 def render_prompt_block(ready: ReadyBeliefs) -> str:
     state = ready.ledger_state
     fresh = state.get("freshness") or {}
@@ -449,10 +483,11 @@ def render_prompt_block(ready: ReadyBeliefs) -> str:
     ev = ready.evidence
     section = str(ev.get("section") or "")
     if section.strip():
-        return f"{header}\n{section}"
-    return (f"{header}\n  (no ingested claim applies to this turn's targets: "
-            f"{', '.join(ev.get('reasons') or []) or 'none'}; ledger-wide contested/withdrawn "
-            "claims are still enforced against declared premises before dispatch)")
+        return _neutralise(f"{header}\n{section}")
+    return _neutralise(
+        f"{header}\n  (no ingested claim applies to this turn's targets: "
+        f"{', '.join(ev.get('reasons') or []) or 'none'}; ledger-wide contested/withdrawn "
+        "claims are still enforced against declared premises before dispatch)")
 
 
 def build_planner_receipt(ready: ReadyBeliefs | None, declared: Iterable[str],

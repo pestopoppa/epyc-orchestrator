@@ -8619,7 +8619,9 @@ def _run_loop_inner(
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     # Mandatory belief context (operator rules 2026-10-21): every planner turn first runs the
     # shared ROOT reader; there is no off switch, only argv-configured paths/timeouts.
-    belief_settings = belief_settings or _loop_beliefs.BeliefSettings()
+    belief_settings = belief_settings or _loop_beliefs.BeliefSettings(
+        root_repo=_loop_beliefs.resolve_root_repo()
+    )
     belief_last_degraded_signature: str | None = None
     log.info("Belief reader (mandatory): %s", json.dumps(belief_settings.describe()))
     state = load_state()
@@ -11733,7 +11735,7 @@ def cmd_start(args: argparse.Namespace) -> None:
 def _belief_settings_from_args(args: argparse.Namespace) -> "_loop_beliefs.BeliefSettings":
     """argv -> belief reader wiring (ONE-champion rule: no env-only gate, no off switch)."""
     return _loop_beliefs.BeliefSettings(
-        root_repo=Path(getattr(args, "belief_root_repo", None) or _loop_beliefs.DEFAULT_ROOT_REPO),
+        root_repo=_loop_beliefs.resolve_root_repo(getattr(args, "belief_root_repo", None)),
         ledger=Path(args.belief_ledger) if getattr(args, "belief_ledger", None) else None,
         known_good=(
             Path(args.belief_known_good) if getattr(args, "belief_known_good", None) else None
@@ -12447,8 +12449,9 @@ def main() -> None:
     # deliberately NO switch that lets the planner run without a verified ledger state.
     p_start.add_argument(
         "--belief-root-repo",
-        default=str(_loop_beliefs.DEFAULT_ROOT_REPO),
-        help="epyc-root checkout whose scripts/vidya/loop_beliefs.py is the belief reader",
+        default=None,
+        help="epyc-root checkout whose scripts/vidya/loop_beliefs.py is the belief reader "
+        "(default: /workspace, else the epyc-root-main view when /workspace lacks the reader)",
     )
     p_start.add_argument("--belief-ledger", default=None, help="ledger path override")
     p_start.add_argument(
