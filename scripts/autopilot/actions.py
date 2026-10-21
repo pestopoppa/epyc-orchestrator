@@ -39,6 +39,9 @@ ORCH_ROOT = Path(__file__).resolve().parents[2]
 # action, so a forced re-run (which copies the stored action) cannot inherit a stale sha,
 # and action fingerprints / repeat detection are unchanged.
 SERVED_CONTENT_STATE_KEY = "_trial_served_content"
+# MHS-15: warn-only prompt-interference findings for the trial's mutation; the trial loop
+# pops it into ``eval_details.prompt_interference_warnings``.
+PROMPT_LINT_STATE_KEY = "_trial_prompt_interference_warnings"
 
 
 def served_content_record(
@@ -1009,6 +1012,22 @@ def _ledger_journal_dir(ctx: _ActionContext) -> Path | None:
     return Path(journal_dir) if isinstance(journal_dir, (str, Path)) else None
 
 
+def _stash_prompt_interference(ctx: _ActionContext, mutation: Any) -> None:
+    """MHS-15: carry the lint findings to the journal row (warn-only; fails open)."""
+    try:
+        warnings = [
+            str(w)
+            for w in (getattr(mutation, "safety_warnings", None) or [])
+            if str(w).startswith("interference:")
+        ]
+        if warnings:
+            ctx.state[PROMPT_LINT_STATE_KEY] = warnings
+        else:
+            ctx.state.pop(PROMPT_LINT_STATE_KEY, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _record_rejected_mutation(
     ctx: _ActionContext,
     *,
@@ -1048,6 +1067,7 @@ def _record_rejected_mutation(
             mutated_content=str(getattr(mutation, "mutated_content", "") or ""),
             description=description,
             gate_detail=gate_detail,
+            safety_warnings=getattr(mutation, "safety_warnings", None),
             per_suite_quality=(
                 getattr(eval_result, "per_suite_quality", None) if eval_result is not None else None
             ),
@@ -1552,6 +1572,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         )
         _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
+    _stash_prompt_interference(ctx, mutation)
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_mutation(mutation)

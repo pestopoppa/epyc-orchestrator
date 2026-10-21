@@ -105,9 +105,10 @@ def build_record(
     tier: Any = None,
     trial_id: int | None = None,
     timestamp: str = "",
+    safety_warnings: Any = None,
 ) -> dict[str, Any]:
     diff = diff_text or unified_diff(original_content, mutated_content, target=target)
-    return {
+    record = {
         "schema_version": LEDGER_SCHEMA_VERSION,
         "writer": "harness",
         "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
@@ -129,6 +130,15 @@ def build_record(
             "candidate_minus_tier_baseline" if baseline_per_suite_quality else "unavailable"
         ),
     }
+    # MHS-15: additive, only when the warn-only interference lint fired.
+    lint = [
+        str(w)[:200]
+        for w in (safety_warnings or [])
+        if str(w).startswith("interference:")
+    ][:20]
+    if lint:
+        record["interference_warnings"] = lint
+    return record
 
 
 def append_record(journal_dir: Path, record: Mapping[str, Any]) -> bool:

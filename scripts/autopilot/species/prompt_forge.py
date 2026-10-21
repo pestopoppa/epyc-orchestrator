@@ -919,6 +919,147 @@ def _prompt_integrity_reason(filename: str, content: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# MHS-15 — warn-only, delta-only prompt interference lint.
+#
+# A pure function. It NEVER rejects: findings are advisory strings that land in
+# ``PromptMutation.safety_warnings`` (prefix ``interference:``) and are surfaced in
+# the AP-53 record / journal ``eval_details`` by the action handler. Only findings
+# present in the mutated text and ABSENT from the original are reported (delta-only),
+# so an unchanged prompt yields none. Placed beside ``_prompt_integrity_reason`` so the
+# later HIL-3 guard-module extraction moves it with its siblings.
+# ---------------------------------------------------------------------------
+
+INTERFERENCE_WARNING_PREFIX = "interference:"
+INTERFERENCE_EXAMPLE_ADD_THRESHOLD = 3
+_INTERFERENCE_MIN_DUP_CHARS = 24
+_INTERFERENCE_POS_RE = re.compile(r"\b(?:must|always)\b", re.IGNORECASE)
+_INTERFERENCE_NEG_RE = re.compile(
+    r"\b(?:never|do not|don't|must not|should not|shall not)\b", re.IGNORECASE
+)
+_INTERFERENCE_DIRECTIVE_SPLIT_RE = re.compile(
+    r"\b(?:must not|must|always|never|do not|don't|should not|shall not)\b", re.IGNORECASE
+)
+_INTERFERENCE_WORD_RE = re.compile(r"[a-z][a-z_]{3,}")
+_INTERFERENCE_STOPWORDS = frozenset(
+    """that this with from have been will your their there then than them they
+    what when where which while into onto over under only also just each every
+    some such must never always should shall does done make made being were
+    about after before because other these those would could using used uses
+    answer answers response responses output outputs instead unless until""".split()
+)
+_INTERFERENCE_PRIORITY_RE = re.compile(
+    r"\b(?:highest priority|top priority|first priority|most important|above all"
+    r"|takes precedence|take precedence|overrides? all|overrides? any)\b",
+    re.IGNORECASE,
+)
+_INTERFERENCE_EXAMPLE_RE = re.compile(
+    r"^\s*(?:#+\s*)?(?:<example\b|example\b\s*\d*\s*[:.)\-]?|for example\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _interference_lines(text: str) -> list[str]:
+    return [" ".join(line.split()) for line in (text or "").splitlines() if line.strip()]
+
+
+def _interference_dup_keys(text: str) -> set[str]:
+    """Normalized lines/blocks that occur more than once in ``text``."""
+    lines = [
+        line.lower()
+        for line in _interference_lines(text)
+        if len(line) >= _INTERFERENCE_MIN_DUP_CHARS
+        and not set(line) <= set("-=*_#`| ")
+    ]
+    seen: dict[str, int] = {}
+    for line in lines:
+        seen[line] = seen.get(line, 0) + 1
+    dups = {line for line, n in seen.items() if n > 1}
+    blocks: dict[str, int] = {}
+    for block in re.split(r"\n\s*\n", text or ""):
+        norm = " ".join(block.lower().split())
+        if len(block.splitlines()) >= 2 and len(norm) >= _INTERFERENCE_MIN_DUP_CHARS:
+            blocks[norm] = blocks.get(norm, 0) + 1
+    dups.update(b for b, n in blocks.items() if n > 1)
+    return dups
+
+
+def _interference_scope_nouns(line: str) -> frozenset[str]:
+    """Content words of the clause governed by the directive keyword(s)."""
+    parts = _INTERFERENCE_DIRECTIVE_SPLIT_RE.split(line)
+    clause = " ".join(parts[1:]) if len(parts) > 1 else line
+    return frozenset(
+        w for w in _INTERFERENCE_WORD_RE.findall(clause.lower()) if w not in _INTERFERENCE_STOPWORDS
+    )
+
+
+def _interference_conflicts(text: str) -> dict[tuple[str, str], tuple[str, ...]]:
+    pos: list[tuple[str, frozenset[str]]] = []
+    neg: list[tuple[str, frozenset[str]]] = []
+    for line in _interference_lines(text):
+        key = line.lower()
+        if _INTERFERENCE_NEG_RE.search(line):
+            neg.append((key, _interference_scope_nouns(line)))
+        elif _INTERFERENCE_POS_RE.search(line):
+            pos.append((key, _interference_scope_nouns(line)))
+    out: dict[tuple[str, str], tuple[str, ...]] = {}
+    for p_line, p_nouns in pos:
+        for n_line, n_nouns in neg:
+            shared = tuple(sorted(p_nouns & n_nouns))
+            if shared:
+                out[(p_line, n_line)] = shared
+    return out
+
+
+def _interference_priority_lines(text: str) -> set[str]:
+    return {
+        line.lower()
+        for line in _interference_lines(text)
+        if _INTERFERENCE_PRIORITY_RE.search(line)
+    }
+
+
+def _interference_example_count(text: str) -> int:
+    return sum(1 for line in (text or "").splitlines() if _INTERFERENCE_EXAMPLE_RE.match(line))
+
+
+def prompt_interference_lint(original: str, mutated: str) -> list[str]:
+    """MHS-15: advisory findings present in ``mutated`` and absent in ``original``.
+
+    Rules: ``duplicate`` (verbatim duplicate line/block), ``directive_conflict``
+    (MUST/ALWAYS vs NEVER/DO NOT sharing a scope noun), ``priority_conflict`` (two or
+    more top-priority claims where the mutation added one), ``examples_added`` (count
+    of in-context examples added, at least ``INTERFERENCE_EXAMPLE_ADD_THRESHOLD``).
+    Pure, deterministic, never raises, never rejects.
+    """
+    try:
+        original = original or ""
+        mutated = mutated or ""
+        if original == mutated:
+            return []
+        findings: list[str] = []
+        for dup in sorted(_interference_dup_keys(mutated) - _interference_dup_keys(original)):
+            findings.append(f"{INTERFERENCE_WARNING_PREFIX}duplicate:{dup[:80]}")
+        old_conflicts = set(_interference_conflicts(original))
+        for (p_line, n_line), shared in sorted(_interference_conflicts(mutated).items()):
+            if (p_line, n_line) in old_conflicts:
+                continue
+            findings.append(
+                f"{INTERFERENCE_WARNING_PREFIX}directive_conflict:"
+                f"{'/'.join(shared[:3])}|{p_line[:50]}|{n_line[:50]}"
+            )
+        new_prio = _interference_priority_lines(mutated)
+        old_prio = _interference_priority_lines(original)
+        if len(new_prio) >= 2 and new_prio - old_prio:
+            findings.append(f"{INTERFERENCE_WARNING_PREFIX}priority_conflict:{len(new_prio)}_claims")
+        added_examples = _interference_example_count(mutated) - _interference_example_count(original)
+        if added_examples >= INTERFERENCE_EXAMPLE_ADD_THRESHOLD:
+            findings.append(f"{INTERFERENCE_WARNING_PREFIX}examples_added:{added_examples}")
+        return findings
+    except Exception:  # noqa: BLE001 - advisory lint must never break proposal
+        return []
+
+
+# ---------------------------------------------------------------------------
 # RTG-55 MHS-3 — anti-leakage (UNDER-generalization) guard.
 #
 # ``_UNIVERSAL_TRANSFER_RE`` rejects OVER-generalization. This is the other half:
@@ -3450,6 +3591,11 @@ class PromptForge:
         mutation.safety_valid = verdict.valid
         mutation.safety_reason = verdict.reason
         mutation.safety_warnings = list(verdict.warnings)
+        if isinstance(mutation, PromptMutation):
+            # MHS-15: warn-only; appended after the verdict so it can never change validity.
+            mutation.safety_warnings.extend(
+                prompt_interference_lint(original_content, mutation.mutated_content)
+            )
         return verdict
 
     def _transfer_safety_verdict(

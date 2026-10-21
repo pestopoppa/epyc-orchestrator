@@ -160,7 +160,7 @@ from state_lock import (
 )
 from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
-from actions import SERVED_CONTENT_STATE_KEY, _public_pending_copy, served_content_record
+from actions import PROMPT_LINT_STATE_KEY, SERVED_CONTENT_STATE_KEY, _public_pending_copy, served_content_record
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
@@ -9821,6 +9821,7 @@ def _run_loop_inner(
         # Both cases prevent silent corruption of the planner's view.
         dispatch_infra_fingerprint: dict[str, Any] | None = None
         trial_served_content: dict[str, Any] | None = None  # set by mutation handlers
+        trial_prompt_lint: list[str] | None = None  # MHS-15 warn-only lint findings
         if pre_dispatch_skip is None:
             dispatch_infra_fingerprint = _infra_fingerprint_for_trial()  # AP-55
             state["in_flight_trial"] = {
@@ -9862,6 +9863,7 @@ def _run_loop_inner(
             # Operator decision 2026-09-16: a mutation handler leaves the sha of the file it
             # served; clear any stale record so this trial only ever sees its own.
             state.pop(SERVED_CONTENT_STATE_KEY, None)
+            state.pop(PROMPT_LINT_STATE_KEY, None)
             eval_result, species_name = dispatch_action(
                 action,
                 seeder,
@@ -9887,6 +9889,7 @@ def _run_loop_inner(
                 ),
             )
             trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)
+            trial_prompt_lint = state.pop(PROMPT_LINT_STATE_KEY, None)
             if trial_served_content is None and isinstance(multitier_validation_context, dict):
                 trial_served_content = _multitier_validation_served_content(
                     state, multitier_validation_context, trial_counter
@@ -10971,6 +10974,9 @@ def _run_loop_inner(
         eval_details_dict[INFRA_REGIME_DIGEST_KEY] = trial_regime_digest
         if trial_served:
             eval_details_dict[SERVED_CONTENT_KEY] = trial_served
+        if trial_prompt_lint:
+            # MHS-15: warn-only interference findings; never read by a gate.
+            eval_details_dict["prompt_interference_warnings"] = list(trial_prompt_lint)[:20]
         if frontier_admission:
             eval_details_dict[FRONTIER_ADMISSION_KEY] = frontier_admission
         if baseline_update is not None:
