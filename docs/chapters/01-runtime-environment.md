@@ -32,6 +32,9 @@ Independent feature flags let us turn orchestration modules on and off without t
 | `observed_dependency_logging` | `ORCHESTRATOR_OBSERVED_DEPENDENCY_LOGGING` | HIL-15: per-tool-call read/write resource edges, observed grade (default off) | None |
 | `step_event_logging` | `ORCHESTRATOR_STEP_EVENT_LOGGING` | HIL-13a: per-step tool events (args hash, ok/error, latency, output size, truncation, mutating) as `tool_step` trace-store rows for the L2 scan (default off) | None |
 | `replay_recording` | `ORCHESTRATOR_REPLAY_RECORDING` | HIL-16: per-turn model prompt/output and tool args/outputs stored content-addressed (`logs/replay_cas`, override `ORCHESTRATOR_REPLAY_CAS_DIR`) plus `model_turn` trace-store rows, for the prefix-preserving replay tier; implies step events (default off) | None |
+| `exec_containment` | `ORCHESTRATOR_EXEC_CONTAINMENT` | SEC-EXEC-3/5: run_shell / run_python_code children run under Landlock + seccomp: no sockets, credential-file read-deny, other processes' `/proc/<pid>` hidden, token-free HF_HOME; refuses the call (logged) when the host cannot enforce (default off) | None |
+| `web_fetch_guard` | `ORCHESTRATOR_WEB_FETCH_GUARD` | SEC-EXEC-3: web_fetch and fetch_docs refuse private, loopback, link-local, metadata and non-canonical-IP destinations, re-checked on every redirect hop and at connect time (default off) | None |
+| `exec_write_flags` | `ORCHESTRATOR_EXEC_WRITE_FLAGS` | SEC-EXEC-7: tool-call audit records carry `write_outside_root` (default off) | None |
 | `final_schema_validation` | `ORCHESTRATOR_FINAL_SCHEMA_VALIDATION` | Validate FINAL() value against caller-supplied JSON Schema; retry-with-error on failure (2026-05-20) | None |
 | `skillbank` | `ORCHESTRATOR_SKILLBANK` | SkillRL experience distillation | `memrl` |
 | `worker_call_budget` | `ORCHESTRATOR_WORKER_CALL_BUDGET` | Cap total REPL executions per task (default 30) | None |

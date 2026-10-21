@@ -142,6 +142,9 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("observed_dependency_logging", False, False, "OBSERVED_DEPENDENCY_LOGGING", "HIL-15: log resource reads/writes per tool call (observed grade)"),
     FeatureSpec("step_event_logging", False, False, "STEP_EVENT_LOGGING", "HIL-13a: per-step tool events (hash, ok/error, latency, size, truncation, mutating) for the L2 scan"),
     FeatureSpec("replay_recording", False, False, "REPLAY_RECORDING", "HIL-16: record per-turn model input/output and tool outputs content-addressed for the prefix-preserving replay tier (implies step events)"),
+    FeatureSpec("exec_containment", False, False, "EXEC_CONTAINMENT", "SEC-EXEC-3/5: run_shell/run_python_code children run under Landlock+seccomp (no sockets, credential-file read-deny, foreign /proc hidden); fail-closed when the host cannot enforce"),
+    FeatureSpec("web_fetch_guard", False, False, "WEB_FETCH_GUARD", "SEC-EXEC-3: web_fetch/fetch_docs deny private, loopback, link-local and metadata destinations (redirect- and DNS-rebinding-safe)"),
+    FeatureSpec("exec_write_flags", False, False, "EXEC_WRITE_FLAGS", "SEC-EXEC-7: audit records carry write_outside_root (child audit hook for run_python_code, static check for run_shell)"),
     FeatureSpec("model_fallback", False, True, "MODEL_FALLBACK", "Same-tier alternatives on circuit-open"),
     FeatureSpec("content_cache", False, False, "CONTENT_CACHE", "SHA-256 keyed response cache"),
     FeatureSpec("session_compaction", False, True, "SESSION_COMPACTION", "Summarize old context"),
@@ -637,6 +640,9 @@ class Features:
     observed_dependency_logging: bool = False  # HIL-15: per-call read/write resource edges (default off)
     step_event_logging: bool = False  # HIL-13a: per-step tool events for the L2 scan (default off)
     replay_recording: bool = False  # HIL-16: content-addressed per-turn recording for replay (default off)
+    exec_containment: bool = False  # SEC-EXEC-3/5: Landlock+seccomp for model-exec children (default off)
+    web_fetch_guard: bool = False  # SEC-EXEC-3: private-range/link-local/metadata deny for web_fetch + fetch_docs (default off)
+    exec_write_flags: bool = False  # SEC-EXEC-7: write_outside_root flag in tool-call audit records (default off)
     model_fallback: bool = False  # Try same-tier alternatives on circuit-open
     content_cache: bool = False  # SHA-256 keyed response cache for LLM calls
     session_compaction: bool = False  # Summarize old context on long conversations

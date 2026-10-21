@@ -56,6 +56,8 @@ flags:
   derived_prefill_timeout: baseline
   escalation_compression: baseline
   eval_batch_serving: baseline
+  exec_containment: baseline
+  exec_write_flags: baseline
   final_schema_validation: baseline
   generalized_interrupts: baseline
   generation_monitor: baseline
@@ -146,6 +148,7 @@ flags:
   v1_escalation: baseline
   v1_subagent_link: baseline
   voice_turn: baseline
+  web_fetch_guard: baseline
   web_research_rerank: baseline
   worker_call_budget: baseline
 

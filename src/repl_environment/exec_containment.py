@@ -24,6 +24,22 @@ _ENV_ALLOW_EXACT = frozenset({
 _ENV_ALLOW_PREFIX = ("LC_",)
 
 
+def flag_enabled(name: str) -> bool:
+    """A SEC-EXEC feature flag (``exec_containment`` | ``web_fetch_guard`` | ``exec_write_flags``).
+
+    Read live from the feature registry (env ``ORCHESTRATOR_<NAME>`` / runtime flags file). A
+    failure to read flags is treated as OFF here because every flag guards NEW enforcement whose
+    absence is the pre-existing behaviour; the refusal paths themselves never fall back.
+    """
+    try:
+        from src.features import features
+
+        return bool(getattr(features(), name, False))
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("feature flag %s unreadable; treating as off", name, exc_info=True)
+        return False
+
+
 def _scratch_home(base: str, task_id: str | None) -> str:
     """Per-task scratch HOME under ``base`` (mode 0700); fresh mkdtemp if that fails."""
     import tempfile
@@ -61,6 +77,12 @@ def child_env(extra: dict[str, str] | None = None, task_id: str | None = None) -
     env["HOME"] = home
     env["XDG_CACHE_HOME"] = os.path.join(home, ".cache")
     env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+    if flag_enabled("exec_containment"):
+        # SEC-EXEC-5: a token-free HF_HOME. The shared cache (with its token files) is never
+        # named in the child; an HF client in the child sees an empty cache and no network.
+        env["HF_HOME"] = os.path.join(home, ".cache", "huggingface")
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
     return env
 
 
@@ -113,6 +135,8 @@ def audit_tool_call(
     refusal: str | None = None,
     role: str | None = None,
     request_id: str | None = None,
+    write_outside_root: bool | None = None,
+    spawned_process: bool | None = None,
 ) -> None:
     """Append one record. Never raises (an audit failure must not break the tool call).
 
@@ -136,7 +160,20 @@ def audit_tool_call(
             "refusal_reason": redact_credentials(refusal[:500]).text if refusal else None,
             "role": role,
             "request_id": request_id,
+            # SEC-EXEC-7 review flags. None = not analysed (see write_audit's docstring).
+            "host": None,
+            "first_seen_host": None,
+            "write_outside_root": write_outside_root,
+            "spawned_process": spawned_process,
         }
+        if tool in ("web_fetch", "fetch_docs"):
+            from src.repl_environment.write_audit import first_seen_host, host_of
+
+            host = host_of(raw)
+            rec["host"] = host
+            seen_path = os.path.join(os.path.dirname(audit_log_path()) or ".", "tool_audit_seen_hosts.txt")
+            # Only a successful fetch makes a host "seen"; a refused or failed one stays flagged.
+            rec["first_seen_host"] = first_seen_host(host, seen_path, persist=(outcome == "ok"))
         line = json.dumps(rec, ensure_ascii=False)
         with _lock:
             _audit_logger(audit_log_path()).info(line)
