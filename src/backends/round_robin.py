@@ -20,6 +20,45 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _record_streaming_handoff(
+    backend: Any, role_config: Any, request: Any, ts0: float, error: BaseException | None
+) -> None:
+    """dispatch.v1 for a non-fleet streaming handle: completion is the consumer's,
+    so the record is ``handed_off`` (as the fleet's ``infer_streaming``). Never raises."""
+    try:
+        from src.backends import dispatch_log, serving_calls
+
+        st = serving_calls.peek_staged() or {}
+        url = getattr(getattr(backend, "config", None), "base_url", None)
+        prompt = getattr(request, "prompt", None)
+        n_tokens = getattr(request, "n_tokens", None)
+        dispatch_log.record_standalone(
+            lane="direct",
+            method="infer_streaming",
+            role=st.get("role") or getattr(role_config, "name", None) or getattr(request, "role", None),
+            base_url=url,
+            port=serving_calls._port_of(url),
+            ts_arrival=st.get("_ts0") or ts0,
+            ts_dispatch=ts0,
+            ts_end=time.time(),
+            request_id=st.get("request_id"),
+            session_id=st.get("session_id"),
+            client_class=st.get("client_class"),
+            client_class_provenance=st.get("client_class_provenance"),
+            client=st.get("client"),
+            workload_class=st.get("workload_class"),
+            priority=st.get("priority"),
+            trace_keys=st.get("trace_keys"),
+            prompt_chars=len(prompt) if isinstance(prompt, str) else None,
+            n_tokens_budget=n_tokens if isinstance(n_tokens, int) else None,
+            outcome="exception" if error is not None else "handed_off",
+            error_type=type(error).__name__ if error is not None else None,
+            completion_observed=False,
+        )
+    except Exception:
+        pass
+
+
 class RoundRobinBackend:
     """Distributes inference requests across multiple backend instances.
 
@@ -69,10 +108,16 @@ class RoundRobinBackend:
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         backend, idx = self._next()
+        _t0 = time.time()
+        _err: BaseException | None = None
         try:
             return backend.infer_streaming(role_config, request)
+        except BaseException as exc:
+            _err = exc
+            raise
         finally:
             self._release(idx)
+            _record_streaming_handoff(backend, role_config, request, _t0, _err)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         backend, idx = self._next()

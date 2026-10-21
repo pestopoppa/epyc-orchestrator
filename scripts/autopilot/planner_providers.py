@@ -561,6 +561,7 @@ class LocalPlannerProvider:
             "stream": False,
             "x_orchestrator_role": self._role,
             "x_disable_repl": True,
+            "x_client_class": "autopilot",
         }
         if self._top_p is not None:
             payload["top_p"] = self._top_p

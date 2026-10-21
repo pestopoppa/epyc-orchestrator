@@ -837,6 +837,7 @@ def _dispatch_direct(
             client=st.get("client"),
             workload_class=st.get("workload_class"),
             priority=st.get("priority"),
+            trace_keys=st.get("trace_keys"),
             prompt_chars=len(prompt) if isinstance(prompt, str) else None,
             n_tokens_budget=n_tokens if isinstance(n_tokens, int) else None,
             outcome=classify_outcome(result, error, False),

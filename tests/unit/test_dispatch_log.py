@@ -191,3 +191,40 @@ def test_passthrough_dispatch_record(monkeypatch, tmp_path):
     assert rec["service_ms"] == 1500.0 and rec["request"] == {"prompt_chars": 4, "n_tokens_budget": 32}
     assert rec["client"]["class"] == "opencode" and rec["fleet_at_arrival"] is None
     assert pt._tag("  ") is None and pt._tag(" a ") == "a" and pt._tag(3) is None
+
+
+# --- client class derivation and non-fleet streaming -------------------------
+
+
+def test_resolve_client_class_header_wins_and_derivations():
+    rc = dispatch_log.resolve_client_class
+    assert rc("opencode", "p", lane="fleet", workload_class="eval_batch") == ("opencode", "header", "p")
+    assert rc(None, lane="fleet", workload_class="eval_batch")[:2] == ("eval_harness", "derived")
+    assert rc(None, lane="fleet", workload_class="campaign")[:2] == ("campaign", "derived")
+    assert rc(None, lane="passthrough")[0] == "external_passthrough"
+    assert rc(None, lane="passthrough", client="codex")[0] == "external:codex"
+    assert rc(None, lane="fleet", trace_keys={"x_session_id": "s"})[0] == "v1_client"
+    assert rc(None, lane="fleet", priority="background")[0] == "background"
+    assert rc(None, lane="direct")[:2] == ("orchestrator_internal", "derived")
+
+
+def test_fleet_record_carries_class_source(monkeypatch, tmp_path):
+    cab, path = _make(monkeypatch, tmp_path, result=SimpleNamespace(success=True))
+    serving_calls.stage_caller(request_id="a", client_class="autopilot")
+    cab.infer(SimpleNamespace(name="frontdoor"), _req())
+    serving_calls.stage_caller(request_id="b", workload_class="campaign")
+    cab.infer(SimpleNamespace(name="frontdoor"), _req())
+    a, b = [r for r in _recs(path) if r["kind"] == "dispatch"]
+    assert (a["client"]["class"], a["client"]["class_source"]) == ("autopilot", "header")
+    assert (b["client"]["class"], b["client"]["class_source"]) == ("campaign", "derived")
+
+
+def test_round_robin_streaming_is_recorded_as_handed_off(monkeypatch, tmp_path):
+    from src.backends.round_robin import RoundRobinBackend
+
+    path = _direct_env(monkeypatch, tmp_path)
+    rr = RoundRobinBackend([_stub("http://localhost:8083"), _stub("http://localhost:8084")])
+    assert rr.infer_streaming(SimpleNamespace(name="r"), _req()) == "handle"
+    rec = [r for r in _recs(path) if r["kind"] == "dispatch"][0]
+    assert rec["method"] == "infer_streaming" and rec["outcome"] == "handed_off"
+    assert rec["completion_observed"] is False and rec["fleet_at_arrival"] is None
