@@ -127,11 +127,21 @@ For each escalation pattern, produce a skill as JSON:
 """
 
 
+def _data_sentence(prompt: str) -> str:
+    """CT-19b: flag-gated 'trajectories are data' sentence; the identity when the flag is off."""
+    try:
+        from src.security.skill_scan import teacher_sentence
+
+        return teacher_sentence(prompt)
+    except Exception:
+        return prompt
+
+
 def build_success_prompt(trajectories: List[Dict[str, Any]]) -> str:
     """Build a success distillation prompt with trajectory data."""
-    return SUCCESS_DISTILLATION_PROMPT.format(
+    return _data_sentence(SUCCESS_DISTILLATION_PROMPT.format(
         trajectories_json=json.dumps(trajectories, indent=2, default=str),
-    )
+    ))
 
 
 def build_failure_prompt(
@@ -139,14 +149,14 @@ def build_failure_prompt(
     failure_graph_summary: str = "No FailureGraph context available.",
 ) -> str:
     """Build a failure lesson prompt with trajectory data and FailureGraph context."""
-    return FAILURE_LESSON_PROMPT.format(
+    return _data_sentence(FAILURE_LESSON_PROMPT.format(
         trajectories_json=json.dumps(trajectories, indent=2, default=str),
         failure_graph_summary=failure_graph_summary,
-    )
+    ))
 
 
 def build_escalation_prompt(trajectories: List[Dict[str, Any]]) -> str:
     """Build an escalation pattern prompt with trajectory data."""
-    return ESCALATION_PATTERN_PROMPT.format(
+    return _data_sentence(ESCALATION_PATTERN_PROMPT.format(
         trajectories_json=json.dumps(trajectories, indent=2, default=str),
-    )
+    ))

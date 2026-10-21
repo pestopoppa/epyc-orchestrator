@@ -354,8 +354,18 @@ class DistillationPipeline:
             report.skills_rejected += 1
             return False
 
+        self._warn_scan(skill)
         self.skill_bank.store(skill, embedding=embedding)
         return True
+
+    def _warn_scan(self, skill: Skill) -> None:
+        """CT-19b: flag-gated, warn-only injection scan of the teacher-authored skill text."""
+        try:
+            from src.security.skill_scan import scan_skill
+
+            scan_skill(skill, "distillation", bank_dir=getattr(self.skill_bank, "db_path", None) and self.skill_bank.db_path.parent)
+        except Exception:  # never alters accept/reject
+            pass
 
 
 def _overlaps(a: List[str], b: List[str]) -> bool:

@@ -2567,6 +2567,13 @@ class PromptForge:
 
         original = self.read_prompt(target_file)
 
+        try:  # CT-19b: flag-gated, warn-only scan of the failure traces that steer the rewrite
+            from src.security.skill_scan import scan_fields
+
+            scan_fields({"failure_context": failure_context}, "prompt_forge", subject=target_file)
+        except Exception:
+            pass
+
         prompt = self._build_mutation_prompt(
             target_file=target_file,
             mutation_type=mutation_type,

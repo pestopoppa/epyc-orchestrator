@@ -163,6 +163,13 @@ class FailureBridge:
             )
 
             try:
+                from src.security.skill_scan import scan_skill
+
+                scan_skill(skill, "failure_bridge", bank_dir=getattr(self.skill_bank, "db_path", None) and self.skill_bank.db_path.parent)  # CT-19b
+            except Exception:  # warn-only; never alters accept/reject
+                pass
+
+            try:
                 self.skill_bank.store(skill)
                 stats["created"] += 1
                 existing_titles.add(title.lower())

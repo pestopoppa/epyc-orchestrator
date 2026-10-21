@@ -188,6 +188,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("langgraph_coder_escalation", False, False, "LANGGRAPH_CODER_ESCALATION", "LangGraph Phase 3: CoderEscalationNode"),
     # Conversation Management
     FeatureSpec("injection_scanning", False, True, "INJECTION_SCANNING", "B7: prompt injection scanning"),
+    FeatureSpec("skill_injection_scan", False, False, "SKILL_INJECTION_SCAN", "CT-19b: warn-only injection scan at SkillBank.store / PromptForge failure_context; flags to a ledger, accept/reject unchanged", ("injection_scanning",)),
     FeatureSpec("context_compression", False, False, "CONTEXT_COMPRESSION", "B2: protected-zone compression"),
     FeatureSpec("user_modeling", False, False, "USER_MODELING", "B1: cross-session user preferences", ("injection_scanning",)),
     FeatureSpec("session_token_budget", False, False, "SESSION_TOKEN_BUDGET", "B5: per-session token budget"),
@@ -688,6 +689,7 @@ class Features:
 
     # Conversation Management (B-series cherry-picks from Hermes/OpenGauss)
     injection_scanning: bool = False  # B7: Prompt injection scanning on loaded context
+    skill_injection_scan: bool = False  # CT-19b: warn-only scan at skill store / PromptForge failure_context
     context_compression: bool = False  # B2: Protected-zone context compression
     user_modeling: bool = False  # B1: Cross-session user preference modeling
     session_token_budget: bool = False  # B5: Per-session token budget with compact/stop signals
@@ -826,6 +828,8 @@ class Features:
         # User modeling requires injection scanning for write safety
         if self.user_modeling and not self.injection_scanning:
             errors.append("user_modeling feature requires injection_scanning feature")
+        if self.skill_injection_scan and not self.injection_scanning:
+            errors.append("skill_injection_scan feature requires injection_scanning feature")
         if self.dcp_for_consult and not self.dcp_pre_assembly:
             errors.append("dcp_for_consult feature requires dcp_pre_assembly feature")
 
