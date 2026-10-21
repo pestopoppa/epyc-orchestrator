@@ -284,15 +284,37 @@ def _check_answer(answer: Any) -> None:
     _check_v2_keys(answer["evidence"])
 
 
+def _num(value: Any) -> float | None:
+    """The one tolerant numeric parse: the reader may send a number or a decimal string."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _check_v2_keys(evidence: Mapping[str, Any]) -> None:
     """DESIGN §7.4 answer keys (`tiers`, `tried_index`, `nonempty_target`, `banner`, per-claim
     `tier`). ALL OPTIONAL: an older answer carries none and passes. A key that is present must
     have its documented shape, so a malformed one is refused instead of rendered."""
-    tiers = evidence.get("tiers")
-    if tiers is not None and (not isinstance(tiers, Mapping) or any(
-            k not in TIERS or isinstance(v, bool) or not isinstance(v, int)
-            for k, v in tiers.items())):
-        raise ValueError("belief evidence.tiers is malformed")
+    for key in ("tiers", "tiers_shown"):  # both live under `evidence`, never top level
+        tiers = evidence.get(key)
+        if tiers is not None and (not isinstance(tiers, Mapping) or any(
+                k not in TIERS or _num(v) is None for k, v in tiers.items())):
+            raise ValueError(f"belief evidence.{key} is malformed")
+    banner = evidence.get("banner")
+    if banner is not None and not isinstance(banner, str):
+        raise ValueError("belief evidence.banner is malformed")
+    for key in ("host_claim_ids", "not_evidence_claim_ids", "refuted_claim_ids"):
+        ids = evidence.get(key)
+        if ids is not None and (not isinstance(ids, (list, tuple))
+                                or any(not isinstance(i, str) for i in ids)):
+            raise ValueError(f"belief evidence.{key} is malformed")
     index = evidence.get("tried_index")
     if index is not None and not isinstance(index, (str, list, tuple, Mapping)):
         raise ValueError("belief evidence.tried_index is malformed")
@@ -572,7 +594,10 @@ def known_good_flags(ready: ReadyBeliefs) -> dict[str, Any]:
             aliases = dict(body.get("aliases") or {})
             source = "known_good_snapshot"
     return {"contested": contested, "withdrawn": withdrawn, "aliases": aliases,
-            "host": host_claim_ids(ev), "source": source,
+            "host": host_claim_ids(ev),
+            "refuted": {str(i) for i in ev.get("refuted_claim_ids") or ()
+                        if isinstance(i, str)},
+            "source": source,
             "ledger_state_digest": ready.ledger_state_digest}
 
 
@@ -582,7 +607,10 @@ def _claim_rows(ev: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def host_claim_ids(ev: Mapping[str, Any]) -> set[str]:
     """Ids this answer labelled `tier: host`. An older answer labels none, so none is refused."""
-    return {str(r["claim_id"]) for r in _claim_rows(ev) if r.get("tier") == "host"}
+    ids = {str(r["claim_id"]) for r in _claim_rows(ev) if r.get("tier") == "host"}
+    for key in ("host_claim_ids", "not_evidence_claim_ids"):
+        ids |= {str(i) for i in ev.get(key) or () if isinstance(i, str)}
+    return ids
 
 
 def declared_premises(rationale: Any) -> list[str]:
@@ -600,8 +628,10 @@ def premise_flag_reason(premises: Iterable[str], flags: Mapping[str, Any] | None
     withdrawn = set(flags.get("withdrawn") or ())
     contested = set(flags.get("contested") or ())
     host = set(flags.get("host") or ())
+    refuted = set(flags.get("refuted") or ())
     # `host` is last: a withdrawn/contested host claim still reports the stronger reason.
     for status, bucket in (("withdrawn", withdrawn), ("contested", contested),
+                           ("refuted", refuted),
                            ("host-tier (background only, not a premise)", host)):
         hits = [p for p in premises if aliases.get(p, p) in bucket]
         if hits:
@@ -653,7 +683,7 @@ def _value_lines(ev: Mapping[str, Any], section: str) -> list[str]:
     tiers = ev.get("tiers")
     if isinstance(tiers, Mapping):
         lines.append("  Evidence tiers: " + ", ".join(
-            f"{name} {int(tiers.get(name) or 0)}" for name in TIERS) + ".")
+            f"{name} {int(_num(tiers.get(name)) or 0)}" for name in TIERS) + ".")
         if ev.get("nonempty_target") is False:
             lines.append("  No belief is scoped to this turn's target; sibling/host lines are "
                          "context, not evidence about it.")

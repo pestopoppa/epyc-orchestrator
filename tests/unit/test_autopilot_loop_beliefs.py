@@ -829,8 +829,9 @@ def test_run_loop_asks_prepare_for_derived_targets_not_an_empty_list() -> None:
 V2_EVIDENCE = {
     "status": "presented", "reasons": [], "claim_ids": ["clm_t1", "clm_s1", "clm_h1"],
     "tiers": {"target": 1, "sibling": 1, "host": 1}, "nonempty_target": True,
-    "tried_index": [{"mechanism_id": "akm-a", "outcome": "null"},
-                    {"mechanism_id": "akm-b", "outcome": "kept"}],
+    "tiers_shown": {"target": 1, "sibling": 1, "host": 1}, "tried_index_count": 2,
+    "tried_index": [{"mechanism_id": "akm-a", "outcome": "null", "tier": "target"},
+                    {"mechanism_id": "akm-b", "outcome": "kept", "tier": "target"}],
     "claims": [{"claim_id": "clm_t1", "tier": "target", "outcome": "regressed",
                 "value": -8.22, "unit": "%"},
                {"claim_id": "clm_s1", "tier": "sibling"},
@@ -846,7 +847,8 @@ def test_check_answer_accepts_v2_keys_and_older_answers() -> None:
 
 
 @pytest.mark.parametrize("bad", [
-    {"tiers": {"target": "1"}}, {"tiers": {"bogus": 1}}, {"tiers": []},
+    {"tiers": {"target": "x"}}, {"tiers": {"bogus": 1}}, {"tiers": []},
+    {"tiers_shown": {"target": None}}, {"banner": 3}, {"not_evidence_claim_ids": "c"},
     {"nonempty_target": "yes"}, {"tried_index": 7}, {"claims": "x"},
     {"claims": [{"claim_id": "c", "tier": "elsewhere"}]},
 ])
@@ -918,3 +920,17 @@ def test_render_prompt_block_for_an_older_answer_is_unchanged() -> None:
     block = lb.render_prompt_block(lb.validate_ready(_ready_answer(section="- c1 line")))
     assert "Evidence tiers" not in block and "Citable in" not in block
     assert block.endswith("- c1 line")
+
+
+def test_reader_shape_decimal_strings_and_not_evidence_lists() -> None:
+    ev = dict(V2_EVIDENCE, claim_ids=["clm_t1", "clm_s1"],
+              tiers={"target": "1", "sibling": "1", "host": "1"},
+              not_evidence_claim_ids=["clm_h1"], host_claim_ids=["clm_h1"],
+              refuted_claim_ids=["clm_r1"], claims=[{"claim_id": "clm_t1", "tier": "target"}],
+              banner="No beliefs are scoped to X.")
+    ready = lb.validate_ready(_ready_answer(**ev))
+    assert lb.host_claim_ids(ready.evidence) == {"clm_h1"}
+    flags = lb.known_good_flags(ready)
+    assert "refuted" in lb.premise_flag_reason(["clm_r1"], flags)
+    assert "host-tier" in lb.premise_flag_reason(["clm_h1"], flags)
+    assert "Evidence tiers: target 1, sibling 1, host 1." in lb.render_prompt_block(ready)
