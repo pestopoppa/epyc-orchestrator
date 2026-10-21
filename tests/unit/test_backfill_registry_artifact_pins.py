@@ -87,3 +87,34 @@ def test_cli_offline_tree_dir_and_network_refusal(tmp_path, capsys):
     assert bf.main(["--registry", str(reg), "--tree-dir", str(td), "--repo-map", str(rm)]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["counts"] == {"pin": 1} and OID in out["yaml_fragment"]
+
+
+def _split_tree(sizes=(100, 200, 300)):
+    return [{"type": "file", "path": f"Q/m-0000{i}-of-00003.gguf", "size": s, "lfs": {"oid": str(i) * 63 + "a", "size": s}}
+            for i, s in enumerate(sizes, 1)]
+
+
+def test_split_gguf_pins_every_shard_by_basename():
+    tree = _split_tree()
+
+    def get(url):
+        return {"sha": COMMIT} if "/revision/" in url else tree
+
+    reg = {"roles": {"g": {"model": {"path": f"{M}/org/repo/Q/m-00001-of-00003.gguf"}}}}
+    sizes = {"m-00001-of-00003.gguf": 100, "m-00002-of-00003.gguf": 200, "m-00003-of-00003.gguf": 300}
+    rows = bf.plan(reg, {}, get, stat_size=lambda p: sizes.get(p.rsplit("/", 1)[-1]))
+    assert rows[0]["status"] == "pin" and rows[0]["sha256"] == "1" * 63 + "a"
+    assert rows[0]["shard_sha256"] == {"m-00002-of-00003.gguf": "2" * 63 + "a", "m-00003-of-00003.gguf": "3" * 63 + "a"}
+    assert "shard_sha256" in bf.yaml_fragment(rows)
+
+
+def test_split_gguf_with_one_bad_shard_pins_nothing():
+    tree = _split_tree()
+
+    def get(url):
+        return {"sha": COMMIT} if "/revision/" in url else tree
+
+    reg = {"roles": {"g": {"model": {"path": f"{M}/org/repo/Q/m-00001-of-00003.gguf"}}}}
+    sizes = {"m-00001-of-00003.gguf": 100, "m-00002-of-00003.gguf": 200, "m-00003-of-00003.gguf": 301}
+    rows = bf.plan(reg, {}, get, stat_size=lambda p: sizes.get(p.rsplit("/", 1)[-1]))
+    assert rows[0]["status"] == "needs_local_hash" and "00003" in rows[0]["reason"]

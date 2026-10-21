@@ -35,6 +35,9 @@ from typing import Any, Callable
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.registry.artifact_integrity import shard_paths  # noqa: E402
+
 MODELS_ROOT = "/mnt/raid0/llm/models"
 HF = "https://huggingface.co"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -85,6 +88,28 @@ def derive_repo(path: str, role: str, repo_map: dict, models_root: str = MODELS_
     return None
 
 
+def split_shards(path: str, hf_path: str, entries: dict[str, dict],
+                 stat_size: Callable[[str], int | None]) -> tuple[dict[str, str], str | None]:
+    """For a split GGUF (`<stem>-00001-of-0000N.gguf`): {basename: oid} of shards 2..N, or (.., reason).
+
+    Every sibling must exist locally AND size-match its upstream LFS entry in the same repo directory;
+    one miss sends the whole role to `needs_local_hash` (a half-pinned split set pins nothing).
+    """
+    local = shard_paths(path)
+    if len(local) == 1:
+        return {}, None
+    upstream = shard_paths(hf_path)
+    out: dict[str, str] = {}
+    for lp, up in list(zip(local, upstream))[1:]:
+        ent = entries.get(up) or {}
+        lfs = ent.get("lfs") or {}
+        size = stat_size(lp)
+        if not lfs.get("oid") or size is None or lfs.get("size") != size:
+            return {}, f"shard {os.path.basename(lp)} missing or size differs (upstream {lfs.get('size')})"
+        out[os.path.basename(lp)] = lfs["oid"]
+    return out, None
+
+
 def plan(registry: dict, repo_map: dict, get: Callable[[str], Any] | None,
          stat_size: Callable[[str], int | None] = lambda p: os.path.getsize(p) if os.path.exists(p) else None,
          tree_loader: Callable[[str, str], tuple[str, dict]] | None = None) -> list[dict]:
@@ -121,7 +146,12 @@ def plan(registry: dict, repo_map: dict, get: Callable[[str], Any] | None,
         lfs = (e or {}).get("lfs") or {}
         row.update(hf_revision=sha, local_size=size)
         if e and lfs.get("oid") and lfs.get("size") == size:
+            shard_sha, bad = split_shards(path, e["path"], entries, stat_size)
+            if bad:
+                rows.append({**row, "status": "needs_local_hash", "reason": bad})
+                continue
             rows.append({**row, "status": "pin", "hf_filename": e["path"], "sha256": lfs["oid"],
+                         **({"shard_sha256": shard_sha} if shard_sha else {}),
                          "basis": "size-match to upstream LFS size; full hash confirms in SEC-ART-2"})
         else:
             why = "not in upstream repo" if not e else f"size differs (upstream {lfs.get('size')})"
@@ -130,7 +160,8 @@ def plan(registry: dict, repo_map: dict, get: Callable[[str], Any] | None,
 
 
 def yaml_fragment(rows: list[dict]) -> str:
-    frag = {r["role"]: {"model": {"hf_repo": r["hf_repo"], "hf_revision": r["hf_revision"], "sha256": r["sha256"]}}
+    frag = {r["role"]: {"model": {"hf_repo": r["hf_repo"], "hf_revision": r["hf_revision"], "sha256": r["sha256"],
+                                  **({"shard_sha256": r["shard_sha256"]} if r.get("shard_sha256") else {})}}
             for r in rows if r["status"] == "pin"}
     return yaml.safe_dump({"roles": frag}, sort_keys=True) if frag else ""
 
