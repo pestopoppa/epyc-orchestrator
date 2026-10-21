@@ -112,6 +112,7 @@ flags:
   session_scratchpad: baseline
   session_token_budget: baseline
   side_effect_tracking: baseline
+  skill_injection_scan: baseline
   skillbank: baseline
   spec_off_bitwise_roles:
     expected: on
@@ -139,6 +140,7 @@ flags:
   v1_client_session_guard: baseline
   v1_escalation: baseline
   v1_subagent_link: baseline
+  voice_turn: baseline
   web_research_rerank: baseline
   worker_call_budget: baseline
 
