@@ -10,7 +10,9 @@ Source: MiniMax M2.7 3-component self-evolution harness (intake-328/329).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from safety_gate import EvalResult, SafetyVerdict
 
@@ -55,6 +57,27 @@ def _quality_delta_threshold(eval_result: EvalResult) -> float:
     return max(0.02, quantum)
 
 
+def _itt_delta_text(eval_result: EvalResult, reference_details: Mapping[str, Any] | None) -> str:
+    try:
+        from src.autopilot_core.itt_quality import itt_delta_flag
+
+        cand = getattr(eval_result, "details", None) or {}
+        if not reference_details or "itt_denominator" not in cand or "itt_denominator" not in reference_details:
+            return ""
+        flag = itt_delta_flag(reference_details, cand)
+        if not flag.get("comparable"):
+            return ""
+        text = (
+            f" [ITT delta vs previous trial {flag['delta_itt']:+.3f} "
+            f"(per-protocol {flag['delta_per_protocol']:+.3f})"
+        )
+        if flag["scorer_dependent"]:
+            text += "; SCORER-DEPENDENT: sign or significance differs, second-scorer rescore required before acting"
+        return text + "]"
+    except Exception:  # noqa: BLE001 - report text only
+        return ""
+
+
 def generate_self_criticism(
     action: dict,
     eval_result: EvalResult,
@@ -62,6 +85,7 @@ def generate_self_criticism(
     failure_analysis: str,
     baseline_quality: float = 0.0,
     prev_per_suite: dict[str, float] | None = None,
+    reference_details: Mapping[str, Any] | None = None,
 ) -> SelfCriticism:
     """Generate rule-based self-criticism for a trial.
 
@@ -101,6 +125,11 @@ def generate_self_criticism(
         crit.keep_revert_reasoning = (
             f"Safety gate failed: {'; '.join(verdict.violations[:3])}"
         )
+
+    # EV-18: report the intention-to-treat delta beside the per-protocol one, and flag a
+    # scorer-dependent delta. Additive text only; never changes keep/revert. The reference is
+    # the previous journaled trial's `details` (the baseline object carries no counts).
+    crit.keep_revert_reasoning += _itt_delta_text(eval_result, reference_details)
 
     # ── Analyze what went wrong ──────────────────────────────────
     if not verdict.passed:

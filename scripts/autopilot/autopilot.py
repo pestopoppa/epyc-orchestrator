@@ -10246,11 +10246,14 @@ def _run_loop_inner(
             _strict_baseline_quality(gate.baseline, eval_result.tier) if gate.baseline else None
         )
         prev_suite = {}
+        prev_trial_details: dict[str, Any] | None = None  # EV-18 ITT reference
         recent = journal.by_species(species_name)
         if recent:
             prev_details = recent[-1].eval_details
             if isinstance(prev_details, dict):
                 prev_suite = prev_details.get("per_suite_quality", {})
+                _pd = prev_details.get("details")
+                prev_trial_details = _pd if isinstance(_pd, dict) else None
 
         prior_criticism_text = last_criticism_text
         criticism = generate_self_criticism(
@@ -10260,6 +10263,7 @@ def _run_loop_inner(
             failure_analysis=failure_analysis,
             baseline_quality=baseline_q or 0.0,
             prev_per_suite=prev_suite,
+            reference_details=prev_trial_details,
         )
         last_criticism_text = criticism.as_text()
 

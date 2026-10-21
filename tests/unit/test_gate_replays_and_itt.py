@@ -100,3 +100,22 @@ def test_itt_counts_and_delta_flag():
     flag = itt_delta_flag(base, cand)
     assert flag["sign_differs"] is True and flag["requires_second_scorer_rescore"] is True
     assert itt_delta_flag({}, {})["comparable"] is False
+
+
+def test_self_criticism_appends_itt_text_without_changing_decision():
+    sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
+    from safety_gate import EvalResult, SafetyVerdict
+    from self_criticism import generate_self_criticism
+
+    ev = EvalResult(
+        tier=1, quality=1.5, speed=20.0, cost=0.5, reliability=1.0, n_questions=40,
+        details={"correct": 40, "n_scored": 70, "itt_denominator": 100},
+    )
+    verdict = SafetyVerdict(passed=True)
+    ref = {"correct": 50, "n_scored": 100, "itt_denominator": 100}
+    with_ref = generate_self_criticism({"type": "x"}, ev, verdict, "", baseline_quality=1.0,
+                                       reference_details=ref)
+    without = generate_self_criticism({"type": "x"}, ev, verdict, "", baseline_quality=1.0)
+    assert with_ref.keep_or_revert == without.keep_or_revert
+    assert "SCORER-DEPENDENT" in with_ref.keep_revert_reasoning
+    assert "ITT" not in without.keep_revert_reasoning

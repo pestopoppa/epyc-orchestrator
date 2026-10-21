@@ -166,3 +166,14 @@ def test_empty_results_list_does_not_touch_parse_failure_stats() -> None:
     # early-return shape (no `details` dict at all when results is empty) —
     # readers must use .get(), which the empty-results EvalResult already
     # requires for every OTHER details key too.
+
+
+def test_ev18_itt_quality_reported_beside_per_protocol_and_journaled_keys_present() -> None:
+    """EV-18: `quality_itt` counts excluded unparseable answers as failures; the key set rides
+    in `details`, which the journal writes verbatim, so new rows carry parse_failure_count."""
+    tower = EvalTower()
+    agg = tower._aggregate([_row("q1", correct=True), _row("q2", correct=False)], tier=1)
+    d = agg.details
+    assert {"parse_failure_count", "quality_itt", "itt_denominator"} <= set(d)
+    assert d["itt_denominator"] == d["n_scored"]  # no excluded unparseable rows here
+    assert d["quality_itt"] == agg.quality
