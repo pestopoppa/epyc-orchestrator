@@ -42,6 +42,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution path
         row_fingerprint,
     )
 
+from src.autopilot_core.sequential_replay import promotion_attempt_ledger
 from src.autopilot_core.sequential_verdict import (
     DEFAULT_POLICY,
     STATE_ACCUMULATING,
@@ -108,6 +109,15 @@ def build_seq_readiness_report(
     alpha_wealth = _alpha_multiplicity_diagnostic(
         trusted_rows,
         budget=alpha_wealth_budget,
+    )
+    # SEQ-5: additive lifetime promotion-attempt ledger (existing keys untouched). Folded
+    # from ALL rows, not only trusted vectors: an attempt is a journal fact, not a vector.
+    era_ts = (state or {}).get("quality_exclude_before_ts") if isinstance(state, Mapping) else None
+    alpha_wealth.update(
+        promotion_attempt_ledger(
+            normalized,
+            era_before_ts=float(era_ts) if isinstance(era_ts, (int, float)) else None,
+        )
     )
     paired_baseline_screening = _paired_baseline_screening(
         trusted_rows,
@@ -186,6 +196,19 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"{report.get('alpha_wealth', {}).get('expected_false_confirms')}, "
             f"new_fingerprint_confirmations_allowed="
             f"{report.get('alpha_wealth', {}).get('new_fingerprint_confirmations_allowed')}"
+        ),
+        (
+            "- Lifetime promotion ledger (SEQ-5, derived; K_opened is a LOWER BOUND): "
+            f"opened={report.get('alpha_wealth', {}).get('promotion_attempts_opened')}, "
+            f"finalized={report.get('alpha_wealth', {}).get('promotion_attempts_finalized')}, "
+            f"union_bound={report.get('alpha_wealth', {}).get('lifetime_false_promotion_bound')}, "
+            f"fingerprints_confirmed="
+            f"{report.get('alpha_wealth', {}).get('fingerprints_confirmed')}, "
+            f"est_false_confirm_fraction="
+            f"{report.get('alpha_wealth', {}).get('est_false_confirm_fraction')}, "
+            f"rate_reference_is_latest_only="
+            f"{report.get('alpha_wealth', {}).get('rate_reference_is_latest_only')}; "
+            "an instrument-era boundary resets the charged fingerprint set"
         ),
         (
             "- Thresholds: "

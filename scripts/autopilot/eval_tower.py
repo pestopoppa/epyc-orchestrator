@@ -1238,6 +1238,7 @@ from src.autopilot_core.measurement_guards import (  # noqa: E402
     is_quality_admissible,
     measurement_disposition,
 )
+from src.autopilot_core.itt_quality import itt_counts  # noqa: E402  (EV-18)
 
 # ETR-1 (handoffs/active/eval-tower-loop-robustness-audit-2026-07-20.md,
 # operator ruling 2026-09-23): names the quality-denominator policy applied
@@ -5969,8 +5970,11 @@ class EvalTower:
         # every accuracy number; any cross-arm difference is a scoring bug
         # until proven otherwise"). debug_scorer counts a model-side parse
         # failure (an answer that doesn't fit the required shape) even while
-        # EXCLUDE_UNPARSEABLE_ANSWERS stays False and `quality` below is
-        # unaffected — this is that count, surfaced beside quality.
+        # EXCLUDE_UNPARSEABLE_ANSWERS is True (scripts/benchmark/debug_scorer.py:161;
+        # this comment said False until EV-18 corrected it) and `quality` below is the
+        # PER-PROTOCOL value: an unparseable answer is excluded as `scoring_failed`.
+        # This is that count, surfaced beside quality; `quality_itt` (EV-18) counts the
+        # excluded unparseable answers as failures, beside it.
         #
         # Bucketed by `eval_batch_id`, NOT a bare global read: this trial's
         # rows all carry the SAME `eval_batch_id` (a fresh uuid4 per
@@ -6041,6 +6045,14 @@ class EvalTower:
         # ETR-1 and are counted incorrect via `_quality_correct` above.
         correct_count = sum(1 for r in scored_results if _quality_correct(r))
         quality = (correct_count / n_scored) * 3.0 if n_scored else 0.0
+        # EV-18: intention-to-treat beside per-protocol. Additive details keys only; no gate
+        # reads them. Delta flagging lives in src/autopilot_core/itt_quality.itt_delta_flag.
+        _itt = itt_counts(
+            correct=correct_count,
+            n_scored=n_scored,
+            parse_failure_count=parse_failure_count,
+            scoring_failed_count=scoring_failed_count,
+        )
         # `quality` is a plain float on the Pareto/SafetyGate contract and cannot
         # become None without breaking every consumer — so the honesty lives in
         # an explicit companion flag instead. With n_scored == 0 the 0.0 above is
@@ -6421,6 +6433,10 @@ class EvalTower:
                 # convention as `quality_measured` above.
                 "parse_failure_count": parse_failure_count,
                 "parse_failure_by_method": parse_failure_by_method,
+                # EV-18: ITT (unparseable counted as failure) beside the per-protocol `quality`.
+                "quality_itt": _itt["quality_itt"],
+                "itt_denominator": _itt["itt_denominator"],
+                "itt_unparseable_counted_as_failure": _itt["itt_unparseable_counted_as_failure"],
                 "parse_failure_rate": parse_failure_rate,
                 # TD-21.9/21.10/21.15: judge-parse-outcome rollup, ALWAYS on
                 # (zero score effect, independent of `CONSTRAIN_JUDGE_OUTPUT`)
