@@ -126,6 +126,110 @@ def resolve_root_repo(explicit: str | Path | None = None) -> Path:
     return DEFAULT_ROOT_REPO
 
 
+# ------------------------------------------------------------------------------ targets
+
+
+def _role_backend(launch_runtime: Mapping[str, Any]) -> str:
+    """gpu when the role's launch flags place it on a ROCm/HIP/CUDA device (or offload layers),
+    else cpu -- the same two backends `loop_beliefs.Target` accepts."""
+    flags = launch_runtime.get("flags") if isinstance(launch_runtime, Mapping) else None
+    flags = flags if isinstance(flags, Mapping) else {}
+    device = str(flags.get("device") or "").strip().lower()
+    if device.startswith(("rocm", "hip", "cuda")):
+        return "gpu"
+    layers = flags.get("n_gpu_layers")
+    if isinstance(layers, str) and layers.strip().lower() == "all":
+        return "gpu"
+    if isinstance(layers, int) and not isinstance(layers, bool) and layers > 0:
+        return "gpu"
+    return "cpu"
+
+
+def stack_targets(records: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Belief targets for the LIVE stack: one per distinct (model file, quant, backend), read from
+    the compiled stack priors AutoPilot already assembles its stack from
+    (`src.registry.stack_priors.live_stack_role_records`). `label` lists the roles sharing it.
+    A role without a model path is skipped (an incomplete target is an error, not a wildcard)."""
+    if records is None:
+        from src.registry.stack_priors import live_stack_role_records
+
+        records = live_stack_role_records()
+    merged: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for role, record in (records or {}).items():
+        if not isinstance(record, Mapping):
+            continue
+        launch = ((record.get("serving") or {}).get("launch") or {})
+        model_path = str((launch.get("requirements") or {}).get("model_path") or "").strip()
+        if not model_path:
+            continue
+        quant = str((record.get("model") or {}).get("quant") or "").strip()
+        backend = _role_backend(launch.get("runtime") or {})
+        key = (Path(model_path).name, quant.upper(), backend)
+        entry = merged.setdefault(key, {"model_path": model_path, "quant": quant,
+                                        "backend": backend, "_roles": []})
+        entry["_roles"].append(str(record.get("role") or role))
+    out = []
+    for entry in merged.values():
+        roles = sorted(set(entry.pop("_roles")))
+        out.append({**entry, "label": "stack:" + ",".join(roles)})
+    return sorted(out, key=lambda t: (t["backend"], t["model_path"], t["quant"]))
+
+
+def hypothesis_targets(hypotheses: Iterable[Any]) -> list[dict[str, Any]]:
+    """Targets an OPEN operator hypothesis names explicitly in its `proposed_action`: a
+    `model_path`/`model_file` ending in .gguf plus an explicit `backend` (cpu|gpu). Anything less
+    is skipped, never guessed."""
+    out = []
+    for item in hypotheses:
+        action = getattr(item, "proposed_action", None)
+        if not getattr(item, "is_open", False) or not isinstance(action, Mapping):
+            continue
+        model = str(action.get("model_path") or action.get("model_file") or "").strip()
+        backend = str(action.get("backend") or "").strip().lower()
+        if not model.lower().endswith(".gguf") or backend not in ("cpu", "gpu"):
+            continue
+        target: dict[str, Any] = {"model_path": model, "backend": backend,
+                                  "quant": str(action.get("quant") or "").strip(),
+                                  "label": f"hypothesis:{getattr(item, 'id', '?')}"}
+        if isinstance(action.get("context_tokens"), int) and not isinstance(
+                action.get("context_tokens"), bool):
+            target["context_tokens"] = action["context_tokens"]
+        out.append(target)
+    return out
+
+
+def derive_targets(*, records: Mapping[str, Any] | None = None,
+                   hypotheses: Iterable[Any] | None = None,
+                   hypotheses_loader: Callable[[], Iterable[Any]] | None = None
+                   ) -> list[dict[str, Any]]:
+    """Targets for this turn's `prepare`: the live stack plus models open hypotheses name.
+    Deduplicated on (model file, quant, backend). Never raises: an empty or unreadable stack
+    logs a warning and yields [] (the planner then gets ledger-wide flags only)."""
+    targets: list[dict[str, Any]] = []
+    try:
+        targets = stack_targets(records)
+    except Exception as exc:  # noqa: BLE001 -- belief context must not crash the loop
+        log.warning("belief targets: live stack unreadable (%s: %s)", type(exc).__name__, exc)
+    if not targets:
+        log.warning("belief targets: no live stack roles resolved; asking for ledger-wide "
+                    "flags only (no per-target evidence this turn)")
+    try:
+        hyps = list(hypotheses) if hypotheses is not None else (
+            list(hypotheses_loader()) if hypotheses_loader is not None else [])
+        extra = hypothesis_targets(hyps)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("belief targets: operator hypotheses unreadable (%s: %s)",
+                    type(exc).__name__, exc)
+        extra = []
+    seen = {(Path(t["model_path"]).name, str(t["quant"]).upper(), t["backend"]) for t in targets}
+    for target in extra:
+        key = (Path(target["model_path"]).name, str(target["quant"]).upper(), target["backend"])
+        if key not in seen:
+            seen.add(key)
+            targets.append(target)
+    return targets
+
+
 # ------------------------------------------------------------------------------ sealed answers
 
 _SEAL = object()

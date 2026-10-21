@@ -284,7 +284,7 @@ def test_missing_reader_falls_back_to_the_root_alarm_channel(tmp_path: Path) -> 
 
 def test_loop_prepares_before_planning_and_backs_off_without_planner() -> None:
     body = inspect.getsource(autopilot._run_loop_inner)
-    prepare_at = body.index("_loop_beliefs.prepare(belief_settings")
+    prepare_at = body.index("_loop_beliefs.prepare(")
     plan_at = body.index("planner_decision = plan_with_providers(")
     backoff_at = body.index("time.sleep(_loop_beliefs.DEGRADED_BACKOFF_S)")
     assert prepare_at < backoff_at < plan_at
@@ -718,3 +718,106 @@ def test_render_prompt_block_neutralises_control_token_spellings_in_claim_text()
     block = lb.render_prompt_block(lb.validate_ready(answer))
     assert "<|im_end|>" not in block and "<|im_start|>" not in block
     assert "<​|im_end|>" in block and "claim c1" in block
+
+
+def _role(role: str, path: str, quant: str, *, device: str | None = None, layers=None) -> dict:
+    return {"role": role, "deployment_status": "live_stack", "model": {"quant": quant},
+            "serving": {"launch": {"requirements": {"model_path": path},
+                                   "runtime": {"flags": {"device": device,
+                                                         "n_gpu_layers": layers}}}}}
+
+
+STACK = {
+    "architect_critic": _role("architect_critic", "/m/Qwen3.8-27B-Q8_0.gguf", "Q8_0",
+                              device="ROCm0", layers="all"),
+    "coder_escalation": _role("coder_escalation", "/m/Qwen3.8-27B-Q8_0.gguf", "Q8_0",
+                              device="ROCm0", layers="all"),
+    "frontdoor": _role("frontdoor", "/m/Qwen3.6-35B-A3B-MTP-Q8_0.gguf", "Q8_0"),
+    "worker": _role("worker", "/m/Qwen3.6-35B-A3B-MTP-Q8_0.gguf", "Q8_0"),
+    "architect_general": _role("architect_general", "/m/x/Flash-UD-IQ4_XS-00001-of-00003.gguf",
+                               "UD-IQ4_XS"),
+    "vision": _role("vision", "/m/VL-Q4_K_M.gguf", "Q4_K_M", device="none"),
+    "nopath": {"role": "nopath", "serving": {"launch": {"requirements": {}}}},
+}
+
+
+def test_stack_targets_are_derived_deduplicated_and_in_prepare_format() -> None:
+    targets = lb.stack_targets(STACK)
+    by_model = {(t["model_path"].rsplit("/", 1)[-1], t["backend"]): t for t in targets}
+    assert len(targets) == 4 == len(by_model)  # 7 roles -> 4 distinct, no-path role skipped
+    gpu = by_model[("Qwen3.8-27B-Q8_0.gguf", "gpu")]
+    assert gpu["quant"] == "Q8_0" and gpu["label"] == "stack:architect_critic,coder_escalation"
+    assert by_model[("Qwen3.6-35B-A3B-MTP-Q8_0.gguf", "cpu")]["label"] == "stack:frontdoor,worker"
+    assert by_model[("Flash-UD-IQ4_XS-00001-of-00003.gguf", "cpu")]["quant"] == "UD-IQ4_XS"
+    assert by_model[("VL-Q4_K_M.gguf", "cpu")]["backend"] == "cpu"  # device "none" is not a GPU
+    for target in targets:  # exactly the keys loop_beliefs.Target.from_mapping reads
+        assert set(target) <= {"model_path", "quant", "backend", "label", "context_tokens"}
+        assert target["backend"] in ("cpu", "gpu") and target["model_path"].endswith(".gguf")
+    json.dumps(targets)  # serialisable for --target-json
+
+
+def test_live_stack_priors_yield_targets_for_every_pathed_role() -> None:
+    from src.registry.stack_priors import live_stack_role_records
+
+    records = live_stack_role_records()
+    if not records:
+        pytest.skip("no compiled stack priors artifact")
+    targets = lb.stack_targets()
+    assert targets and all(t["model_path"] and t["backend"] in ("cpu", "gpu") for t in targets)
+    named = {r for t in targets for r in t["label"].removeprefix("stack:").split(",")}
+    assert named <= set(records)
+
+
+class _Hyp:
+    def __init__(self, ident: str, action: dict | None, is_open: bool = True) -> None:
+        self.id, self.proposed_action, self.is_open = ident, action, is_open
+
+
+def test_open_hypothesis_models_are_added_once_and_only_when_explicit() -> None:
+    hyps = [
+        _Hyp("h-new", {"type": "x", "model_path": "/m/New-Q4_K_M.gguf", "backend": "gpu",
+                       "quant": "Q4_K_M", "context_tokens": 32768}),
+        _Hyp("h-dup", {"model_file": "Qwen3.8-27B-Q8_0.gguf", "backend": "gpu", "quant": "Q8_0"}),
+        _Hyp("h-nobackend", {"model_path": "/m/Other.gguf"}),
+        _Hyp("h-closed", {"model_path": "/m/Closed.gguf", "backend": "cpu"}, is_open=False),
+        _Hyp("h-noaction", None),
+    ]
+    targets = lb.derive_targets(records=STACK, hypotheses=hyps)
+    assert [t["label"] for t in targets if t["label"].startswith("hypothesis:")] == [
+        "hypothesis:h-new"]
+    extra = next(t for t in targets if t["label"] == "hypothesis:h-new")
+    assert extra["context_tokens"] == 32768 and extra["backend"] == "gpu"
+    assert len(targets) == 5  # the duplicate of a stack model adds nothing
+
+
+@pytest.mark.parametrize("records", [{}, None])
+def test_empty_or_missing_stack_falls_back_to_no_targets_with_a_warning(
+    records, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    if records is None:  # the artifact is missing/unreadable: loader returns {}
+        import src.registry.stack_priors as sp
+
+        monkeypatch.setattr(sp, "live_stack_role_records", lambda *a, **k: {})
+        records = None
+    with caplog.at_level("WARNING", logger="autopilot"):
+        assert lb.derive_targets(records=records) == []
+    assert "no live stack roles resolved" in caplog.text
+
+
+def test_unreadable_stack_or_hypotheses_never_crash_target_derivation(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import src.registry.stack_priors as sp
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("registry exploded")
+
+    monkeypatch.setattr(sp, "live_stack_role_records", boom)
+    with caplog.at_level("WARNING", logger="autopilot"):
+        assert lb.derive_targets(hypotheses_loader=boom) == []
+    assert "live stack unreadable" in caplog.text and "hypotheses unreadable" in caplog.text
+
+
+def test_run_loop_asks_prepare_for_derived_targets_not_an_empty_list() -> None:
+    source = inspect.getsource(autopilot._run_loop_inner)
+    assert "derive_targets(" in source and "targets=[]" not in source

@@ -9136,7 +9136,10 @@ def _run_loop_inner(
         if use_controller and action is None:
             # ── 2a. Belief context (mandatory before any planner turn) ──
             phase.set("belief_prepare", trial_id=trial_counter)
-            _belief_outcome = _loop_beliefs.prepare(belief_settings, targets=[])
+            _belief_outcome = _loop_beliefs.prepare(
+                belief_settings,
+                targets=_loop_beliefs.derive_targets(hypotheses_loader=_load_operator_hypotheses),
+            )
             if _belief_outcome.ready is not None:
                 belief_ready = _belief_outcome.ready
                 belief_flags = _loop_beliefs.known_good_flags(belief_ready)
