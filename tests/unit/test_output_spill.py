@@ -294,3 +294,21 @@ class TestSpillErrorPreserve:
         assert "WORKER SUMMARY" in a
         b = r._spill_output(self.ERR, error="e")  # flag off: error kwarg is inert
         assert a.split("\n")[1:-1] == b.split("\n")[1:-1] == ["WORKER SUMMARY"]
+
+    def test_exception_text_over_cap_routed_through_spill_flag_on(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", "1")
+        w = self._worker()
+        r = self._repl(tmp_path, w)
+        res = r.execute("raise ValueError('x' * 500)")
+        w.llm_call.assert_not_called()
+        assert res.error and "chars omitted" in res.error and "peek(2000" in res.error
+
+    def test_exception_text_unchanged_flag_off_and_under_cap(self, tmp_path, monkeypatch):
+        w = self._worker()
+        r = self._repl(tmp_path, w)
+        monkeypatch.delenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", raising=False)
+        res = r.execute("raise ValueError('x' * 500)")
+        assert res.error == "ValueError: " + "x" * 500
+        monkeypatch.setenv("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE", "1")
+        res = r.execute("raise ValueError('short')")
+        assert res.error == "ValueError: short"

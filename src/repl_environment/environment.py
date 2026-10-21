@@ -761,6 +761,15 @@ class REPLEnvironment(
     def _spill_error_preserve_enabled() -> bool:
         return os.environ.get("ORCHESTRATOR_REPL_SPILL_ERROR_PRESERVE") == "1"
 
+    def _error_text_for_result(self, text: str) -> str:
+        """Exception text for ExecutionResult.error. Flag off: exactly the bundle cap
+        (byte-identical to before). Flag on (TOC-SP-8) and over the spill threshold:
+        routed through ``_spill_output(..., error=...)`` -> head+tail+peek, no worker."""
+        capped = self._bundle_cap_output(text)
+        if self._spill_error_preserve_enabled() and len(capped) > self.config.output_cap:
+            return self._spill_output(capped, error=capped)
+        return capped
+
     def _is_error_bearing(self, output: str, error: str | None) -> bool:
         return bool(error) or bool(self._ERROR_MARKER_RE.search(output))
 
@@ -1588,7 +1597,7 @@ class REPLEnvironment(
                     # would otherwise carry a pulled value into the root prompt uncapped).
                     output=self._bundle_cap_output(stdout_capture.getvalue()),
                     is_final=False,
-                    error=self._bundle_cap_output(f"{type(e).__name__}: {e}{hint}"),
+                    error=self._error_text_for_result(f"{type(e).__name__}: {e}{hint}"),
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
 
