@@ -31,6 +31,18 @@ def _factory(spec: str):
     return getattr(importlib.import_module(mod), name)
 
 
+def write_sidecar(out: str, kind: str, run_id: str, epyc_root: str) -> Path:
+    """VB-HIL-REPLAY-WRITE: emit <report>.beliefs.jsonl at write time (opt-in; never backfills a finished report)."""
+    import subprocess
+
+    sys.path.insert(0, str(Path(epyc_root) / "scripts" / "vidya"))
+    from adapters.hil_replay_capture import write_belief_measurements  # type: ignore
+
+    ref = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
+    return write_belief_measurements(out, kind=kind, run_id=run_id,
+                                     producer="epyc-orchestrator/scripts/trace/" + Path(__file__).name + " " + kind, code_ref=ref)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["verify", "prefix", "flip"])
@@ -41,6 +53,8 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=10); ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--original-outcome", default="fail"); ap.add_argument("--task-key")
     ap.add_argument("--out")
+    ap.add_argument("--belief-sidecar", action="store_true", help="flip: also write <out>.beliefs.jsonl via the root belief-kernel writer (needs --out)")
+    ap.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"))
     a = ap.parse_args()
     if a.cas_dir:
         os.environ["ORCHESTRATOR_REPLAY_CAS_DIR"] = a.cas_dir   # harness factories build their own CAS() from it
@@ -56,6 +70,8 @@ def main() -> int:
         res = ReplayDriver(run, cas, hf()).check_prefix(a.k)
         print(json.dumps(res.__dict__, indent=2, default=str))
         return 0 if res.ok else 1
+    if a.belief_sidecar and not a.out:
+        sys.exit("--belief-sidecar needs --out (the sidecar binds to the report file's bytes)")
     if os.environ.get("WINDOW_CONFIRMED") != "1":
         sys.exit("refusing: flip runs inference. Set WINDOW_CONFIRMED=1 inside an operator-confirmed window.")
     if not (a.llm and a.scorer and a.hint):
@@ -69,6 +85,10 @@ def main() -> int:
                        arms={x.name: {"restart_turn": x.restart_turn, "hint_chars": len(x.patch.text) if x.patch else 0}
                              for x in arms}, samples=samples)
     (Path(a.out).write_text(dumps(rep)) if a.out else print(dumps(rep)))
+    if a.belief_sidecar:
+        if not a.out:
+            sys.exit("--belief-sidecar needs --out (the sidecar binds to the report file's bytes)")
+        write_sidecar(a.out, "flip", a.run_id, a.epyc_root)
     return 0
 
 

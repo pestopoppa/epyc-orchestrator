@@ -25,6 +25,18 @@ from src.trace.spectrum_replay import (RunOutcome, build_report, dumps, load_man
                                        traces_for_manifest)
 
 
+def write_sidecar(out: str, kind: str, run_id: str, epyc_root: str) -> Path:
+    """VB-HIL-REPLAY-WRITE: emit <report>.beliefs.jsonl at write time (opt-in; never backfills a finished report)."""
+    import subprocess
+
+    sys.path.insert(0, str(Path(epyc_root) / "scripts" / "vidya"))
+    from adapters.hil_replay_capture import write_belief_measurements  # type: ignore
+
+    ref = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip() or "unknown"
+    return write_belief_measurements(out, kind=kind, run_id=run_id,
+                                     producer="epyc-orchestrator/scripts/trace/" + Path(__file__).name + " " + kind, code_ref=ref)
+
+
 def _require_window() -> None:
     if os.environ.get("WINDOW_CONFIRMED") != "1":
         sys.exit("refusing: this runs inference. Set WINDOW_CONFIRMED=1 inside an operator-confirmed window.")
@@ -67,6 +79,8 @@ def main() -> int:
     p.add_argument("--manifest", required=True); p.add_argument("--db", required=True); p.add_argument("--out", required=True)
     p.add_argument("--human", help="json {task_key: [[role, tool, status], ...]}"); p.add_argument("--n-tasks", type=int, default=10)
     p.add_argument("--min-replays", type=int, default=20); p.add_argument("--top-m", type=int, default=3)
+    p.add_argument("--belief-sidecar", action="store_true", help="also write <out>.beliefs.jsonl via the root belief-kernel writer")
+    p.add_argument("--run-id", default="spectrum-run"); p.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"))
     a = ap.parse_args()
     if a.cmd == "run":
         _require_window()
@@ -88,6 +102,8 @@ def main() -> int:
     per_task, acct = traces_for_manifest(a.db, load_manifest(a.manifest))
     Path(a.out).write_text(dumps(build_report(per_task, acct, n_tasks=a.n_tasks, min_replays=a.min_replays,
                                               top_m=a.top_m, human=human)))
+    if a.belief_sidecar:
+        write_sidecar(a.out, "spectrum", a.run_id, a.epyc_root)
     return 0
 
 
