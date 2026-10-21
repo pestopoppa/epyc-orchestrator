@@ -133,6 +133,90 @@ def _extract_content(html: str, url: str) -> str:
     return "\n".join(lines)
 
 
+def _legacy_curl(url: str, timeout: int) -> str:
+    """Pre-SEC-EXEC-3 fetch: curl handles gzip/deflate decompression and avoids bot detection."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-L", "--max-time", str(timeout), "--compressed",
+                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                "-H", "Accept: text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+                "-H", "Accept-Language: en-US,en;q=0.5",
+                "-w", "\n__CONTENT_TYPE__:%{content_type}",
+                url,
+            ],
+            capture_output=True,
+            timeout=timeout + 5,
+        )
+        if result.returncode != 0:
+            raise Exception(f"curl failed: {result.stderr.decode()[:200]}")
+        return result.stdout.decode("utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        raise Exception(f"Fetch timed out after {timeout}s")
+    except FileNotFoundError:
+        raise Exception("curl not found")
+
+
+_CURL_TRAILER = re.compile(r"\n__CONTENT_TYPE__:([^\n]*)\n__CODE__:(\d*)\n__REDIRECT__:([^\n]*)")
+
+
+def _guarded_curl(url: str, timeout: int) -> str:
+    """curl with every hop validated by ``web_guard`` and pinned via ``--resolve``.
+
+    Returns the same ``body + "\\n__CONTENT_TYPE__:<type>"`` shape as the legacy path. Raises
+    ``Exception("WEB_FETCH DENIED: ...")`` for a refused destination.
+    """
+    import subprocess
+
+    from src.repl_environment import web_guard
+
+    current = url
+    for hop in range(web_guard.MAX_REDIRECTS + 1):
+        try:
+            host, port, ip = web_guard.resolve_pinned(current)
+        except web_guard.WebGuardRefusal as refusal:
+            reason = str(refusal) if hop == 0 else f"redirect hop {hop}: {refusal}"
+            web_guard.log_refusal("fetch_docs", current, reason)
+            raise Exception(f"WEB_FETCH DENIED: {reason}") from None
+        addr = f"[{ip}]" if ":" in ip else ip
+        try:
+            result = subprocess.run(
+                [
+                    "curl", "-s", "--max-time", str(timeout), "--compressed",
+                    "--proto", "=http,https", "--noproxy", "*", "--max-redirs", "0",
+                    "--resolve", f"{host}:{port}:{addr}",
+                    "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                    "-H", "Accept: text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+                    "-H", "Accept-Language: en-US,en;q=0.5",
+                    "-w", "\n__CONTENT_TYPE__:%{content_type}\n__CODE__:%{http_code}\n__REDIRECT__:%{redirect_url}",
+                    current,
+                ],
+                capture_output=True,
+                timeout=timeout + 5,
+            )
+        except subprocess.TimeoutExpired:
+            raise Exception(f"Fetch timed out after {timeout}s") from None
+        except FileNotFoundError:
+            raise Exception("curl not found") from None
+        if result.returncode != 0:
+            raise Exception(f"curl failed: {result.stderr.decode()[:200]}")
+        raw = result.stdout.decode("utf-8", errors="replace")
+        cut = raw.rfind("\n__CONTENT_TYPE__:")
+        m = _CURL_TRAILER.fullmatch(raw, cut) if cut >= 0 else None
+        if m is None:
+            raise Exception("curl output carried no status trailer")
+        body, ctype, code, redirect = raw[:cut], m.group(1), m.group(2), m.group(3).strip()
+        if code.startswith("3") and redirect:
+            current = redirect
+            continue
+        return body + "\n__CONTENT_TYPE__:" + ctype
+    reason = f"more than {web_guard.MAX_REDIRECTS} redirects"
+    web_guard.log_refusal("fetch_docs", url, reason)
+    raise Exception(f"WEB_FETCH DENIED: {reason}")
+
+
 def _fetch_url(url: str, max_length: int = 8000, timeout: int = _WEB_FETCH_TIMEOUT) -> str:
     """Fetch content from a URL.
 
@@ -157,29 +241,14 @@ def _fetch_url(url: str, max_length: int = 8000, timeout: int = _WEB_FETCH_TIMEO
             logger.debug(f"Cache hit for {url}")
             return content
 
-    # Use curl — handles gzip/deflate decompression and avoids bot detection
-    import subprocess
+    from src.repl_environment.exec_containment import flag_enabled
 
-    try:
-        result = subprocess.run(
-            [
-                "curl", "-s", "-L", "--max-time", str(timeout), "--compressed",
-                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
-                "-H", "Accept: text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
-                "-H", "Accept-Language: en-US,en;q=0.5",
-                "-w", "\n__CONTENT_TYPE__:%{content_type}",
-                url,
-            ],
-            capture_output=True,
-            timeout=timeout + 5,
-        )
-        if result.returncode != 0:
-            raise Exception(f"curl failed: {result.stderr.decode()[:200]}")
-        raw = result.stdout.decode("utf-8", errors="replace")
-    except subprocess.TimeoutExpired:
-        raise Exception(f"Fetch timed out after {timeout}s")
-    except FileNotFoundError:
-        raise Exception("curl not found")
+    if flag_enabled("web_fetch_guard"):
+        # SEC-EXEC-3: private/loopback/link-local/metadata deny; redirects handled here, one
+        # validated hop at a time, with curl pinned to the address that was validated.
+        raw = _guarded_curl(url, timeout)
+    else:
+        raw = _legacy_curl(url, timeout)
 
     # Split content type from body (appended by -w flag)
     if "\n__CONTENT_TYPE__:" in raw:
@@ -204,6 +273,19 @@ def _fetch_url(url: str, max_length: int = 8000, timeout: int = _WEB_FETCH_TIMEO
     return content
 
 
+def _audit_fetch(url: str, started: float, result: Any) -> None:
+    """SEC-EXEC-4/7: one durable audit record per fetch_docs call, refused and failed included."""
+    from src.repl_environment.exec_containment import audit_tool_call
+
+    error = None if result.success else str(result.error or "")
+    refused = error is not None and "WEB_FETCH DENIED" in error
+    audit_tool_call(
+        "fetch_docs", text=url, cwd=None, started=started,
+        outcome="ok" if result.success else ("refused" if refused else "error"),
+        refusal=error if refused else None,
+    )
+
+
 def fetch_docs(
     url: str,
     max_length: int = 8000,
@@ -224,12 +306,16 @@ def fetch_docs(
     trust_level = _get_domain_trust(url, source_registry)
 
     # Fetch content
+    import time as _time
+
+    _started = _time.time()
     result = safe_execute(
         _fetch_url,
         url,
         max_length=max_length,
         timeout_seconds=30,
     )
+    _audit_fetch(url, _started, result)
 
     if not result.success:
         return {
