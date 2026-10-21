@@ -116,6 +116,15 @@ def _execute_direct(
             + direct_prompt
         )
 
+    # RTE-LOG-1: stage the block layout (hashes and lengths only; never raises).
+    from src.backends import prompt_layout
+
+    prompt_layout.record_prompt(
+        direct_prompt,
+        named=[("context", request.context or ""), ("task", request.prompt)],
+        turn_index=0,
+    )
+
     # Merge default stop sequences with any request-level overrides
     # (e.g. benchmark seeding passes "</answer>" to halt after answer tags).
     stop_seqs = ["\n\n\n", QWEN_STOP, "</answer>"]

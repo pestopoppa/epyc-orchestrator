@@ -43,7 +43,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from src.backends import serving_calls
+from src.backends import prompt_layout, serving_calls
 
 SCHEMA = "epyc.orchestrator.dispatch.v1"
 LOG_ENV = "ORCHESTRATOR_DISPATCH_LOG"
@@ -269,6 +269,7 @@ class DispatchLog:
                 or getattr(request, "workload_class", None),
                 "priority": staged.get("priority"),
                 "lengths": lengths,
+                "layout": prompt_layout.fields_for_request(request),
                 "fleet_at_arrival": self._snapshot(),
                 "_held": False,
             }
@@ -373,6 +374,10 @@ class DispatchLog:
                     "workload_class": handle["workload_class"],
                     "priority": handle["priority"],
                     "request": lengths,
+                    # RTE-LOG-1: hashes and lengths only; absent when no layout was staged.
+                    **(handle.get("layout") or {}),
+                    "prompt_tokens": getattr(result, "prompt_tokens", None),
+                    "cached_prompt_tokens": serving_calls._cached_prompt_tokens(result, None),
                     "instance": instance,
                     "fleet_at_arrival": handle["fleet_at_arrival"],
                     "fleet_at_dispatch": handle.get("fleet_at_dispatch"),

@@ -37,6 +37,7 @@ from src.prompt_builders.reusable_blocks import (
     cache_friendly_enabled,
     pack_blocks,
     render_blocks,
+    retain_for_log as _retain_blocks,
 )
 
 _log = logging.getLogger(__name__)
@@ -324,7 +325,10 @@ class PromptBuilder:
             return prompt
         # RTE-Prefix: when enabled, fixed sections render before per-turn ones
         # so REPL turns share a longer KV-cache prefix (see to_string docs).
-        return prompt.to_string(prefix_stable=_get_features().prefix_stable_order)
+        _stable = _get_features().prefix_stable_order
+        text = prompt.to_string(prefix_stable=_stable)
+        _record_root_lm_layout(prompt, text, _stable, turn, routing_context)
+        return text
 
     def build_escalation_prompt(
         self,
@@ -788,6 +792,40 @@ def build_stage2_review_prompt(
     )
 
 
+def _record_root_lm_layout(
+    prompt: RootLMPrompt, text: str, prefix_stable: bool, turn: int, routing_context: str
+) -> None:
+    """RTE-LOG-1: stage the block layout of a rendered Root LM prompt (hashes only).
+
+    Additive and failure-proof; see ``src/backends/prompt_layout.py``. The routing
+    block is carved out of the context span so the two never overlap.
+    """
+    try:
+        from src.backends import prompt_layout
+
+        if not prompt_layout.enabled():
+            return
+        spans = prompt.section_spans(prefix_stable)
+        routing = f"## Routing Intelligence\n{routing_context}" if routing_context else ""
+        named = []
+        if routing:
+            rpos = text.rfind(routing)
+            carved = []
+            for kind, a, b in spans:
+                if kind == "context" and a <= rpos < b:
+                    if rpos > a:
+                        carved.append((kind, a, rpos))
+                    if rpos + len(routing) < b:
+                        carved.append((kind, rpos + len(routing), b))
+                    named.append(("routing", routing))
+                else:
+                    carved.append((kind, a, b))
+            spans = carved
+        prompt_layout.record_prompt(text, sections=spans, named=named, turn_index=turn)
+    except Exception:
+        pass
+
+
 def _build_cache_friendly_routing_context(
     role: str, tier_value: Any, results: list[Any], best: Any
 ) -> str:
@@ -803,6 +841,7 @@ def _build_cache_friendly_routing_context(
         mrole = ctx.get("role", r.memory.action)
         items.append(f"Past task: {objective} -> {mrole} ({r.memory.outcome or '?'})")
     blocks = pack_blocks(items)
+    _retain_blocks("routing", blocks)
     tail = [f"Role: {role} (Tier {tier_value})"]
     if best:
         tail.append(f"Suggested: {best[0]} (conf={best[1]:.2f})")
@@ -1041,6 +1080,26 @@ def build_corpus_context(
         "context_chars": 0,
         "retrieval_latency_ms": 0.0,
     }
+    if config is None:
+        # RTE-CORPUS-1: the retired-corpus fast path.  With runtime corpus_retrieval
+        # OFF (the index was deleted 2026-07-04) nothing below is needed: no module
+        # import, no per-role registry lookup (an unknown role cannot raise here), no
+        # retriever.  A registry that cannot be read falls through to the full path,
+        # which reports registry_error as before.  Flag-on behaviour is unchanged.
+        try:
+            _fast_cfg = _get_corpus_registry().get_corpus_config()
+            if not _fast_cfg.get("enabled", False):
+                event.update(
+                    index_path=_fast_cfg.get("index_path", ""),
+                    runtime_corpus_enabled=False,
+                    status="skipped",
+                    reason="config_disabled",
+                )
+                _emit_corpus_context_event(event)
+                return ""
+        except Exception:
+            pass
+
     try:
         from src.services.corpus_retrieval import (
             CorpusConfig,

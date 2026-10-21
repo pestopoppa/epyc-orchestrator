@@ -162,3 +162,18 @@ def block_log_records(blocks: Sequence[Block], kind: str) -> list[dict]:
          "n_items": len(b.item_hashes), "meets_min": b.meets_min}
         for b in blocks
     ]
+
+
+def retain_for_log(kind: str, blocks: Sequence[Block]) -> None:
+    """Hand just-rendered blocks to the prompt-layout logger (RTE-LOG-1, B7-LOG-1).
+
+    The logger finds each block in the final prompt by its rendered bytes, so a
+    retained block that did not reach the prompt is simply never logged.  Never
+    raises; logging only, nothing here touches the prompt text.
+    """
+    try:
+        from src.backends.prompt_layout import retain_blocks
+
+        retain_blocks(kind, blocks)
+    except Exception:
+        pass

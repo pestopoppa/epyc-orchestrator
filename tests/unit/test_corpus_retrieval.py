@@ -121,6 +121,55 @@ class TestReturnsEmptyForNonLookupRole:
         )
         assert result == ""
 
+    def test_flag_off_is_a_clean_noop_without_role_lookup_or_retriever(
+        self, monkeypatch, caplog
+    ):
+        """RTE-CORPUS-1: runtime corpus_retrieval OFF skips before any role lookup,
+        retriever construction or warning, even for a role the registry does not know."""
+        from src.prompt_builders import builder
+
+        def _boom(*_a, **_k):
+            raise AssertionError("must not be reached with the flag off")
+
+        fake_registry = SimpleNamespace(
+            get_corpus_config=lambda: {"enabled": False, "index_path": "/gone/v3_sharded"},
+            get_role=_boom,
+        )
+        monkeypatch.setattr(builder, "_get_corpus_registry", lambda: fake_registry)
+        monkeypatch.setattr(builder, "_configured_corpus_retriever", _boom)
+
+        with caplog.at_level(logging.DEBUG, logger="src.prompt_builders.builder"):
+            result = builder.build_corpus_context(
+                role="no_such_role", task_description="def f(x): return x", task_id="t"
+            )
+
+        assert result == ""
+        records = [r for r in caplog.records if hasattr(r, "corpus_retrieval")]
+        assert len(records) == 1 and records[0].levelno == logging.DEBUG
+        event = records[0].corpus_retrieval
+        assert (event["status"], event["reason"]) == ("skipped", "config_disabled")
+        assert event["runtime_corpus_enabled"] is False and event["index_path"] == "/gone/v3_sharded"
+
+    def test_flag_off_block_absent_is_also_clean(self, monkeypatch):
+        from src.prompt_builders import builder
+
+        monkeypatch.setattr(
+            builder, "_get_corpus_registry", lambda: SimpleNamespace(get_corpus_config=lambda: {})
+        )
+        assert builder.build_corpus_context(role="frontdoor", task_description="x") == ""
+
+    def test_unreadable_registry_still_reports_registry_error(self, monkeypatch, caplog):
+        from src.prompt_builders import builder
+
+        def _broken():
+            raise RuntimeError("registry unreadable")
+
+        monkeypatch.setattr(builder, "_get_corpus_registry", _broken)
+        with caplog.at_level(logging.WARNING, logger="src.prompt_builders.builder"):
+            assert builder.build_corpus_context(role="frontdoor", task_description="x") == ""
+        event = [r for r in caplog.records if hasattr(r, "corpus_retrieval")][-1].corpus_retrieval
+        assert (event["status"], event["reason"]) == ("error", "registry_error")
+
     def test_build_corpus_context_requires_role_corpus_flag(
         self,
         mini_index: Path,

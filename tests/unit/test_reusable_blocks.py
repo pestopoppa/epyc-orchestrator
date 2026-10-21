@@ -180,3 +180,37 @@ class TestRoutingContext:
 def test_flag_default_off(monkeypatch):
     monkeypatch.delenv(FLAG, raising=False)
     assert rb.cache_friendly_enabled() is False
+
+
+class TestDocChunkLayoutContract:
+    """REPL-EMB-6.1: the inlining layout contract, exercised on a chunk set (no inlining path exists yet)."""
+
+    @staticmethod
+    def _chunks():
+        # 256-token embedder-slot sized chunks of source text, byte-for-byte; no score/rank/id in the text.
+        return [("def f%d(x):\n    return x + %d\n" % (i, i)) * 20 for i in range(24)]
+
+    def test_two_retrieval_orders_give_byte_identical_blocks(self):
+        chunks = self._chunks()
+        a = rb.pack_blocks(chunks)
+        b = rb.pack_blocks(list(reversed(chunks)))
+        c = rb.pack_blocks(random.Random(3).sample(chunks, len(chunks)))
+        assert [x.text for x in a] == [x.text for x in b] == [x.text for x in c]
+        assert rb.render_blocks(a, header="H") == rb.render_blocks(b, header="H")
+        assert all(blk.meets_min for blk in a)
+
+    def test_blocks_are_contiguous_and_logged_as_doc_chunk_kind(self):
+        blocks = rb.pack_blocks(self._chunks())
+        rendered = rb.render_blocks(blocks, header="Retrieved context:")
+        assert rendered.count(rb.BLOCK_OPEN) == len(blocks)
+        recs = rb.block_log_records(blocks, "doc_chunk")
+        assert {r["kind"] for r in recs} == {"doc_chunk"}
+        # hashes are logging-only: none of them appears in the prompt text
+        assert not any(r["sha256_12"] in rendered for r in recs)
+
+    def test_per_request_fields_stay_outside_the_blocks(self):
+        chunks = self._chunks()
+        base = rb.render_blocks(rb.pack_blocks(chunks), header="Retrieved context:")
+        for volatile in ("req-1 2026-10-21T10:00:00Z", "req-2 2026-10-21T10:00:05Z"):
+            prompt = base + "\n" + volatile  # the volatile tail follows the reusable blocks
+            assert prompt.startswith(base)

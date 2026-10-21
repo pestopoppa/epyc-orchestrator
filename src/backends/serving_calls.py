@@ -677,6 +677,14 @@ def build_record(
             "chat_payload": getattr(request, "chat_payload", None) is not None,
             "prefix_fp": prefix_fingerprints(request),
         }
+    if request is not None:
+        # RTE-LOG-1: ordered prompt blocks (kind/start/length/sha256_12 only).
+        try:
+            from src.backends import prompt_layout
+
+            record.update(prompt_layout.fields_for_request(request))
+        except Exception:
+            pass
     if notes:
         record["notes"] = notes
     return record
@@ -897,6 +905,12 @@ def recorded_call(method: str) -> Callable:
                         notes=notes,
                     )
                     write_record(record)
+                    try:
+                        from src.backends import prompt_layout
+
+                        prompt_layout.clear_layout()  # consumed by this record
+                    except Exception:
+                        pass
                     _dispatch_direct(staged, request, role_config, self, ts_start, result, error)
                     remember_served(record, prefix_ladder(request))
                     observe_prefix_index(record, request)

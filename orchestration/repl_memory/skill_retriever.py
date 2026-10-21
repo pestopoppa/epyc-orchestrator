@@ -245,7 +245,11 @@ class SkillRetriever:
         the kept set then ignores score.  General skills are packed separately so
         their blocks stay byte-identical across requests.
         """
-        from src.prompt_builders.reusable_blocks import pack_blocks, render_blocks
+        from src.prompt_builders.reusable_blocks import (
+            pack_blocks,
+            render_blocks,
+            retain_for_log,
+        )
 
         header = "## Learned Routing Skills"
         used = len(header)
@@ -263,6 +267,7 @@ class SkillRetriever:
             (general if r.source == "general" else specific).append(entry)
         blocks = pack_blocks(general) + pack_blocks(specific)
         self.last_blocks = blocks  # for B7 hash logging; never in the prompt
+        retain_for_log("skill", blocks)  # RTE-LOG-1: located by bytes at layout time
         return render_blocks(blocks, header=header)
 
     def _format_skill_entry(self, result: SkillRetrievalResult) -> str:

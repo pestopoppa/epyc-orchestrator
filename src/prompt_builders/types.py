@@ -92,38 +92,67 @@ class RootLMPrompt:
                 stay AFTER the fixed prefix for the cache to help at all.
                 Default False preserves the legacy order.
         """
-        parts = []
+        return "\n".join(text for _, text in self._parts(prefix_stable))
+
+    def _parts(self, prefix_stable: bool = False) -> list[tuple[str, str]]:
+        """Ordered ``(kind, line)`` pairs; ``to_string`` joins the lines with newlines.
+
+        ``kind`` is the RTE-LOG-1 block kind (``src/backends/prompt_layout.py``);
+        separator lines belong to the section that follows them.
+        """
+        parts: list[tuple[str, str]] = []
         if self.system:
-            parts.append(self.system)
+            parts.append(("system", self.system))
         if self.tools:
-            parts.extend(["", "## Available Tools", self.tools])
+            parts.extend([("tools", ""), ("tools", "## Available Tools"), ("tools", self.tools)])
         if self.rules:
-            parts.extend(["", "## Rules", self.rules])
+            parts.extend([("rules", ""), ("rules", "## Rules"), ("rules", self.rules)])
         if prefix_stable:
             # Fixed sections first — shared across every turn of a session.
             if self.task:
-                parts.extend(["", "## Task", self.task])
+                parts.extend([("task", ""), ("task", "## Task"), ("task", self.task)])
             if self.instruction:
-                parts.extend(["", "## Your Code", self.instruction])
+                parts.extend([("task", ""), ("task", "## Your Code"), ("task", self.instruction)])
             # Per-turn-mutating sections last — the delta between turns.
             if self.state:
-                parts.extend(["", "## Current State", self.state])
+                parts.extend([("state", ""), ("state", "## Current State"), ("state", self.state)])
             if self.context:
-                parts.extend(["", self.context])
+                parts.extend([("context", ""), ("context", self.context)])
             if self.reference_code:
-                parts.extend(["", "## Reference Code", self.reference_code])
+                parts.extend([("reference_code", ""), ("reference_code", "## Reference Code"),
+                              ("reference_code", self.reference_code)])
         else:
             if self.state:
-                parts.extend(["", "## Current State", self.state])
+                parts.extend([("state", ""), ("state", "## Current State"), ("state", self.state)])
             if self.context:
-                parts.extend(["", self.context])
+                parts.extend([("context", ""), ("context", self.context)])
             if self.reference_code:
-                parts.extend(["", "## Reference Code", self.reference_code])
+                parts.extend([("reference_code", ""), ("reference_code", "## Reference Code"),
+                              ("reference_code", self.reference_code)])
             if self.task:
-                parts.extend(["", "## Task", self.task])
+                parts.extend([("task", ""), ("task", "## Task"), ("task", self.task)])
             if self.instruction:
-                parts.extend(["", "## Your Code", self.instruction])
-        return "\n".join(parts)
+                parts.extend([("task", ""), ("task", "## Your Code"), ("task", self.instruction)])
+        return parts
+
+    def section_spans(self, prefix_stable: bool = False) -> list[tuple[str, int, int]]:
+        """``(kind, start, end)`` character spans of each section in ``to_string``.
+
+        Adjacent lines of one kind merge; a span starts after its leading blank
+        separator line so it covers the heading and body only.
+        """
+        spans: list[tuple[str, int, int]] = []
+        pos = 0
+        for i, (kind, text) in enumerate(self._parts(prefix_stable)):
+            start, end = pos, pos + len(text)
+            pos = end + 1  # the "\n" join
+            if text == "":
+                continue
+            if spans and spans[-1][0] == kind and start - spans[-1][2] <= 2:
+                spans[-1] = (kind, spans[-1][1], end)
+            else:
+                spans.append((kind, start, end))
+        return spans
 
 
 @dataclass
