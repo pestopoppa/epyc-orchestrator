@@ -434,3 +434,32 @@ def test_shipped_store_file_validates() -> None:
     operator_hypotheses.load_operator_hypotheses(
         shipped, ROOT / "orchestration" / "operator_hypothesis_resolutions.jsonl"
     )
+
+
+# ----- belief-degraded seeds: declared premises + seeded_against (2026-10-21) -----
+
+
+def test_vidya_premises_and_seeded_against_round_trip(tmp_path) -> None:
+    entry = dict(WELL_FORMED, proposed_action={"type": "seed_batch", "n_questions": 4},
+                 vidya_claim_ids=["claim-a", "claim-b"], seeded_against="sha256:abc")
+    store, ledger = _paths(tmp_path, [entry])
+    [hyp] = operator_hypotheses.load_operator_hypotheses(store, ledger)
+    assert hyp.vidya_claim_ids == ("claim-a", "claim-b")
+    assert hyp.seeded_against == "sha256:abc"
+    assert hyp.as_dict()["vidya_claim_ids"] == ["claim-a", "claim-b"]
+
+
+def test_premise_fields_are_optional(tmp_path) -> None:
+    store, ledger = _paths(tmp_path, [WELL_FORMED])
+    [hyp] = operator_hypotheses.load_operator_hypotheses(store, ledger)
+    assert hyp.vidya_claim_ids == () and hyp.seeded_against == ""
+    assert "vidya_claim_ids" not in hyp.as_dict()
+
+
+@pytest.mark.parametrize("bad", [{"vidya_claim_ids": "claim-a"},
+                                 {"vidya_claim_ids": ["", "x"]},
+                                 {"seeded_against": {"kind": "operator"}}])
+def test_malformed_premise_fields_raise(tmp_path, bad) -> None:
+    store, ledger = _paths(tmp_path, [dict(WELL_FORMED, **bad)])
+    with pytest.raises(operator_hypotheses.OperatorHypothesisError):
+        operator_hypotheses.load_operator_hypotheses(store, ledger)

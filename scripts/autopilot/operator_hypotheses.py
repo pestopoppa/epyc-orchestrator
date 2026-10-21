@@ -111,7 +111,14 @@ RESOLUTION_STATUSES = ("confirmed", "refuted", "inconclusive")
 EVIDENCE_REQUIRING_STATUSES = ("confirmed", "refuted")
 
 REQUIRED_FIELDS = ("id", "hypothesis", "falsifier", "stated_by", "stated")
-OPTIONAL_FIELDS = ("confidence", "proposed_action", "notes")
+# `vidya_claim_ids` / `seeded_against` (2026-10-21, belief-degraded mode): the belief-ledger claim
+# ids the hypothesis' proposed action rests on, and the ledger state (or its digest) it was stated
+# against. While the belief ledger cannot be made current, an open hypothesis with a
+# `proposed_action` is a PRESEEDED item AutoPilot may run after `check-seeds` admits it and the
+# binding critic approves it; a premise the last known-good ledger state flags contested or
+# withdrawn keeps it un-run. Absent `seeded_against`, the operator provenance
+# {"kind": "operator", "author": stated_by, "at": stated} is recorded instead.
+OPTIONAL_FIELDS = ("confidence", "proposed_action", "notes", "vidya_claim_ids", "seeded_against")
 KNOWN_FIELDS = frozenset(REQUIRED_FIELDS + OPTIONAL_FIELDS)
 
 #: Fields refused on a statement because they would grade a prior as evidence.
@@ -182,6 +189,8 @@ class OperatorHypothesis:
     proposed_action: Mapping[str, Any] | None = None
     notes: str = ""
     resolution: Resolution | None = None
+    vidya_claim_ids: tuple[str, ...] = ()
+    seeded_against: str = ""
 
     @property
     def is_open(self) -> bool:
@@ -203,6 +212,10 @@ class OperatorHypothesis:
         }
         if self.proposed_action is not None:
             out["proposed_action"] = dict(self.proposed_action)
+        if self.vidya_claim_ids:
+            out["vidya_claim_ids"] = list(self.vidya_claim_ids)
+        if self.seeded_against:
+            out["seeded_against"] = self.seeded_against
         if self.resolution is not None:
             out["resolution"] = self.resolution.as_row()
         return out
@@ -291,6 +304,20 @@ def _hypothesis_from_raw(index: int, raw: Any, path: Path) -> OperatorHypothesis
     if not isinstance(notes, str):
         raise OperatorHypothesisError(f"{where} ({hypothesis_id}): 'notes' must be a string")
 
+    claim_ids = raw.get("vidya_claim_ids") or []
+    if not isinstance(claim_ids, list) or not all(
+        isinstance(cid, str) and cid.strip() for cid in claim_ids
+    ):
+        raise OperatorHypothesisError(
+            f"{where} ({hypothesis_id}): 'vidya_claim_ids' must be a list of non-empty "
+            f"belief-ledger claim id strings"
+        )
+    seeded_against = raw.get("seeded_against") or ""
+    if not isinstance(seeded_against, str):
+        raise OperatorHypothesisError(
+            f"{where} ({hypothesis_id}): 'seeded_against' must be a ledger state digest string"
+        )
+
     return OperatorHypothesis(
         id=hypothesis_id,
         hypothesis=hypothesis,
@@ -300,6 +327,8 @@ def _hypothesis_from_raw(index: int, raw: Any, path: Path) -> OperatorHypothesis
         confidence=confidence.strip().lower(),
         proposed_action=proposed_action,
         notes=notes.strip(),
+        vidya_claim_ids=tuple(cid.strip() for cid in claim_ids),
+        seeded_against=seeded_against.strip(),
     )
 
 
@@ -488,6 +517,8 @@ def load_operator_hypotheses(
             proposed_action=statement.proposed_action,
             notes=statement.notes,
             resolution=resolutions.get(statement.id),
+            vidya_claim_ids=statement.vidya_claim_ids,
+            seeded_against=statement.seeded_against,
         )
         for statement in statements
     ]

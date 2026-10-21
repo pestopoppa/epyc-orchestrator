@@ -33,6 +33,36 @@ REPL_NUMERIC_ACTION = {
     "params": {"repl.turn_token_cap": 1024},
 }
 
+loop_beliefs_bridge = importlib.import_module("loop_beliefs_bridge")
+
+
+def _ready_answer(**evidence: Any) -> dict[str, Any]:
+    """A canned, verified `ready` answer from the shared belief reader."""
+    ev = {"status": "omitted", "reasons": ["inapplicable_target"], "claim_ids": [],
+          "contested_claim_ids": [], "withdrawn_claim_ids": [], "section": "",
+          "section_sha256": ""}
+    ev.update(evidence)
+    return {
+        "schema": "epyc.vidya.loop_beliefs.v1", "consumer": "autopilot.planner",
+        "as_of": "2026-10-21T12:00:00+00:00", "status": "ready", "reason": None,
+        "known_good_path": "", "targets": [],
+        "ledger_state": {"schema": "epyc.vidya.ledger_state.v1", "ledger_path": "/tmp/l.jsonl",
+                         "frame_count": 7, "head_seq": 6, "head_hash": "sha256:" + "ab" * 32,
+                         "verified_at": "2026-10-21T12:00:00Z", "fresh": True,
+                         "freshness": {"sync_action": "ingested", "was_fresh": False}},
+        "ledger_state_digest": "sha256:" + "cd" * 32, "evidence": ev,
+    }
+
+
+READY_BELIEFS = loop_beliefs_bridge.validate_ready(_ready_answer())
+
+
+def _plan(*args: Any, **kwargs: Any) -> Any:
+    """plan_with_providers with the mandatory belief context supplied (operator rule 2026-10-21);
+    tests of the guard itself call planner_coordinator.plan_with_providers directly."""
+    kwargs.setdefault("belief_context", READY_BELIEFS)
+    return planner_coordinator.plan_with_providers(*args, **kwargs)
+
 
 def _unreachable_repair_complete(messages: Any, schema: Any) -> str:
     """Default TD-21.2/.3 repair completer for this test module: raises
@@ -147,7 +177,7 @@ def test_primary_failure_falls_back_to_secondary() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id="old",
         planner_state={},
@@ -198,7 +228,7 @@ def test_codex_primary_can_use_distinct_codex_critic_alias() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -267,7 +297,7 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id="old",
         planner_state={},
@@ -320,7 +350,7 @@ def test_currently_unavailable_primary_draft_falls_back_before_critique() -> Non
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -382,7 +412,7 @@ def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -491,7 +521,7 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -582,7 +612,7 @@ def test_empty_numeric_planner_action_is_deterministically_blocked() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -617,7 +647,7 @@ def test_prior_critic_rejected_signature_is_deterministically_blocked() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -666,7 +696,7 @@ def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circ
     )
 
     state = {"claude": {"failures": 1, "circuit_open_until": 0.0}}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id="old",
         planner_state=state,
@@ -713,7 +743,7 @@ def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id="old",
         planner_state={},
@@ -753,7 +783,7 @@ def test_local_failure_codex_fallback_can_dispatch_without_external_critic() -> 
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -824,7 +854,7 @@ def test_spend_breaker_defaults_off_when_env_absent(
     )
     state: dict[str, Any] = {"_spend_breaker": {"active": True}}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -882,7 +912,7 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
     )
     state: dict[str, Any] = {}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -946,7 +976,7 @@ def test_spend_breaker_accepts_local_ingest_leading_json_action(
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -1007,7 +1037,7 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
     )
     state: dict[str, Any] = {}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1066,7 +1096,7 @@ def test_spend_breaker_preserves_configured_local_critic(
     )
     state: dict[str, Any] = {}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1124,7 +1154,7 @@ def test_local_role_primary_falls_back_to_local_critic_role(
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -1187,7 +1217,7 @@ def test_spend_breaker_keeps_config_when_under_threshold(
     )
     state: dict[str, Any] = {}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1222,7 +1252,7 @@ def test_nonresumable_primary_clears_persisted_session_id() -> None:
     )
     codex = FakeProvider("codex", [])
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id="old-session",
         planner_state={},
@@ -1269,7 +1299,7 @@ def test_shadow_critique_does_not_apply_revision() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -1317,7 +1347,7 @@ def test_active_critique_applies_valid_revision() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -1361,7 +1391,7 @@ def test_active_reject_without_revision_uses_numeric_fallback() -> None:
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -1416,7 +1446,7 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
     )
 
     state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1512,7 +1542,7 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
     )
 
     state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1570,7 +1600,7 @@ def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
     )
     state: dict[str, Any] = {}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1684,7 +1714,7 @@ def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
         ],
     )
     state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -1830,7 +1860,7 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
             )
         ],
     )
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -1935,7 +1965,7 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     )
     state = {"claude": {"circuit_open_until": time.time() + 60}}
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id="old",
         planner_state=state,
@@ -2031,7 +2061,7 @@ def test_draft_validation_error_is_surfaced_not_opaque() -> None:
         supports_resume=True,
     )
     state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -2175,7 +2205,7 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
         ],
     )
     state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -2222,7 +2252,7 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
             return codex
         return claude
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2254,7 +2284,7 @@ def test_both_models_unavailable_sets_providers_unavailable() -> None:
             return codex
         return claude
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2284,7 +2314,7 @@ def test_content_failure_is_not_providers_unavailable() -> None:
             return codex
         return claude
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2320,7 +2350,7 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
         return claude
 
     state = {"codex": {"circuit_open_until": _time.time() + 600.0, "failures": 2}}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -2366,7 +2396,7 @@ def test_recovered_parse_repairs_action_without_fallback_or_circuit_trip(
     monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: fake_complete)
 
     planner_state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=planner_state,
@@ -2411,7 +2441,7 @@ def test_unrepairable_action_still_falls_back_and_trips_circuit_breaker(
     monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: failing_complete)
 
     planner_state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=planner_state,
@@ -2447,7 +2477,7 @@ def test_rationale_repair_recovers_malformed_sidecar(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: fake_complete)
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2486,7 +2516,7 @@ def test_rationale_repair_unrepairable_persists_empty_default_flagged_failed(
 
     monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: failing_complete)
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2538,7 +2568,7 @@ def test_recovered_critic_verdict_repairs_without_fallback_or_circuit_trip(
     monkeypatch.setattr(planner_coordinator, "action_repair_completer", lambda: fake_complete)
 
     planner_state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=planner_state,
@@ -2602,7 +2632,7 @@ def test_unrepairable_critic_verdict_is_typed_failure_and_counted(
     before = STRUCTURED_OUTPUT_REPAIR_COUNTS.get(key, 0)
 
     state: dict[str, Any] = {}
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state=state,
@@ -2652,7 +2682,7 @@ def test_clean_critic_verdict_never_invokes_repair(monkeypatch: pytest.MonkeyPat
         ],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2701,7 +2731,7 @@ def test_external_cli_critic_trailing_noise_recovered_by_fish_only(
         [PlannerProviderResult(provider="codex", role="critique", ok=True, text=noisy)],
     )
 
-    decision = planner_coordinator.plan_with_providers(
+    decision = _plan(
         "prompt",
         session_id=None,
         planner_state={},
@@ -2714,3 +2744,88 @@ def test_external_cli_critic_trailing_noise_recovered_by_fish_only(
     assert decision.critique.parse_status == "parsed"
     assert decision.critique.repair_calls == 0
     assert len(codex.calls) == 1
+
+
+# ── Mandatory belief context (loop_beliefs, operator rules 2026-10-21) ──
+
+
+def _counting_factory(calls: list[str]):
+    def factory(name: str) -> Any:
+        calls.append(name)
+        raise AssertionError(f"provider {name} must not be built without belief context")
+
+    return factory
+
+
+@pytest.mark.parametrize("bad", [None, _ready_answer(), {"status": "ready"}, object()])
+def test_plan_with_providers_without_validated_ready_answer_raises(bad: Any) -> None:
+    calls: list[str] = []
+    with pytest.raises(loop_beliefs_bridge.BeliefContextRefused):
+        planner_coordinator.plan_with_providers(
+            "prompt", session_id=None, provider_factory=_counting_factory(calls),
+            belief_context=bad,
+        )
+    assert calls == []
+
+
+def test_plan_with_providers_requires_belief_context_argument() -> None:
+    with pytest.raises(TypeError):
+        planner_coordinator.plan_with_providers("prompt", session_id=None)  # type: ignore[call-arg]
+
+
+def test_ready_beliefs_cannot_be_forged() -> None:
+    with pytest.raises(loop_beliefs_bridge.BeliefContextRefused):
+        loop_beliefs_bridge.ReadyBeliefs(answer=_ready_answer())
+    refused = dict(_ready_answer(), status="refused", reason="chain_broken")
+    with pytest.raises(ValueError):
+        loop_beliefs_bridge.validate_ready(refused)
+    stale = _ready_answer()
+    stale["ledger_state"] = dict(stale["ledger_state"], fresh=False)
+    with pytest.raises(ValueError):
+        loop_beliefs_bridge.validate_ready(stale)
+
+
+def test_archive_receipt_carries_loop_beliefs_ledger_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
+    ready = loop_beliefs_bridge.validate_ready(_ready_answer(
+        status="presented", claim_ids=["u1", "u2"], contested_claim_ids=["c1"],
+        withdrawn_claim_ids=["w1"], section="## Belief-kernel evidence", section_sha256="s"))
+    decision = planner_coordinator.PlannerDecision(
+        action=MEMRL_NUMERIC_ACTION,
+        rationale={"vidya_claim_ids": ["u2", "c1", "w1", "ghost"]},
+        session_id=None, canonical_text="", draft_text="", draft_provider="claude",
+        mode="single", draft_action=MEMRL_NUMERIC_ACTION,
+    )
+    planner_coordinator._archive_decision(decision, {}, trial_id=5, belief_context=ready)
+    receipt = records[-1]["vidya_loop_beliefs"]
+    assert receipt["schema"] == "epyc.vidya.loop_beliefs_planner_receipt.v1"
+    assert receipt["status"] == "ready"
+    assert receipt["ledger_state"]["frame_count"] == 7
+    assert receipt["ledger_state_digest"] == "sha256:" + "cd" * 32
+    assert receipt["exposed_usable_claim_ids"] == ["u1", "u2"]
+    assert receipt["accepted_reliance_claim_ids"] == ["u2"]
+    assert receipt["rejected_reliance"] == [
+        {"claim_id": "c1", "reason": "contested"},
+        {"claim_id": "ghost", "reason": "not_presented"},
+        {"claim_id": "w1", "reason": "withdrawn"},
+    ]
+
+
+def test_plan_with_providers_archives_belief_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
+    draft = (
+        "```json:autopilot_action\n"
+        '{"type":"numeric_trial","surface":"memrl_retrieval",'
+        '"params":{"memrl_retrieval.semantic_k":15}}\n```\n'
+    )
+    claude = FakeProvider("claude", [PlannerProviderResult(
+        provider="claude", role="draft", ok=True, text=draft)])
+    _plan("prompt", session_id=None, provider_factory=lambda _name: claude,
+          settings=PlannerSettings(mode="single"))
+    receipt = records[-1]["vidya_loop_beliefs"]
+    assert receipt["status"] == "ready"
+    assert receipt["ledger_state"]["freshness"]["sync_action"] == "ingested"

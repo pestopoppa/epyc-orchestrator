@@ -24,6 +24,13 @@ from controller_io import (
     extract_rationale_with_repair,
     validate_single_variable,
 )
+from loop_beliefs_bridge import (
+    ReadyBeliefs,
+    SeedReviewToken,
+    build_planner_receipt,
+    require_ready,
+    require_seed_review,
+)
 from planner_providers import (
     PlannerProvider,
     PlannerProviderResult,
@@ -318,8 +325,15 @@ def plan_with_providers(
     action_feedback_state: dict[str, Any] | None = None,
     trial_id: int | None = None,
     vidya_kvq_context: dict[str, Any] | None = None,
+    belief_context: ReadyBeliefs,
 ) -> PlannerDecision:
-    """Draft a canonical planner action with optional secondary critique."""
+    """Draft a canonical planner action with optional secondary critique.
+
+    `belief_context` is REQUIRED (operator rule 2026-10-21): a validated `ready` answer from the
+    shared belief reader (`loop_beliefs_bridge.prepare`). Without one this raises
+    `BeliefContextRefused` before any provider -- draft, fallback, critic or repair -- is built.
+    """
+    belief_context = require_ready(belief_context)
     # One deterministic, unmistakable banner per live planning cycle. Tests and
     # helper calls omit trial_id, so they do not write to the shared planner tap.
     _write_trial_planning_banner(trial_id)
@@ -503,7 +517,8 @@ def plan_with_providers(
             rationale_repair_calls=rationale_repair_calls,
         )
         _archive_decision(decision, planner_state, trial_id=trial_id,
-                          vidya_kvq_context=vidya_kvq_context)
+                          vidya_kvq_context=vidya_kvq_context,
+                          belief_context=belief_context)
         return decision
 
     if _should_critique(settings, action, stagnation_signal):
@@ -746,7 +761,130 @@ def plan_with_providers(
             else f"{decision.fallback_reason}; {guard_reason}"
         )
     _archive_decision(decision, planner_state, trial_id=trial_id,
-                      vidya_kvq_context=vidya_kvq_context)
+                      vidya_kvq_context=vidya_kvq_context,
+                      belief_context=belief_context)
+    return decision
+
+
+SEED_REVIEW_PROVIDER = "preseeded"
+
+
+def review_preseeded_seed(
+    seed_review: SeedReviewToken,
+    *,
+    review_context: str,
+    timeout: int = DEFAULT_PLANNER_TIMEOUT,
+    cwd: Path | str | None = None,
+    planner_state: dict[str, Any] | None = None,
+    settings: PlannerSettings | None = None,
+    provider_factory: ProviderFactory = get_planner_provider,
+    action_feedback_state: dict[str, Any] | None = None,
+    trial_id: int | None = None,
+) -> PlannerDecision:
+    """Binding critic review of ONE preseeded item while belief context is REFUSED.
+
+    Belief-degraded mode (operator rules 2026-10-21 + the 2026-06-07 "nothing runs unreviewed"
+    rule). Nothing is drafted here: the action is the preseeded item's, admitted by `check-seeds`
+    against the last known-good ledger state (`seed_review` can only be minted from that check).
+    Only the critic (and its configured fallback critic) is invoked. Outcome is fail-closed:
+      * `approve` (parsed or repaired) -> `action` is the seed, unchanged;
+      * `reject` -> `action` None (the seed is retired for degraded mode);
+      * `revise` -> `action` None: a critic-authored replacement would be new planning without
+        belief context, so it is never adopted (the seed is retired for degraded mode);
+      * critic unavailable / unparseable / circuit open / deterministic block -> `action` None.
+    Planner DRAFTING stays impossible: `plan_with_providers` accepts only a `ready` answer.
+    """
+    token = require_seed_review(seed_review)
+    settings = settings or load_planner_settings_from_env()
+    planner_state = planner_state if planner_state is not None else {}
+    action_feedback_state = action_feedback_state if action_feedback_state is not None else {}
+    action = json.loads(json.dumps(dict(token.action)))
+    rationale = json.loads(json.dumps(dict(token.rationale)))
+    draft_text = (
+        "[belief-degraded preseeded review]\n"
+        f"{token.description}\n\n"
+        "This action was NOT drafted this turn. The belief ledger could not be made current, so "
+        "no new plan may be generated; this is a preseeded, not-yet-tested item whose declared "
+        "premises passed check-seeds against the last known-good ledger state "
+        f"{token.checked_against_digest}.\n"
+        f"seeded_against: {json.dumps(token.seeded_against, sort_keys=True, default=str)}\n"
+        f"declared premises (vidya claim ids): {list(token.premises)}\n"
+        "Approve to run it exactly as written, or reject it. A `revise` is NOT adopted in this "
+        "mode (it would be new planning without belief context) and leaves the seed un-run."
+    )
+    provider_trace: list[dict[str, Any]] = []
+    critique: PlannerCritique | None = None
+    block_reason = _final_action_block_reason(
+        action, draft_action=action, critique=None, binding=False,
+        allowed_action_types=None, action_feedback_state=action_feedback_state,
+    )
+    fallback_reason = ""
+    if block_reason:
+        fallback_reason = f"{DETERMINISTIC_GUARD_PREFIX} {block_reason}"
+    else:
+        critic_name = _normalize_provider(settings.critic)
+        critic_fallback_name = _critic_fallback_provider_name(critic_name, SEED_REVIEW_PROVIDER)
+        if _circuit_is_open(planner_state, critic_name):
+            if critic_fallback_name and not _circuit_is_open(planner_state, critic_fallback_name):
+                critic_name = critic_fallback_name
+                critic_fallback_name = ""
+            else:
+                critique = PlannerCritique(decision="unavailable", provider=critic_name,
+                                           parse_error="critic circuit open")
+        if critique is None:
+            repair_complete = action_repair_completer()
+            critique_prompt = build_critique_prompt(review_context, draft_text, action, rationale)
+            result = provider_factory(critic_name).invoke(
+                critique_prompt, role="critique", session_id=None, timeout=timeout, cwd=cwd,
+            )
+            if result.ok:
+                critique = extract_critique_with_repair(result.text, complete=repair_complete)
+                critique.provider = result.provider
+                provider_trace.append(_critique_provider_event(
+                    stage="seed_review_primary", result=result, critique=critique))
+                if critique.parse_error:
+                    _mark_failure(planner_state, result.provider, settings)
+                else:
+                    _mark_success(planner_state, result.provider)
+            else:
+                _mark_failure(planner_state, result.provider, settings)
+                provider_trace.append(_critique_provider_event(
+                    stage="seed_review_primary", result=result, critique=None))
+                critique = PlannerCritique(decision="unavailable", raw_text=result.text,
+                                           provider=result.provider,
+                                           parse_error=result.error or "critique failed")
+            if critique.parse_error:
+                fallback = _try_fallback_critic(
+                    provider_factory=provider_factory, fallback_name=critic_fallback_name,
+                    failed_provider=critique.provider or critic_name,
+                    critique_prompt=critique_prompt, timeout=timeout, cwd=cwd,
+                    planner_state=planner_state, settings=settings,
+                    provider_trace=provider_trace, complete=repair_complete,
+                )
+                if fallback is not None:
+                    critique = fallback
+            if critique.parse_error:
+                critique.decision = "unavailable"
+        fallback_reason = f"preseeded review verdict: {critique.decision}"
+
+    approved = critique is not None and critique.decision == "approve" and not critique.parse_error
+    decision = PlannerDecision(
+        action=action if approved else None,
+        rationale=rationale,
+        session_id=None,
+        canonical_text=draft_text,
+        draft_text=draft_text,
+        draft_provider=SEED_REVIEW_PROVIDER,
+        mode="belief_degraded_seed_review",
+        degraded=True,
+        fallback_reason=fallback_reason,
+        critic_provider=critique.provider if critique else "",
+        critique=critique,
+        draft_action=action,
+        provider_trace=provider_trace,
+        deterministic_block_reason=block_reason or "",
+    )
+    _archive_decision(decision, planner_state, trial_id=trial_id, seed_review=token)
     return decision
 
 
@@ -1694,6 +1832,8 @@ def _archive_decision(
     *,
     trial_id: int | None = None,
     vidya_kvq_context: dict[str, Any] | None = None,
+    belief_context: ReadyBeliefs | None = None,
+    seed_review: SeedReviewToken | None = None,
 ) -> None:
     critique = decision.critique
     context = vidya_kvq_context or {}
@@ -1725,6 +1865,9 @@ def _archive_decision(
                 "declared_reliance_claim_ids": relied_on,
                 "reliance_status": "planner_declared" if relied_on else "not_declared",
             },
+            "vidya_loop_beliefs": build_planner_receipt(
+                belief_context, declared, seed_review=seed_review
+            ),
             "mode": decision.mode,
             "draft_provider": decision.draft_provider,
             "critic_provider": decision.critic_provider,

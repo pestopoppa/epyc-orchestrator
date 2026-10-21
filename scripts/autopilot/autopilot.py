@@ -127,7 +127,12 @@ from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_con
 from run_manifest import build_run_manifest, manifest_drift_reasons
 import rejected_mutation_ledger
 import reproposal_rate
-from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
+from planner_coordinator import (
+    plan_with_providers,
+    review_preseeded_seed,
+    uncritiqued_dispatch_block_reason,
+)
+import loop_beliefs_bridge as _loop_beliefs
 from state_store import (
     OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
     _auto_blacklist_reason_class,
@@ -144,7 +149,9 @@ from state_store import (
 )
 from blacklist_purge_plan import purge_scoped_target, retryable_reexploration_target
 from operator_hypotheses import (
+    blacklist_conflicts as _operator_hypothesis_blacklist_conflicts,
     build_planner_block as _build_operator_hypotheses_block,
+    load_operator_hypotheses as _load_operator_hypotheses,
     record_resolution_from_rationale as _record_operator_hypothesis_resolution,
 )
 from vidya_planner_bridge import build_settled_ground_block as _build_vidya_settled_ground_block
@@ -6071,6 +6078,14 @@ If the chosen action uses a KV-quant claim above, list its exact claim ID in
 did not influence the action. A claim shown in this prompt is not automatically
 support for your action.
 
+### Belief-Kernel Evidence (Vidya loop_beliefs; ledger verified current before this turn)
+{vidya_loop_beliefs_block}
+
+List every USABLE claim above that the chosen action relies on in the same
+`vidya_claim_ids` field. Contested or withdrawn claims are not evidence: an
+action whose declared `vidya_claim_ids` include a contested or withdrawn claim is
+skipped before dispatch and journaled as invalid.
+
 ### Experiment Journal (bounded recent entries)
 {journal_summary}
 
@@ -8279,6 +8294,185 @@ def invoke_controller(
 # public name + signature are preserved for callers (run_loop, tests).
 
 
+# ── Belief context (Vidya loop_beliefs, mandatory 2026-10-21) ────
+
+
+def _vidya_premise_skip(
+    action: dict[str, Any] | None,
+    premise_action: dict[str, Any] | None,
+    premise_ids: list[str],
+    flags: dict[str, Any] | None,
+) -> SkipOutcome | None:
+    """Pre-dispatch "contradiction caught" hook. Pure.
+
+    Applies only when `action` is still exactly the planner's action whose rationale declared
+    `premise_ids` (a forced/substituted action does not inherit the draft's premises). A declared
+    premise that the belief snapshot flags contested or withdrawn turns the trial into an
+    invalid skip, journaled through the ordinary skip path.
+    """
+    if not isinstance(action, dict) or premise_action is None or action != premise_action:
+        return None
+    reason = _loop_beliefs.premise_flag_reason(premise_ids, flags)
+    if reason is None:
+        return None
+    return SkipOutcome("invalid", reason, action.get("type", ""))
+
+
+def _belief_degraded_review_context(
+    blacklist: list[dict[str, Any]], state: dict[str, Any], *, dry_run: bool
+) -> str:
+    """Selected-context sections the critic reads for a preseeded review (no planning)."""
+    return "\n\n".join(
+        [
+            "### System Health\n" + ("OK" if not dry_run else "dry_run"),
+            "### Blacklisted Configurations\n" + _format_blacklist_for_prompt(blacklist),
+            "### Last Non-Executing Action\n" + _build_last_invalid_feedback(state),
+        ]
+    )
+
+
+def _belief_degraded_turn(
+    settings: "_loop_beliefs.BeliefSettings",
+    refusal: dict[str, Any],
+    *,
+    blacklist: list[dict[str, Any]],
+    state: dict[str, Any],
+    trial_counter: int,
+    dry_run: bool,
+    last_signature: str | None,
+    review_fn: Callable[..., Any] | None = None,
+    hypotheses_loader: Callable[[], list[Any]] | None = None,
+) -> tuple[
+    dict[str, Any] | None, dict[str, Any] | None, Any | None, dict[str, Any] | None, str
+]:
+    """One belief-degraded turn: NO planner draft. Returns
+    (action, rationale, seed_review_token, selected_item, turn_signature).
+
+    Candidates are open operator hypotheses with a `proposed_action` (the preseeded queue),
+    filtered by `check-seeds` against the LAST known-good snapshot; the first admissible one is
+    reviewed by the binding critic (`review_preseeded_seed`). Anything else -> (None, ...) and
+    the caller backs off without planning. Every turn's candidates/skips are receipted in the
+    degraded log (deduplicated against the previous turn).
+    """
+    review = review_fn or review_preseeded_seed
+    loader = hypotheses_loader or _load_operator_hypotheses
+    excluded = _loop_beliefs.degraded_excluded_ids(settings.degraded_log)
+    load_error = ""
+    try:
+        hypotheses = list(loader())
+        conflicts = _operator_hypothesis_blacklist_conflicts(hypotheses, blacklist)
+    except Exception as exc:  # noqa: BLE001 -- a malformed seed store is "nothing admissible"
+        hypotheses, conflicts = [], {}
+        load_error = f"{type(exc).__name__}: {exc}"[:300]
+    items, ineligible = _loop_beliefs.operator_seed_items(
+        hypotheses, excluded=excluded, blacklist_conflicts=conflicts
+    )
+    selection = _loop_beliefs.select_degraded_item(settings, items)
+    skipped = ineligible + selection.skipped
+    outcome = "review" if selection.item is not None else "backoff"
+    signature = json.dumps(
+        [refusal.get("reason"), outcome, selection.reason, load_error,
+         [i["id"] for i in items], skipped],
+        sort_keys=True,
+        default=str,
+    )
+    if signature != last_signature or selection.item is not None:
+        _loop_beliefs.append_jsonl(
+            settings.degraded_log,
+            _loop_beliefs.degraded_row(
+                "degraded_turn",
+                settings,
+                trial_id=trial_counter,
+                refusal=refusal,
+                candidate_ids=[i["id"] for i in items],
+                skipped=skipped,
+                selected_id=(selection.item or {}).get("id"),
+                selection_reason=selection.reason,
+                load_error=load_error,
+                checked_against_digest=(selection.seed_check or {}).get(
+                    "checked_against_digest"
+                ),
+                outcome=outcome,
+            ),
+        )
+    if selection.item is None:
+        return None, None, None, None, signature
+    token = _loop_beliefs.mint_seed_review(selection.item, selection.seed_check or {})
+    planner_provider_state = state.setdefault("planner_providers", {})
+    if not isinstance(planner_provider_state, dict):
+        planner_provider_state = {}
+        state["planner_providers"] = planner_provider_state
+    decision = review(
+        token,
+        review_context=_belief_degraded_review_context(blacklist, state, dry_run=dry_run),
+        cwd=ORCH_ROOT,
+        planner_state=planner_provider_state,
+        action_feedback_state=state,
+        trial_id=trial_counter,
+    )
+    critique = getattr(decision, "critique", None)
+    verdict = getattr(critique, "decision", "") if critique is not None else ""
+    if getattr(decision, "deterministic_block_reason", ""):
+        verdict = "deterministic_block"
+    _loop_beliefs.append_jsonl(
+        settings.degraded_log,
+        _loop_beliefs.degraded_row(
+            "degraded_review",
+            settings,
+            trial_id=trial_counter,
+            item_id=token.item_id,
+            verdict=verdict,
+            approved=isinstance(decision.action, dict),
+            critic_provider=getattr(decision, "critic_provider", ""),
+            issues=list(getattr(critique, "issues", []) or []) if critique else [],
+            deterministic_block_reason=getattr(decision, "deterministic_block_reason", ""),
+            premises=list(token.premises),
+            seeded_against=token.seeded_against,
+            checked_against_digest=token.checked_against_digest,
+        ),
+    )
+    if not isinstance(decision.action, dict):
+        log.warning(
+            "Belief-degraded seed %s not approved by the critic (%s); backing off",
+            token.item_id,
+            verdict or "no verdict",
+        )
+        return None, None, None, None, signature
+    return dict(decision.action), dict(decision.rationale or {}), token, selection.item, signature
+
+
+def _record_belief_degraded_dispatch(
+    settings: "_loop_beliefs.BeliefSettings",
+    token: Any,
+    selected: dict[str, Any] | None,
+    refusal: dict[str, Any] | None,
+    *,
+    action: dict[str, Any],
+    trial_counter: int,
+    skipped: Any | None,
+) -> None:
+    """Receipt for a degraded-mode trial: what it was seeded against and checked against."""
+    ran_seed = skipped is None and dict(token.action) == action
+    _loop_beliefs.append_jsonl(
+        settings.degraded_log,
+        _loop_beliefs.degraded_row(
+            "degraded_dispatch" if ran_seed else "degraded_superseded",
+            settings,
+            receipt_id=_loop_beliefs.receipt_id(trial_counter, token.item_id),
+            trial_id=trial_counter,
+            item_id=token.item_id,
+            source=(selected or {}).get("source"),
+            action=action,
+            premises=list(token.premises),
+            seeded_against=token.seeded_against,
+            checked_against_digest=token.checked_against_digest,
+            checked_against=token.checked_against,
+            refusal=refusal,
+            skip_reason=getattr(skipped, "reason", None),
+        ),
+    )
+
+
 # ── Main Loop ────────────────────────────────────────────────────
 
 
@@ -8287,6 +8481,7 @@ def run_loop(
     dry_run: bool = False,
     use_controller: bool = True,
     use_tui: bool = False,
+    belief_settings: "_loop_beliefs.BeliefSettings | None" = None,
 ) -> None:
     """Main optimization loop."""
     breadcrumb = ExitBreadcrumb()
@@ -8310,7 +8505,8 @@ def run_loop(
             tui = None
 
     try:
-        _run_loop_inner(max_trials, dry_run, use_controller, tui, breadcrumb)
+        # Positional on purpose: belief_settings rides the same call shape as the rest.
+        _run_loop_inner(max_trials, dry_run, use_controller, tui, breadcrumb, belief_settings)
     except BaseException as exc:
         breadcrumb.mark_terminal(
             "unhandled_exception",
@@ -8418,8 +8614,14 @@ def _run_loop_inner(
     use_controller: bool,
     tui: "AutoPilotTUI | None" = None,
     breadcrumb: ExitBreadcrumb | None = None,
+    belief_settings: "_loop_beliefs.BeliefSettings | None" = None,
 ) -> None:
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
+    # Mandatory belief context (operator rules 2026-10-21): every planner turn first runs the
+    # shared ROOT reader; there is no off switch, only argv-configured paths/timeouts.
+    belief_settings = belief_settings or _loop_beliefs.BeliefSettings()
+    belief_last_degraded_signature: str | None = None
+    log.info("Belief reader (mandatory): %s", json.dumps(belief_settings.describe()))
     state = load_state()
     if MULTITIER_PROMOTION_ENABLED:
         policy_state = state.get("multitier_promotion_policy")
@@ -8868,6 +9070,13 @@ def _run_loop_inner(
         selectable_action_types: list[str] | None = None
         planner_evidence_text = ""
         outcome_progress_pressure_text = ""
+        belief_ready: Any | None = None
+        belief_flags: dict[str, Any] | None = None
+        belief_premise_ids: list[str] = []
+        belief_premise_action: dict[str, Any] | None = None
+        belief_seed_review: Any | None = None
+        belief_degraded_selected: dict[str, Any] | None = None
+        belief_refusal: dict[str, Any] | None = None
         if action is None:
             (
                 action,
@@ -8922,6 +9131,59 @@ def _run_loop_inner(
                     gate="frontier_rerun",
                     action_type=action.get("type", ""),
                 )
+        if use_controller and action is None:
+            # ── 2a. Belief context (mandatory before any planner turn) ──
+            phase.set("belief_prepare", trial_id=trial_counter)
+            _belief_outcome = _loop_beliefs.prepare(belief_settings, targets=[])
+            if _belief_outcome.ready is not None:
+                belief_ready = _belief_outcome.ready
+                belief_flags = _loop_beliefs.known_good_flags(belief_ready)
+                belief_last_degraded_signature = None
+                try:
+                    _recheck = _loop_beliefs.recovery_recheck(belief_settings, belief_ready)
+                    if _recheck.get("flagged"):
+                        log.warning(
+                            "Belief recovery re-check flagged %d degraded-mode result(s) for "
+                            "operator review (no automatic reversal): %s",
+                            len(_recheck["flagged"]),
+                            [f.get("receipt_id") for f in _recheck["flagged"]],
+                        )
+                except Exception as _exc:  # noqa: BLE001 -- review bookkeeping only
+                    log.warning("Belief recovery re-check failed: %s", _exc)
+            else:
+                belief_refusal = _belief_outcome.refusal()
+                log.error(
+                    "BELIEF CONTEXT REFUSED (%s): no new plan this turn; degraded mode runs "
+                    "only critic-approved preseeded items. %s",
+                    _belief_outcome.reason,
+                    _belief_outcome.detail[:300],
+                )
+                (
+                    action,
+                    rationale,
+                    belief_seed_review,
+                    belief_degraded_selected,
+                    _degraded_signature,
+                ) = _belief_degraded_turn(
+                    belief_settings,
+                    belief_refusal,
+                    blacklist=blacklist,
+                    state=state,
+                    trial_counter=trial_counter,
+                    dry_run=dry_run,
+                    last_signature=belief_last_degraded_signature,
+                )
+                belief_last_degraded_signature = _degraded_signature
+                if action is None:
+                    phase.set(
+                        "belief_degraded_backoff",
+                        trial_id=trial_counter,
+                        idle_reason="belief ledger not current; nothing admissible to run",
+                        refusal_reason=_belief_outcome.reason,
+                        backoff_s=_loop_beliefs.DEGRADED_BACKOFF_S,
+                    )
+                    time.sleep(_loop_beliefs.DEGRADED_BACKOFF_S)
+                    continue
         if use_controller and action is None:
             phase.set(
                 "planner_prompt_build",
@@ -9305,6 +9567,7 @@ def _run_loop_inner(
                     operator_hypotheses_block=_build_operator_hypotheses_block(blacklist),
                     vidya_settled_ground_block=_build_vidya_settled_ground_block(),
                     vidya_kvq_evidence_block=vidya_kvq_context["text"],
+                    vidya_loop_beliefs_block=_loop_beliefs.render_prompt_block(belief_ready),
                     feature_flags_block=_build_feature_flags_block(
                         lab,
                         denylisted_flags=_PLANNER_DENYLISTED_FEATURE_FLAGS,
@@ -9339,7 +9602,11 @@ def _run_loop_inner(
                 action_feedback_state=state,
                 trial_id=trial_counter,
                 vidya_kvq_context=vidya_kvq_context,
+                belief_context=belief_ready,
             )
+            if isinstance(planner_decision.action, dict):
+                belief_premise_action = dict(planner_decision.action)
+                belief_premise_ids = _loop_beliefs.declared_premises(planner_decision.rationale)
             phase.set(
                 "planner_parse",
                 trial_id=trial_counter,
@@ -9503,6 +9770,19 @@ def _run_loop_inner(
                 action,
                 blacklist,
                 rationale,
+            )
+        elif belief_seed_review is not None:
+            # Belief-degraded mode: a critic-approved preseeded item, not a new plan. The
+            # planner-steering forcers (meta/quota/higher-tier) must not rewrite it.
+            predicted_objectives = {}
+            rationale = rationale or {}
+            stagnation_signal = ""
+            seq_due_bypassed_planner = True
+            phase.set(
+                "planner_bypassed_belief_degraded",
+                trial_id=trial_counter,
+                action_type=action.get("type", ""),
+                seed_id=belief_seed_review.item_id,
             )
         else:
             predicted_objectives = {}
@@ -9792,6 +10072,29 @@ def _run_loop_inner(
                         blocked_reason,
                     )
                     pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
+            if pre_dispatch_skip is None:
+                # Contradiction caught: the planner's declared premises vs the snapshot the
+                # belief reader wrote for THIS turn (ledger-wide contested/withdrawn claims).
+                pre_dispatch_skip = _vidya_premise_skip(
+                    action, belief_premise_action, belief_premise_ids, belief_flags
+                )
+                if pre_dispatch_skip is not None:
+                    log.warning(
+                        "Trial %d: %s, recording invalid skip",
+                        trial_counter,
+                        pre_dispatch_skip.reason,
+                    )
+
+        if belief_seed_review is not None:
+            _record_belief_degraded_dispatch(
+                belief_settings,
+                belief_seed_review,
+                belief_degraded_selected,
+                belief_refusal,
+                action=action,
+                trial_counter=trial_counter,
+                skipped=pre_dispatch_skip,
+            )
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
         current_action = action
@@ -11423,6 +11726,26 @@ def cmd_start(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         use_controller=not args.no_controller,
         use_tui=args.tui,
+        belief_settings=_belief_settings_from_args(args),
+    )
+
+
+def _belief_settings_from_args(args: argparse.Namespace) -> "_loop_beliefs.BeliefSettings":
+    """argv -> belief reader wiring (ONE-champion rule: no env-only gate, no off switch)."""
+    return _loop_beliefs.BeliefSettings(
+        root_repo=Path(getattr(args, "belief_root_repo", None) or _loop_beliefs.DEFAULT_ROOT_REPO),
+        ledger=Path(args.belief_ledger) if getattr(args, "belief_ledger", None) else None,
+        known_good=(
+            Path(args.belief_known_good) if getattr(args, "belief_known_good", None) else None
+        ),
+        escalate_after_s=float(
+            getattr(args, "belief_escalate_after_s", None)
+            or _loop_beliefs.DEFAULT_ESCALATE_AFTER_S
+        ),
+        reader_timeout_s=float(
+            getattr(args, "belief_reader_timeout_s", None)
+            or _loop_beliefs.DEFAULT_READER_TIMEOUT_S
+        ),
     )
 
 
@@ -12119,6 +12442,29 @@ def main() -> None:
     )
     p_start.add_argument(
         "--tui", action="store_true", help="Live Rich TUI for inference monitoring (hang detection)"
+    )
+    # Mandatory belief context (operator rules 2026-10-21). Paths/timeouts only: there is
+    # deliberately NO switch that lets the planner run without a verified ledger state.
+    p_start.add_argument(
+        "--belief-root-repo",
+        default=str(_loop_beliefs.DEFAULT_ROOT_REPO),
+        help="epyc-root checkout whose scripts/vidya/loop_beliefs.py is the belief reader",
+    )
+    p_start.add_argument("--belief-ledger", default=None, help="ledger path override")
+    p_start.add_argument(
+        "--belief-known-good", default=None, help="known-good snapshot path override"
+    )
+    p_start.add_argument(
+        "--belief-escalate-after-s",
+        type=float,
+        default=_loop_beliefs.DEFAULT_ESCALATE_AFTER_S,
+        help="seconds a refusal alarm stays active before the critical escalation",
+    )
+    p_start.add_argument(
+        "--belief-reader-timeout-s",
+        type=float,
+        default=_loop_beliefs.DEFAULT_READER_TIMEOUT_S,
+        help="consumer-side deadline for the belief reader child process",
     )
     p_start.set_defaults(func=cmd_start)
 
