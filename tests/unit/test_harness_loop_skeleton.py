@@ -125,13 +125,11 @@ def test_fence_helpers_arm_and_refuse_disarm():
             substrate.require_fence_active(bad)
 
 
-def test_unextracted_seams_fail_closed(tmp_path, monkeypatch):
+def test_leakage_seam_fails_closed_without_vocabulary(tmp_path, monkeypatch):
     # S2 landed: MHS-3 is the real guard and keeps its fail-closed contract.
     monkeypatch.setenv("AUTOPILOT_EVAL_ID_VOCAB_SOURCES", str(tmp_path / "absent_pool.jsonl"))
     reason = substrate.leakage_reason("anything", harness=_EMPTY_HARNESS)
     assert reason.startswith("eval_leakage_vocabulary_unavailable:missing_eval_id_source")
-    with pytest.raises(substrate.SeamNotExtracted):
-        substrate.autopilot_gate_verdict()
 
 
 def test_fingerprint_is_the_autopilot_implementation():

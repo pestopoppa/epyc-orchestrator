@@ -21,10 +21,12 @@ uses; nothing is re-implemented. What the facade ADDS is only the sibling's boun
 * **AP-54 eval fence** (``src/repl_environment/knowledge_fence.py``, request field
   ``eval_fence``): the sibling arms the existing request seam on BOTH arms and creates no second
   fence. :func:`fenced_eval_request` and :func:`require_fence_active` are the two checks.
-* **Safety/promotion gate**: the no-side-effect verdict entry point is extraction seam S4 and does
-  not exist yet; :func:`autopilot_gate_verdict` refuses rather than calling ``SafetyGate.check``
-  (which mutates gate state and reads AutoPilot's live archive). The sibling consumes a verdict;
-  it can never ratchet AutoPilot's baseline.
+* **Safety/promotion gate** (seam S4): :func:`autopilot_gate_verdict` runs AutoPilot's own
+  verdict legs (``safety_gate.verdict_from_evidence``: the same checks, order and messages as
+  ``SafetyGate.check``) against the sibling's OWN incumbent arm as the reference. It never
+  calls ``SafetyGate.check``, which mutates gate state, and never reads AutoPilot's baseline,
+  MAD window, host state or live archive. The sibling consumes a verdict; it can never ratchet
+  AutoPilot's baseline.
 """
 
 from __future__ import annotations
@@ -257,11 +259,34 @@ def require_fence_active(response_fence: Mapping[str, Any] | None) -> None:
         raise ValueError(f"HIL-2 item 7: eval fence state {state!r}, expected 'active'")
 
 
-# ── safety/promotion gate (seam S4, not extracted) ────────────────────────────
+# ── safety/promotion gate (seam S4) ───────────────────────────────────────────
 
 
-def autopilot_gate_verdict(*_: Any, **__: Any) -> Any:
-    raise SeamNotExtracted(
-        "seam S4 (no-side-effect SafetyGate verdict over explicit immutable evidence) is not "
-        "extracted; SafetyGate.check mutates gate state and reads AutoPilot's live archive"
+def autopilot_gate_verdict(
+    candidate: Any,
+    incumbent: Any,
+    *,
+    mad_window: Any = (),
+    reliability_floor: float | None = None,
+) -> Any:
+    """AutoPilot's SafetyGate verdict for ``candidate`` against the sibling's incumbent arm.
+
+    Both arguments are EvalResult-shaped (``tier``, ``quality``, ``speed``, ``reliability``,
+    ``per_suite_quality``, optional ``per_suite_counts`` / ``routing_distribution`` /
+    ``quality_measured``). The reference is the INCUMBENT (quality, per-suite scores and counts,
+    speed), never an AutoPilot tier baseline. ``mad_window`` is the loop's own same-tier quality
+    history (empty: no noise filter). No host read: throttle demotion never applies. Pure: it
+    returns a ``SafetyVerdict`` and changes nothing.
+    """
+    from scripts.autopilot import safety_gate as sg
+
+    evidence = sg.GateEvidence(
+        baseline_quality=incumbent.quality,
+        baseline_per_suite=dict(incumbent.per_suite_quality or {}),
+        baseline_per_suite_counts=dict(getattr(incumbent, "per_suite_counts", None) or {}),
+        frontdoor_speed=incumbent.speed,
+        proxy_per_suite=dict(incumbent.per_suite_quality or {}),
+        mad_window=tuple(mad_window),
+        reliability_floor=reliability_floor,
     )
+    return sg.verdict_from_evidence(candidate, evidence)
