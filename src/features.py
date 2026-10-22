@@ -254,6 +254,16 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # share a longer prompt prefix and llama-server KV cache reuse pays off.
     # Default-off: behavioral change to the prompt, needs A/B validation first.
     FeatureSpec("prefix_stable_order", False, False, "PREFIX_STABLE_ORDER", "RTE-Prefix: put fixed prompt sections before per-turn-mutating ones so REPL turns share a longer cache prefix"),
+    # RTE-PFX-3: render the root-LM "Turn N" counter as the builder prompt's LAST line
+    # instead of the head of the state block, so consecutive REPL turns share the state
+    # block (and, in legacy order, the task text) as cache prefix. Default-off: prompt
+    # bytes change when on; flag off is byte-identical.
+    FeatureSpec("repl_turn_counter_tail", False, False, "REPL_TURN_COUNTER_TAIL", "RTE-PFX-3: move the root-LM Turn N counter from the state-block head to the prompt tail"),
+    # CT-21 (DP-G ruling 2026-10-22, "Hold; architect trial"): boundary-only
+    # "data, not instructions" sentence directly above the untrusted block in the
+    # architect_investigate (evidence bundle) and architect_synthesis (specialist
+    # report) prompts only. Worker/REPL roles never change. Default-off; trial only.
+    FeatureSpec("architect_untrusted_boundary_sentence", False, False, "ARCHITECT_UNTRUSTED_BOUNDARY_SENTENCE", "CT-21: architect-only boundary sentence above untrusted evidence/report blocks (trial; default off)"),
     # UFH14-B1 F1 (D1): add the derived silent-prefill allowance (serving_params:
     # measured prefill rate of THIS server x THIS prompt) to the HTTP timeout of
     # long-prompt calls — primitives calls with no request deadline, and the
@@ -781,6 +791,10 @@ class Features:
     # share a longer llama-server KV-cache prefix. Default OFF — prompt
     # behavioral change, pending A/B validation.
     prefix_stable_order: bool = False
+    # RTE-PFX-3: root-LM Turn N counter at the prompt tail (default off).
+    repl_turn_counter_tail: bool = False
+    # CT-21: architect-only untrusted-boundary sentence (default off; trial).
+    architect_untrusted_boundary_sentence: bool = False
 
     # UFH14-B1 F1: derived silent-prefill allowance on long-prompt call timeouts.
     derived_prefill_timeout: bool = False

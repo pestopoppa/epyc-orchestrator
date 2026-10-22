@@ -38,6 +38,7 @@ flags:
   accurate_token_counting: baseline
   approval_gates: baseline
   architect_delegation: baseline
+  architect_untrusted_boundary_sentence: baseline
   batch_edit_mode: baseline
   binding_routing: baseline
   caching: baseline
@@ -93,11 +94,12 @@ flags:
   repl: baseline
   repl_answer_force: baseline
   repl_embedding_pool: baseline
+  repl_turn_counter_tail: baseline
+  replay_recording: baseline
   restricted_python: baseline
   resume_tokens: baseline
   review_before_commit_consult: baseline
   review_before_commit_targeted_gate: baseline
-  replay_recording: baseline
   review_decision_enforce: baseline
   review_decision_shadow: baseline
   role_aware_compaction: baseline

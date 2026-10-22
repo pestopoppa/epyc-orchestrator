@@ -15,7 +15,10 @@ Cause classes: volatile_field (per-turn counter or per-call field), key_order
 changed or removed), state_preview_change.  A divergence inside the system/tools/
 rules block is flagged ``PREFIX_BLOCK_DIVERGENCE``.
 
-Usage: rte_pfx1_first_divergence.py [--json OUT]   (run with the repo venv)
+Usage: rte_pfx1_first_divergence.py [--json OUT] [--turn-counter-tail]   (run with the repo venv)
+
+``--turn-counter-tail`` (RTE-PFX-3) renders with flag ``repl_turn_counter_tail`` on: the
+``Turn N`` counter moves from the state-block head to the builder prompt's last line.
 """
 from __future__ import annotations
 
@@ -48,12 +51,14 @@ OUT2 = "tests passed: 4"
 WORKSPACE_BLOCK = "[Workspace]\nroot=/tmp/ws files=2"
 SESSION_N = "[Session log]\nturn 1: read"
 SESSION_N1 = "[Session log]\nturn 1: read\nturn 2: edit"
+TURN_COUNTER_TAIL = False  # RTE-PFX-3 flag, set by --turn-counter-tail
 
 
 def render(stable: bool, *, state: str, turn: int, last_output: str = "", last_error: str = "",
            routing: str = "", tools_variant: str | None = None, graph_tail: bool = False,
            session: str = "") -> str:
-    B._get_features = lambda: SimpleNamespace(prefix_stable_order=stable, deferred_tool_results=False)
+    B._get_features = lambda: SimpleNamespace(prefix_stable_order=stable, deferred_tool_results=False,
+                                              repl_turn_counter_tail=TURN_COUNTER_TAIL)
     builder = B.PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))
     if tools_variant is not None:
         builder.config.tools_file = None
@@ -76,6 +81,11 @@ def section_of(prompt: str, offset: int, stable: bool) -> str:
              ("## Last", "context"), ("## Routing Intelligence", "context"),
              ("[Workspace]", "graph_tail"), ("[Session log]", "graph_tail")]
     found = [(prompt.find(m), name) for m, name in marks if prompt.find(m) >= 0]
+    if TURN_COUNTER_TAIL:  # RTE-PFX-3: the builder's last line is the counter
+        end = prompt.find("\n\n[Workspace]")
+        tail = prompt.rfind("\nTurn ", 0, end if end >= 0 else len(prompt))
+        if tail >= 0:
+            found.append((tail + 1, "turn_tail"))
     found.sort()
     cur = "system"
     for pos, name in found:
@@ -87,7 +97,8 @@ def section_of(prompt: str, offset: int, stable: bool) -> str:
 def classify(a: str, b: str, off: int, sec: str, label: str) -> str:
     if label in ("tool_block_edit", "key_order", "history_rewrite", "state_preview_change"):
         return label
-    return "volatile_field" if sec in ("state", "context", "graph_tail", "task", "instruction") else label
+    return "volatile_field" if sec in ("state", "context", "graph_tail", "task", "instruction",
+                                       "turn_tail") else label
 
 
 SCENARIOS = [
@@ -114,7 +125,10 @@ SCENARIOS = [
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json")
+    ap.add_argument("--turn-counter-tail", action="store_true")
     a = ap.parse_args()
+    global TURN_COUNTER_TAIL
+    TURN_COUNTER_TAIL = a.turn_counter_tail
     rows = []
     for stable in (False, True):
         for name, kn, kn1, declared in SCENARIOS:
@@ -124,7 +138,8 @@ def main() -> int:
             sec = section_of(pn1, off, stable)
             blockflag = sec in ("system", "tools", "rules") and off < len(pn1)
             rows.append({
-                "prefix_stable_order": stable, "scenario": name,
+                "prefix_stable_order": stable, "repl_turn_counter_tail": TURN_COUNTER_TAIL,
+                "scenario": name,
                 "first_divergence_char": off, "first_divergence_tok_est": off // 4,
                 "section": sec, "cause_class": classify(pn, pn1, off, sec, declared),
                 "prefix_share_of_n1": round(off / len(pn1), 4), "n1_chars": len(pn1),

@@ -79,6 +79,11 @@ class RootLMPrompt:
     instruction: str = ""
     """Final instruction."""
 
+    turn_tail: str = ""
+    """RTE-PFX-3: per-turn volatile line(s) rendered LAST (flag ``repl_turn_counter_tail``).
+
+    Empty (the default) renders nothing, so every existing prompt is byte-identical."""
+
     def to_string(self, prefix_stable: bool = False) -> str:
         """Convert to a single prompt string.
 
@@ -133,6 +138,8 @@ class RootLMPrompt:
                 parts.extend([("task", ""), ("task", "## Task"), ("task", self.task)])
             if self.instruction:
                 parts.extend([("task", ""), ("task", "## Your Code"), ("task", self.instruction)])
+        if self.turn_tail:  # RTE-PFX-3: volatile tail, after every section in both orders
+            parts.extend([("state", ""), ("state", self.turn_tail)])
         return parts
 
     def section_spans(self, prefix_stable: bool = False) -> list[tuple[str, int, int]]:

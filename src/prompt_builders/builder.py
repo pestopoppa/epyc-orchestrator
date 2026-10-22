@@ -258,13 +258,17 @@ class PromptBuilder:
         last_error = _ct_neutralise(last_error)
         corpus_context = _ct_neutralise(corpus_context)
 
+        # RTE-PFX-3: with repl_turn_counter_tail the per-turn counter leaves the head of the
+        # state block (the first divergence between consecutive turns) for the prompt tail.
+        _counter_tail = bool(getattr(_get_features(), "repl_turn_counter_tail", False))
         prompt = RootLMPrompt(
             system=resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK),
             tools=self._resolve_tools(),
             rules=self._resolve_rules(),
-            state=f"Turn {turn + 1}\n{state}",
+            state=state if _counter_tail else f"Turn {turn + 1}\n{state}",
             task=original_prompt,
             instruction="Answer or write code. End with FINAL().\n\n",
+            turn_tail=f"Turn {turn + 1}" if _counter_tail else "",
         )
 
         # Build context section based on last output/error
