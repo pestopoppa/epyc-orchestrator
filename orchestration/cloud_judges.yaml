@@ -43,3 +43,13 @@ judges:
     timeout_s: 300
     egress: anthropic (OAuth via claude CLI)
     verified_live: false
+  sonnet-5-5-low:
+    # Exact-version pin (HS-PROF-1 BEAM judge, operator decision 2026-10-22): a
+    # decision-grade A/B must be judged by ONE model; the `sonnet` alias may move.
+    transport: claude_cli
+    model: claude-sonnet-5-5
+    models: []
+    effort: low
+    timeout_s: 300
+    egress: anthropic (OAuth via claude CLI)
+    verified_live: false
