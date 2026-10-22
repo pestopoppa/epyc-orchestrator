@@ -62,3 +62,40 @@ def test_resume_and_stop(tmp_path):
     # a second pass over a finished cell dir adds no rows
     assert M.main(["--mock", "--n", "4", "--cell-dir", str(cells), "--out", str(out)]) == 0
     assert sum(len(p.read_text().splitlines()) for p in cells.glob("*.jsonl")) == 12
+
+
+def _complete_result(tmp_path, mock=False):
+    out = tmp_path / "r.json"
+    assert M.main(["--mock", "--n", "4", "--no-belief", "--out", str(out)]) == 0
+    r = json.loads(out.read_text()); r["mock"] = mock; out.write_text(json.dumps(r))
+    return out, r
+
+
+def test_belief_skipped_for_mock_and_partial(tmp_path):
+    out, r = _complete_result(tmp_path, mock=True)
+    st = M.belief_capture(r, out, [("mock_role", None, None)], {}, M.fx_mod.build_fixture(), "rid", None)
+    assert st["written"] is None and st["skipped"] == "mock result" and not (tmp_path / "repl_preview.beliefs.jsonl").exists()
+    out, r = _complete_result(tmp_path)
+    r["complete"] = False
+    st = M.belief_capture(r, out, [("mock_role", None, None)], {}, M.fx_mod.build_fixture(), "rid", None)
+    assert "partial" in st["skipped"]
+
+
+def test_belief_written_for_complete_nonmock(tmp_path):
+    from pathlib import Path as P
+    root = P("/mnt/raid0/llm/worktrees/root-pbe-3c4ca599")
+    if not (root / "scripts/vidya/adapters/repl_preview.py").is_file():
+        pytest.skip("repl_preview adapter not present")
+    out, r = _complete_result(tmp_path)
+    st = M.belief_capture(r, out, [("mock_role", None, None)], {"mock_role": "/m/x.gguf"}, M.fx_mod.build_fixture(),
+                          "rid", str(root))
+    assert st["error"] is None and st["written"]
+    rows = [json.loads(x) for x in (tmp_path / "repl_preview.beliefs.jsonl").read_text().splitlines()]
+    assert rows and all(x["extra"]["gguf_path"] == "/m/x.gguf" and len(x["extra"]["fixture_sha256"]) == 64 for x in rows)
+
+
+def test_belief_missing_gguf_is_recorded_not_raised(tmp_path):
+    out, r = _complete_result(tmp_path)
+    st = M.belief_capture(r, out, [("mock_role", None, None)], {}, M.fx_mod.build_fixture(), "rid",
+                          "/mnt/raid0/llm/worktrees/root-pbe-3c4ca599")
+    assert st["written"] is None and "no GGUF" in (st["error"] or "")

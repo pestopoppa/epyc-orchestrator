@@ -106,6 +106,48 @@ def chat(url: str, prompt: str, temperature: float, max_tokens: int, seed: int) 
         return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
+BELIEF_ROOTS = ("/workspace", "/mnt/raid0/llm/worktrees/root-pbe-3c4ca599")
+
+
+def server_gguf(url: str) -> str | None:
+    """GGUF the (proven-ours) private server loaded, from llama-server GET /props ``model_path``."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/props", timeout=15) as r:
+            mp = json.loads(r.read()).get("model_path")
+        return mp if isinstance(mp, str) and mp else None
+    except Exception:
+        return None
+
+
+def belief_capture(res: dict, out: Path, roles, role_gguf: dict, fx: dict, run_id: str, epyc_root: str | None) -> dict:
+    """VB-DRIPREVIEW-WRITE: call the root adapter after a COMPLETE, non-mock result is written.
+    Never raises and never changes the exit code; status lands in <out>.belief_status.json."""
+    status: dict = {"written": None, "error": None, "skipped": None}
+    try:
+        if res.get("mock") or not res.get("complete"):
+            status["skipped"] = "mock result" if res.get("mock") else "partial result (rerun resumes from --cell-dir)"
+        else:
+            root = next((r for r in ([epyc_root, os.environ.get("EPYC_ROOT")] + list(BELIEF_ROOTS)) if r and
+                         (Path(r) / "scripts/vidya/adapters/repl_preview.py").is_file()), None)
+            if root is None:
+                raise RuntimeError("repl_preview adapter not found (--epyc-root, EPYC_ROOT, /workspace, pinned root worktree)")
+            sys.path.insert(0, str(Path(root) / "scripts" / "vidya"))
+            from adapters import repl_preview as rp  # type: ignore
+            pins = {}
+            for name, url, _pid in roles:
+                g = role_gguf.get(name) or (server_gguf(url) if url else None)
+                if not g:
+                    raise RuntimeError(f"no GGUF for role {name!r}: pass --role-gguf {name}=/path.gguf (server /props gave none)")
+                pins[name] = {"gguf_path": g}
+            path = rp.write_belief_measurements(out.parent, run_id=run_id, producer="run_repl_preview.py",
+                                                result_path=out, role_pins=pins, fixture_sha256=rp.fixture_sha256(fx))
+            status["written"] = str(path)
+    except Exception as e:
+        status["error"] = f"{type(e).__name__}: {e}"
+    Path(str(out) + ".belief_status.json").write_text(json.dumps(status, indent=1))
+    return status
+
+
 def listening_pid(port: int):
     out = subprocess.run(["ss", "-H", "-ltnp", f"sport = :{port}"], capture_output=True, text=True).stdout
     m = re.search(r"pid=(\d+)", out)
@@ -167,6 +209,10 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-file", help="checked between samples: stop cleanly when it exists")
     ap.add_argument("--deadline-epoch", type=float, help="checked between samples: no new sample after this epoch second")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--role-gguf", action="append", default=[], help="NAME=/path/model.gguf (default: the server's /props model_path)")
+    ap.add_argument("--run-id", default=None, help="belief-sidecar run id (default dripreview-<UTC>)")
+    ap.add_argument("--epyc-root", default=None, help="root checkout holding scripts/vidya/adapters")
+    ap.add_argument("--no-belief", action="store_true", help="do not write repl_preview.beliefs.jsonl")
     a = ap.parse_args(argv)
 
     fx = fx_mod.build_fixture()
@@ -231,6 +277,11 @@ def main(argv=None) -> int:
            "note": "a mock result is plumbing only and must never be cited as a finding" if a.mock else ""}
     Path(a.out).write_text(json.dumps(res, indent=1) + "\n")
     print(json.dumps(res["counts"], indent=1))
+    if not a.no_belief:
+        rg = dict(x.partition("=")[::2] for x in a.role_gguf)
+        st = belief_capture(res, Path(a.out).resolve(), roles, rg, fx,
+                            a.run_id or time.strftime("dripreview-%Y%m%dT%H%M%SZ", time.gmtime()), a.epyc_root)
+        print("belief capture:", st["written"] or st["skipped"] or st["error"])
     return 0 if complete else 75     # 75 = partial (stop/deadline); rerun resumes from --cell-dir
 
 
