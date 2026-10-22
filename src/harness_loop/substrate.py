@@ -8,7 +8,9 @@ uses; nothing is re-implemented. What the facade ADDS is only the sibling's boun
   default) or any directory that already holds an AutoPilot journal. Storage, append-only,
   flock + fsync and torn-tail repair are the journal's own.
 * **AP-53 rejected-mutation ledger** (``scripts/autopilot/rejected_mutation_ledger.py``): the same
-  record builder and durable append, written beside the LOOP journal, never AutoPilot's.
+  record builder and durable append, written beside the LOOP journal, never AutoPilot's. The
+  proposer sees the ledger through the score-free render (seam S3,
+  :func:`render_rejections_for_proposer`).
 * **MHS guards** (``src/autopilot_core/mutation_guards.py``, extraction seams S1 and S2):
   import-safe, no PromptForge proposer is imported or instantiated to call them.
   :func:`leakage_reason` applies the same MHS-3 checks PromptForge applies to a prompt mutation
@@ -62,6 +64,7 @@ __all__ = [
     "prompt_interference_lint",
     "rank_mutations_by_risk",
     "regime_digest",
+    "render_rejections_for_proposer",
     "render_trace_context",
     "require_fence_active",
     "screen_static_safety",
@@ -160,6 +163,17 @@ def load_rejections(journal_dir: Path | str) -> list[dict[str, Any]]:
     from scripts.autopilot import rejected_mutation_ledger as ledger
 
     return ledger.load_records(_check_loop_dir(journal_dir))
+
+
+def render_rejections_for_proposer(journal_dir: Path | str, target: str, *, n: int = 3) -> str:
+    """The loop's AP-53 rejections of ``target`` as the proposer may see them (seam S3).
+
+    AutoPilot's own renderer over the LOOP directory, score-free (HIL-2 item 7): no per-suite
+    deltas and no gate detail; the gate name, repeat count and diff remain.
+    """
+    from scripts.autopilot import rejected_mutation_ledger as ledger
+
+    return ledger.render_for_prompt(_check_loop_dir(journal_dir), target, n=n, include_scores=False)
 
 
 # ── MHS-3 leakage (seam S2) ─────────────────────────────────────────────────

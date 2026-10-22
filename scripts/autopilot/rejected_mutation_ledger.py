@@ -198,8 +198,15 @@ def render_for_prompt(
     *,
     n: int = 3,
     max_diff_chars: int = DEFAULT_PROMPT_DIFF_CHARS,
+    include_scores: bool = True,
 ) -> str:
-    """Render the last ``n`` rejections of ``target`` for the mutation prompt."""
+    """Render the last ``n`` rejections of ``target`` for the mutation prompt.
+
+    ``include_scores=False`` is the score-free projection the HIL sibling loop shows its
+    proposer (HIL-2 item 7; HIL-6 seam S3): no per-suite deltas and no ``gate_detail`` (a gate
+    detail can carry deltas, or eval ids for a leakage refusal). The rejecting gate's NAME, the
+    repeat count and the diff stay. The default keeps AutoPilot's render byte-identical.
+    """
     try:
         rows = recent_for_target(journal_dir, target, n=n)
         if not rows:
@@ -215,16 +222,22 @@ def render_for_prompt(
             "them; if you revisit the idea, state what differs and why it should now pass.",
         ]
         for row in rows:
-            deltas = row.get("per_suite_deltas") or {}
-            worst = sorted(deltas.items(), key=lambda kv: kv[1])[:4]
-            delta_text = ", ".join(f"{k} {v:+.3f}" for k, v in worst) or "n/a"
             seen = repeats.get(row.get("diff_sha256", ""), 1)
             trial = row.get("trial_id")
+            if include_scores:
+                deltas = row.get("per_suite_deltas") or {}
+                worst = sorted(deltas.items(), key=lambda kv: kv[1])[:4]
+                delta_text = ", ".join(f"{k} {v:+.3f}" for k, v in worst) or "n/a"
+                scored = (
+                    (f" ({row.get('gate_detail')})" if row.get("gate_detail") else "")
+                    + f"; per-suite delta vs baseline: {delta_text}"
+                )
+            else:
+                scored = ""
             lines.append(
                 f"- {row.get('timestamp', '')[:19]} trial #{trial if trial is not None else '?'} "
                 f"{row.get('mutation_type', '')}: rejected by `{row.get('rejecting_gate', '')}`"
-                + (f" ({row.get('gate_detail')})" if row.get("gate_detail") else "")
-                + f"; per-suite delta vs baseline: {delta_text}"
+                + scored
                 + (f"; this exact diff was rejected {seen}x" if seen > 1 else "")
             )
             diff = str(row.get("unified_diff") or "")
