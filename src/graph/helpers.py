@@ -1407,8 +1407,13 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     if state.tool_required and state.turns == 1 and deps.repl is not None:
         try:
             tool_reg = deps.repl.tool_registry if hasattr(deps.repl, "tool_registry") else None
-            if tool_reg is not None:
-                grammar = tool_reg.generate_gbnf_grammar(str(role))
+            # UFH14-LB3: ``ORCHESTRATOR_TURN1_GRAMMAR`` = legacy (default, unchanged) | call
+            # (CALL(...)/FINAL(...) only, no any-line escape) | off (no turn-1 grammar).
+            _turn1_shape = os.environ.get("ORCHESTRATOR_TURN1_GRAMMAR", "legacy").strip().lower()
+            if tool_reg is not None and _turn1_shape != "off":
+                grammar = tool_reg.generate_gbnf_grammar(
+                    str(role), shape="call" if _turn1_shape == "call" else "legacy"
+                )
                 if grammar:
                     llm_kwargs["grammar"] = grammar
                     state.grammar_enforced = True

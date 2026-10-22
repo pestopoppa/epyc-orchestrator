@@ -724,7 +724,7 @@ class ToolRegistry:
                 result.append(info)
         return result
 
-    def generate_gbnf_grammar(self, role: str | None = None) -> str:
+    def generate_gbnf_grammar(self, role: str | None = None, shape: str = "legacy") -> str:
         """Generate GBNF grammar for valid tool call syntax.
 
         Constrains model output to valid TOOL() calls for the given role's
@@ -732,6 +732,11 @@ class ToolRegistry:
 
         Args:
             role: Optional role to filter available tools.
+            shape: ``"legacy"`` (default, byte-identical to the historical grammar: a
+                ``TOOL(...)`` call, a ``FINAL(...)`` call, or ANY code line) or ``"call"``
+                (UFH14-LB3 tightened turn-1 shape: a ``CALL("tool", k=v)`` statement, optionally
+                assigned, or ``FINAL(...)``; the any-line ``code-line`` escape is gone, so
+                the thought line must be followed by a real action).
 
         Returns:
             GBNF grammar string.
@@ -745,6 +750,23 @@ class ToolRegistry:
 
         # Build tool-name alternation
         name_alts = " | ".join(f'"{name}"' for name in tool_names)
+
+        if shape == "call":
+            return f"""\
+root ::= thought action
+thought ::= "# " [^\\n]+ "\\n"
+action ::= call-stmt | final-call
+call-stmt ::= (ident " = ")? "CALL(\\"" tool-name "\\"" args ")\\n"
+ident ::= [a-zA-Z_] [a-zA-Z0-9_]*
+tool-name ::= {name_alts}
+args ::= ("," ws arg)*
+arg ::= ident "=" value
+value ::= quoted-string | number | "True" | "False" | "None"
+quoted-string ::= "\\"" [^\\"]* "\\""
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+final-call ::= "FINAL(" value ")\\n"
+ws ::= " "*
+"""
 
         grammar = f"""\
 root ::= thought action
