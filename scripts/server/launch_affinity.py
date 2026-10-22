@@ -281,7 +281,8 @@ def enforce_launch_affinity(
     declared no placement) and for a pid that is not a direct child of this
     launcher (it is never touched: prove OUR pid before acting on it -- a recycled
     pid or a test double must not get another process re-pinned). Otherwise the
-    PinResult; the caller treats ``not result.ok`` as a failed launch.
+    PinResult; the caller treats ``not result.ok`` as a failed launch (operator
+    decision D1, 2026-10-22: refuse, no warn-only mode).
 
     The spawn is ``taskset -c ... [numactl ...] llama-server``: both wrappers
     exec, so the Popen pid IS the server and its parent is this launcher.

@@ -350,3 +350,15 @@ def test_aux_launch_source_applies_env_and_gate():
     assert "apply_pinned_launch_env(env, spawn_prefix)" in src
     assert "_post_health_affinity_gate(" in src
     assert src.index("apply_pinned_launch_env") < src.index("subprocess.Popen")
+
+
+def test_d1_refuse_has_no_warn_mode_or_bypass(monkeypatch):
+    """Operator decision D1 (2026-10-22): refuse, with no flag or env that downgrades to warn."""
+    import inspect
+
+    from scripts.server import orchestrator_stack as osk
+
+    src = inspect.getsource(osk._post_health_affinity_gate)
+    assert "kill_process(pid)" in src and "return False" in src
+    assert "environ" not in src and "getenv" not in src
+    assert "environ" not in inspect.getsource(la.enforce_launch_affinity)

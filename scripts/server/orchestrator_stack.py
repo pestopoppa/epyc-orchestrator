@@ -1873,6 +1873,10 @@ def _post_health_affinity_gate(
     placement. An unpinned spawn, or a pid that is not this launcher's child, is
     never touched (returns True). Read by `status` again later
     (stack_commands -> launch_affinity.affinity_attestation_warnings).
+
+    OPERATOR DECISION D1 (STACKCHG-GPUPIN-20261022, 2026-10-22): REFUSE. There is
+    deliberately no warn-only mode, flag or env override: a launch that cannot hold
+    its declared placement does not come up.
     """
     try:
         result = enforce_launch_affinity(pid, spawn_prefix, label=label)
