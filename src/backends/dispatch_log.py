@@ -268,6 +268,9 @@ class DispatchLog:
                 "workload_class": staged.get("workload_class")
                 or getattr(request, "workload_class", None),
                 "priority": staged.get("priority"),
+                # HSF-LB1: the tool whose result opened this turn, when the caller staged it.
+                "preceding_tool": staged.get("preceding_tool"),
+                "turn_trigger": staged.get("turn_trigger"),
                 "lengths": lengths,
                 "layout": prompt_layout.fields_for_request(request),
                 "fleet_at_arrival": self._snapshot(),
@@ -373,6 +376,11 @@ class DispatchLog:
                     },
                     "workload_class": handle["workload_class"],
                     "priority": handle["priority"],
+                    # HSF-LB1: key session gaps by the tool that preceded the request and
+                    # by how the previous generation ended (the backend's own stop signal).
+                    "preceding_tool": handle.get("preceding_tool"),
+                    "turn_trigger": handle.get("turn_trigger"),
+                    "finish_reason": getattr(result, "completion_reason", None) or None,
                     "request": lengths,
                     # RTE-LOG-1: hashes and lengths only; absent when no layout was staged.
                     **(handle.get("layout") or {}),
@@ -418,6 +426,9 @@ def record_standalone(
     method: str | None = None,
     trace_keys: Any = None,
     completion_observed: bool = True,
+    preceding_tool: str | None = None,
+    turn_trigger: str | None = None,
+    finish_reason: str | None = None,
 ) -> None:
     """One ``dispatch.v1`` record for a lane with no fleet placement.
 
@@ -483,6 +494,9 @@ def record_standalone(
                 },
                 "workload_class": workload_class,
                 "priority": priority,
+                "preceding_tool": preceding_tool,
+                "turn_trigger": turn_trigger,
+                "finish_reason": finish_reason,
                 "request": {"prompt_chars": prompt_chars, "n_tokens_budget": n_tokens_budget},
                 "instance": {
                     "key": str(port) if port else None,

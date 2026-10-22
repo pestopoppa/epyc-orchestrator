@@ -253,3 +253,50 @@ def test_served_model_in_config_echo_and_dispatch_record(monkeypatch, tmp_path):
 def test_model_identity_never_raises(monkeypatch):
     monkeypatch.setattr(serving_calls, "server_identity", lambda p: (_ for _ in ()).throw(OSError()))
     assert dispatch_log.model_identity(8070) == {"identity_source": "error"}
+
+
+# --- HSF-LB1: preceding tool name and finish_reason ----------------------------
+
+
+def test_passthrough_dispatch_record_carries_preceding_tool_and_finish_reason(monkeypatch, tmp_path):
+    from src.api.routes import passthrough as pt
+
+    path = _direct_env(monkeypatch, tmp_path)
+    call = SimpleNamespace(
+        role="coder_escalation", base_url="http://localhost:8083", t_staged=100.0, t_dispatch=100.5,
+        request_id="rq", session_id="sess", client_class="opencode", client_id="cid",
+        prompt_text="abcd", new_tokens=32, pool_exhausted=False, client_disconnected=False,
+        upstream_error=None, http_status=200,
+        preceding_tool="bash", turn_trigger="tool_result", finish_reason="length",
+    )
+    pt._write_dispatch_record(call, None, 102.0)
+    rec = [r for r in _recs(path) if r["kind"] == "dispatch"][0]
+    assert (rec["preceding_tool"], rec["turn_trigger"], rec["finish_reason"]) == ("bash", "tool_result", "length")
+
+
+def test_turn_origin_chat_and_responses_shapes():
+    from src.api.routes import passthrough as pt
+
+    chat = {"messages": [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "grep", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "x"},
+    ]}
+    assert pt.turn_origin("chat/completions", chat) == ("grep", "tool_result")
+    assert pt.turn_origin("chat/completions", {"messages": [{"role": "user", "content": "hi"}]}) == (None, "user")
+    resp = {"input": [
+        {"type": "function_call", "call_id": "k", "name": "shell"},
+        {"type": "function_call_output", "call_id": "k", "output": "ok"},
+    ]}
+    assert pt.turn_origin("responses", resp) == ("shell", "tool_result")
+    assert pt.turn_origin("responses", {"input": "text"}) == (None, None)
+    assert pt.turn_origin("chat/completions", {"messages": "bad"}) == (None, None)
+
+
+def test_direct_lane_record_carries_finish_reason(monkeypatch, tmp_path):
+    path = _direct_env(monkeypatch, tmp_path)
+    serving_calls.stage_caller(role="architect_general", request_id="r1", preceding_tool="read")
+    backend = _DirectBackend("http://localhost:8083")
+    backend.infer(SimpleNamespace(name="architect_general"), _req())
+    rec = [r for r in _recs(path) if r["kind"] == "dispatch"][0]
+    assert rec["preceding_tool"] == "read" and "finish_reason" in rec

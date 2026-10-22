@@ -308,6 +308,8 @@ class _Call:
     # UFH14-LB2/LB6: the upstream's own stop signal and the wall gaps between consecutive
     # SSE output events (ms; the first event starts the clock, so TTFT is not a gap).
     finish_reason: str | None = None
+    preceding_tool: str | None = None
+    turn_trigger: str | None = None
     gaps_ms: list[float] = field(default_factory=list, repr=False)
     last_event_mono: float | None = field(default=None, repr=False)
     upstream_error: str | None = None
@@ -860,6 +862,48 @@ def wire_prefix_key(endpoint: str, body: dict[str, Any]) -> str | None:
         return None
 
 
+def turn_origin(endpoint: str, body: dict[str, Any]) -> tuple[str | None, str | None]:
+    """HSF-LB1: ``(preceding_tool, trigger)`` for a request body.
+
+    ``trigger`` is ``tool_result`` when the last conversation item is a tool result (then
+    ``preceding_tool`` is that call's tool name, resolved through its call id), ``user`` when it
+    is a user message, else None. Chat bodies use ``messages``; /v1/responses bodies use
+    ``input`` items. Pure; never raises; returns ``(None, None)`` on any unexpected shape.
+    """
+    try:
+        if endpoint == "responses" or "input" in body and "messages" not in body:
+            items = body.get("input")
+            if not isinstance(items, list) or not items or not isinstance(items[-1], dict):
+                return None, None
+            last = items[-1]
+            if last.get("type") == "function_call_output":
+                cid = last.get("call_id")
+                for it in reversed(items[:-1]):
+                    if isinstance(it, dict) and it.get("type") == "function_call" and it.get("call_id") == cid:
+                        return _tag(it.get("name")), "tool_result"
+                return None, "tool_result"
+            return None, "user" if last.get("role") == "user" else None
+        msgs = body.get("messages")
+        if not isinstance(msgs, list) or not msgs or not isinstance(msgs[-1], dict):
+            return None, None
+        last = msgs[-1]
+        if last.get("role") in ("tool", "function"):
+            name = _tag(last.get("name"))
+            cid = last.get("tool_call_id")
+            if name is None and cid:
+                for m in reversed(msgs[:-1]):
+                    for tc in (m.get("tool_calls") or []) if isinstance(m, dict) else []:
+                        if isinstance(tc, dict) and tc.get("id") == cid:
+                            name = _tag((tc.get("function") or {}).get("name"))
+                            break
+                    if name:
+                        break
+            return name, "tool_result"
+        return None, "user" if last.get("role") == "user" else None
+    except Exception:
+        return None, None
+
+
 def _tag(value: Any) -> str | None:
     return value.strip() or None if isinstance(value, str) else None
 
@@ -888,6 +932,9 @@ def _write_dispatch_record(call: _Call, error: BaseException | None, now: float)
             n_tokens_budget=call.new_tokens,
             outcome=outcome(call, error),
             error_type=type(error).__name__ if error is not None else None,
+            preceding_tool=getattr(call, "preceding_tool", None),
+            turn_trigger=getattr(call, "turn_trigger", None),
+            finish_reason=getattr(call, "finish_reason", None),
         )
     except Exception:
         pass
@@ -1023,6 +1070,7 @@ async def _passthrough(endpoint: str, role: str, http_request: Request, state: A
     from src.llm_primitives.inference import _role_config_for_backend
 
     text = prompt_text(body)
+    _prev_tool, _trigger = turn_origin(endpoint, body)
     call = _Call(
         role=role_name,
         base_url=base_url,
@@ -1041,6 +1089,8 @@ async def _passthrough(endpoint: str, role: str, http_request: Request, state: A
         client_class=_tag(body.get("x_client_class")) or _tag(http_request.headers.get("x-client-class")),
         role_config=_role_config_for_backend(getattr(state, "registry", None), role_name),
         prompt_text=text,
+        preceding_tool=_prev_tool,
+        turn_trigger=_trigger,
         prefix_fp=wire_prefix_fingerprints(endpoint, body),
         prefix_ladder=wire_prefix_ladder(endpoint, body),
         prefix_key=wire_prefix_key(endpoint, body),

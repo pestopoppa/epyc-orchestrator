@@ -984,6 +984,9 @@ def _dispatch_direct(
             n_tokens_budget=n_tokens if isinstance(n_tokens, int) else None,
             outcome=classify_outcome(result, error, False),
             error_type=type(error).__name__ if error is not None else None,
+            preceding_tool=st.get("preceding_tool"),
+            turn_trigger=st.get("turn_trigger"),
+            finish_reason=getattr(result, "completion_reason", None) or None,
         )
     except Exception:
         pass
