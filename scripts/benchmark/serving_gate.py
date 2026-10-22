@@ -19,6 +19,11 @@ Stops 5 min before --deadline; a phase is skipped (SKIPPED_DEADLINE) if less tha
 import argparse, ast, datetime, fcntl, hashlib, json, math, os, re, shlex, signal, subprocess, sys, threading, time, urllib.request
 from pathlib import Path
 
+# Deterministic host-thread pinning (2026-10-22): one shared helper with the stack launcher.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.server.launch_affinity import (  # noqa: E402
+    affinity_escapes, apply_pinned_launch_env, enforce_launch_affinity, prefix_cpuset)
+
 STAGE = Path('/mnt/raid0/llm/tmp/q38t101-serving-gate')
 CORPUS = STAGE / 'corpus.jsonl'
 CORPUS_SHA = STAGE / 'corpus.sha256'
@@ -235,6 +240,7 @@ class Server:
         env['LD_LIBRARY_PATH'] = f'{self.bin_dir}:/opt/rocm/lib' if self.expect_gpu else str(self.bin_dir)      # this tree's own ggml, never the global path
         for k in ('HSA_OVERRIDE_GFX_VERSION', 'GGML_NOHUGEPAGE_PROCESS', 'LLAMA_SPEC_EXACT', 'LLAMA_SPEC_DIAG_ACCEPT', 'GGML_CUDA_LOG_MMVQ_ROUTE'): env.pop(k, None)
         if not self.expect_gpu: env['HIP_VISIBLE_DEVICES'] = '-1'; env['ROCR_VISIBLE_DEVICES'] = ''     # CPU role must never touch the MI210
+        apply_pinned_launch_env(env, self.argv)     # ROCr must not widen its own threads off the taskset placement
         (self.out / f'{self.label}.server_command.txt').write_text(' '.join(shlex.quote(a) for a in self.argv) + '\n')
         self.log = (self.out / f'{self.label}.server.log').open('wb')
         self.proc = subprocess.Popen(self.argv, stdout=self.log, stderr=subprocess.STDOUT, env=env)
@@ -257,8 +263,15 @@ class Server:
         if self.expect_gpu:
             if self.vram_ready < VRAM_FLOOR: raise RuntimeError(f'{self.label}: VRAM {self.vram_ready} below residency floor {VRAM_FLOOR}')
             if not any('libggml-hip' in m for m in self.maps): raise RuntimeError(f'{self.label}: libggml-hip not mapped; not a HIP run: {self.maps}')
+        pin = enforce_launch_affinity(self.pid, self.argv, label=self.label, emit=lambda _m: None)
+        self.affinity = pin.as_dict() if pin is not None else None
+        if pin is not None and not pin.ok: raise RuntimeError(f'{self.label}: tasks escape the placement after re-pin: {self.affinity}')
     def stop_and_verify(self):
         dead = True
+        cpuset = prefix_cpuset(self.argv)
+        if self.proc is not None and self.proc.poll() is None and cpuset:
+            # Post-warm-up re-check: threads born at the first request / draft load must have inherited the pin.
+            self.affinity_escapes_at_stop = [{'tid': t.tid, 'comm': t.comm, 'cpus': t.cpu_list} for t in affinity_escapes(self.pid, cpuset)]
         if self.proc is not None:
             if self.proc.poll() is None:
                 self.proc.send_signal(signal.SIGTERM)
@@ -279,7 +292,8 @@ class Server:
         return {'label': self.label, 'pid': getattr(self, 'pid', None), 'dead_after': dead, 'expect_gpu': self.expect_gpu, 'samples': len(s), 'libs': self.maps,
                 'vram_ready_gib': round(getattr(self, 'vram_ready', -1) / 2**30, 2), 'vram_peak_gib': round(max([x['vram'] for x in s] or [0]) / 2**30, 2),
                 'busy_max': max([x['busy'] for x in s] or [0]), 'busy_nonzero_samples': sum(1 for x in s if x['busy'] > 0),
-                'child_in_kfd_samples': sum(1 for x in s if x['child_in_kfd'])}
+                'child_in_kfd_samples': sum(1 for x in s if x['child_in_kfd']),
+                'affinity': getattr(self, 'affinity', None), 'affinity_escapes_at_stop': getattr(self, 'affinity_escapes_at_stop', None)}
 
 def gen_body(prompt, n=N_PREDICT):
     return {'prompt': prompt, 'n_predict': n, 'temperature': 0.0, 'top_k': 1, 'top_p': 1.0, 'min_p': 0.0, 'typical_p': 1.0, 'repeat_penalty': 1.0, 'seed': 42,

@@ -137,6 +137,11 @@ from scripts.server.stack_paths import (
     SLOT_SAVE_DIR,
     STATE_FILE,
 )
+from scripts.server.launch_affinity import (
+    LaunchAffinityError,
+    apply_pinned_launch_env,
+    enforce_launch_affinity,
+)
 from scripts.server.stack_numa_evict import (
     placement_summary,
     pre_evict_gib_for_role,
@@ -1856,6 +1861,34 @@ def _apply_diag_env_override(env: dict[str, str], diag_env_override: dict[str, s
         print(f"    [EXPERIMENT] diagnostic env override: {diag_env_override}")
 
 
+def _post_health_affinity_gate(
+    pid: int, spawn_prefix: list[str], label: str, log_file: Any
+) -> bool:
+    """After health: every task of OUR pid inside the spawn prefix's cpuset, or the launch fails.
+
+    2026-10-22 (workspace-58): a `taskset -c 184-191` HIP llama-server carried ONE
+    ROCr thread on 0-191. `apply_pinned_launch_env` removes the cause; this re-pins
+    any task still outside the placement (pin_all_tasks) and refuses the launch when
+    one remains -- a declared placement that does not hold is not a served
+    placement. An unpinned spawn, or a pid that is not this launcher's child, is
+    never touched (returns True). Read by `status` again later
+    (stack_commands -> launch_affinity.affinity_attestation_warnings).
+    """
+    try:
+        result = enforce_launch_affinity(pid, spawn_prefix, label=label)
+    except LaunchAffinityError as exc:
+        print(f"    [FAIL] [affinity] {label}: {exc}")
+        result = None
+        ok = False
+    else:
+        ok = result is None or result.ok
+    if ok:
+        return True
+    print(f"    Check log: {log_file}")
+    kill_process(pid)
+    return False
+
+
 @_refuse_on_artifact_integrity_error
 def start_server(
     port: int,
@@ -1957,6 +1990,9 @@ def start_server(
             # other branch (2026-09-26).
             _strip_ambient_ggml(env, _role_env_overrides(source_role), label="eval_batch")
             _apply_diag_env_override(env, diag_env_override)
+            # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
+            # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
+            apply_pinned_launch_env(env, spawn_prefix)
             _launch = _log_banner.write_launch_banner(
                 log, port=port, roles=roles, argv=spawn_prefix + cmd, env=env, binary=cmd[0]
             )
@@ -1973,6 +2009,10 @@ def start_server(
         print("    Waiting for health...")
 
         if wait_for_health(port, timeout=max(_HEALTH_SERVER_STARTUP, 180)):
+            if not _post_health_affinity_gate(
+                proc.pid, spawn_prefix, f"eval-batch frontdoor :{port}", log_file
+            ):
+                return None
             print("    [OK] Eval-batch frontdoor ready")
             return ProcessInfo(
                 role=primary_role,
@@ -2030,6 +2070,9 @@ def start_server(
                 preserve=_role_env_overrides(source_role),
             )
             _apply_diag_env_override(env, diag_env_override)
+            # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
+            # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
+            apply_pinned_launch_env(env, spawn_prefix)
             _launch = _log_banner.write_launch_banner(
                 log, port=port, roles=roles, argv=spawn_prefix + cmd, env=env, binary=cmd[0]
             )
@@ -2046,6 +2089,10 @@ def start_server(
         print("    Waiting for health...")
 
         if wait_for_health(port, timeout=max(_HEALTH_SERVER_STARTUP, 300)):
+            if not _post_health_affinity_gate(
+                proc.pid, spawn_prefix, f"gpu shadow lane :{port}", log_file
+            ):
+                return None
             print("    [OK] GPU shadow lane ready")
             return ProcessInfo(
                 role=primary_role,
@@ -2104,6 +2151,9 @@ def start_server(
                 preserve=_role_env_overrides(roles[0]),
             )
             _apply_diag_env_override(env, diag_env_override)
+            # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
+            # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
+            apply_pinned_launch_env(env, spawn_prefix)
             _launch = _log_banner.write_launch_banner(
                 log, port=port, roles=roles, argv=spawn_prefix + cmd, env=env, binary=cmd[0]
             )
@@ -2122,6 +2172,10 @@ def start_server(
         # VL models take longer to load (mmproj + main model)
         timeout = _HEALTH_VISION_SERVER if vision_type == "escalation" else _HEALTH_WORKER_SERVER
         if wait_for_health(port, timeout=timeout):
+            if not _post_health_affinity_gate(
+                proc.pid, spawn_prefix, f"llama-server :{port}", log_file
+            ):
+                return None
             print(f"    [OK] Vision server {vision_type or 'worker'} ready")
             return ProcessInfo(
                 role=roles[0],
@@ -2170,6 +2224,9 @@ def start_server(
                 env.update(env_override)
                 print(f"    [EXPERIMENT] env override: {env_override}")
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
+            # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
+            # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
+            apply_pinned_launch_env(env, spawn_prefix)
             _launch = _log_banner.write_launch_banner(
                 log, port=port, roles=roles, argv=spawn_prefix + cmd, env=env, binary=cmd[0]
             )
@@ -2186,6 +2243,10 @@ def start_server(
         print("    Waiting for health...")
 
         if wait_for_health(port, timeout=60):  # Faster timeout for small model
+            if not _post_health_affinity_gate(
+                proc.pid, spawn_prefix, f"embedder :{port}", log_file
+            ):
+                return None
             print(f"    [OK] Embedder #{instance_idx} ready")
             return ProcessInfo(
                 role=roles[0],  # Use actual role name (embedder, embedder_1, etc.)
@@ -2249,6 +2310,9 @@ def start_server(
                 _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
             except Exception as exc:
                 print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
+            # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
+            # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
+            apply_pinned_launch_env(env, spawn_prefix)
             _launch = _log_banner.write_launch_banner(
                 log, port=port, roles=roles, argv=spawn_prefix + cmd, env=env, binary=cmd[0]
             )
@@ -2271,6 +2335,10 @@ def start_server(
             else _HEALTH_WORKER_SERVER
         )
         if wait_for_health(port, timeout=timeout):
+            if not _post_health_affinity_gate(
+                proc.pid, spawn_prefix, f"llama-server :{port}", log_file
+            ):
+                return None
             print(f"    [OK] Worker {worker_type} ready")
             # 2026-05-09: per-thread renice to nice=19 for binary_override roles
             # (ik_llama.cpp PR #1744 / gemma4 MTP). Reason: PR #1744's OMP_WAIT_POLICY=active
@@ -2357,6 +2425,9 @@ def start_server(
             _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
         except Exception as exc:
             print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
+        # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
+        # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
+        apply_pinned_launch_env(env, spawn_prefix)
         _launch = _log_banner.write_launch_banner(
             log, port=port, roles=roles, argv=spawn_prefix + cmd, env=env, binary=cmd[0]
         )
@@ -2374,6 +2445,10 @@ def start_server(
     # Wait for health
     print("    Waiting for health...")
     if wait_for_health(port, timeout=180):
+        if not _post_health_affinity_gate(
+            proc.pid, spawn_prefix, f"llama-server :{port}", log_file
+        ):
+            return None
         print("    [OK] Server ready")
         # INF-70/C7: placement observation, not a gate. The weights are faulted
         # in by the time health passes, so this is the one moment the operator
@@ -2996,6 +3071,9 @@ def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | Non
         return None
 
     env = _build_aux_env(service, ld_paths)
+    # A declared aux cpuset (whisper/tts are HIP builds with HIP hidden) gets the same
+    # ROCr affinity override as every pinned llama-server (launch_affinity.py).
+    apply_pinned_launch_env(env, spawn_prefix)
     # A missing LD_PRELOAD object is NOT fatal to the dynamic loader: glibc prints a
     # warning and runs the binary without it. For the CPU TTS that silently means
     # 96 spinning threads on a 16-core cpuset instead of 16 (see nprocs_shim.c), so
@@ -3039,6 +3117,10 @@ def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | Non
     )
 
     if wait_for_health(service.port, timeout=service.health_timeout, path=service.health_path):
+        if not _post_health_affinity_gate(
+            proc.pid, spawn_prefix, f"aux service {service.name}", log_file
+        ):
+            return None
         # `/health` proves the PORT answers, not that the service can do its job.
         # The TTS server returns HTTP 200 with ZERO audio bytes for a request it
         # cannot satisfy (e.g. an unknown `voice`), and whisper will answer

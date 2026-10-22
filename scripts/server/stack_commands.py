@@ -1250,6 +1250,24 @@ def _episodic_embedding_status_line() -> str:
     )
 
 
+def _affinity_attestation_warnings(name: str, info: ProcessInfo) -> list[str]:
+    """Every task of the live pid inside the port's declared placement (2026-10-22).
+
+    The main thread's mask is not the process's placement: a `taskset -c 184-191`
+    HIP llama-server read 184-191 in /proc/<pid>/status while one ROCr thread ran
+    on 0-191. Reads /proc/<pid>/task/*/status for the pid the state file names.
+    Docker rows (pid -1) and ports with no declared placement are not asserted.
+    """
+    if info.pid == -1:
+        return []
+    try:
+        from scripts.server.launch_affinity import affinity_attestation_warnings
+
+        return affinity_attestation_warnings(name, info.pid, info.port)
+    except Exception as exc:  # a status read must never die on the check itself
+        return [f"{name} pid {info.pid} cpu_affinity_check_error: {exc}"]
+
+
 def runtime_attestation_warnings(
     state: dict[str, ProcessInfo] | None = None,
 ) -> list[str]:
@@ -1308,6 +1326,8 @@ def runtime_attestation_warnings(
         if warning:
             warnings.append(warning)
         warnings.extend(_runtime_attestation_warnings(name, info, cmdline, launch_contract))
+        if alive:
+            warnings.extend(_affinity_attestation_warnings(name, info))
     return warnings
 
 
@@ -2572,6 +2592,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         attestation_warnings.extend(
             _runtime_attestation_warnings(name, info, cmdline, launch_contract)
         )
+        if alive:
+            attestation_warnings.extend(_affinity_attestation_warnings(name, info))
 
         print(
             f"{name:<25} {info.port:<8} {pid_str:<10} {status:<10} "

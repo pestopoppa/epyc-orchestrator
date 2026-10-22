@@ -1004,12 +1004,26 @@ def build_serving_config(
         expected_cpus = _parse_cpu_list(numa_intent.get("cpu_list") if numa_intent else None)
         process_cpus = _parse_cpu_list(cpus_allowed)
         numa_match = None
+        # 2026-10-22: a mask held by ANY task used to be enough (`... in task_cpu_masks`),
+        # and the main thread's mask was enough on its own -- so a HIP server whose main
+        # thread read 184-191 while one ROCr thread ran on 0-191 attested as a match.
+        # Every task must now lie INSIDE the declared list (a narrower OpenMP place is
+        # inside); an escaping task is reported and makes the row a mismatch.
+        task_cpu_escape = (
+            sorted(
+                mask
+                for mask in task_cpu_masks
+                if not _parse_cpu_list(mask) <= expected_cpus
+            )
+            if numa_intent and expected_cpus
+            else []
+        )
         if numa_intent and cpus_allowed:
             numa_match = (
                 process_cpus == expected_cpus
                 or task_cpu_union == expected_cpus
                 or numa_intent.get("cpu_list") in task_cpu_masks
-            )
+            ) and not task_cpu_escape
         rows.append(
             {
                 "pid": proc["pid"],
@@ -1032,6 +1046,7 @@ def build_serving_config(
                 "cpus_allowed_list": cpus_allowed,
                 "task_cpu_masks": task_cpu_masks,
                 "task_cpu_union": task_cpu_union_text,
+                "task_cpu_escape": task_cpu_escape,
                 "numa_intent": numa_intent,
                 "numa_match": numa_match,
             }
@@ -1083,7 +1098,12 @@ def summarize(
                         f"actual={row.get('cpus_allowed_list')}:"
                         f"task_union={row.get('task_cpu_union')}:"
                         f"expected={row.get('numa_intent', {}).get('cpu_list')}"
-                    ],
+                    ]
+                    + (
+                        ["cpu_affinity_escape:" + ",".join(row["task_cpu_escape"])]
+                        if row.get("task_cpu_escape")
+                        else []
+                    ),
                 }
             )
     if feature_flags and feature_flags.get("status") == "warn":
