@@ -113,11 +113,13 @@ def test_protected_layer_accepts_wording_and_refuses_policy_edits():
     assert screen(reworded) is None and screen(rerouted) == "protected_layer:role_binding"
 
 
-def test_default_screen_fails_closed_until_seam_s2():
-    from src.harness_loop import substrate
-
+def test_default_screen_is_the_fail_closed_mhs3_guard(tmp_path, monkeypatch):
+    # Seam S2 landed: the default leakage check is the real MHS-3 guard; with no eval-id
+    # vocabulary it refuses every text.
+    monkeypatch.setenv("AUTOPILOT_EVAL_ID_VOCAB_SOURCES", str(tmp_path / "absent_pool.jsonl"))
     ref = (ROOT / ff.TARGET_PATH).read_text()
-    assert ff.make_candidate_screen(ref)(ref) == substrate.LEAKAGE_NOT_EXTRACTED
+    reason = ff.make_candidate_screen(ref)(ref, original=ref)
+    assert reason.startswith("eval_leakage_vocabulary_unavailable:missing_eval_id_source")
 
 
 # ── splits ──────────────────────────────────────────────────────────────────
@@ -258,3 +260,12 @@ def test_pilot_module_has_no_entrypoint():
     assert not (ROOT / "src/harness_loop/pilots/__main__.py").exists()
     for banned in ("httpx", "requests", "subprocess", "socket", "open("):
         assert banned not in src, banned
+
+
+def test_pilot_and_local_editor_cite_the_same_ported_source():
+    # HIL-6h landed the port itself (editor.LOCAL_EDITOR_META_PROMPT_SHA256); the pilot's M9
+    # "local-editor port" must name the same published source the editor was ported from.
+    from src.harness_loop import editor
+
+    assert ff.EDITOR_PROMPT_SOURCE_SHA256 == editor.GEPA_SOURCE_PROMPT_SHA256
+    assert editor.LOCAL_EDITOR_META_PROMPT.sha256 == editor.LOCAL_EDITOR_META_PROMPT_SHA256

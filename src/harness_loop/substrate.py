@@ -199,7 +199,12 @@ def leakage_reason(
     closed: an unavailable vocabulary (or a crashed content check) refuses every text.
     """
     vocab = vocabulary if vocabulary is not None else _guards.load_eval_id_vocabulary()
-    known = harness if harness is not None else _guards.harness_content()
+    if harness is not None:
+        known = harness
+    elif vocab.available:
+        known = _guards.harness_content()
+    else:  # refused before the corpus is consulted; skip hashing the checkout
+        known = None
     reason = _guards.eval_leakage_reason(
         _guards._added_text(original, text),
         vocab,

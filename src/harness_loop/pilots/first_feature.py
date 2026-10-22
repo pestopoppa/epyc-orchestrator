@@ -430,15 +430,16 @@ def protected_layer_reason(reference_text: str, mutated_text: str) -> str | None
 
 
 def make_candidate_screen(reference_text: str,
-                          leakage: Callable[[str], str | None] | None = None) -> Callable[[str], str | None]:
+                          leakage: Callable[..., str | None] | None = None) -> Callable[..., str | None]:
     """A text screen for the driver's ``leakage`` seam: the protected layer first, then the MHS-3
-    leakage check (``substrate.leakage_reason`` by default, which fails closed until seam S2)."""
+    leakage check (``substrate.leakage_reason`` by default: the real fail-closed guard since seam
+    S2). The driver's ``original=`` / ``trace_context=`` keywords are passed through to it."""
     if leakage is None:
         from src.harness_loop import substrate
 
         leakage = substrate.leakage_reason
 
-    def screen(mutated_text: str) -> str | None:
-        return protected_layer_reason(reference_text, mutated_text) or leakage(mutated_text)
+    def screen(mutated_text: str, **kw: Any) -> str | None:
+        return protected_layer_reason(reference_text, mutated_text) or leakage(mutated_text, **kw)
 
     return screen
