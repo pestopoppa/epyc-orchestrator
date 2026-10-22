@@ -52,6 +52,9 @@ PRIVATE_DIR = Path("/mnt/raid0/llm/tmp/rte-pfx2")
 EXPECTED_CPUS = "0-95"
 LINKAGE = Path("/workspace/repos/epyc-inference-research/scripts/utils/verify_ggml_linkage.sh")
 KERNEL_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
+# Roots that may hold scripts/vidya/adapters/rte_pfx2_capture.py (the belief write side). First hit wins.
+BELIEF_ROOTS = ("/workspace", "/mnt/raid0/llm/worktrees/root-pbe-3c4ca599")
+FILLER_ROLE = "build"   # filler_run.sh claims `region-lock run --role build --tag filler-<id>`
 
 
 def _flag(argv: list[str], name: str) -> str | None:
@@ -129,6 +132,73 @@ def plan_checks(plan: dict, n: int) -> list[str]:
     if not ok:
         bad.append(f"prefix file sha256 {got[:12]} != sidecar")
     return bad
+
+
+def utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def window_claim(env: dict, start_utc: str, role: str = ROLE) -> dict:
+    """Window the probe ran under, from what the filler launcher exports (nothing invented).
+
+    Under filler_run.sh: window id = <FILLER_ID>@<FILLER_END_ISO>, claim = the region-lock invocation the
+    launcher made (cpus from FILLER_CPUS, role build, tag filler-<id>). Standalone (no FILLER_ID) the
+    claim is recorded as the explicit absence ``none:WINDOW_CONFIRMED=1`` so a reader can see it."""
+    fid = env.get("FILLER_ID")
+    if fid:
+        wid = f"{fid}@{env.get('FILLER_END_ISO', 'unknown-end')}"
+        claim = f"region-lock run --cpu-list {env.get('FILLER_CPUS', 'unknown')} --role {FILLER_ROLE} --tag filler-{fid}"
+    else:
+        wid = f"operator-confirmed@{start_utc}"
+        claim = "none:WINDOW_CONFIRMED=1 (no region-lock claim recorded)"
+    return {"window_id": wid, "region_lock_claim": claim, "start_utc": start_utc, "end_utc": None, "role": role}
+
+
+def filter_unreported_timings(probe: dict) -> tuple[dict, list[dict]]:
+    """Drop every TRIAL holding a request whose server timings are the probe's -1 placeholder.
+
+    The writer refuses the whole run on one such row; a row cannot be removed alone (the trial's
+    total_uncached_prompt_tokens sums all its requests), so the trial is skipped with its reason."""
+    kept, skipped = [], []
+    for t in probe.get("results", []):
+        bad = [r.get("idx") for r in t.get("rows", [])
+               if not (isinstance(r.get("prompt_n"), int) and r["prompt_n"] >= 0
+                       and isinstance(r.get("cache_n"), int) and r["cache_n"] >= 0)]
+        if bad:
+            skipped.append({"arm": t.get("arm"), "trial": t.get("trial"), "request_idx": bad,
+                            "reason": "server timings prompt_n/cache_n < 0 (not reported); not invented"})
+        else:
+            kept.append(t)
+    return {**probe, "results": kept, "belief_skipped_trials": skipped}, skipped
+
+
+def belief_capture(out: Path, window: dict, role: str, run_id: str) -> dict:
+    """Write chunk_kv.beliefs.jsonl after a rc=0 probe. NEVER raises or changes the probe rc: any
+    refusal is recorded in <out>/belief_status.json."""
+    status: dict = {"written": None, "skipped_trials": [], "error": None}
+    try:
+        root = next((r for r in ([os.environ.get("EPYC_ROOT")] + list(BELIEF_ROOTS)) if r and
+                     (Path(r) / "scripts/vidya/adapters/rte_pfx2_capture.py").is_file()), None)
+        if root is None:
+            raise RuntimeError("rte_pfx2_capture adapter not found in EPYC_ROOT, /workspace or the pinned root worktree")
+        sys.path.insert(0, str(Path(root) / "scripts" / "vidya"))
+        from adapters import rte_pfx2_capture as cap  # type: ignore
+        probe = json.loads((out / "probe.json").read_text())
+        filtered, skipped = filter_unreported_timings(probe)
+        status["skipped_trials"] = skipped
+        src = out / "probe.json"
+        if skipped:   # the attested file is the one the rows were derived from
+            src = out / "probe.belief.json"
+            src.write_text(json.dumps(filtered, indent=1))
+        path = cap.write_belief_measurements(out, run_id=run_id, producer="rte_pfx2_role_recipe.py",
+                                             probe_path=src, header_path=out / "RUN_HEADER.json",
+                                             role=role, window={k: window[k] for k in
+                                             ("window_id", "region_lock_claim", "start_utc", "end_utc")})
+        status["written"] = str(path)
+    except Exception as e:  # recorded, never fatal
+        status["error"] = f"{type(e).__name__}: {e}"
+    (out / "belief_status.json").write_text(json.dumps(status, indent=1))
+    return status
 
 
 def listening(port: int) -> bool:
@@ -216,15 +286,29 @@ def do_run(a, plan: dict) -> int:
         if lk.returncode != 0:
             print("REFUSED: ggml linkage FAIL", file=sys.stderr)
             return 7
+        win = window_claim(os.environ, utc_now())
         (out / "RUN_HEADER.json").write_text(json.dumps({
             "schema": "epyc.rte_pfx2.header.v1", "argv": plan["argv"], "numa_prefix": plan["numa_prefix"],
             "registry_argv": plan["registry_argv"], "pid": pid,
             "cache_ram_mib": _flag(plan["argv"], "--cache-ram"), "slot_prompt_similarity": "server default (flag absent)",
             "prefix_sha256": prefix_sha_ok()[1], "n": a.n, "trials": a.trials, "seed": a.seed,
-            "binary_mtime": time.ctime(os.path.getmtime(plan["argv"][0]))}, indent=1))
+            "binary_mtime": time.ctime(os.path.getmtime(plan["argv"][0])),
+            "role": ROLE, "window": win}, indent=1))
         rc = subprocess.run([sys.executable, str(PROBE), "--server", f"http://127.0.0.1:{a.port}", "--n", str(a.n),
                              "--trials", str(a.trials), "--prefix-file", str(PREFIX), "--seed", str(a.seed),
                              "--output", str(out / "probe.json")], env={**os.environ, "WINDOW_CONFIRMED": "1"}).returncode
+        win["end_utc"] = utc_now()
+        try:   # record the window in both result files (RUN_HEADER is rewritten whole; probe.json gains keys)
+            hp = out / "RUN_HEADER.json"
+            h = json.loads(hp.read_text()); h["window"] = win; hp.write_text(json.dumps(h, indent=1))
+            if (out / "probe.json").is_file():
+                pj = json.loads((out / "probe.json").read_text())
+                pj.update(role=ROLE, window=win); (out / "probe.json").write_text(json.dumps(pj, indent=1))
+        except Exception as e:
+            print(f"window record failed: {e}", file=sys.stderr)
+        if rc == 0:
+            st = belief_capture(out, win, ROLE, f"rtepfx2-{out.name}")
+            print("belief capture:", st["written"] or st["error"], f"(skipped trials: {len(st['skipped_trials'])})")
         return rc
     finally:
         dead = stop_own(pid)
