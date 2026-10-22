@@ -6,6 +6,7 @@ from collections.abc import Iterable, Iterator
 from typing import Protocol
 
 from src.voice.contracts import VoiceEvent, VoiceTurn
+from src.voice.tts_text_normalize import normalize_for_tts
 
 
 MAX_ROUTE_EVENTS = 4096
@@ -42,10 +43,29 @@ class CascadeBackend:
         transcriber: Transcriber,
         voice_turn: VoiceTurnService,
         synthesizer: SpeechSynthesizer,
+        *,
+        tts_text_normalization: bool = False,
+        tts_language: str | None = None,
     ) -> None:
+        """``tts_text_normalization`` rewrites numbers, units and letter acronyms into words
+        (Italian only, ``src.voice.tts_text_normalize``) on the text handed to the synthesizer.
+        The language is the turn's ``language``, else ``tts_language`` (the language the TTS
+        server was launched for; the pinned Qwen TTS HTTP contract carries none). Off, the
+        synthesizer receives the route's answer string unchanged.
+
+        TODO(operator): default OFF on the live voice path. Enable it (pass True and the
+        server's language) once the CS-8.L re-listen of the normalized clips is rated; the
+        cascade/eval path (research g1_cascade_language.py) already runs it default-on.
+        """
+        if not isinstance(tts_text_normalization, bool):
+            raise TypeError("tts_text_normalization must be a bool")
+        if tts_language is not None and (not isinstance(tts_language, str) or not tts_language.strip()):
+            raise ValueError("tts_language must be None or a non-empty string")
         self._transcriber = transcriber
         self._voice_turn = voice_turn
         self._synthesizer = synthesizer
+        self._tts_text_normalization = tts_text_normalization
+        self._tts_language = tts_language
 
     def ingest(self, audio_chunk: bytes) -> str:
         if not isinstance(audio_chunk, bytes):
@@ -132,7 +152,14 @@ class CascadeBackend:
         if any(value not in answer for value in turn.must_preserve):
             yield VoiceEvent("error", "voice-turn stream omitted a protected value")
             return
-        for index, chunk in enumerate(self._synthesizer.stream_pcm(answer, language=turn.language)):
+        # must_preserve is checked on the route's own text above; normalization only changes
+        # how the synthesizer is asked to say it.
+        speech_text = answer
+        if self._tts_text_normalization:
+            speech_text = normalize_for_tts(
+                answer, turn.language if turn.language is not None else self._tts_language
+            )
+        for index, chunk in enumerate(self._synthesizer.stream_pcm(speech_text, language=turn.language)):
             if index >= MAX_ROUTE_EVENTS:
                 yield VoiceEvent("error", "speech backend exceeded chunk limit")
                 return
