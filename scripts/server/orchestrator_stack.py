@@ -2448,6 +2448,11 @@ PRODUCTION_FEATURE_WAVE_OVERRIDES: dict[str, bool] = {
     # runs thinking-off with skip_suffix (fixes the RI-22 no-op gate). RI-23b A/B 2026-09-29:
     # verdicts parse (0/2 -> 2/2), code/ingest/REPL probes correct and faster.
     "thinking_roles_chat_lane": True,
+    # SEC-EXEC-POST-e, operator-staged 2026-10-22 (step 1 of 3: exec_write_flags, then
+    # web_fetch_guard, then exec_containment; one API reload + live proof each). Audit-only:
+    # tool-call audit records gain write_outside_root (run_python_code: child audit hook;
+    # run_shell: static argv check). No enforcement, no child-env change (SEC-EXEC-7).
+    "exec_write_flags": True,
 }
 
 LANGGRAPH_PHASE3_LIVE_ENV_VARS: tuple[str, ...] = (
