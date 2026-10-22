@@ -12,9 +12,12 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
+# HIL-6 S5: the lint lives in the import-safe guard module (seam S1). Import it from THIS
+# checkout (the venv's .pth points at the shared clone) without importing the PromptForge
+# proposer. ``species.prompt_forge.prompt_interference_lint`` is the same object.
+sys.path.insert(0, str(ROOT))
 
-from species.prompt_forge import prompt_interference_lint  # noqa: E402
+from src.autopilot_core.mutation_guards import prompt_interference_lint  # noqa: E402
 
 
 def main() -> int:

@@ -38,10 +38,10 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-try:  # package import (production) or flat ``species.`` import (tests)
-    from .prompt_forge import MUTATION_EFFECT_RISK, MutationEffect
-except ImportError:  # pragma: no cover - script execution fallback
-    from scripts.autopilot.species.prompt_forge import MUTATION_EFFECT_RISK, MutationEffect
+# HIL-6 S5: the MHS-1/MHS-4 vocabulary and risk prior live in the import-safe guard module
+# (seam S1). One module in every import context (``prompt_forge`` re-exports the same
+# objects), so the bare/package fallback and the PromptForge proposer import are not needed.
+from src.autopilot_core.mutation_guards import MUTATION_EFFECT_RISK, MutationEffect
 
 SCHEMA = "epyc.rtg55.heldout_effect_corpus.v1"
 
