@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import functools
+import hashlib
 import io
 import logging
 import os
@@ -1456,6 +1457,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 if grammar:
                     llm_kwargs["grammar"] = grammar
                     state.grammar_enforced = True
+                    state.turn1_grammar_shape = "call" if _turn1_shape == "call" else "legacy"
         except Exception:
             pass  # Fall back to unconstrained generation
 
@@ -1542,6 +1544,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             deps.primitives._early_stop_check = None
 
     _primary_llm_output = code
+    if state.grammar_enforced and state.turns == 1:
+        try:  # UFH14-LB3.1: corpus for the turn-1 grammar replay; never affects the turn
+            state.turn1_output_probe = turn1_output_probe(code)
+        except Exception:
+            log.debug("turn-1 output probe failed", exc_info=True)
     if _replay_rec is not None:   # HIL-16 / HIL-16b
         _replay_rec.record_turn(role=str(role), prompt=prompt, output=code, kwargs=llm_kwargs,
                                 force_answer=force_answer, meta=_turn_call_meta)
@@ -2074,3 +2081,23 @@ def _format_validation_failure_message(
         f"Rejected value: {rejected_trunc}\n"
         "Fix the value and call FINAL again. State is preserved."
     )
+
+
+#: UFH14-LB3.1: characters of the raw turn-1 output kept next to ``grammar_enforced``.
+TURN1_PROBE_HEAD_CHARS = 400
+
+
+def turn1_output_probe(text: Any) -> dict[str, Any]:
+    """Hash + head of a raw turn-1 output (the replay corpus the grammar A/B needs).
+
+    ``sha256`` is over the full UTF-8 text; ``head`` is the first
+    ``TURN1_PROBE_HEAD_CHARS`` characters, so a replay can classify the shape
+    (tool-call / final-call / code-line) without the whole reply being retained.
+    """
+    t = text if isinstance(text, str) else ("" if text is None else str(text))
+    return {
+        "sha256": hashlib.sha256(t.encode("utf-8", "replace")).hexdigest(),
+        "chars": len(t),
+        "head": t[:TURN1_PROBE_HEAD_CHARS],
+        "truncated": len(t) > TURN1_PROBE_HEAD_CHARS,
+    }

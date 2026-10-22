@@ -1079,6 +1079,8 @@ async def _execute_repl_body(
         think_harder_succeeded=task_state.think_harder_succeeded,
         think_harder_expected_roi=float(task_state.artifacts.get("think_harder_expected_roi", 0.0)),
         grammar_enforced=task_state.grammar_enforced,
+        turn1_grammar_shape=task_state.turn1_grammar_shape,
+        turn1_output_probe=task_state.turn1_output_probe,
         parallel_tools_used=parallel_tools,
         cache_affinity_bonus=task_state.cache_affinity_bonus,
         # SkillBank integration

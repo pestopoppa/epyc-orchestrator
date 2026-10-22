@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import ast as _ast
 import logging
+import time
 import os
 import operator as _operator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from src.config import get_config as _get_config
@@ -44,6 +45,34 @@ if TYPE_CHECKING:
     from src.api.models import ChatRequest
     from src.api.state import AppState
     from src.llm_primitives import LLMPrimitives
+
+
+
+def _record_vl_call(method: str, role: str, base_url: str, ts0: float, resp: Any,
+                    exc: BaseException | None, max_tokens: int) -> None:
+    """UFH14-LB6.2: one ``serving_call.v1`` record for a direct VL-server call (these
+    bypass ``LlamaServerBackend``). The prompt carries images, so it is not fingerprinted.
+    Never raises."""
+    try:
+        from src.backends import serving_calls
+
+        body: Any = None
+        if resp is not None and getattr(resp, "status_code", None) == 200:
+            try:
+                body = resp.json()
+            except Exception:
+                body = None
+        b = body if isinstance(body, dict) else {}
+        ch = b.get("choices") if isinstance(b.get("choices"), list) else []
+        serving_calls.record_http_call(
+            method=method, role=role, base_url=base_url, endpoint="/v1/chat/completions",
+            ts_start=ts0, ts_end=time.time(), n_tokens=max_tokens,
+            status=getattr(resp, "status_code", None),
+            finish_reason=ch[0].get("finish_reason") if ch and isinstance(ch[0], dict) else None,
+            timings=b.get("timings"), usage=b.get("usage"), exc=exc,
+        )
+    except Exception:
+        pass
 
 
 def _needs_structured_analysis(prompt: str) -> bool:
@@ -301,10 +330,18 @@ async def _handle_vision_request(
     for server_name, server_url in vl_servers:
         try:
             async with httpx.AsyncClient(timeout=_get_config().timeouts.vision_inference) as client:
-                resp = await client.post(
-                    f"{server_url}/v1/chat/completions",
-                    json=vl_payload,
-                )
+                _t0 = time.time()
+                _resp, _exc = None, None
+                try:
+                    resp = _resp = await client.post(
+                        f"{server_url}/v1/chat/completions",
+                        json=vl_payload,
+                    )
+                except BaseException as _e:
+                    _exc = _e
+                    raise
+                finally:
+                    _record_vl_call("vision_vl_answer", server_name, server_url, _t0, _resp, _exc, 2048)
 
             if resp.status_code == 200:
                 data = resp.json()
@@ -560,15 +597,23 @@ Important rules:
         # Call VL backend
         try:
             async with httpx.AsyncClient(timeout=_get_config().timeouts.vision_inference) as client:
-                resp = await client.post(
-                    vl_url,
-                    json={
-                        "messages": messages,
-                        "max_tokens": 2048,
-                        "temperature": 0.0,
-                        "stop": [QWEN_STOP],
-                    },
-                )
+                _t0 = time.time()
+                _resp, _exc = None, None
+                try:
+                    resp = _resp = await client.post(
+                        vl_url,
+                        json={
+                            "messages": messages,
+                            "max_tokens": 2048,
+                            "temperature": 0.0,
+                            "stop": [QWEN_STOP],
+                        },
+                    )
+                except BaseException as _e:
+                    _exc = _e
+                    raise
+                finally:
+                    _record_vl_call("vision_react_turn", "vision_react", _base, _t0, _resp, _exc, 2048)
 
             if resp.status_code != 200:
                 logger.warning(f"Vision ReAct turn {turn}: HTTP {resp.status_code}")

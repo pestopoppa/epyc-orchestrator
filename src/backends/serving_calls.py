@@ -1066,3 +1066,84 @@ def recorded_call(method: str) -> Callable:
         return wrapper
 
     return decorator
+
+
+def record_http_call(
+    *,
+    method: str,
+    role: str | None,
+    base_url: str | None,
+    endpoint: str | None,
+    ts_start: float,
+    ts_end: float,
+    prompt: str | None = None,
+    n_tokens: int | None = None,
+    status: int | None = None,
+    finish_reason: str | None = None,
+    timings: Any = None,
+    usage: Any = None,
+    tokens_generated: int | None = None,
+    prompt_tokens: int | None = None,
+    exc: BaseException | None = None,
+    notes: dict[str, Any] | None = None,
+) -> bool:
+    """UFH14-LB6.2: write one ``serving_call.v1`` record for an HTTP call that does NOT
+    go through ``LlamaServerBackend`` (so ``recorded_call`` cannot wrap it).
+
+    Same schema and writer as :func:`recorded_call` (``build_record`` + ``write_record``),
+    ``method`` names the lane (``worker_pool_completion``, ``repair_chat`` ...) and
+    ``notes.endpoint`` the URL path. Never raises, never changes the call; a call made
+    inside a recorded backend call is not double-counted (``skipped_nested``).
+    """
+    if _IN_CALL.get():
+        _bump("skipped_nested")
+        return False
+    if log_path() is None:
+        _bump("skipped_disabled")
+        return False
+    try:
+        from types import SimpleNamespace
+
+        n: dict[str, Any] = dict(notes or {})
+        if endpoint:
+            n["endpoint"] = endpoint
+        if status is not None:
+            n["http_status"] = status
+        if isinstance(timings, dict) and ("prompt_n" in timings or "predicted_n" in timings):
+            n["timings"] = {k: timings[k] for k in TIMING_KEYS if k in timings}
+        if isinstance(usage, dict) and usage:
+            n["usage"] = {k: usage[k] for k in ("prompt_tokens", "completion_tokens", "total_tokens") if k in usage}
+            if tokens_generated is None:
+                tokens_generated = usage.get("completion_tokens")
+            if prompt_tokens is None:
+                prompt_tokens = usage.get("prompt_tokens")
+        ok = exc is None and (status is None or 200 <= int(status) < 300)
+        result = SimpleNamespace(
+            success=ok,
+            completion_reason=finish_reason,
+            failure_reason=None if ok else (f"http_{status}" if status is not None else None),
+            error_message=None,
+            tokens_generated=tokens_generated,
+            prompt_tokens=prompt_tokens,
+            prompt_eval_ms=None,
+            generation_ms=None,
+            first_token_ms=None,
+            stream_chunks=None,
+        )
+        record = build_record(
+            method=method,
+            role_config=SimpleNamespace(name=role, model=None),
+            request=SimpleNamespace(role=role, prompt=prompt, n_tokens=n_tokens, timeout=None,
+                                    slot_id=None, chat_payload=None),
+            base_url=base_url,
+            ts_start=ts_start,
+            ts_end=ts_end,
+            result=result,
+            exc=exc,
+            staged=None,
+            notes=n,
+        )
+        return write_record(record)
+    except Exception as e:
+        _bump("build_failed", e)
+        return False

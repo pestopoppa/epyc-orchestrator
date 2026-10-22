@@ -61,6 +61,8 @@ def build_diagnostic(
     cheap_first_attempted: bool = False,
     cheap_first_passed: bool | None = None,
     grammar_enforced: bool = False,
+    turn1_grammar_shape: str = "",
+    turn1_output_probe: dict[str, Any] | None = None,
     parallel_tools_used: bool = False,
     cache_affinity_bonus: float = 0.0,
     # SkillBank retrieval data (None = SkillBank not loaded, 0 = loaded but no hits)
@@ -140,6 +142,8 @@ def build_diagnostic(
         "cheap_first_attempted": cheap_first_attempted,
         "cheap_first_passed": cheap_first_passed,
         "grammar_enforced": grammar_enforced,
+        "turn1_grammar_shape": turn1_grammar_shape,
+        "turn1_output": turn1_output_probe,
         "parallel_tools_used": parallel_tools_used,
         "cache_affinity_bonus": cache_affinity_bonus,
         # SkillBank retrieval

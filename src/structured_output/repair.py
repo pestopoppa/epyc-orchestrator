@@ -956,6 +956,36 @@ async def parse_with_repair_async(
 # --------------------------------------------------------------------------- complete() adapters
 
 
+def _record_repair_call(url, messages, max_tokens, ts0, status, payload, exc) -> None:
+    """UFH14-LB6.2: ``serving_call.v1`` record for a schema-repair turn (stdlib urllib,
+    bypasses ``LlamaServerBackend``). Never raises."""
+    try:
+        import time as _time
+
+        from src.backends import serving_calls
+
+        p = payload if isinstance(payload, dict) else {}
+        choices = p.get("choices") if isinstance(p.get("choices"), list) else []
+        finish = choices[0].get("finish_reason") if choices and isinstance(choices[0], dict) else None
+        serving_calls.record_http_call(
+            method="structured_repair_chat",
+            role="structured_repair",
+            base_url=url.rsplit("/chat/completions", 1)[0],
+            endpoint="/chat/completions",
+            ts_start=ts0,
+            ts_end=_time.time(),
+            prompt="\n".join(str(m.get("content", "")) for m in messages if isinstance(m, Mapping)),
+            n_tokens=max_tokens,
+            status=status,
+            finish_reason=finish,
+            timings=p.get("timings"),
+            usage=p.get("usage"),
+            exc=exc,
+        )
+    except Exception:
+        pass
+
+
 def http_chat_completer(
     base_url: str,
     *,
@@ -997,8 +1027,22 @@ def http_chat_completer(
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:
-            payload = json.loads(response.read().decode("utf-8", "replace"))
+        import time as _time
+
+        _ts0 = _time.time()
+        _status: int | None = None
+        _payload: Any = None
+        _exc: BaseException | None = None
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_s) as response:
+                _status = getattr(response, "status", None)
+                payload = json.loads(response.read().decode("utf-8", "replace"))
+                _payload = payload
+        except BaseException as e:
+            _exc = e
+            raise
+        finally:
+            _record_repair_call(url, messages, max_tokens, _ts0, _status, _payload, _exc)
         from src.structured_output import parse_events
 
         usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}

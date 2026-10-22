@@ -874,18 +874,32 @@ class WorkerPoolManager:
         if grammar:
             payload["grammar"] = grammar
 
+        _ts_start = time.time()
+        _status: int | None = None
+        _data: Any = None
+        _exc: BaseException | None = None
         try:
             async with self._http_session.post(url, json=payload) as resp:
+                _status = resp.status
                 if resp.status != 200:
                     error_text = await resp.text()
                     raise RuntimeError(f"Worker returned {resp.status}: {error_text}")
 
                 data = await resp.json()
+                _data = data
                 return data.get("content", "")
 
         except aiohttp.ClientError as e:
+            _exc = e
             worker.error_count += 1
             raise RuntimeError(f"HTTP call to {worker.config.name} failed: {e}")
+        except BaseException as e:
+            _exc = e
+            raise
+        finally:
+            _record_worker_completion(
+                worker, url, templated_prompt, max_tokens, _ts_start, _status, _data, _exc
+            )
 
     # =========================================================================
     # Status & Monitoring
@@ -939,6 +953,42 @@ class WorkerPoolManager:
             results[name] = instance._healthy
 
         return results
+
+
+def _record_worker_completion(
+    worker: Any,
+    url: str,
+    prompt: str,
+    max_tokens: int,
+    ts_start: float,
+    status: int | None,
+    data: Any,
+    exc: BaseException | None,
+) -> None:
+    """UFH14-LB6.2: one ``serving_call.v1`` record for a worker-pool ``/completion`` call
+    (the ingest/worker lane bypasses ``LlamaServerBackend``). Never raises."""
+    try:
+        from src.backends import serving_calls
+
+        d = data if isinstance(data, dict) else {}
+        serving_calls.record_http_call(
+            method="worker_pool_completion",
+            role=getattr(getattr(worker, "config", None), "name", None),
+            base_url=url.rsplit("/completion", 1)[0],
+            endpoint="/completion",
+            ts_start=ts_start,
+            ts_end=time.time(),
+            prompt=prompt,
+            n_tokens=max_tokens,
+            status=status,
+            finish_reason=d.get("stop_type"),
+            timings=d.get("timings"),
+            tokens_generated=d.get("tokens_predicted"),
+            prompt_tokens=d.get("tokens_evaluated"),
+            exc=exc,
+        )
+    except Exception:
+        pass
 
 
 # Singleton instance for module-level access
