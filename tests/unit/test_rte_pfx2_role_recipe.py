@@ -104,3 +104,35 @@ def test_belief_capture_failure_is_recorded_not_raised(tmp_path):
     (tmp_path / "probe.json").write_text("{not json")
     st = M.belief_capture(tmp_path, {"window_id": "a", "region_lock_claim": "b", "start_utc": "c", "end_utc": "d"}, "frontdoor", "r")
     assert st["written"] is None and st["error"] and (tmp_path / "belief_status.json").is_file()
+
+
+def test_reasoning_off_added_for_qwen3x_only():
+    q = ["bin", "-m", "/m/Qwen3.6-35B-A3B-Q4_K_M.gguf", "--port", "1"]
+    assert M.apply_reasoning_off(q) == q + ["--reasoning", "off"]
+    assert M.apply_reasoning_off(M.apply_reasoning_off(q)).count("--reasoning") == 1
+    g = ["bin", "-m", "/nonexistent/gemma-4-26B.gguf"]
+    assert M.apply_reasoning_off(g) == g
+
+
+def test_reasoning_off_by_header_arch(tmp_path):
+    f = tmp_path / "x.gguf"; f.write_bytes(b"GGUF\0general.architecture\0qwen35moe\0")
+    assert M.is_qwen3x(str(f))
+
+
+class _Resp:
+    def __init__(self, body): self.b = body
+    def read(self): return self.b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _op(msg):
+    return lambda req, timeout=0: _Resp(__import__("json").dumps({"choices": [{"message": msg}]}).encode())
+
+
+def test_preflight_ok_and_refusals():
+    assert M.first_reply_preflight(1, opener=_op({"content": "OK"}))[0] == 0
+    assert M.first_reply_preflight(1, opener=_op({"content": "OK", "reasoning_content": "hmm"}))[0] == 9
+    assert M.first_reply_preflight(1, opener=_op({"content": "", "reasoning_content": ""}))[0] == 9
+    def boom(req, timeout=0): raise OSError("down")
+    assert M.first_reply_preflight(1, opener=boom)[0] == 8

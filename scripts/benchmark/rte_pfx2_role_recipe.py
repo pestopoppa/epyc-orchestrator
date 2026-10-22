@@ -12,6 +12,9 @@ the drift guards below fail loudly instead of probing a different server silentl
 DECLARED DELTAS from the production argv (nothing else is changed; every one is asserted):
   --port            -> the probe port (default 18971; refused if 8000-8999 or already LISTENing)
   --slot-save-path  -> a private directory (production's kv_slots dir is never touched)
+  --reasoning off   -> ADDED for Qwen3.x models (GGUF name *qwen3*/*qwen-3*, or arch qwen35*/qwen3moe in the GGUF
+                       header), same rule as fillers qwen_thinking_lib.sh; thinking-ON eats capped budgets. A
+                       per-request chat_template_kwargs override still works. Skipped if the argv already has it.
   --host            unchanged (127.0.0.1)
 DECLARED PROBE REQUIREMENTS (the registry must satisfy them, else REFUSED):
   -np >= N (default 4), --cache-ram present (cache_prompt reuse is the thing measured),
@@ -38,6 +41,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -68,6 +72,52 @@ def retarget(argv: list[str], port: int, slot_dir: str) -> list[str]:
     if "--slot-save-path" in out:
         out[out.index("--slot-save-path") + 1] = slot_dir
     return out
+
+
+def is_qwen3x(model_path: str | None) -> bool:
+    """Same rule as qwen_thinking_lib.sh: GGUF basename, else arch string in the first 4096 header bytes."""
+    import re
+    if not model_path:
+        return False
+    base = os.path.basename(model_path).lower()
+    if "qwen3" in base or "qwen-3" in base:
+        return True
+    try:
+        with open(model_path, "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return False
+    return re.search(rb"qwen35[a-z]*|qwen3moe|qwen3[a-z]*", head) is not None
+
+
+def apply_reasoning_off(argv: list[str]) -> list[str]:
+    """Add `--reasoning off` for Qwen3.x (the only delta besides port/slot path); idempotent."""
+    if "--reasoning" in argv or not is_qwen3x(_flag(argv, "-m")):
+        return list(argv)
+    return list(argv) + ["--reasoning", "off"]
+
+
+PREFLIGHT_RC = 9
+
+
+def first_reply_preflight(port: int, timeout: int = 120, opener=None) -> tuple[int, str]:
+    """One 16-token chat request. rc 0 ok; 9 reasoning_content non-empty or content empty; 8 transport/parse."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps({"messages": [{"role": "user", "content": "Reply with OK."}],
+                         "max_tokens": 16, "temperature": 0}).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with (opener or urllib.request.urlopen)(req, timeout=timeout) as r:
+            m = json.loads(r.read())["choices"][0]["message"]
+    except Exception as e:
+        return 8, f"preflight: no usable reply ({type(e).__name__}: {e})"
+    if (m.get("reasoning_content") or "").strip():
+        return PREFLIGHT_RC, "preflight: REFUSE reasoning_content non-empty (thinking is ON)"
+    c = (m.get("content") or "").strip()
+    if not c:
+        return PREFLIGHT_RC, "preflight: REFUSE content empty"
+    return 0, f"preflight: ok content={c[:40]!r}"
 
 
 def check_requirements(argv: list[str], n: int, port: int) -> list[str]:
@@ -111,7 +161,7 @@ def resolve(port: int, n: int) -> dict:
     evict = stack.pre_evict_gib_for_role(stack.NUMA_CONFIG.get(ROLE))
     slot_dir = str(PRIVATE_DIR / "kv_slots")
     return {"role": ROLE, "instance": INSTANCE, "registry_argv": argv,
-            "argv": retarget(argv, port, slot_dir), "numa_prefix": prefix, "env": env,
+            "argv": apply_reasoning_off(retarget(argv, port, slot_dir)), "numa_prefix": prefix, "env": env,
             "pre_evict_gib": evict, "port": port}
 
 
@@ -280,6 +330,12 @@ def do_run(a, plan: dict) -> int:
                 if time.time() - t0 > a.health_timeout:
                     return 6
                 time.sleep(5)
+        pf_rc, pf_msg = first_reply_preflight(a.port)
+        (out / "preflight.txt").write_text(pf_msg + "\n")
+        print(pf_msg)
+        if pf_rc != 0:
+            print("REFUSED: first-reply preflight failed", file=sys.stderr)
+            return pf_rc
         lk = subprocess.run(["bash", str(LINKAGE), plan["argv"][0], str(KERNEL_CPU.parent)],
                             capture_output=True, text=True, env=env)
         (out / "linkage.txt").write_text(lk.stdout + lk.stderr)
@@ -290,6 +346,9 @@ def do_run(a, plan: dict) -> int:
         (out / "RUN_HEADER.json").write_text(json.dumps({
             "schema": "epyc.rte_pfx2.header.v1", "argv": plan["argv"], "numa_prefix": plan["numa_prefix"],
             "registry_argv": plan["registry_argv"], "pid": pid,
+            "argv_delta_vs_registry": {"port": a.port, "slot_save_path": str(PRIVATE_DIR / "kv_slots"),
+                                       "reasoning_off_added": "--reasoning" in plan["argv"] and "--reasoning" not in plan["registry_argv"]},
+            "first_reply_preflight": pf_msg,
             "cache_ram_mib": _flag(plan["argv"], "--cache-ram"), "slot_prompt_similarity": "server default (flag absent)",
             "prefix_sha256": prefix_sha_ok()[1], "n": a.n, "trials": a.trials, "seed": a.seed,
             "binary_mtime": time.ctime(os.path.getmtime(plan["argv"][0])),
