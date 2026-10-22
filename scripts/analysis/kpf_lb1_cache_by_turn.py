@@ -3,7 +3,8 @@
 
 Two read-only sources, each labelled with exactly what it can and cannot key on:
 
-* ``opencode.db`` (live store, ``mode=ro``, LIMITed; run under ``nice -n 19``): per assistant
+* the opencode read-only snapshots (``/mnt/raid0/llm/opencode-db/{epyc,host-daniele}.db``, ``mode=ro``, LIMITed;
+  run under ``nice -n 19``; live stores are refused): per assistant
   step of a local-provider session, ``tokens.input`` (= prompt_n, tokens evaluated this step) and
   ``tokens.cache.read`` (= cache_n). Turn index = the step's ordinal within its session. The
   endpoint is /v1/chat/completions (opencode's local providers speak only that).
@@ -18,12 +19,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import statistics
 import sys
 from collections import defaultdict
+from pathlib import Path
 
-DB = "/home/node/.local/share/opencode/opencode.db"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import opencode_ro  # noqa: E402
+
+DBS = opencode_ro.OPENCODE_RO_DBS     # default: both read-only snapshots
 BUCKETS = [(1, 1), (2, 2), (3, 3), (4, 5), (6, 10), (11, 20), (21, 10**9)]
 
 
@@ -48,10 +52,16 @@ def cell(rows: list[tuple[int, int]]) -> dict:
     }
 
 
-def opencode_table(db: str, providers: list[str], sessions: int, per_session: int) -> dict:
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
-    con.execute("PRAGMA query_only=ON")
+def opencode_table(db: "str | list[str] | None", providers: list[str], sessions: int, per_session: int) -> dict:
+    """Merged over every snapshot in ``db`` (default: epyc + host); ``sessions`` is the per-snapshot limit."""
     out: dict[str, dict[str, list[tuple[int, int]]]] = defaultdict(lambda: defaultdict(list))
+    for _src, path in opencode_ro.resolve_dbs(db):
+        _collect(opencode_ro.open_ro(path), out, providers, sessions, per_session)
+    return {prov: {b: cell(rows) for b, rows in sorted(by.items(), key=lambda kv: int(kv[0].split("-")[0].rstrip("+")))}
+            for prov, by in out.items()}
+
+
+def _collect(con, out, providers: list[str], sessions: int, per_session: int) -> None:
     for prov in providers:
         sess = [r[0] for r in con.execute(
             "SELECT id FROM session WHERE model LIKE ? ORDER BY time_updated DESC LIMIT ?",
@@ -66,8 +76,7 @@ def opencode_table(db: str, providers: list[str], sessions: int, per_session: in
                     continue
                 turn += 1
                 out[prov][bucket(turn)].append((inp, cr))
-    return {prov: {b: cell(rows) for b, rows in sorted(by.items(), key=lambda kv: int(kv[0].split("-")[0].rstrip("+")))}
-            for prov, by in out.items()}
+    con.close()
 
 
 def serving_table(path: str) -> dict:
@@ -83,7 +92,9 @@ def serving_table(path: str) -> dict:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default=DB)
+    ap.add_argument("--db", action="append",
+                    help="opencode READ-ONLY snapshot (repeatable). Default: both snapshots "
+                         f"{', '.join(DBS.values())}. Live stores are refused.")
     ap.add_argument("--serving-calls")
     ap.add_argument("--providers", default="qwen-gpu,qwen-local")
     ap.add_argument("--sessions", type=int, default=300)

@@ -6,8 +6,9 @@ READ-ONLY over conversation stores; never writes to a store. Sources:
 * ``--vault-claude DIR``  Claude Code jsonl (``tool_use`` / ``tool_result``), e.g.
   ``/mnt/raid0/llm/cloud-llm-vault/claude``;
 * ``--vault-codex DIR``   Codex rollout jsonl (``function_call`` / ``function_call_output``);
-* ``--opencode-db FILE``  opencode.db (``mode=ro``, ``PRAGMA query_only``), ``--providers`` filter,
-  sessions and parts LIMITed; run under ``nice -n 19``.
+* ``--opencode-db FILE``  opencode READ-ONLY snapshot (repeatable; ``mode=ro``, ``PRAGMA query_only``; default: BOTH
+  ``/mnt/raid0/llm/opencode-db/{epyc,host-daniele}.db``, live stores refused; ``--no-opencode`` skips),
+  ``--providers`` filter, sessions and parts LIMITed; run under ``nice -n 19``.
 
 Per session the tool-call sequence is read in store order. A call is a REPEAT when its
 (name, canonical-args) equals the immediately preceding call's. For each repeat we record
@@ -27,9 +28,12 @@ import hashlib
 import json
 import os
 import re
-import sqlite3
 import sys
 from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import opencode_ro  # noqa: E402
 
 _VOLATILE = re.compile(r"^(Chunk ID|Wall time|Original token count):.*$", re.M)
 
@@ -150,26 +154,30 @@ def codex_events(path: str) -> list[tuple]:
     return ev
 
 
-def opencode_sessions(db: str, providers: list[str], sessions: int, parts_per_session: int):
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5)
-    con.execute("PRAGMA query_only=ON")
-    for prov in providers:
-        ids = [r[0] for r in con.execute(
-            "SELECT id FROM session WHERE model LIKE ? ORDER BY time_updated DESC LIMIT ?",
-            (f'%"providerID":"{prov}"%', sessions))]
-        for sid in ids:
-            ev: list[tuple] = []
-            for (t, tool, inp, out, status) in con.execute(
-                "SELECT json_extract(p.data,'$.type'), json_extract(p.data,'$.tool'), "
-                "json_extract(p.data,'$.state.input'), json_extract(p.data,'$.state.output'), "
-                "json_extract(p.data,'$.state.status') FROM part p JOIN message m ON m.id=p.message_id "
-                "WHERE p.session_id=? AND json_extract(p.data,'$.type') IN ('tool','text') "
-                "ORDER BY m.time_created, p.id LIMIT ?", (sid, parts_per_session)):
-                if t == "tool":
-                    ev.append(("call", tool, _args_key(inp), _h(out) if status == "completed" else None))
-                elif t == "text":
-                    ev.append(("text",))
-            yield prov, ev
+def opencode_sessions(db: "str | list[str] | None", providers: list[str], sessions: int, parts_per_session: int):
+    """Yield (provider, events) over every snapshot in ``db`` (default: epyc + host); ``sessions`` is per snapshot."""
+    for _src, path in opencode_ro.resolve_dbs(db):
+        con = opencode_ro.open_ro(path)
+        try:
+            for prov in providers:
+                ids = [r[0] for r in con.execute(
+                    "SELECT id FROM session WHERE model LIKE ? ORDER BY time_updated DESC LIMIT ?",
+                    (f'%"providerID":"{prov}"%', sessions))]
+                for sid in ids:
+                    ev: list[tuple] = []
+                    for (t, tool, inp, out, status) in con.execute(
+                        "SELECT json_extract(p.data,'$.type'), json_extract(p.data,'$.tool'), "
+                        "json_extract(p.data,'$.state.input'), json_extract(p.data,'$.state.output'), "
+                        "json_extract(p.data,'$.state.status') FROM part p JOIN message m ON m.id=p.message_id "
+                        "WHERE p.session_id=? AND json_extract(p.data,'$.type') IN ('tool','text') "
+                        "ORDER BY m.time_created, p.id LIMIT ?", (sid, parts_per_session)):
+                        if t == "tool":
+                            ev.append(("call", tool, _args_key(inp), _h(out) if status == "completed" else None))
+                        elif t == "text":
+                            ev.append(("text",))
+                    yield prov, ev
+        finally:
+            con.close()
 
 
 def walk(root: str, max_files: int):
@@ -194,7 +202,9 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--vault-claude")
     ap.add_argument("--vault-codex")
-    ap.add_argument("--opencode-db")
+    ap.add_argument("--opencode-db", action="append",
+                    help="opencode READ-ONLY snapshot (repeatable); default both /mnt/raid0/llm/opencode-db/*.db")
+    ap.add_argument("--no-opencode", action="store_true", help="skip the opencode snapshots")
     ap.add_argument("--providers", default="qwen-gpu,qwen-local,deepseek")
     ap.add_argument("--keep-polling", action="store_true", help="do not drop POLLING_TOOLS")
     ap.add_argument("--max-files", type=int, default=300)
@@ -215,7 +225,7 @@ def main(argv: list[str]) -> int:
         for f in fl:
             c.update(analyse_sequence(codex_events(f), ex))
         res["vault_codex"] = {"files": len(fl), **report(c)}
-    if a.opencode_db:
+    if not a.no_opencode:
         by: dict[str, Counter] = {}
         ns: Counter = Counter()
         for prov, ev in opencode_sessions(a.opencode_db, a.providers.split(","), a.sessions, a.parts_per_session):
