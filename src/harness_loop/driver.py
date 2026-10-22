@@ -296,8 +296,18 @@ class SiblingLoopDriver:
 
     def final_test(self, arm: ArmSpec) -> ArmResult:
         """Item 3: the held-out test split is evaluated once, for the reported claim."""
+        return self.final_test_paired(arm)[0]
+
+    def final_test_paired(self, arm: ArmSpec, *references: ArmSpec) -> tuple[ArmResult, ...]:
+        """Item 3, paired: the committed arm and its references (e.g. the unmodified control) are
+        evaluated on the test split in the SAME single touch, so a paired test claim exists.
+        Results come back in argument order; any later touch is refused."""
         if self.journal.ledger_events(TEST_EVENT):
             raise ResultRefused("item 3: the test split was already touched")
+        arms = (arm, *references)
+        for a in arms:
+            self._check_arm(a)
         self.journal.append_ledger_event({"type": TEST_EVENT, "arm_id": arm.arm_id,
+                                          "arm_ids": [a.arm_id for a in arms],
                                           "split": self.design.test.split_id})
-        return self._evaluate(arm, self.design.test)
+        return tuple(self._evaluate(a, self.design.test) for a in arms)

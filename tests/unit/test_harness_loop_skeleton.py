@@ -508,3 +508,44 @@ def test_driver_refuses_outcome_named_trace_events(tmp_path):
     with pytest.raises(TripwireTripped):
         drv.run_cycle(view, _spec(1, INCUMBENT, drv.design.train))
     assert prop.views == []
+
+
+def test_paired_final_test_is_one_touch_for_all_arms(tmp_path):
+    drv, _, _, j = _driver(tmp_path, [])
+    spec = _spec(1, INCUMBENT, drv.design.train)
+    committed, control = drv.final_test_paired(spec.incumbent, spec.incumbent)
+    assert committed.split_id == control.split_id == "TEST"
+    from src.harness_loop.driver import TEST_EVENT
+
+    (event,) = j.ledger_events(TEST_EVENT)
+    assert len(event["arm_ids"]) == 2
+    with pytest.raises(ResultRefused):
+        drv.final_test(spec.incumbent)
+
+
+def test_paired_win_share_is_the_exact_sign_test():
+    from src.harness_loop.interfaces import PairedWinShare, sign_test_p
+
+    def arm(outcomes):
+        return ArmResult("a", "V", "pass", None, "fraction", "higher_better", len(outcomes),
+                         len(outcomes), item_outcomes=outcomes)
+
+    # 84 discordant pairs at alpha 0.00625: 54 wins is the smallest significant count.
+    assert sign_test_p(54, 84) <= 0.00625 < sign_test_p(53, 84)
+    rule = PairedWinShare(alpha=0.00625, min_win_share=54 / 84)
+
+    def pair(wins, losses, ties=300):
+        inc = {f"w{i}": False for i in range(wins)} | {f"l{i}": True for i in range(losses)}
+        cand = {f"w{i}": True for i in range(wins)} | {f"l{i}": False for i in range(losses)}
+        tied = {f"t{i}": True for i in range(ties)}
+        return arm(inc | tied), arm(cand | tied)
+
+    inc, cand = pair(54, 30)
+    assert rule.decide(inc, cand).keep
+    assert not rule.decide(*pair(53, 31)).keep  # same D = 84, one win short
+    inc = inc.item_outcomes
+    cand = cand.item_outcomes
+    # Ties go to the incumbent; unscored items are excluded, not counted as losses.
+    assert not rule.decide(arm(inc), arm(inc)).keep
+    assert rule.decide(arm(inc), arm(dict(cand, t0=None))).keep
+    assert rule.decide(arm({}), arm({})).reason == "no_paired_items"

@@ -269,3 +269,13 @@ def test_pilot_and_local_editor_cite_the_same_ported_source():
 
     assert ff.EDITOR_PROMPT_SOURCE_SHA256 == editor.GEPA_SOURCE_PROMPT_SHA256
     assert editor.LOCAL_EDITOR_META_PROMPT.sha256 == editor.LOCAL_EDITOR_META_PROMPT_SHA256
+
+
+def test_declared_decision_rule_is_the_paired_sign_test_at_the_attempt_alpha():
+    from src.harness_loop.interfaces import PairedWinShare, sign_test_p
+
+    assert isinstance(ff.DECISION_RULE, PairedWinShare)
+    assert ff.DECISION_RULE.alpha == ff.ALPHA_PER_ATTEMPT
+    assert ff.DECISION_RULE.min_win_share == ff.MIN_WIN_SHARE
+    k, d = ff.CRITICAL_WINS, ff.EXPECTED_DISCORDANT
+    assert sign_test_p(k, d) <= ff.ALPHA_PER_ATTEMPT < sign_test_p(k - 1, d)

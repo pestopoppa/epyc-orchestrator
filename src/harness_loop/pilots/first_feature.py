@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from math import comb
 from typing import Any, Callable, Iterable, Mapping
 
-from src.harness_loop.interfaces import SplitRef, splits_disjoint
+from src.harness_loop.interfaces import PairedWinShare, SplitRef, splits_disjoint
 from src.harness_loop.pilot import PilotDesign
 
 DESIGN_DOC = "docs/design/hil6i-pilot-design-first-feature-20261022.md"  # epyc-root
@@ -142,6 +142,10 @@ MIN_WIN_SHARE = CRITICAL_WINS / EXPECTED_DISCORDANT  # 0.643
 DECISION_MARGIN = (2 * CRITICAL_WINS - EXPECTED_DISCORDANT) / PAIRED_N  # 0.057
 #: Above this incumbent validation pass share, n*(1-p) < CRITICAL_WINS: no candidate can pass.
 CEILING_PASS_SHARE = 1.0 - CRITICAL_WINS / PAIRED_N  # 0.871
+#: The declared decision rule (item 17a + item 11): the paired exact sign test at this attempt's
+#: alpha, with the win-share floor from the power statement. Pass it as the driver's
+#: ``decision_rule``; IncumbentWinsTies(DECISION_MARGIN) is exact only at D == EXPECTED_DISCORDANT.
+DECISION_RULE = PairedWinShare(alpha=ALPHA_PER_ATTEMPT, min_win_share=MIN_WIN_SHARE)
 
 REGRESSION_SET_ID = "hil6i-arch-deleg-regress-v1"
 TOKEN_SEATS = frozenset({"proposer", "judge", "solver", "solver_child"})
@@ -247,18 +251,20 @@ NOTES: Mapping[str, str] = {
         f"One consuming role ({CONSUMER_ROLE}, {CONSUMER_MODEL}); n=1 feature, so the n+2 set is "
         "{all-on (delegation on, arm prompt), all-off (allow_delegation=False)}, leave-one-out "
         "being all-off. No verdict transfers to another role or model. Not a reviewer mechanism."),
-    # gaps in the skeleton, recorded rather than patched (pilot.py / driver.py are not edited)
+    # gaps in the skeleton found while designing (G2 and G3 closed on 2026-10-22 by the HIL-6
+    # seam builder: SiblingLoopDriver.final_test_paired and interfaces.PairedWinShare)
     "gap.arrival_per_cycle": (
         "PilotDesign has one arrival split and run_cycle refuses a tune split overlapping it, so P1's "
         "cycle-2 re-tune on T1+T2 needs a second design (train=T1+T2, arrival=T3) on the same "
         "journal; see first_feature_design(cycle=2)."),
     "gap.paired_final_test": (
-        "SiblingLoopDriver.final_test evaluates one arm and then refuses; a paired test claim needs "
-        "the committed arm and the unmodified control in the same single touch."),
+        "Closed: SiblingLoopDriver.final_test_paired(committed, unmodified_control) evaluates both "
+        "arms on the test split in the same single touch (final_test alone is one arm)."),
     "gap.decision_rule": (
-        "No paired sign-test DecisionRule and no PilotDesign.decision_rule field: IncumbentWinsTies"
-        f"(margin={DECISION_MARGIN:.4f}) equals the critical count only at the expected discordant "
-        "count."),
+        "Closed: interfaces.PairedWinShare is the paired exact sign test; DECISION_RULE pins it at "
+        f"alpha {ALPHA_PER_ATTEMPT:g}, min win share {MIN_WIN_SHARE:.3f}. IncumbentWinsTies"
+        f"(margin={DECISION_MARGIN:.4f}) equals it only at the expected discordant count. "
+        "PilotDesign still has no decision_rule field (the driver takes the rule)."),
     "gap.design_fields": (
         "PilotDesign has no fields for the split manifest digest, the target sha256, the editor "
         "meta-prompt pin, egress clearance or the per-cycle arrival split; they live in notes."),

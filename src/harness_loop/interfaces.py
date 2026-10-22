@@ -303,6 +303,50 @@ class DecisionRule(Protocol):
     def decide(self, incumbent: ArmResult, candidate: ArmResult) -> Decision: ...
 
 
+def sign_test_p(wins: int, discordant: int) -> float:
+    """One-sided exact sign test: P(X >= wins | Binomial(discordant, 1/2)); 1.0 when no pairs."""
+    if discordant <= 0:
+        return 1.0
+    from math import comb
+
+    return sum(comb(discordant, k) for k in range(max(wins, 0), discordant + 1)) / 2**discordant
+
+
+@dataclass(frozen=True)
+class PairedWinShare:
+    """Paired decision over per-item outcomes: an exact one-sided sign test on discordant items.
+
+    Only items BOTH arms scored count (``None`` outcomes are excluded). A win is an item the
+    candidate passes and the incumbent fails; a loss is the reverse. The candidate is kept only when
+    the sign-test tail ``P(X >= wins | Bin(D, 1/2)) <= alpha`` AND ``wins / D >= min_win_share``;
+    anything else, ties included, goes to the incumbent (item 17a). ``alpha`` is the attempt's
+    reserved share of the ledger budget (item 21). Not a protocol: decisions are observations.
+    """
+
+    alpha: float
+    min_win_share: float = 0.5
+
+    def decide(self, incumbent: ArmResult, candidate: ArmResult) -> Decision:
+        if incumbent.metric != candidate.metric or incumbent.direction != candidate.direction:
+            return Decision(False, "metric_mismatch")
+        paired = [
+            (bool(incumbent.item_outcomes[q]), bool(candidate.item_outcomes[q]))
+            for q in sorted(set(incumbent.item_outcomes) & set(candidate.item_outcomes))
+            if incumbent.item_outcomes[q] is not None and candidate.item_outcomes[q] is not None
+        ]
+        if not paired:
+            return Decision(False, "no_paired_items")
+        wins = sum(1 for inc, cand in paired if cand and not inc)
+        losses = sum(1 for inc, cand in paired if inc and not cand)
+        discordant = wins + losses
+        p = sign_test_p(wins, discordant)
+        share = wins / discordant if discordant else 0.0
+        detail = f"paired_wins:{wins}/{discordant} n:{len(paired)} p:{p:.3g} alpha:{self.alpha:g}"
+        if discordant and p <= self.alpha and share >= self.min_win_share:
+            return Decision(True, f"candidate_better:{detail}")
+        return Decision(False, f"incumbent_holds:{detail}")
+
+
 @dataclass(frozen=True)
 class IncumbentWinsTies:
     """Item 17a: the incumbent carries the burden of proof; ties (and anything inside the declared
