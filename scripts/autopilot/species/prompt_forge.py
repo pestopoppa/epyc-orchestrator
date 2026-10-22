@@ -185,6 +185,10 @@ from src.autopilot_core.mutation_guards import (  # noqa: E402,F401 - re-exporte
     harness_content as _guards_harness_content,
 )
 
+# HIL-6j (2026-10-22): repo-relative targets a sibling measurement asked PromptForge to leave
+# alone (default: none; read on every call). See ``src.autopilot_core.mutation_exclusions``.
+from src.autopilot_core import mutation_exclusions as _mutation_exclusions  # noqa: E402
+
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -584,10 +588,40 @@ class PromptForge:
         )
 
     def list_prompts(self) -> list[str]:
-        """List all hot-swappable prompt files (flat + roles/ subdirectory)."""
+        """List all hot-swappable prompt files (flat + roles/ subdirectory).
+
+        HIL-6j: a prompt listed in the AutoPilot mutation-exclusions file is left out, so the
+        controller is never offered it. With no exclusions the listing is unchanged.
+        """
         if not self.prompts_dir.exists():
             return []
-        return sorted(f.name for f in self.prompts_dir.rglob("*.md"))
+        files = self.prompts_dir.rglob("*.md")
+        excluded = _mutation_exclusions.load()
+        if excluded:
+            files = [
+                f for f in files
+                if _mutation_exclusions.excluded_reason(self._exclusion_target(f), excluded) is None
+            ]
+        return sorted(f.name for f in files)
+
+    def _exclusion_target(self, path: Path) -> str:
+        """Repo-relative spelling (``orchestration/prompts/<rel>``) of a prompt file."""
+        try:
+            rel = path.resolve().relative_to(self.prompts_dir.resolve())
+        except ValueError:
+            rel = Path(path.name)
+        return "orchestration/prompts/" + rel.as_posix()
+
+    def _mutation_exclusion_reason(self, filename: str) -> str | None:
+        """HIL-6j: ``mutation_exclusion:<target>`` when ``filename`` may not be mutated now."""
+        excluded = _mutation_exclusions.load()
+        if not excluded:
+            return None
+        try:
+            path = self._resolve_prompt_path(filename)
+        except FileNotFoundError:
+            path = self.prompts_dir / filename
+        return _mutation_exclusions.excluded_reason(self._exclusion_target(path), excluded)
 
     def _resolve_prompt_path(self, filename: str) -> Path:
         """Resolve prompt file, searching multiple locations."""
@@ -653,6 +687,21 @@ class PromptForge:
         """
         if mutation_type not in MUTATION_TYPES:
             raise ValueError(f"Unknown mutation type: {mutation_type}")
+
+        # HIL-6j: an excluded target gets no proposal (no CLI call, no GEPA run).
+        exclusion = self._mutation_exclusion_reason(target_file)
+        if exclusion is not None:
+            original = self.read_prompt(target_file)
+            log.warning("Prompt mutation refused (%s): %s", target_file, exclusion)
+            return PromptMutation(
+                file=target_file,
+                mutation_type=mutation_type,
+                description=f"{exclusion}: no mutation proposed",
+                original_content=original,
+                mutated_content=original,
+                safety_valid=False,
+                safety_reason=exclusion,
+            )
 
         # AP-19: GEPA evolutionary optimization
         if mutation_type == "gepa":
@@ -837,6 +886,9 @@ class PromptForge:
         integrity_reason = _prompt_integrity_reason(mutation.file, mutation.mutated_content)
         if integrity_reason:
             raise ValueError(f"prompt integrity rejected mutation: {integrity_reason}")
+        exclusion = self._mutation_exclusion_reason(mutation.file)
+        if exclusion is not None:
+            raise ValueError(f"prompt mutation refused: {exclusion}")
 
         # Git snapshot before
         git_before = self._capture_git_state()
@@ -1163,6 +1215,9 @@ class PromptForge:
         integrity_reason = _prompt_integrity_reason(mutation.file, mutation.mutated_content)
         if integrity_reason:
             raise ValueError(f"prompt integrity rejected isolated mutation: {integrity_reason}")
+        exclusion = self._mutation_exclusion_reason(mutation.file)
+        if exclusion is not None:
+            raise ValueError(f"isolated prompt mutation refused: {exclusion}")
 
         rel_path = f"orchestration/prompts/{mutation.file}"
         ctx.apply_file(rel_path, mutation.mutated_content)

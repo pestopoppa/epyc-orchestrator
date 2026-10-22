@@ -481,9 +481,13 @@ def test_finalize_rows_are_accepted_by_the_root_carrier(tmp_path):
 
 
 def test_package_has_no_entrypoint_and_no_importer():
+    # HIL-6j (operator lift 2026-10-22, pilot only): pilot_run.py is the ONE entrypoint, and it
+    # refuses every design but the HIL-6i pilot (tests/unit/test_harness_loop_pilot_run.py).
     pkg = ROOT / "src" / "harness_loop"
     assert not (pkg / "__main__.py").exists()
     for f in pkg.glob("*.py"):
+        if f.name == "pilot_run.py":
+            continue
         assert not re.search(r"__name__\s*==\s*[\"']__main__", f.read_text()), f
     pat = re.compile(r"\b(?:from|import)\s+src\.harness_loop\b|src/harness_loop")
     importers = []
