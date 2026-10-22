@@ -119,7 +119,7 @@ def test_run_detects_a_persona_after_trunk_regression(waves, tmp_path):
     srv, _ = _fake_server(ans)
     s = K.run(waves, K.HttpClient(f"http://127.0.0.1:{srv.server_port}"), tmp_path, reps=3, concurrency=3)
     srv.shutdown()
-    assert s["verdict"] == "CHANGED" and s["regress"] > s["ctrl_regress"] == 0 and s["improve"] == 0
+    assert s["verdict"] == "CHANGED" and s["reorder_decision"] == "KEEP_OFF" and s["regress"] > s["ctrl_regress"] == 0 and s["improve"] == 0
 
 
 def test_stopfile_and_deadline_stop_between_waves(waves, tmp_path):
@@ -146,16 +146,29 @@ def _table(n, a, b, a2):
 APPLIED = {"applied": True}
 
 
-@pytest.mark.parametrize("a,b,a2,verdict", [
-    (lambda i: True, lambda i: True, lambda i: True, "UNCHANGED"),
-    (lambda i: True, lambda i: i != 0, lambda i: i != 1, "WITHIN_NOISE"),
-    (lambda i: True, lambda i: i > 2, lambda i: True, "CHANGED"),
-    (lambda i: i % 4 != 3, lambda i: i % 4 != 0, lambda i: i % 4 != 3, "INCONCLUSIVE"),
-    (lambda i: i % 4 == 0, lambda i: True, lambda i: i % 4 == 0, "INVALID"),   # baseline pass 25% < 60%
+@pytest.mark.parametrize("a,b,a2,verdict,decision", [
+    (lambda i: True, lambda i: True, lambda i: True, "UNCHANGED", "KEEP_ON_ELIGIBLE"),
+    # one B regression, but A vs A2 also differ by one case: the drop equals the spread
+    (lambda i: True, lambda i: i != 0, lambda i: i != 1, "WITHIN_SPREAD", "KEEP_ON_ELIGIBLE"),
+    # three regressions, control identical: drop 3/60 > spread 0
+    (lambda i: True, lambda i: i > 2, lambda i: True, "CHANGED", "KEEP_OFF"),
+    # flips both ways, net drop 0: rate unchanged
+    (lambda i: i % 4 != 3, lambda i: i % 4 != 0, lambda i: i % 4 != 3, "WITHIN_SPREAD", "KEEP_ON_ELIGIBLE"),
+    (lambda i: i % 4 == 0, lambda i: True, lambda i: i % 4 == 0, "INVALID", None),   # baseline pass 25% < 60%
 ])
-def test_decide_table(a, b, a2, verdict):
+def test_decide_table(a, b, a2, verdict, decision):
     d = K.decide(_table(60, a, b, a2), APPLIED, 6, 6)
-    assert d["verdict"] == verdict, d
+    assert d["verdict"] == verdict and d["reorder_decision"] == decision, d
+
+
+def test_b_errors_are_regressions_not_a_void():
+    ok = lambda i: True  # noqa: E731
+    cs = _table(60, ok, ok, ok)
+    for c in cs:
+        if c["arm"] == "B":
+            c["pass"], c["error"] = False, "timeout"
+    d = K.decide(cs, APPLIED, 6, 6)
+    assert d["verdict"] == "CHANGED" and d["B_transport_errors"] == 60 and d["reorder_decision"] == "KEEP_OFF"
 
 
 def test_decide_invalid_gates():
@@ -164,8 +177,9 @@ def test_decide_invalid_gates():
     assert K.decide(_table(10, ok, ok, ok), APPLIED, 6, 6)["verdict"] == "INVALID"       # < MIN_CASES
     assert K.decide(_table(60, ok, ok, ok), APPLIED, 1, 6)["verdict"] == "INVALID"       # persona share
     cs = _table(60, ok, ok, ok)
-    for c in cs[:30]:
-        c["error"] = "boom"
+    for c in cs:
+        if c["arm"] == "A":
+            c["error"] = "boom"
     assert K.decide(cs, APPLIED, 6, 6)["verdict"] == "INVALID"
 
 
@@ -200,3 +214,18 @@ def test_cli_dry_run_and_mock(tmp_path):
     assert r.returncode == 0 and '"treatment_applied": true' in r.stdout
     r = _cli(["--out-dir", str(tmp_path / "m"), "--mock-llm", "--n-waves", "3", "--reps", "3"])
     assert r.returncode == 0 and "UNCHANGED" in r.stdout and (tmp_path / "m" / "DONE").exists()
+
+
+def test_manifest_frozen_and_mismatch_aborts(waves, tmp_path):
+    ok = lambda p: {"answer": "", "finish": None, "elapsed_s": 0, "prompt_n": 0, "cache_n": 0}  # noqa: E731
+    K.run(waves, ok, tmp_path, reps=1, concurrency=1, deadline=0.0, seed=261)
+    m = json.loads((tmp_path / "manifest.json").read_text())
+    assert m["n_tasks"] == 18 and len(m["tasks"][0]["sha256_A"]) == 64 and m["tasks"][0]["sha256_A"] != m["tasks"][0]["sha256_B"]
+    K.run(waves, ok, tmp_path, reps=1, concurrency=1, deadline=0.0, seed=261)      # same prompts: resumes fine
+    other = K.build_waves(n_waves=3, n_steps=6, seed=262)
+    with pytest.raises(K.ManifestMismatch):
+        K.run(other, ok, tmp_path, reps=1, concurrency=1, deadline=0.0, seed=262)
+
+
+def test_seed_gives_distinct_waves():
+    assert K.build_waves(2, 6, 261) != K.build_waves(2, 6, 262)

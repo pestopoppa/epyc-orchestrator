@@ -19,27 +19,36 @@ port this process proves it owns.  Never starts a server, never touches the prod
 Not measured here (needs the P1 server and the stack, i.e. the rest of KPF-26): trunk-prefilled-once timings,
 child TTFT, peak unique cells, admission waits.
 
-PREDECLARED DECISION RULE (frozen before any measurement; ``summary.json`` repeats it verbatim)
-  unit      a case = (wave, step, rep); each case is graded pass/fail by a deterministic regex checker.
+PREDECLARED DECISION RULE (frozen before any measurement; ``summary.json`` repeats it verbatim).  Source: handoff
+kv-prefix-fork-and-paged-attention.md KPF-26.1: "predeclared rule = outcome rate within the flag-off rerun-to-rerun
+spread, any regression keeps the reorder off".  Reading, fixed here: a REGRESSION is a pass-rate drop of B below A that
+exceeds the A-vs-A2 spread; any regression keeps the reorder OFF.
+  unit      a case = (wave, step, rep); graded pass/fail by a deterministic regex checker.  EVERY case is counted:
+            a transport error or timeout is a fail, never dropped.
+  frozen    ``manifest.json`` (task ids + SHA-256 of the exact prompt of each arm) is written before the first request;
+            a resume whose prompts differ aborts (rc 8).  Waves come from a fixed seed, none was used to pick the order.
   gates     INVALID (no verdict) unless ALL hold:
               * treatment applied: in every wave with >= 2 siblings the byte-stable arm's sibling prompts share a
-                strictly longer common prefix than the legacy arm's, AND at least one persona-bearing step has its
-                persona text after the trunk in B and before it in A;
+                strictly longer common prefix than the legacy arm's, AND a persona-bearing step has its persona text
+                after the trunk in B and before it in A;
               * >= MIN_CASES cases (40) and >= half the steps carry a persona;
-              * baseline (arm A) pass rate >= MIN_BASELINE_PASS (0.60), so there is something to regress;
-              * every request returned (transport errors are reported, count as fail, and > 5% voids the run).
-  metric    regress = #cases with pass(A) and not pass(B);  improve = #cases with not pass(A) and pass(B);
-            ctrl = #cases with pass(A) and not pass(A2) (the control's regressions, the noise floor).
-  min_effect  EXACT: zero pass->fail flips beyond the control's.  No percentage tolerance exists.
-  verdict   UNCHANGED         regress == 0
-            WITHIN_NOISE      regress > 0, regress <= ctrl
-            CHANGED           regress > ctrl and regress > improve   (one-sided sign-test p reported, not used)
-            INCONCLUSIVE      regress > ctrl but regress <= improve  (flips go both ways: reported, no claim)
-  class     correctness: it compares outcomes, not times; latency is recorded but never gates.
+              * baseline (A) pass rate >= MIN_BASELINE_PASS (0.60), so there is something to regress;
+              * transport errors in the BASELINE arms A and A2 <= 5% (errors in B are regressions, not a void).
+  metric    rate(X) = pass rate of arm X.  spread = |rate(A) - rate(A2)| (the flag-off rerun-to-rerun spread).
+            drop = rate(A) - rate(B).  Diagnostics: regress/improve = pass->fail / fail->pass flips A->B, ctrl = A->A2
+            pass->fail flips, one-sided sign-test p.
+  min_effect  EXACT identity is the headline (UNCHANGED = zero flips A->B); the tolerance is the measured spread and
+            nothing else.  No percentage tolerance exists.
+  verdict   UNCHANGED      regress == 0
+            WITHIN_SPREAD  regress > 0 and drop <= spread
+            CHANGED        drop > spread   -> reorder_decision KEEP_OFF
+            INVALID        a gate failed   -> no decision
+            reorder_decision: KEEP_ON_ELIGIBLE for UNCHANGED / WITHIN_SPREAD in EVERY window (the handoff needs two).
+  class     correctness: outcomes are compared, latency is recorded but never gates.
 
 Modes: ``--mock-llm`` scripted answers (unit tests, plumbing, ``--dry-run``); live needs WINDOW_CONFIRMED=1,
 ``--server-url`` on a free private loopback port and ``--server-pid`` owning it.  Resumable: ``cases.jsonl`` is
-append-only and a (pass, arm, wave, step) already written is skipped.  ``DONE`` is written last.
+append-only and a (rep, arm, wave, step) already written is skipped.  ``DONE`` is written last.
 """
 from __future__ import annotations
 
@@ -67,11 +76,10 @@ ARMS = ("A", "B", "A2")                      # A legacy, B byte-stable, A2 legac
 FLAG_ENVS = ("ORCHESTRATOR_PREFIX_INDEX", "ORCHESTRATOR_PREFIX_INDEX_FORK")
 PRODUCTION_PORTS = set(range(8000, 8200))
 RULE_TEXT = (
-    "regress=#cases pass(A)&!pass(B); improve=#!pass(A)&pass(B); ctrl=#pass(A)&!pass(A2). "
-    "min_effect EXACT: zero pass->fail flips beyond the control's. UNCHANGED regress==0; WITHIN_NOISE "
-    "0<regress<=ctrl; CHANGED regress>ctrl and regress>improve; INCONCLUSIVE regress>ctrl and regress<=improve. "
-    f"Gates: treatment applied, cases>={MIN_CASES}, persona share>=0.5, baseline pass>={MIN_BASELINE_PASS}, "
-    f"transport errors<={MAX_TRANSPORT_ERR:.0%}.")
+    "spread=|rate(A)-rate(A2)|; drop=rate(A)-rate(B). min_effect EXACT identity headline, tolerance = measured spread only. "
+    "UNCHANGED regress==0 (zero pass->fail flips A->B); WITHIN_SPREAD regress>0 and drop<=spread; CHANGED drop>spread (reorder KEEP_OFF); "
+    f"INVALID if a gate fails: treatment applied, cases>={MIN_CASES}, persona share>=0.5, baseline pass>={MIN_BASELINE_PASS}, "
+    f"baseline-arm transport errors<={MAX_TRANSPORT_ERR:.0%}. Every case counted, errors are fails. Two windows needed for KEEP_ON_ELIGIBLE.")
 
 PERSONAS = ("security_auditor", "code_reviewer", "test_designer", "data_analyst", "technical_writer",
             "performance_optimizer", None)    # None: persona-less steps are in the set too
@@ -248,49 +256,85 @@ def grade(step: dict, answer: str) -> bool:
 
 def decide(cases: list[dict], treatment: dict, n_steps_persona: int, n_steps: int) -> dict:
     """Pure function of the case table.  See the module docstring for the frozen rule."""
-    by = {}
+    by: dict = {}
     for c in cases:
         by.setdefault((c["rep"], c["wave"], c["step"]), {})[c["arm"]] = c
     keys = [k for k, v in by.items() if all(a in v for a in ARMS)]
     n = len(keys)
-    p = lambda k, a: bool(by[k][a]["pass"])  # noqa: E731
-    errs = sum(1 for c in cases if c.get("error"))
+
+    def p(k, a):
+        return bool(by[k][a]["pass"])
+
+    base_cases = [c for c in cases if c["arm"] in ("A", "A2")]
+    base_errs = sum(1 for c in base_cases if c.get("error"))
+    b_errs = sum(1 for c in cases if c["arm"] == "B" and c.get("error"))
     regress = sum(1 for k in keys if p(k, "A") and not p(k, "B"))
     improve = sum(1 for k in keys if not p(k, "A") and p(k, "B"))
     ctrl = sum(1 for k in keys if p(k, "A") and not p(k, "A2"))
     ctrl_improve = sum(1 for k in keys if not p(k, "A") and p(k, "A2"))
-    base = (sum(1 for k in keys if p(k, "A")) / n) if n else 0.0
+    rate = {a: (sum(1 for k in keys if p(k, a)) / n) if n else None for a in ARMS}
+    spread = abs(rate["A"] - rate["A2"]) if n else None
+    drop = (rate["A"] - rate["B"]) if n else None
+    base = rate["A"] or 0.0
     same_text = (sum(1 for k in keys if by[k]["A"]["answer"].strip() == by[k]["B"]["answer"].strip()) / n) if n else 0.0
     ctrl_same_text = (sum(1 for k in keys if by[k]["A"]["answer"].strip() == by[k]["A2"]["answer"].strip()) / n) if n else 0.0
     gates = {"treatment_applied": bool(treatment.get("applied")), "cases_ge_min": n >= MIN_CASES,
              "persona_share_ge_half": n_steps > 0 and n_steps_persona * 2 >= n_steps,
              "baseline_pass_ge_min": base >= MIN_BASELINE_PASS,
-             "transport_errors_le_max": (errs / max(1, len(cases))) <= MAX_TRANSPORT_ERR}
+             "baseline_transport_errors_le_max": (base_errs / max(1, len(base_cases))) <= MAX_TRANSPORT_ERR}
+    eps = 1e-12
     if not all(gates.values()):
         verdict = "INVALID"
     elif regress == 0:
         verdict = "UNCHANGED"
-    elif regress <= ctrl:
-        verdict = "WITHIN_NOISE"
-    elif regress > improve:
-        verdict = "CHANGED"
+    elif drop <= spread + eps:
+        verdict = "WITHIN_SPREAD"
     else:
-        verdict = "INCONCLUSIVE"
-    # one-sided sign test on the discordant A/B pairs (reported only)
+        verdict = "CHANGED"
+    decision = {"UNCHANGED": "KEEP_ON_ELIGIBLE", "WITHIN_SPREAD": "KEEP_ON_ELIGIBLE", "CHANGED": "KEEP_OFF"}.get(verdict)
     from math import comb
     d = regress + improve
     sign_p = sum(comb(d, i) for i in range(regress, d + 1)) / (2 ** d) if d else 1.0
-    return {"verdict": verdict, "gates": gates, "n_cases": n, "regress": regress, "improve": improve, "ctrl_regress": ctrl,
-            "ctrl_improve": ctrl_improve, "baseline_pass_rate": round(base, 4),
-            "pass_rate": {a: round(sum(1 for k in keys if p(k, a)) / n, 4) if n else None for a in ARMS},
+    r4 = lambda x: None if x is None else round(x, 4)  # noqa: E731
+    return {"verdict": verdict, "reorder_decision": decision, "gates": gates, "n_cases": n, "regress": regress,
+            "improve": improve, "ctrl_regress": ctrl, "ctrl_improve": ctrl_improve, "baseline_pass_rate": r4(base),
+            "pass_rate": {a: r4(v) for a, v in rate.items()}, "spread": r4(spread), "drop": r4(drop),
             "text_identical_A_B": round(same_text, 4), "text_identical_A_A2_control": round(ctrl_same_text, 4),
-            "transport_errors": errs, "sign_test_p_regress": round(sign_p, 6), "rule": RULE_TEXT}
+            "baseline_transport_errors": base_errs, "B_transport_errors": b_errs,
+            "incomplete_cases": len(cases) - 3 * n if cases else 0,
+            "sign_test_p_regress": round(sign_p, 6), "rule": RULE_TEXT}
+
+
+def freeze_manifest(waves: list[dict], out: Path, seed: int | None) -> dict:
+    """Task ids + prompt digests, written once before the first request; a resume must reproduce it exactly."""
+    import hashlib
+    tasks = []
+    for w in waves:
+        for s in w["steps"]:
+            pa, pb = render(w, s, "A")[0], render(w, s, "B")[0]
+            tasks.append({"wave": w["wave_id"], "step": s["id"], "persona": s.get("persona"), "expect": s["expect"],
+                          "sha256_A": hashlib.sha256(pa.encode()).hexdigest(), "sha256_B": hashlib.sha256(pb.encode()).hexdigest()})
+    digest = hashlib.sha256(json.dumps(tasks, sort_keys=True).encode()).hexdigest()
+    m = {"seed": seed, "n_tasks": len(tasks), "digest": digest, "tasks": tasks}
+    path = out / "manifest.json"
+    if path.exists():
+        old = json.loads(path.read_text())
+        if old.get("digest") != digest:
+            raise ManifestMismatch(f"{path}: frozen digest {old.get('digest')} != current {digest} (prompts changed since the first request)")
+        return old
+    path.write_text(json.dumps(m, indent=1))
+    return m
+
+
+class ManifestMismatch(Exception):
+    pass
 
 
 # ------------------------------------------------------------------------------------------------- the run
 def run(waves: list[dict], client: Callable[[str], dict], out: Path, reps: int, concurrency: int,
-        deadline: float | None = None, stopfile: str | None = None) -> dict:
+        deadline: float | None = None, stopfile: str | None = None, seed: int | None = None) -> dict:
     out.mkdir(parents=True, exist_ok=True)
+    manifest = freeze_manifest(waves, out, seed)
     path = out / "cases.jsonl"
     done = set()
     cases: list[dict] = []
@@ -346,7 +390,7 @@ def run(waves: list[dict], client: Callable[[str], dict], out: Path, reps: int, 
     n_pers = sum(1 for w in waves for s in w["steps"] if s.get("persona"))
     complete = all((r, a, w["wave_id"], s["id"]) in done for r in range(reps) for a in ARMS for w in waves for s in w["steps"])
     summary = decide(cases, treatment, n_pers, n_steps)
-    summary.update({"complete": complete, "stopped": stopped, "reps": reps, "finished_utc": time.strftime("%FT%TZ", time.gmtime())})
+    summary.update({"manifest_digest": manifest["digest"], "seed": seed, "complete": complete, "stopped": stopped, "reps": reps, "finished_utc": time.strftime("%FT%TZ", time.gmtime())})
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     if complete:
         (out / "DONE").write_text(summary["finished_utc"] + "\n")
@@ -360,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--n-waves", type=int, default=8)
     ap.add_argument("--n-steps", type=int, default=6)
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--seed", type=int, default=261, help="wave-generator seed (window 1 = 261, window 2 = 262)")
     ap.add_argument("--concurrency", type=int, default=4, help="sibling requests in flight (match the server -np)")
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--server-url")
@@ -369,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--deadline-epoch", type=float, help="stop starting new waves at this epoch")
     ap.add_argument("--stopfile")
     a = ap.parse_args(argv)
-    waves = json.loads(Path(a.waves).read_text()) if a.waves else build_waves(a.n_waves, a.n_steps)
+    waves = json.loads(Path(a.waves).read_text()) if a.waves else build_waves(a.n_waves, a.n_steps, a.seed)
     out = Path(a.out_dir)
     if a.dry_run:
         out.mkdir(parents=True, exist_ok=True)
@@ -387,8 +432,12 @@ def main(argv: list[str] | None = None) -> int:
             sys.exit("refusing: live mode needs --server-url and --server-pid (a private server this launcher owns)")
         prove_port_ownership(a.server_url, a.server_pid)
         client = HttpClient(a.server_url, a.max_tokens)
-    s = run(waves, client, out, a.reps, a.concurrency, a.deadline_epoch, a.stopfile)
-    print(json.dumps({k: s[k] for k in ("verdict", "n_cases", "regress", "improve", "ctrl_regress", "complete", "stopped")}))
+    try:
+        s = run(waves, client, out, a.reps, a.concurrency, a.deadline_epoch, a.stopfile, None if a.waves else a.seed)
+    except ManifestMismatch as e:
+        print(f"refusing: {e}", file=sys.stderr)
+        return 8
+    print(json.dumps({k: s[k] for k in ("verdict", "reorder_decision", "n_cases", "regress", "improve", "ctrl_regress", "complete", "stopped")}))
     return 0 if s["complete"] and s["verdict"] != "INVALID" else (4 if s["complete"] else 0)
 
 
