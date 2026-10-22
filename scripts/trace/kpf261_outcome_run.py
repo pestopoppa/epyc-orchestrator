@@ -262,9 +262,10 @@ def final_answer(answer: str) -> str:
     """The text after the LAST ``ANSWER:`` marker.  No marker: a short bare reply (<=40 chars, the oracle/legacy form) is
     taken whole; a long reply without the marker has no answer (intermediate numbers in the work must never pass)."""
     a = answer or ""
-    hits = re.findall(r"(?is)\banswer\s*:\s*(.*)", a)
-    if hits:
-        return hits[-1].strip().strip("*`'\" ")
+    parts = re.split(r"(?i)\banswer\s*:", a)
+    if len(parts) > 1:  # text after the LAST marker, first line only (work after an early "answer:" must not leak in)
+        tail = parts[-1].strip()
+        return tail.splitlines()[0].strip().strip("*`'\" ") if tail else ""
     return a.strip() if len(a.strip()) <= 40 else ""
 
 

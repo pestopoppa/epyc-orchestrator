@@ -245,3 +245,12 @@ def test_prompts_ask_for_work_and_marker(waves):
     for w in waves:
         for s in w["steps"]:
             assert "ANSWER:" in s["action"]
+
+
+def test_final_answer_uses_last_marker_first_line_only():
+    # an early "answer:" in the work must not leak the work text (with the expected number) into the graded span
+    reply = "The answer: start with 600 + 64 = 664, then subtract 51.\nANSWER: 613"
+    assert K.final_answer(reply) == "613"
+    assert not K.grade({"expect": r"\b664\b"}, reply)
+    assert K.final_answer("work...\nANSWER: **oak**\nthanks") == "oak"
+    assert K.final_answer("ANSWER:") == ""
