@@ -48,8 +48,8 @@ def main(argv=None) -> int:
         res["traceelephant"] = C.traceelephant_table(a.traceelephant, cfg)
     if a.trail:
         d = Path(a.trail)
-        dirs = {s: d / f"processed_annotations_{s}" for s in ("gaia", "swe_bench") if (d / f"processed_annotations_{s}").is_dir()}
-        res["trail"] = C.trail_tabulate(dirs) if dirs else {"status": "not available: dataset gated (HTTP 401), no HF token on host"}
+        has = any((d / f"processed_annotations_{s}").is_dir() for s in ("gaia", "swe_bench"))
+        res["trail"] = C.trail_table(d, cfg) if has else {"status": "not available: no processed_annotations_* under --trail"}
     if a.kbh:
         sel = json.loads((Path(a.kbh) / "selection.json").read_text())
         res["kernelbench_hard"] = C.kbh_firing([Path(a.kbh) / f for f in sel], cfg)

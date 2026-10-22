@@ -11,7 +11,7 @@ from pathlib import Path
 from src.trace.l2.detectors import (
     DetectorConfig, baseline_first_error_step, baseline_last_step, detect, first_visible_deviation,
 )
-from src.trace.l2.loaders import load_claude_session, load_whowhen_pro
+from src.trace.l2.loaders import load_claude_session, load_trail_trace, load_whowhen_pro, read_json_tolerant
 from src.trace.l2.model import L2Step, L2Trace
 
 MIN_N = 10   # categories under this N are reported unscored
@@ -188,17 +188,123 @@ EXEC_LEAVES = {
 }
 
 
+def trail_canon(label: str | None) -> str:
+    """Spelling-tolerant leaf name (TRAIL annotators vary case, plural and whitespace)."""
+    return " ".join((label or "").lower().split())
+
+
 def trail_tabulate(ann_dirs: dict[str, Path]) -> dict:
-    """Counts per leaf per split from processed_annotations_* JSON ({"errors": [{"category", ...}]})."""
+    """Counts per leaf per split from processed_annotations_* JSON ({"errors": [{"category", ...}]}).
+
+    ``per_leaf`` keeps the verbatim spelling; ``per_leaf_canon`` merges case/whitespace variants.
+    """
     out = {}
     for split, d in ann_dirs.items():
-        c, n = Counter(), 0
+        c, cc, n = Counter(), Counter(), 0
         for f in sorted(Path(d).glob("*.json")):
             n += 1
-            for e in json.loads(f.read_text()).get("errors", []):
+            for e in read_json_tolerant(f).get("errors", []):
                 c[e.get("category")] += 1
-        out[split] = {"n_traces": n, "per_leaf": dict(sorted(c.items(), key=lambda kv: -kv[1]))}
+                cc[trail_canon(e.get("category"))] += 1
+        out[split] = {"n_traces": n, "per_leaf": dict(sorted(c.items(), key=lambda kv: -kv[1])),
+                      "per_leaf_canon": dict(sorted(cc.items(), key=lambda kv: -kv[1]))}
     return out
+
+
+# canonical-leaf predicate -> (HIL-14a category, detector category it is scored against)
+def _is_api(c: str) -> bool:
+    return c in ("rate limiting", "authentication errors", "service errors", "resource not found")
+
+
+TRAIL_TARGETS = {
+    "api_issues": (_is_api, "tool_error"),
+    "timeout": (lambda c: c.startswith("timeout issue"), "tool_error"),
+    "resource_exhaustion": (lambda c: c.startswith("resource exhaustion"), "truncation"),
+    "formatting": (lambda c: c.startswith("formatting error"), "invalid_invocation"),
+    # supplementary, not one of the four HIL-14a categories: the loop detector's natural gold leaf
+    "resource_abuse_supp": (lambda c: c.startswith("resource abuse"), "loop"),
+}
+
+
+def _trail_files(trail_dir: Path, split: str) -> list[tuple[Path, Path]]:
+    tdir = {"gaia": "GAIA", "swe_bench": "SWE Bench"}[split]
+    return [(f, trail_dir / f"processed_annotations_{split}" / f.name) for f in sorted((trail_dir / tdir).glob("*.json"))
+            if (trail_dir / f"processed_annotations_{split}" / f.name).exists()]
+
+
+def trail_table(trail_dir, cfg: DetectorConfig | None = None) -> dict:
+    """Score the mechanical detectors against TRAIL gold, per split and ALL. Aggregate counts only.
+
+    Two units, both declared. STEP level (primary): gold positive = a step that contains a span annotated
+    with the leaf; detector positive = a detection of the mapped category at that step; baselines flag the
+    first error-flagged step of a trace, or the last step of a trace, as the position-only guesses.
+    TRACE level: gold = trace has >=1 annotation of the leaf, detector = fires anywhere in the trace,
+    baseline = best single n_steps threshold (the Who&When construction-only baseline). Categories whose
+    gold N is under MIN_N are reported unscored. TRAIL traces are all natural, but annotated leaves
+    describe the annotators' reading, not a mechanical ground truth.
+    """
+    cfg = cfg or DetectorConfig()
+    trail_dir = Path(trail_dir)
+    ann_dirs = {s: trail_dir / f"processed_annotations_{s}" for s in ("gaia", "swe_bench")
+                if (trail_dir / f"processed_annotations_{s}").is_dir()}
+    res = {"tabulate": trail_tabulate(ann_dirs), "scoring": {}, "unmapped_gold_locations": {}, "detector_categories_fired": {}}
+    rows: dict[str, list[dict]] = {}
+    for split in ann_dirs:
+        recs, unm, fired = [], 0, Counter()
+        for tf, af in _trail_files(trail_dir, split):
+            t, span_step = load_trail_trace(tf)
+            dets = detect(t, cfg)
+            fired.update({d.category for d in dets})
+            gold: dict[str, set[int]] = defaultdict(set)
+            for e in read_json_tolerant(af).get("errors", []):
+                si = span_step.get(e.get("location"))
+                if si is None:
+                    unm += 1
+                    continue
+                for name, (pred_fn, _) in TRAIL_TARGETS.items():
+                    if pred_fn(trail_canon(e.get("category"))):
+                        gold[name].add(si)
+            # gold at trace level also counts unmapped locations
+            tgold = defaultdict(bool)
+            for e in read_json_tolerant(af).get("errors", []):
+                for name, (pred_fn, _) in TRAIL_TARGETS.items():
+                    if pred_fn(trail_canon(e.get("category"))):
+                        tgold[name] = True
+            recs.append({"t": t, "dets": dets, "gold": gold, "tgold": tgold,
+                         "first_err": baseline_first_error_step(t), "last": baseline_last_step(t)})
+        rows[split] = recs
+        res["unmapped_gold_locations"][split] = unm
+        res["detector_categories_fired"][split] = dict(fired)
+    rows["ALL"] = [r for v in list(rows.values()) for r in v]
+    for split, recs in rows.items():
+        out = {"n_traces": len(recs), "n_steps": sum(len(r["t"].steps) for r in recs)}
+        for name, (_, det_cat) in TRAIL_TARGETS.items():
+            n_gold_steps = sum(len(r["gold"].get(name, ())) for r in recs)
+            n_gold_traces = sum(bool(r["tgold"].get(name)) for r in recs)
+            pred, g, b_first, b_last = [], [], [], []
+            for r in recs:
+                dsteps = {d.step_idx for d in r["dets"] if d.category == det_cat and d.step_idx is not None}
+                for s in r["t"].steps:
+                    pred.append(s.idx in dsteps)
+                    g.append(s.idx in r["gold"].get(name, ()))
+                    b_first.append(s.idx == r["first_err"])
+                    b_last.append(s.idx == r["last"])
+            tpred = [any(d.category == det_cat for d in r["dets"]) for r in recs]
+            tg = [bool(r["tgold"].get(name)) for r in recs]
+            lens = [len(r["t"].tool_steps()) for r in recs]
+            cell = {"detector": det_cat, "n_gold_steps": n_gold_steps, "n_gold_traces": n_gold_traces,
+                    "step_level": score_binary(pred, g, name),
+                    "trace_level": score_binary(tpred, tg, name)}
+            if n_gold_steps >= MIN_N:
+                cell["step_level"]["baseline_first_error_step"] = score_binary(b_first, g, name)
+                cell["step_level"]["baseline_last_step"] = score_binary(b_last, g, name)
+            if n_gold_traces >= MIN_N:
+                cell["trace_level"]["length_baseline"] = best_length_baseline(lens, tg)
+            out[name] = cell
+        res["scoring"][split] = out
+    res["scope"] = ("natural traces, annotator gold; step unit = Step span (planning LLM calls outside a Step are "
+                    "message units no detector can fire on); not a statement about natural recall of other agents")
+    return res
 
 
 # ------------------------------------------------------------ KernelBench-Hard

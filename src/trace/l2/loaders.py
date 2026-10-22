@@ -209,3 +209,135 @@ def merge_step_traces(progress: list[L2Trace], steps: list[L2Trace]) -> list[L2T
     """Progress-log traces whose id has step events are replaced by the step-bearing trace."""
     have = {t.trace_id for t in steps}
     return [t for t in progress if t.trace_id not in have] + steps
+
+
+# ----------------------------------------------------------------------------- TRAIL
+def read_json_tolerant(path: Path | str):
+    """json.loads, falling back to removal of trailing commas outside strings.
+
+    Some TRAIL ``processed_annotations_*`` files carry an illegal trailing comma before ``]``/``}``.
+    The fallback removes only commas that sit directly before a closing bracket, outside strings, so
+    no content is altered.
+    """
+    s = Path(path).read_text()
+    try:
+        return json.loads(s)
+    except ValueError:
+        out, i, n, ins = [], 0, len(s), False
+        while i < n:
+            c = s[i]
+            if ins:
+                out.append(c)
+                if c == "\\" and i + 1 < n:
+                    i += 1
+                    out.append(s[i])
+                elif c == '"':
+                    ins = False
+            elif c == '"':
+                ins = True
+                out.append(c)
+            elif c == ",":
+                j = i + 1
+                while j < n and s[j] in " \t\r\n":
+                    j += 1
+                if not (j < n and s[j] in "]}"):
+                    out.append(c)
+            else:
+                out.append(c)
+            i += 1
+        return json.loads("".join(out))
+
+
+def _span_kind(s: dict) -> str | None:
+    return (s.get("span_attributes") or {}).get("openinference.span.kind")
+
+
+def _children(s: dict) -> list[dict]:
+    return sorted(s.get("child_spans") or [], key=lambda c: c.get("timestamp") or "")
+
+
+def load_trail_trace(path: Path | str) -> tuple[L2Trace, dict[str, int]]:
+    """TRAIL (PatronusAI) span tree -> ``L2Trace`` plus ``{span_id: step_idx}``.
+
+    Format (verified against the real GAIA and SWE Bench files): ``{"trace_id", "spans": [root]}``
+    with nested ``child_spans``; smolagents/openinference attributes in ``span_attributes``.
+    A step is a ``Step N`` CHAIN span (nested Steps are separate steps, pre-order), and an LLM span
+    outside every Step (planning call) is a ``message`` step. Every span maps to its nearest enclosing
+    step. Derived flags, all fixed and named here:
+
+    * ``error``: step status is ``Error`` and no nested Step is itself in error (blame goes to the origin);
+    * ``invocation_error``: ``unparseable_code`` when the status message starts with ``AgentParsingError``
+      or contains ``Code parsing failed``; ``invalid_arguments`` for a TOOL child ``TypeError`` about an
+      unexpected/missing argument;
+    * ``tool``/``args``: the first direct TOOL child (kwargs from its JSON input) else ``python_interpreter``
+      keyed by a hash of the step's LLM output;
+    * ``is_final``: the step has a ``FinalAnswerTool`` descendant;
+    * ``truncated`` is not derivable (no finish_reason in these spans) and stays ``None``.
+    """
+    import hashlib
+    d = json.loads(Path(path).read_text())
+    steps: list[L2Step] = []
+    span_step: dict[str, int] = {}
+    step_of: dict[int, dict] = {}
+
+    def desc(s):
+        yield s
+        for c in _children(s):
+            yield from desc(c)
+
+    def visit(s: dict, cur: int | None) -> None:
+        sid = s.get("span_id")
+        nm = s.get("span_name") or ""
+        if _span_kind(s) == "CHAIN" and nm.startswith("Step "):
+            idx = len(steps)
+            steps.append(L2Step(idx=idx, kind="tool_call"))
+            step_of[idx] = s
+            cur = idx
+        elif cur is None and _span_kind(s) == "LLM":
+            idx = len(steps)
+            steps.append(L2Step(idx=idx, kind="message"))
+            step_of[idx] = s
+            cur = idx
+        if cur is not None and sid:
+            span_step[sid] = cur
+        for c in _children(s):
+            visit(c, cur)
+
+    for root in d.get("spans", []):
+        visit(root, None)
+
+    err_steps = {i for i, s in step_of.items() if s.get("status_code") == "Error"}
+    for i, st in enumerate(steps):
+        sp = step_of[i]
+        if st.kind != "tool_call":
+            continue
+        a = sp.get("span_attributes") or {}
+        nested_err = any(span_step.get(x.get("span_id")) != i and span_step.get(x.get("span_id")) in err_steps
+                         for x in desc(sp) if x is not sp)
+        msg = sp.get("status_message") or ""
+        st.error = (i in err_steps) and not nested_err
+        if st.error:
+            if msg.startswith("AgentParsingError") or "Code parsing failed" in msg:
+                st.invocation_error = "unparseable_code"
+        tools = [x for x in desc(sp) if x is not sp and _span_kind(x) == "TOOL" and span_step.get(x.get("span_id")) == i]
+        llm = [x for x in desc(sp) if x is not sp and _span_kind(x) == "LLM" and span_step.get(x.get("span_id")) == i]
+        if tools:
+            st.tool = (tools[0].get("span_name") or "tool")
+            try:
+                v = json.loads((tools[0].get("span_attributes") or {}).get("input.value") or "{}")
+                st.args = v.get("kwargs") if isinstance(v, dict) and isinstance(v.get("kwargs"), dict) else {}
+            except ValueError:
+                st.args = {}
+            tm = tools[0].get("status_message") or ""
+            if st.error and re.match(r"TypeError: .*(unexpected keyword|missing \d+ required)", tm):
+                st.invocation_error = st.invocation_error or "invalid_arguments"
+        else:
+            st.tool = "python_interpreter"
+            lo = str(((llm[0].get("span_attributes") or {}).get("output.value")) if llm else a.get("input.value") or "")
+            st.args = {"llm_output_sha1": hashlib.sha1(lo.encode("utf-8", "replace")).hexdigest()}
+        st.observation = str(a.get("output.value") or "")[:4000]
+        if any(x.get("span_name") == "FinalAnswerTool" for x in desc(sp)):
+            st.is_final = True
+    t = L2Trace(trace_id=str(d.get("trace_id")), task_key=str(d.get("trace_id")), outcome="unknown",
+                source="trail", steps=steps)
+    return t, span_step
