@@ -89,6 +89,8 @@ _INTENTIONALLY_DROPPED_SECTIONS: dict[str, str] = {
     "schema_version": "metadata; the lean artifact carries its own",
     "last_updated": "metadata",
     "notes": "human prose, not runtime input",
+    "serving_floors": "measured AutoKernel noise floors (research-side evidence, keyed by role); the "
+                      "orchestrator runtime never reads them",
 }
 
 
