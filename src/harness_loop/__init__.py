@@ -14,21 +14,30 @@ sibling's side of that seam:
 * :mod:`.pilot` encodes the HIL-6 pilot requirements and the HIL-2 checklist (items 1-22) as a
   validator over a declared design.
 * :mod:`.driver` is the cycle driver skeleton; :mod:`.finalize` is the VB-HIL-WRITE producer call.
+* HIL-6h concrete parts, built but unwired: :mod:`.editor` (local and reference editor
+  proposers), :mod:`.credibility_judge` (typed credibility-matrix judge adapter),
+  :mod:`.chat_evaluator` (fenced ``/chat`` evaluator), :mod:`.report` (zero-adoption and
+  underpowered report rules) and :mod:`.transport` (the injected I/O seam they share).
 
 **Nothing here runs a loop.** The 2026-09-16 deferment on RUNNING a harness-improvement loop is
-in force. There is no ``__main__``, no CLI, no scheduler/autopilot/cron hook, and no concrete
-proposer or evaluator that could reach a model: every inference-capable part is an interface that
-a later, separately authorized change must implement. A unit test asserts that no non-test module
-imports this package.
+in force. There is no ``__main__``, no CLI, no scheduler/autopilot/cron hook. The concrete parts
+reach nothing on their own: every one takes an injected transport, and only a later, separately
+authorized entrypoint (HIL-6j) may build and inject a real one. A unit test asserts that no
+non-test module imports this package.
 """
 
 from __future__ import annotations
 
 __all__ = [
     "attempt_ledger",
+    "chat_evaluator",
+    "credibility_judge",
     "driver",
+    "editor",
     "finalize",
     "interfaces",
     "pilot",
+    "report",
     "substrate",
+    "transport",
 ]
