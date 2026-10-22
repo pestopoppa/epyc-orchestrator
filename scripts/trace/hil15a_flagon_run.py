@@ -189,17 +189,23 @@ _MOCK_ANS = {"arith-1": "391", "arith-2": "19", "fact-1": "Canberra", "str-1": "
 
 
 def default_mock_script(task, run_id):
-    """Mock: a correct answer everywhere except count/list/str tasks on odd repeats (so the labels carry both classes)."""
-    wrong = task["task_key"].split("-")[0] in ("count", "list", "str") and int(run_id.rsplit("-r", 1)[1]) % 2 == 1
-    ans = "7" if wrong else _MOCK_ANS.get(task["task_key"], "x")
+    """Mock: scripted write->read dependency chain; a correct answer except on odd repeats of count/list/str and
+    hard/mid-difficulty tasks (so the labels carry both classes). A task may carry ``mock_answer``."""
+    key = task["task_key"]
+    wrong = (key.split("-")[0] in ("count", "list", "str") or key.endswith(("-hard", "-mid"))) and int(run_id.rsplit("-r", 1)[1]) % 2 == 1
+    ans = "7" if wrong else task.get("mock_answer", _MOCK_ANS.get(key, "x"))
     return ['a = TOOL("write_file", path="/work/n.txt", text="x")\nprint(a)\n', 'print(peek(12))\n',
             'b = TOOL("read_file", path="/work/n.txt")\nprint(b)\n', 'c = TOOL("read_file", path="/work/n.txt")\nprint(c)\n', f'FINAL("{ans}")\n']
 
 
-async def run_all(tasks, repeats, deps_for, state_cls, run_task):
+async def run_all(tasks, repeats, deps_for, state_cls, run_task, max_wall_s=None):
     labels, results = {}, []
-    for t in tasks:
-        for i in range(repeats):
+    t_start = time.time()
+    # repeat-major order so a wall cap truncates repeats, never whole task keys
+    for i in range(repeats):
+        for t in tasks:
+            if max_wall_s and time.time() - t_start > max_wall_s:
+                continue
             rid = f"{t['task_key']}-r{i}"
             state = state_cls(task_id=rid, prompt=t["prompt"], context=t["prompt"])
             t0, err = time.time(), None
@@ -247,6 +253,8 @@ def main(argv=None) -> int:
     ap.add_argument("--min-task-keys", type=int, default=5)
     ap.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"), help="root checkout that holds scripts/vidya/adapters (belief-sidecar writers)")
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--max-wall-s", type=float, default=None, help="stop starting new runs after this many seconds; offline steps still run")
+    ap.add_argument("--min-dep-task-keys", type=int, default=5, help="warn when fewer task keys than this have a tool_dependency run")
     a = ap.parse_args(argv)
 
     if not a.mock_llm:
@@ -279,7 +287,7 @@ def main(argv=None) -> int:
     from src.graph.graph import run_task
     from src.graph.state import TaskState
     deps_for = mock_deps(paths["spill_dir"], default_mock_script) if a.mock_llm else live_deps(paths["spill_dir"])
-    labels, results = asyncio.run(run_all(tasks, a.repeats, deps_for, TaskState, run_task))
+    labels, results = asyncio.run(run_all(tasks, a.repeats, deps_for, TaskState, run_task, a.max_wall_s))
     (out / "labels.json").write_text(json.dumps(labels, indent=1))
     manifest["runs"] = results
     progress = write_progress_log(out, results)
@@ -299,14 +307,26 @@ def main(argv=None) -> int:
         return 3
 
     rid = a.run_id or ("hil15a-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
-    l2 = subprocess.run([sys.executable, str(ROOT / "scripts/trace/l2_scan.py"), "--step-db", paths["db"], "--progress-logs", str(progress),
-                         "--out", str(out / "l2_report.json"), "--belief-sidecar", "--run-id", rid, "--epyc-root", a.epyc_root],
-                        capture_output=True, text=True)
-    manifest["l2_scan"] = {"rc": l2.returncode, "stderr": l2.stderr[-400:], "sidecar": str(out / "l2_report.json.beliefs.jsonl")}
+    adapter = Path(a.epyc_root) / "scripts" / "vidya" / "adapters" / "l2_scan_capture.py"
+    sidecar_ok = adapter.is_file()
+    l2_cmd = [sys.executable, str(ROOT / "scripts/trace/l2_scan.py"), "--step-db", paths["db"], "--progress-logs", str(progress),
+              "--out", str(out / "l2_report.json"), "--run-id", rid, "--epyc-root", a.epyc_root]
+    if sidecar_ok:
+        l2_cmd.insert(-4, "--belief-sidecar")
+    l2 = subprocess.run(l2_cmd, capture_output=True, text=True)
+    manifest["l2_scan"] = {"rc": l2.returncode, "stderr": l2.stderr[-400:],
+                           "sidecar": str(out / "l2_report.json.beliefs.jsonl") if sidecar_ok else None,
+                           "sidecar_skipped": None if sidecar_ok else f"adapter not found: {adapter}"}
 
     from src.trace.dependency_features import auc_table, load_runs
     manifest["auc_table"] = auc_table(load_runs(paths["db"]), {k: (v[0], bool(v[1])) for k, v in labels.items()})
     (out / "auc_table.json").write_text(json.dumps(manifest["auc_table"], indent=1))
+    dep_runs = load_runs(paths["db"])
+    dep_keys = {labels[r][0] for r in dep_runs if r in labels}
+    dep_classes = {bool(labels[r][1]) for r in dep_runs if r in labels}
+    manifest["dep_coverage"] = {"runs_with_dependency": len([r for r in dep_runs if r in labels]), "task_keys": len(dep_keys), "label_classes": len(dep_classes)}
+    if len(dep_keys) < a.min_dep_task_keys or len(dep_classes) < 2:
+        manifest["warnings"].append(f"dependency coverage too thin for the AUC: {manifest['dep_coverage']} (need >= {a.min_dep_task_keys} task keys and 2 label classes among tool-using runs; use tool-requiring --tasks)")
 
     ver = {}
     for r in results:

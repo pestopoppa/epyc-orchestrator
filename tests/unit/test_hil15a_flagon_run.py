@@ -63,3 +63,30 @@ def test_mock_end_to_end(tmp_path):
     assert all(v["rc"] == 0 for v in m["replay_verify"].values()) and len(m["replay_verify"]) == 24
     assert m["auc_table"]["n_tasks"] == 6 and "auc_out_of_fold" in m["auc_table"]
     assert sorted(m["label_classes"]) == ["False", "True"]
+
+
+def test_missing_sidecar_adapter_is_not_a_problem(tmp_path):
+    empty_root = tmp_path / "root"
+    empty_root.mkdir()
+    r = _run(["--out-dir", str(tmp_path / "o"), "--mock-llm", "--no-reexec", "--epyc-root", str(empty_root)])
+    m = json.loads((tmp_path / "o" / "manifest.json").read_text())
+    assert m["l2_scan"]["rc"] == 0, m["l2_scan"]["stderr"]
+    assert m["l2_scan"]["sidecar"] is None and "adapter not found" in m["l2_scan"]["sidecar_skipped"]
+    assert m["verdict"] == "OK", r.stderr[-500:]
+    assert m["dep_coverage"]["task_keys"] == 6
+
+
+def test_wall_cap_and_dependency_coverage_warning(tmp_path):
+    r = _run(["--out-dir", str(tmp_path / "o"), "--mock-llm", "--no-reexec", "--max-wall-s", "0.0001", "--repeats", "3"])
+    m = json.loads((tmp_path / "o" / "manifest.json").read_text())
+    assert len(m["runs"]) <= 6, r.stderr[-300:]   # repeat-major: at most one pass over the 6 keys got started
+
+
+def test_new_task_set_mock_auc(tmp_path):
+    tasks = Path("/mnt/raid0/llm/tmp/fillers-3c4ca599/jobs/hil15a_tasks.json")
+    if not tasks.exists():
+        pytest.skip("filler task set not present")
+    _run(["--out-dir", str(tmp_path / "o"), "--mock-llm", "--no-reexec", "--tasks", str(tasks)])
+    m = json.loads((tmp_path / "o" / "manifest.json").read_text())
+    assert len(m["runs"]) == 56 and m["dep_coverage"]["task_keys"] == 14 and not m["warnings"]
+    assert "status" not in m["auc_table"] and "auc_out_of_fold" in m["auc_table"]
