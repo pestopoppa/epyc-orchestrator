@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from pathlib import Path as _P  # noqa: F401
 from src.registry.tool_registry import ToolRegistry
 
 _spec = importlib.util.spec_from_file_location(
@@ -99,3 +100,17 @@ def test_helpers_selector_records_lazy_legacy(monkeypatch):
 
     src = Path(h.__file__).read_text()
     assert '"lazy-legacy"' in src and "state.turn1_grammar_shape = _turn1_shape" in src
+
+
+def test_execute_turn_has_no_function_local_import_os():
+    """Regression: a local ``import os`` inside ``_execute_turn`` (since 2026-03-03) made ``os`` a function local, so the turn-1
+    grammar block's ``os.environ.get`` raised UnboundLocalError on every first turn and the blanket ``except`` swallowed it: the
+    turn-1 GBNF (and therefore every ORCHESTRATOR_TURN1_GRAMMAR arm) never applied after UFH14-LB3 (517e24d4)."""
+    import ast
+
+    import src.graph.helpers as h
+
+    tree = ast.parse(Path(h.__file__).read_text())
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_execute_turn")
+    local = [n.lineno for n in ast.walk(fn) if isinstance(n, ast.Import) and any(a.name == "os" for a in n.names)]
+    assert not local, f"function-local `import os` in _execute_turn at lines {local}"
