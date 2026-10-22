@@ -399,6 +399,20 @@ class TestAutoWrapFinal:
         assert result.count("FINAL(") == 1
         assert ")" in result
 
+    def test_one_line_assignment_not_wrapped(self):
+        """``r = f(x)`` wrapped as ``FINAL(r = f(x))`` is a guaranteed ValueError (unsupported
+        keyword); augmented / annotated / tuple assignments would be SyntaxErrors. They run as code."""
+        for code in ("r = next_clue(130)", "x += 1", "x: int = 5", "a, b = 1, 2", "answer = x = 5"):
+            assert auto_wrap_final(code) == code, f"Should not wrap: {code}"
+
+    def test_alias_assignment_still_wrapped(self):
+        """``<FINAL alias> = expr`` wraps to a VALID FINAL(alias=expr) today: unchanged."""
+        for alias in ("answer", "result", "secret", "value", "response"):
+            assert auto_wrap_final(f"{alias} = 42") == f"FINAL({alias} = 42)"
+
+    def test_comparison_still_wrapped(self):
+        assert auto_wrap_final("x == 5") == "FINAL(x == 5)"
+
     def test_bracketed_error_wrapped_as_string(self):
         code = "[ERROR: Inference failed: Request timed out after 90s]"
         result = auto_wrap_final(code)
@@ -429,7 +443,9 @@ class TestAutoWrapFinal:
 
     def test_escapes_triple_quotes(self):
         """Triple quotes in code must be escaped to prevent syntax errors."""
-        code = "x = '''some text'''"
+        # A bare expression. The old one-line ``x = '''...'''`` wrapped to FINAL(x = ...), an
+        # unsupported-keyword ValueError at run time; one-line assignments now run as code.
+        code = "'''some text'''"
         result = auto_wrap_final(code)
         assert "FINAL(" in result
         # The triple quotes should be escaped or the code should use the other style

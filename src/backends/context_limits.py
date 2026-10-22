@@ -312,16 +312,34 @@ def registry_facts_by_port(priors_path: Path | None = None) -> dict[int, dict[st
     return facts
 
 
+SERVER_URLS_ENV_PREFIX = "ORCHESTRATOR_SERVER_URLS_"
+
+
 def registry_role_urls(priors_path: Path | None = None) -> dict[str, list[str]]:
-    """Role → serving URLs from the compiled stack priors."""
+    """Role → serving URLs from the compiled stack priors, with explicit per-role overrides on top.
+
+    ``ORCHESTRATOR_SERVER_URLS_<ROLE>`` (the env vars ``ServerURLsConfig`` already reads) wins for its
+    role. Without it, a caller that passes no URLs (compaction's context lookup on primitives without
+    ``server_urls``, context-recovery reroute candidates) resolved the role to the compiled-priors port
+    and GET /props there, so an in-process harness that points every role at ONE private server still
+    reached the production server (found by the KPF-LB1.1 capture's socket guard, 2026-10-22). Unset in
+    production, so the result there is unchanged.
+    """
     try:
         from src.registry.stack_priors import DEFAULT_OUTPUT, live_stack_serving_url_values
     except Exception:  # pragma: no cover - import guard
-        return {}
-    return {
-        role: split_urls(value)
-        for role, value in live_stack_serving_url_values(priors_path or DEFAULT_OUTPUT).items()
-    }
+        urls: dict[str, list[str]] = {}
+    else:
+        urls = {
+            role: split_urls(value)
+            for role, value in live_stack_serving_url_values(priors_path or DEFAULT_OUTPUT).items()
+        }
+    for key, value in os.environ.items():
+        if key.startswith(SERVER_URLS_ENV_PREFIX) and value.strip():
+            override = split_urls(value)
+            if override:
+                urls[key[len(SERVER_URLS_ENV_PREFIX):].lower()] = override
+    return urls
 
 
 def limit_from_registry(url: str, facts: dict[str, Any] | None) -> ContextLimit | None:

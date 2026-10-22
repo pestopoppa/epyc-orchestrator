@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -746,10 +747,37 @@ def auto_wrap_final(code: str) -> str:
             # pull-and-print move), never an answer.
             "print(",
         ]
-        if not any(first_line.startswith(p) for p in non_final_patterns):
+        if not any(first_line.startswith(p) for p in non_final_patterns) and not _is_assignment_statement(first_line):
             return f"FINAL({first_line})"
 
     return code
+
+
+# FINAL()'s keyword aliases (repl_environment/context.py ``_final``): ``answer = 42`` wrapped as
+# ``FINAL(answer = 42)`` is accepted as the answer 42, so that one form keeps its wrap.
+_FINAL_KWARG_ALIASES = frozenset({"answer", "result", "secret", "value", "response"})
+
+
+def _is_assignment_statement(line: str) -> bool:
+    """True for a one-line assignment that wrapping would break: ``r = f(x)`` becomes
+    ``FINAL(r = f(x))`` (ValueError: unsupported keyword), ``x += 1`` / ``x: int = 1`` /
+    ``a, b = 1, 2`` become SyntaxErrors -- every such wrap is a guaranteed failed turn, so the line
+    runs as code instead. A single plain ``<alias> = expr`` (see ``_FINAL_KWARG_ALIASES``) is NOT
+    reported: its wrap is a valid FINAL today and is left unchanged."""
+    try:
+        tree = ast.parse(line)
+    except SyntaxError:
+        return False
+    if len(tree.body) != 1:
+        return False
+    node = tree.body[0]
+    if isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+        return True
+    if isinstance(node, ast.Assign):
+        alias_form = (len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                      and node.targets[0].id in _FINAL_KWARG_ALIASES)
+        return not alias_form
+    return False
 
 
 # `FINAL(OK)` — the whole code is one call whose argument is one bare identifier.
