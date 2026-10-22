@@ -42,6 +42,7 @@ from src.harness_loop.interfaces import (
     SplitRef,
     TokenCount,
     VerdictMatrix,
+    OUTCOME_KEYS,
     outcome_keys_in,
     policy_document_reason,
     sha256_text,
@@ -152,6 +153,9 @@ class SiblingLoopDriver:
             raise TripwireTripped(f"item 7: proposer context carries {hits}")
         for t in view.traces:
             leaked = outcome_keys_in({"events": list(t.events)})
+            # Event names are VALUES; outcome_keys_in scans keys only, so an event literally
+            # named like an outcome ("passed", "score") is refused here as well.
+            leaked += [str(e) for e in t.events if str(e).lower() in OUTCOME_KEYS]
             if leaked:
                 raise TripwireTripped(f"item 7: trace {t.trace_id} carries outcome keys {leaked}")
 

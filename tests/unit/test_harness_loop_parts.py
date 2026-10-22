@@ -579,7 +579,8 @@ def test_parts_run_one_driver_cycle_on_fakes(tmp_path):
                    proposer_models=[LOCAL_MODEL, "gpt-5.6-terra"])
     journal = substrate.open_loop_journal(tmp_path / "loop")
     drv = SiblingLoopDriver(design=design, journal=journal, journal_dir=tmp_path / "loop",
-                            proposer=proposer, evaluator=evaluator, judge=judge, leakage=lambda t: None)
+                            proposer=proposer, evaluator=evaluator, judge=judge,
+                            leakage=lambda t, **_: None)
     inc = ArmSpec("inc1", "incumbent", FEATURE, TARGET, sha256_text(INCUMBENT), dict(PINS))
     out = drv.run_cycle(_view(), CycleSpec(1, design.train, inc, INCUMBENT, dict(PINS), max_candidates=2))
     assert out.outcome == "keep" and out.committed_text == better

@@ -497,3 +497,14 @@ def test_package_has_no_entrypoint_and_no_importer():
             except OSError:
                 continue
     assert importers == []
+
+
+def test_driver_refuses_outcome_named_trace_events(tmp_path):
+    # outcome_keys_in scans keys; an EVENT named like an outcome is a value and must be refused too.
+    drv, prop, _, _ = _driver(tmp_path, ["Prefer short answers.\n"])
+    view = ProposerView("HS4-3.6-summary-prompt", "3.6", "orchestration/prompts/compaction.md",
+                        "prompt", INCUMBENT, traces=(TraceRef("t1", "worker", ("passed",), "..."),),
+                        selection_rule="first 20 traces with any L2 event, by trace id")
+    with pytest.raises(TripwireTripped):
+        drv.run_cycle(view, _spec(1, INCUMBENT, drv.design.train))
+    assert prop.views == []
