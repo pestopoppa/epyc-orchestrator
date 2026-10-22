@@ -229,3 +229,19 @@ def test_manifest_frozen_and_mismatch_aborts(waves, tmp_path):
 
 def test_seed_gives_distinct_waves():
     assert K.build_waves(2, 6, 261) != K.build_waves(2, 6, 262)
+
+
+def test_final_answer_extraction_and_grade():
+    st = {"expect": r"\b664\b"}
+    assert K.grade(st, "Sum: 34+85=119 ... total 664.\nANSWER: 664")
+    assert not K.grade(st, "work mentions 664 along the way\nANSWER: 613")         # intermediate value must not pass
+    assert not K.grade(st, "x " * 100 + "664")                                      # long reply, no marker -> no answer
+    assert K.grade(st, "664")                                                       # short bare reply (oracle form)
+    assert K.grade({"expect": r"(?i)\boak\b"}, "Largest is oak.\nanswer: **Oak**")
+    assert K.grade(st, "ANSWER: 1\nANSWER: 664")                                     # last marker wins
+
+
+def test_prompts_ask_for_work_and_marker(waves):
+    for w in waves:
+        for s in w["steps"]:
+            assert "ANSWER:" in s["action"]

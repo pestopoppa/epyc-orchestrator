@@ -86,6 +86,14 @@ PERSONAS = ("security_auditor", "code_reviewer", "test_designer", "data_analyst"
 
 
 # ---------------------------------------------------------------------------------------------- replay set
+# Window-1 diagnosis (DIAGNOSIS-win1.md): with thinking OFF and "reply with the number only" the model must do 14-row
+# sums / group sums / counts / rankings in ONE token; arm-A failed 49% of cases (aggregates 0-62% pass, lookups 75-88%),
+# every failure a plausible wrong value, none truncated.  The answer is derivable; the format denied any work budget.
+# Fix: allow brief visible work, grade ONLY the final ``ANSWER:`` line.  Identical for all three arms (calibration uses arm A only).
+FMT_NUM = " Show brief work, then end with a final line 'ANSWER: <number>'."
+FMT_NAME = " Show brief work, then end with a final line 'ANSWER: <name>'."
+
+
 def build_waves(n_waves: int = 8, n_steps: int = 6, seed: int = 26_1) -> list[dict]:
     """Deterministic persona-bearing delegate waves.  Each wave: one objective, two upstream step outputs (a table
     and distractor notes; the children list them in DIFFERENT orders, so key sorting is exercised) and
@@ -109,12 +117,12 @@ def build_waves(n_waves: int = 8, n_steps: int = 6, seed: int = 26_1) -> list[di
         k = rng.randint(2, 5)
         kth = sorted(rows, key=lambda r: (-r[1], r[0]))[k - 1][0]
         qs = [
-            (f"Add up every qty value in the table. Reply with the number only.", rf"\b{total}\b"),
-            (f"Which name has the largest qty? Reply with the name only.", rf"(?i)\b{biggest}\b"),
-            (f"Which name has the smallest qty? Reply with the name only.", rf"(?i)\b{smallest}\b"),
-            (f"What is the total qty of rows in zone {zone}? Reply with the number only.", rf"\b{zsum}\b"),
-            (f"How many rows have qty greater than {over}? Reply with the number only.", rf"\b{nover}\b"),
-            (f"Ranking names by qty from largest (ties by name), which is number {k}? Reply with the name only.",
+            (f"Add up every qty value in the table.{FMT_NUM}", rf"\b{total}\b"),
+            (f"Which name has the largest qty?{FMT_NAME}", rf"(?i)\b{biggest}\b"),
+            (f"Which name has the smallest qty?{FMT_NAME}", rf"(?i)\b{smallest}\b"),
+            (f"What is the total qty of rows in zone {zone}?{FMT_NUM}", rf"\b{zsum}\b"),
+            (f"How many rows have qty greater than {over}?{FMT_NUM}", rf"\b{nover}\b"),
+            (f"Ranking names by qty from largest (ties by name), which is number {k}?{FMT_NAME}",
              rf"(?i)\b{kth}\b"),
         ]
         steps = []
@@ -220,7 +228,7 @@ def prove_port_ownership(url: str, server_pid: int) -> int:
 class HttpClient:
     """POST one prompt as a single user message to /v1/chat/completions (the frontdoor chat path), greedy, thinking off."""
 
-    def __init__(self, url: str, max_tokens: int = 256, timeout: float = 600.0, seed: int = 261):
+    def __init__(self, url: str, max_tokens: int = 1024, timeout: float = 600.0, seed: int = 261):
         self.url, self.max_tokens, self.timeout, self.seed = url.rstrip("/"), max_tokens, timeout, seed
 
     def __call__(self, prompt: str) -> dict:
@@ -250,8 +258,18 @@ def mock_client_for(waves: list[dict]) -> Callable[[str], dict]:
 
 
 # --------------------------------------------------------------------------------------------------- grading
+def final_answer(answer: str) -> str:
+    """The text after the LAST ``ANSWER:`` marker.  No marker: a short bare reply (<=40 chars, the oracle/legacy form) is
+    taken whole; a long reply without the marker has no answer (intermediate numbers in the work must never pass)."""
+    a = answer or ""
+    hits = re.findall(r"(?is)\banswer\s*:\s*(.*)", a)
+    if hits:
+        return hits[-1].strip().strip("*`'\" ")
+    return a.strip() if len(a.strip()) <= 40 else ""
+
+
 def grade(step: dict, answer: str) -> bool:
-    return bool(re.search(step["expect"], answer or ""))
+    return bool(re.search(step["expect"], final_answer(answer)))
 
 
 def decide(cases: list[dict], treatment: dict, n_steps_persona: int, n_steps: int) -> dict:
@@ -406,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--seed", type=int, default=261, help="wave-generator seed (window 1 = 261, window 2 = 262)")
     ap.add_argument("--concurrency", type=int, default=4, help="sibling requests in flight (match the server -np)")
-    ap.add_argument("--max-tokens", type=int, default=256)
+    ap.add_argument("--max-tokens", type=int, default=1024)
     ap.add_argument("--server-url")
     ap.add_argument("--server-pid", type=int)
     ap.add_argument("--mock-llm", action="store_true")
