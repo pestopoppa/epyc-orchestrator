@@ -466,6 +466,13 @@ async def _execute_repl_body(
 
     # Phase 3: cross-request globals restore (opt-in via session_id).
     session_id = getattr(request, "session_id", None)
+    if session_id:  # TOC-WRITER-HOOKS-1: bind task -> harness session (no-op with the flag off)
+        try:
+            from src.graph import trajectory_artifact
+
+            trajectory_artifact.bind_session(task_id, session_id)
+        except Exception:
+            pass
     session_store = state.session_store if hasattr(state, "session_store") else None
     session_persistence: dict[str, object] = {
         "session_id": session_id,

@@ -419,6 +419,9 @@ def _maybe_compress_for_escalation(prompt: str, state: "TaskState") -> str:
             (1 - result.actual_ratio) * 100,
             result.latency_ms,
         )
+        if result.compressed_text != prompt:
+            # TOC-WRITER-HOOKS-1: the whole prompt, history included, was rewritten.
+            _trajectory_note_history_rewrite(state)
         return result.compressed_text
     except Exception as e:
         log.warning("Escalation compression failed, using uncompressed: %s", e)
@@ -1069,6 +1072,41 @@ def _trajectory_note_call(state: Any, role: Any, prompt: str, meta: dict[str, An
         pass
 
 
+def _trajectory_tool_calls(deps: Any, baseline: int) -> list[str] | None:
+    """TOC-WRITER-TOOLCALLS-1: this turn's exploration calls for the trajectory artifact only.
+
+    None (so ``_record_session_turn`` keeps its previous argument) unless the artifact is on;
+    the session-log record is never given these, so no prompt byte changes.
+    """
+    try:
+        from src.graph import trajectory_artifact
+
+        if not trajectory_artifact.enabled():
+            return None
+        return _get_exploration_tool_calls(deps, baseline)
+    except Exception:
+        return None
+
+
+def _trajectory_note_rendered_history(state: Any, block: str) -> None:
+    """TOC-WRITER-HOOKS-1: report the rendered session-log block (history-rewrite producer)."""
+    try:
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_rendered_history(getattr(state, "task_id", None), block)
+    except Exception:
+        pass
+
+
+def _trajectory_note_history_rewrite(state: Any) -> None:
+    try:
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_history_rewrite(getattr(state, "task_id", None))
+    except Exception:
+        pass
+
+
 def _trajectory_note_overflow(state: Any) -> None:
     try:
         from src.graph import trajectory_artifact
@@ -1319,6 +1357,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     await _maybe_refresh_session_summary(state, deps)
     session_block = _session_log_prompt_block(state)
     if session_block:
+        _trajectory_note_rendered_history(state, session_block)
         prompt += "\n\n" + session_block
 
     # Budget pressure warnings (Fast-RLM)
@@ -1858,7 +1897,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             "3. Submit it: FINAL(solution)\n"
             "Do NOT use bare input(). Wrap ALL code in a string variable."
         )
-        _record_session_turn(state, role=str(role), code=code, error=result.error, nudge=nudge)
+        _record_session_turn(
+            state, role=str(role), code=code, error=result.error, nudge=nudge,
+            trajectory_tool_calls=_trajectory_tool_calls(deps, _exploration_baseline),
+        )
         return "", None, False, {"_nudge": nudge}
 
     # No-output guard: code ran successfully but produced no output, no error,
@@ -1926,7 +1968,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 "FINAL must contain the actual answer or complete program text. "
                 "If the task asks for code, call FINAL(your_code_as_string)."
             )
-            _record_session_turn(state, role=str(role), code=code, nudge=nudge)
+            _record_session_turn(
+                state, role=str(role), code=code, nudge=nudge,
+                trajectory_tool_calls=_trajectory_tool_calls(deps, _exploration_baseline),
+            )
             return "", None, False, {"_nudge": nudge}
 
     artifacts = (

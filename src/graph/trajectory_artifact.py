@@ -63,6 +63,11 @@ _REASON_CHARS = 80
 _lock = threading.Lock()
 _TASKS: dict[str, "_Task"] = {}
 _N_CTX_CACHE: dict[str, tuple[int | None, str]] = {}
+# TOC-WRITER-HOOKS-1: harness sessions that reported their own compaction (insertion-ordered,
+# bounded). A shell session spans many requests, i.e. many task ids, so the mark is kept per
+# session and applied to every task bound to it, now and later (``bind_session``).
+_COMPACTED_SESSIONS: dict[str, None] = {}
+_MAX_COMPACTED_SESSIONS = 4096
 
 
 def enabled() -> bool:
@@ -94,6 +99,9 @@ class _Task:
         self.retrieval = 0
         self.execution = 0
         self.shell_compaction_seen = False
+        self.session_id: str | None = None
+        self.last_history_sha: str | None = None
+        self.last_history_len = 0
         self.context_overflow = False
         self.finalized = False
 
@@ -248,6 +256,40 @@ def note_history_rewrite(task_id: Any, n: int = 1) -> None:
         log.debug("trajectory note_history_rewrite failed", exc_info=True)
 
 
+def note_rendered_history(task_id: Any, block: str) -> None:
+    """TOC-WRITER-HOOKS-1: producer side of :func:`note_history_rewrite` for the rendered history.
+
+    The graph rebuilds every turn's prompt; the only already-sent HISTORY it re-renders is the
+    session-log block (the session summary, its two-level consolidation and the scratchpad
+    insights). When this turn's block is not an append-only extension of the previous turn's
+    block, the history the server cached was rewritten: one ``prefix_cache_invalidations``.
+    Only a sha256 and a length are kept (privacy rule); an empty block resets nothing.
+
+    Session compaction (``src/graph/compaction.py``) is deliberately NOT a producer: it rewrites
+    ``TaskState.context``, which is never rendered into a turn prompt (UFH14-B1), so it cannot
+    invalidate the server prefix cache and counting it would inflate the field.
+    """
+    try:
+        text = str(block or "")
+        t = _task(task_id) if (text and enabled()) else None
+        if t is None:
+            return
+        import hashlib
+
+        rewritten = False
+        with _lock:
+            prev_sha, prev_len = t.last_history_sha, t.last_history_len
+            if prev_sha is not None:
+                head = text[:prev_len] if len(text) >= prev_len else None
+                rewritten = head is None or hashlib.sha256(head.encode("utf-8")).hexdigest() != prev_sha
+            t.last_history_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            t.last_history_len = len(text)
+        if rewritten:
+            note_history_rewrite(task_id)
+    except Exception:
+        log.debug("trajectory note_rendered_history failed", exc_info=True)
+
+
 def note_compressor_time(task_id: Any, seconds: float) -> None:
     try:
         t = _task(task_id) if enabled() else None
@@ -267,6 +309,48 @@ def note_shell_compaction(task_id: Any) -> None:
                 t.shell_compaction_seen = True
     except Exception:
         log.debug("trajectory note_shell_compaction failed", exc_info=True)
+
+
+def bind_session(task_id: Any, session_id: Any) -> None:
+    """TOC-WRITER-HOOKS-1: bind a task to its harness session (``x_session_id``).
+
+    A task bound to a session that already reported a shell compaction starts with
+    ``shell_compaction_seen`` true (the field is sticky for the rest of the trajectory).
+    """
+    try:
+        sid = str(session_id or "").strip()
+        t = _task(task_id) if (sid and enabled()) else None
+        if t is not None:
+            with _lock:
+                t.session_id = sid
+                if sid in _COMPACTED_SESSIONS:
+                    t.shell_compaction_seen = True
+    except Exception:
+        log.debug("trajectory bind_session failed", exc_info=True)
+
+
+def note_shell_compaction_session(session_id: Any) -> None:
+    """TOC-WRITER-HOOKS-1: producer for the OpenCode ``session.compacted`` signal.
+
+    The OpenCode plugin's ``event`` hook forwards ``session.compacted`` as a control-only
+    request carrying the session id; that id is all the server has, so every live task bound
+    to the session is marked through :func:`note_shell_compaction`, and tasks bound later
+    inherit the mark through :func:`bind_session`.
+    """
+    try:
+        sid = str(session_id or "").strip()
+        if not sid or not enabled():
+            return
+        with _lock:
+            _COMPACTED_SESSIONS.pop(sid, None)
+            _COMPACTED_SESSIONS[sid] = None
+            while len(_COMPACTED_SESSIONS) > _MAX_COMPACTED_SESSIONS:
+                _COMPACTED_SESSIONS.pop(next(iter(_COMPACTED_SESSIONS)))
+            bound = [t.task_id for t in _TASKS.values() if t.session_id == sid]
+        for tid in bound:
+            note_shell_compaction(tid)
+    except Exception:
+        log.debug("trajectory note_shell_compaction_session failed", exc_info=True)
 
 
 def note_context_overflow(state: Any) -> None:
@@ -327,6 +411,7 @@ def _reset_for_tests() -> None:
     with _lock:
         _TASKS.clear()
         _N_CTX_CACHE.clear()
+        _COMPACTED_SESSIONS.clear()
 
 
 # -- offline helpers (reader side; no flag) --------------------------------------------

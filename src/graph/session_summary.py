@@ -43,14 +43,22 @@ def _record_session_turn(
     nudge: str = "",
     escalation_target: str = "",
     tool_calls: list[str] | None = None,
+    trajectory_tool_calls: list[str] | None = None,
 ) -> None:
-    """Record a turn to session log (in-memory + disk). Fail-silent."""
+    """Record a turn to session log (in-memory + disk). Fail-silent.
+
+    ``trajectory_tool_calls`` (TOC-WRITER-TOOLCALLS-1) reaches ONLY the trajectory artifact:
+    error-path callers pass the turn's exploration calls there so the retrieval/execution split
+    is not undercounted, without adding them to the session-log record (whose ``tools:[...]``
+    renders into the session-summary prompt block, so prompt bytes stay unchanged).
+    """
     try:  # TOC-SP-6 trajectory artifact (default off; no-op and never raises)
         from src.graph import trajectory_artifact
 
         trajectory_artifact.note_turn(
             state, role=role, code=code, output=output, error=error,
-            is_final=is_final, tool_calls=tool_calls,
+            is_final=is_final,
+            tool_calls=tool_calls if trajectory_tool_calls is None else trajectory_tool_calls,
         )
     except Exception:
         pass

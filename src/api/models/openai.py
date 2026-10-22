@@ -304,6 +304,14 @@ class OpenAIChatRequest(BaseModel):
     x_session_end_event: Literal["final", "idle", "deleted"] | None = Field(
         default=None, description="Client lifecycle event associated with x_session_final"
     )
+    # TOC-WRITER-HOOKS-1: control-only packet from the OpenCode plugin's ``event`` hook when
+    # the shell compacted the session itself (``session.compacted``). Acknowledged before
+    # prompt parsing, never enters inference; only marks the trajectory artifact
+    # (``shell_compaction_seen``), which is a no-op while that flag is off.
+    x_session_compacted: bool = Field(
+        default=False,
+        description="Harness reported its own session compaction (control-only, no inference)",
+    )
     x_agent_name: Any = Field(
         default=None,
         description="Harness agent name (string), e.g. OpenCode's 'general' sub-agent "

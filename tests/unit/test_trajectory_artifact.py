@@ -206,3 +206,145 @@ def test_sidecar_roundtrips_through_strict_reader_and_projects(monkeypatch, dirs
     assert by["spill-only"]["extra"]["total_rolling_input_tokens"] == 500
     for r in rows:
         assert toc_ab.project(r) is not None
+
+
+# -- TOC-WRITER-HOOKS-1 / TOC-WRITER-TOOLCALLS-1 ---------------------------------------
+
+
+def _final(dirs, task_id):
+    return ta.final_event(ta.read_events(dirs / "traj" / f"{task_id}.trajectory.jsonl"))
+
+
+def test_rendered_history_rewrite_moves_prefix_cache_invalidations(monkeypatch, dirs):
+    _on(monkeypatch, dirs)
+    st = _State("h1")
+    ta.note_rendered_history("h1", "[Session]\n- t1")
+    ta.note_rendered_history("h1", "[Session]\n- t1\n- t2")          # append-only: no rewrite
+    ta.note_rendered_history("h1", "[Consolidated t1-t2]\n- t3")      # consolidation: rewrite
+    ta.note_rendered_history("h1", "[C")                              # shorter than before: rewrite
+    ta.note_rendered_history("h1", "")                                # empty: ignored
+    _record_session_turn(st, role="frontdoor", code="x", output="y")
+    ta.finalize(st, "ok", True)
+    assert _final(dirs, "h1")["prefix_cache_invalidations"] == 2
+
+
+def test_escalation_compression_reports_history_rewrite(monkeypatch, dirs):
+    import sys
+    import types
+
+    from src.graph import helpers
+
+    set_features(Features(trajectory_artifact=True, escalation_compression=True))
+    monkeypatch.setenv(ta.DIR_ENV, str(dirs / "traj"))
+
+    class _Res:
+        original_chars, compressed_chars, actual_ratio, latency_ms = 20000, 10, 0.5, 1.0
+        compressed_text = "short"
+
+    fake = types.ModuleType("src.services.prompt_compressor")
+    fake.PromptCompressor = type("PC", (), {"get_instance": staticmethod(
+        lambda: type("C", (), {"compress": lambda self, *a, **k: _Res()})())})
+    monkeypatch.setitem(sys.modules, "src.services.prompt_compressor", fake)
+    st = _State("e1")
+    st.escalation_count = 1
+    assert helpers._maybe_compress_for_escalation("x" * 20000, st) == "short"
+    _record_session_turn(st, role="architect", code="x", output="y")
+    ta.finalize(st, "ok", True)
+    assert _final(dirs, "e1")["prefix_cache_invalidations"] == 1
+
+
+def test_execute_turn_session_block_is_reported(monkeypatch, dirs):
+    """The producer is wired where the session-log block is rendered into the prompt."""
+    import inspect
+
+    from src.graph import helpers
+
+    src = inspect.getsource(helpers)
+    assert "_trajectory_note_rendered_history(state, session_block)" in src
+
+
+def test_shell_compaction_signal_marks_bound_and_later_tasks(monkeypatch, dirs):
+    _on(monkeypatch, dirs)
+    ta.bind_session("s1", "ses_A")
+    ta.bind_session("other", "ses_B")
+    ta.note_shell_compaction_session("ses_A")
+    ta.bind_session("s2", "ses_A")   # a later request of the same shell session inherits it
+    for tid in ("s1", "other", "s2"):
+        st = _State(tid)
+        _record_session_turn(st, role="frontdoor", code="x", output="y")
+        ta.finalize(st, "ok", True)
+    assert _final(dirs, "s1")["shell_compaction_seen"] is True
+    assert _final(dirs, "s2")["shell_compaction_seen"] is True
+    assert _final(dirs, "other")["shell_compaction_seen"] is False
+
+
+def test_new_producers_are_noops_with_flag_off(monkeypatch, dirs):
+    monkeypatch.setenv(ta.DIR_ENV, str(dirs / "traj"))
+    set_features(Features(trajectory_artifact=False))
+    ta.bind_session("s1", "ses_A")
+    ta.note_shell_compaction_session("ses_A")
+    ta.note_rendered_history("s1", "abc")
+    assert not ta._TASKS and not ta._COMPACTED_SESSIONS and not (dirs / "traj").exists()
+
+
+def test_session_compacted_control_packet_reaches_the_writer(monkeypatch, dirs):
+    from fastapi.testclient import TestClient
+
+    from src.api import app
+    from src.api.state import reset_state
+
+    _on(monkeypatch, dirs)
+    reset_state()
+    ta.bind_session("v1", "ses_C")
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post("/v1/chat/completions", json={
+            "model": "orchestrator", "messages": [], "x_session_id": "ses_C",
+            "x_session_compacted": True})
+        bad = c.post("/v1/chat/completions", json={
+            "model": "orchestrator", "messages": [], "x_session_compacted": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["choices"][0]["message"]["content"] == ""
+    assert bad.status_code == 422
+    st = _State("v1")
+    _record_session_turn(st, role="frontdoor", code="x", output="y")
+    ta.finalize(st, "ok", True)
+    assert _final(dirs, "v1")["shell_compaction_seen"] is True
+
+
+def test_error_turn_tool_calls_reach_trajectory_only(monkeypatch, dirs):
+    """TOC-WRITER-TOOLCALLS-1: an error turn that peeked counts its retrieval; the session-log
+    record (rendered into the prompt) is unchanged."""
+    from src.graph import helpers
+
+    class _Ev:
+        def __init__(self, f):
+            self.function = f
+
+    class _Repl:
+        def get_exploration_log(self):
+            return type("L", (), {"events": [_Ev("grep"), _Ev("peek"), _Ev("run_python_code")]})()
+
+    deps = type("D", (), {"repl": _Repl()})()
+    set_features(Features(trajectory_artifact=False))
+    monkeypatch.setenv(ta.DIR_ENV, str(dirs / "traj"))
+    assert helpers._trajectory_tool_calls(deps, 1) is None          # flag off: argument unchanged
+    _on(monkeypatch, dirs)
+    calls = helpers._trajectory_tool_calls(deps, 1)
+    assert calls == ["peek", "run_python_code"]
+    st = _State("err1")
+    st.session_log_path = str(dirs / "session.jsonl")
+    _record_session_turn(st, role="frontdoor", code="peek(1)", error="boom", nudge="n",
+                         trajectory_tool_calls=calls)
+    ta.finalize(st, "[x]", False)
+    fin = _final(dirs, "err1")
+    assert fin["tool_calls"] == {"retrieval": 1, "execution": 1}
+    assert st.session_log_records and st.session_log_records[0].tool_calls == []
+
+
+def test_error_path_call_sites_pass_trajectory_tool_calls():
+    import inspect
+
+    from src.graph import helpers
+
+    src = inspect.getsource(helpers)
+    assert src.count("trajectory_tool_calls=_trajectory_tool_calls(deps, _exploration_baseline)") == 2

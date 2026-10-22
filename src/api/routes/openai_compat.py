@@ -1305,6 +1305,21 @@ async def openai_chat_completions(
             usage=OpenAIUsage(),
         )
 
+    # TOC-WRITER-HOOKS-1: shell-compaction control packet (OpenCode ``session.compacted``).
+    # Like x_session_final it is answered before prompt parsing and never reaches inference.
+    if request.x_session_compacted:
+        session_id = request.x_session_id or http_request.headers.get("x-session-id")
+        if not session_id or len(session_id) > 128:
+            raise HTTPException(status_code=422, detail="x_session_compacted requires a session id")
+        from src.graph import trajectory_artifact
+
+        trajectory_artifact.note_shell_compaction_session(session_id)
+        return OpenAIChatResponse(
+            model=request.model,
+            choices=[OpenAIChoice(message=OpenAIMessage(role="assistant", content=""), finish_reason="stop")],
+            usage=OpenAIUsage(),
+        )
+
     # Extract the last user message as the prompt
     user_messages = [m for m in request.messages if m.role == "user"]
     if not user_messages:
