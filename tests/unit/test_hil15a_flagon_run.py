@@ -90,3 +90,38 @@ def test_new_task_set_mock_auc(tmp_path):
     m = json.loads((tmp_path / "o" / "manifest.json").read_text())
     assert len(m["runs"]) == 56 and m["dep_coverage"]["task_keys"] == 14 and not m["warnings"]
     assert "status" not in m["auc_table"] and "auc_out_of_fold" in m["auc_table"]
+
+
+def test_served_model_and_belief_sidecar_refuse_mock(tmp_path):
+    root = os.environ.get("EPYC_ROOT", "/workspace")
+    _run(["--out-dir", str(tmp_path / "o"), "--mock-llm", "--no-reexec", "--served-model", "/m/x.gguf",
+          "--belief-sidecar", "--epyc-root", root])
+    m = json.loads((tmp_path / "o" / "manifest.json").read_text())
+    assert m["served_model"] == "/m/x.gguf"
+    s = m["auc_sidecar"]
+    assert s["path"] is None and s["skipped"]  # mock run: refused or adapter absent, never a sidecar
+    assert not (tmp_path / "o" / "auc_table.beliefs.jsonl").exists()
+
+
+def test_write_auc_sidecar_missing_adapter_is_recorded(tmp_path):
+    r = drv.write_auc_sidecar(tmp_path, "rid", str(tmp_path / "nope"), {"mock": False})
+    assert r["path"] is None and "adapter not found" in r["skipped"]
+
+
+def test_write_auc_sidecar_live_manifest_writes_rows(tmp_path):
+    root = Path(os.environ.get("EPYC_VIDYA_ROOT", "/mnt/raid0/llm/worktrees/root-pbe-3c4ca599"))
+    if not (root / "scripts/vidya/adapters/hil15a_auc.py").is_file():
+        pytest.skip("hil15a_auc adapter not present in the root checkout")
+    table = {"n_runs": 24, "n_tasks": 6, "n_failed": 9, "edge_definition": "observed (intervention-validated needs HIL-16 replay)",
+             "auc_out_of_fold": {"size": 0.6, "size+composition": 0.62, "size+composition+observed_dependency": 0.7,
+                                 "size+composition+degree_matched_counterfeit": 0.61},
+             "deltas": {"observed_dependency_minus_composition": {"delta_auc": 0.08, "ci95_task_resampled": [0.01, 0.15]},
+                        "observed_dependency_minus_size": {"delta_auc": 0.1, "ci95_task_resampled": [0.0, 0.2]},
+                        "counterfeit_minus_composition": {"delta_auc": -0.01, "ci95_task_resampled": [-0.1, 0.08]}}}
+    (tmp_path / "auc_table.json").write_text(json.dumps(table))
+    man = {"mock": False, "schema": "hil15a_flagon_run/v1", "hashseed": "0", "flags": ["a"], "label_classes": ["False", "True"],
+           "served_model": "/m/x.gguf"}
+    r = drv.write_auc_sidecar(tmp_path, "rid", str(root), man)
+    assert r["skipped"] is None, r
+    rows = [json.loads(x) for x in (tmp_path / "auc_table.beliefs.jsonl").read_text().splitlines()]
+    assert len(rows) == 7 and all(x["extra"]["served_model"] == "/m/x.gguf" for x in rows)

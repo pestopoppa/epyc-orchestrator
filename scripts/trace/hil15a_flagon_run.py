@@ -240,6 +240,22 @@ def join_accounting(db: str, progress: Path) -> dict:
     return {"step_bearing_runs": len(steps), "joined_outcome": joined, "task_runs": len(outcomes)}
 
 
+def write_auc_sidecar(out: Path, run_id: str, epyc_root: str, manifest: dict) -> dict:
+    """Write ``auc_table.beliefs.jsonl`` (VB-HIL15A-WRITE). Never raises: a missing adapter or a refused
+    table (mock, insufficient, one class) is recorded in the manifest and the run still completes."""
+    adapter = Path(epyc_root) / "scripts" / "vidya" / "adapters" / "hil15a_auc.py"
+    if not adapter.is_file():
+        return {"path": None, "skipped": f"adapter not found: {adapter}"}
+    sys.path.insert(0, str(Path(epyc_root) / "scripts" / "vidya"))
+    try:
+        from adapters.hil15a_auc import write_belief_measurements  # type: ignore
+        path = write_belief_measurements(out, run_id=run_id, producer="hil15a_flagon_run.py",
+                                         auc_table_path=out / "auc_table.json", manifest=manifest)
+        return {"path": str(path), "skipped": None}
+    except Exception as e:  # CaptureError or import failure: recorded, never fatal
+        return {"path": None, "skipped": f"{type(e).__name__}: {e}"}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out-dir", required=True)
@@ -253,6 +269,8 @@ def main(argv=None) -> int:
     ap.add_argument("--min-task-keys", type=int, default=5)
     ap.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"), help="root checkout that holds scripts/vidya/adapters (belief-sidecar writers)")
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--served-model", default=None, help="GGUF path (or pin) of the served model; recorded in the manifest and the belief rows")
+    ap.add_argument("--belief-sidecar", action="store_true", help="write auc_table.beliefs.jsonl via hil15a_auc.write_belief_measurements after auc_table.json (opt-in, live non-mock only)")
     ap.add_argument("--max-wall-s", type=float, default=None, help="stop starting new runs after this many seconds; offline steps still run")
     ap.add_argument("--min-dep-task-keys", type=int, default=5, help="warn when fewer task keys than this have a tool_dependency run")
     a = ap.parse_args(argv)
@@ -273,6 +291,8 @@ def main(argv=None) -> int:
 
     manifest = {"schema": "hil15a_flagon_run/v1", "mock": a.mock_llm, "hashseed": hs, "flags": list(FLAGS),
                 "reasoning_retry": "disabled via " + ",".join(RETRY_OFF), "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if a.served_model:
+        manifest["served_model"] = a.served_model
     if not a.mock_llm:
         import dataclasses
         from src.config.models import ServerURLsConfig
@@ -321,6 +341,8 @@ def main(argv=None) -> int:
     from src.trace.dependency_features import auc_table, load_runs
     manifest["auc_table"] = auc_table(load_runs(paths["db"]), {k: (v[0], bool(v[1])) for k, v in labels.items()})
     (out / "auc_table.json").write_text(json.dumps(manifest["auc_table"], indent=1))
+    if a.belief_sidecar:
+        manifest["auc_sidecar"] = write_auc_sidecar(out, rid, a.epyc_root, manifest)
     dep_runs = load_runs(paths["db"])
     dep_keys = {labels[r][0] for r in dep_runs if r in labels}
     dep_classes = {bool(labels[r][1]) for r in dep_runs if r in labels}
