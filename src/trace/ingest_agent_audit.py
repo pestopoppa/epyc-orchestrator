@@ -1,4 +1,10 @@
-"""Parse /workspace/logs/agent_audit.log into normalized events.
+"""Parse the agent_audit log family (/workspace/logs/agent_audit*.log) into normalized events.
+
+Since the shard cutover (root f1717d80) every writer appends to its own
+``agent_audit-<agent-id>.log`` shard; the monolithic ``agent_audit.log`` is FROZEN
+(pre-cutover history only). The default source is therefore the whole log DIRECTORY,
+read with the same ``agent_audit*.log`` glob as root's ``agent_log_files()``
+(scripts/utils/agent_log_read.sh), which matches the legacy file and every shard (UTM-LB3).
 
 Two formats coexist in the file:
 1. JSON (~1459/2698 lines, recent): `{"ts","session","level","cat","msg","details"}`
@@ -21,7 +27,11 @@ from src.trace.store import Event, EventCategory, EventSource, detail_to_json
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LOG_PATH = Path("/workspace/logs/agent_audit.log")
+DEFAULT_LOG_DIR = Path("/workspace/logs")
+# One glob covers the frozen legacy file AND every per-writer shard (empty infix or -<id>).
+SHARD_GLOB = "agent_audit*.log"
+# Frozen legacy monolith; kept as a constant for callers that want pre-cutover history only.
+DEFAULT_LOG_PATH = DEFAULT_LOG_DIR / "agent_audit.log"
 
 # Map upstream category strings to canonical EventCategory values.
 # Categories not in this map are stored verbatim (lowercased).
@@ -158,6 +168,29 @@ def parse_lines(lines: list[str], source_path: str) -> Iterator[Event]:
             ev = None
         if ev is not None:
             yield ev
+
+
+def shard_files(log_dir: Path | str = DEFAULT_LOG_DIR) -> list[Path]:
+    """Every agent_audit log file under ``log_dir`` (legacy + shards), sorted by name.
+
+    Order across files is NOT chronological; the store keys rows by (source_path, line),
+    so cross-file order does not matter for ingest.
+    """
+    log_dir = Path(log_dir)
+    if not log_dir.is_dir():
+        return []
+    return sorted(p for p in log_dir.glob(SHARD_GLOB) if p.is_file())
+
+
+def parse_source(path: Path | str = DEFAULT_LOG_DIR) -> list[Event]:
+    """Parse a single log file, or every shard when ``path`` is a directory."""
+    path = Path(path)
+    if path.is_dir():
+        events: list[Event] = []
+        for f in shard_files(path):
+            events.extend(parse_file(f))
+        return events
+    return parse_file(path)
 
 
 def parse_file(path: Path | str = DEFAULT_LOG_PATH) -> list[Event]:

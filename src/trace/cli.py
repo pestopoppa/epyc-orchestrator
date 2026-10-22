@@ -38,8 +38,8 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     sources = []
 
     if not args.no_agent_audit:
-        events = ingest_agent_audit.parse_file(
-            args.agent_audit or ingest_agent_audit.DEFAULT_LOG_PATH
+        events = ingest_agent_audit.parse_source(
+            args.agent_audit or ingest_agent_audit.DEFAULT_LOG_DIR
         )
         ins, skp = upsert_events(conn, events)
         total_inserted += ins
@@ -258,7 +258,11 @@ def main(argv: list[str] | None = None) -> int:
     pi.add_argument("--no-agent-audit", action="store_true")
     pi.add_argument("--no-progress", action="store_true")
     pi.add_argument("--no-autopilot", action="store_true")
-    pi.add_argument("--agent-audit", help="override agent_audit.log path")
+    pi.add_argument(
+        "--agent-audit",
+        help="agent_audit log file, or a directory whose agent_audit*.log shards are all read "
+        "(default: /workspace/logs — the per-agent shards plus the frozen legacy file)",
+    )
     pi.add_argument("--progress-root", help="override progress/ root")
     pi.add_argument("--autopilot-tsv", help="override autopilot_journal.tsv path")
     pi.add_argument("--autopilot-jsonl", help="override autopilot_journal.jsonl path")

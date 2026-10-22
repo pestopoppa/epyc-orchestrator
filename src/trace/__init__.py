@@ -1,7 +1,7 @@
 """Unified trace / memory service.
 
 Read-only query layer over fragmented audit/trace formats:
-- /workspace/logs/agent_audit.log (JSON + legacy text dual format)
+- /workspace/logs/agent_audit*.log — per-agent shards + frozen legacy file (JSON + legacy text)
 - /workspace/progress/YYYY-MM/*.md (+ .jsonl when present)
 - orchestration/autopilot_journal.{tsv,jsonl} + autopilot_state.json
 

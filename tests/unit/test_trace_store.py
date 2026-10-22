@@ -351,3 +351,32 @@ def test_trial_context_handles_missing_trial(db_path: Path) -> None:
     assert ctx["trial_id"] == 404
     assert ctx["from_ts"] is None
     assert ctx["counts"] == {"trial_events": 0, "context_events": 0, "timeline": 0}
+
+
+# ─── agent_audit shard discovery (UTM-LB3) ────────────────────────────────────
+
+def test_default_source_is_shard_directory() -> None:
+    assert ingest_agent_audit.DEFAULT_LOG_DIR == Path("/workspace/logs")
+    assert ingest_agent_audit.DEFAULT_LOG_PATH.parent == ingest_agent_audit.DEFAULT_LOG_DIR
+
+
+def test_parse_source_reads_every_shard_and_the_legacy_file(tmp_path: Path) -> None:
+    line = '{{"ts":"2026-10-22T00:00:00Z","cat":"OBSERVE","msg":"{m}","session":"s"}}'
+    (tmp_path / "agent_audit.log").write_text(line.format(m="legacy") + "\n")
+    (tmp_path / "agent_audit-mainA.log").write_text(line.format(m="a") + "\n")
+    (tmp_path / "agent_audit-unattributed.log").write_text(line.format(m="u") + "\n")
+    (tmp_path / "other.log").write_text(line.format(m="ignored") + "\n")
+    files = ingest_agent_audit.shard_files(tmp_path)
+    assert [f.name for f in files] == [
+        "agent_audit-mainA.log", "agent_audit-unattributed.log", "agent_audit.log",
+    ]
+    events = ingest_agent_audit.parse_source(tmp_path)
+    assert sorted(e.summary for e in events) == ["a", "legacy", "u"]
+    # dedup key stays per-file
+    assert len({(e.source_path, e.source_line) for e in events}) == 3
+    # a single file still works
+    assert [e.summary for e in ingest_agent_audit.parse_source(tmp_path / "agent_audit-mainA.log")] == ["a"]
+
+
+def test_parse_source_missing_dir_is_empty(tmp_path: Path) -> None:
+    assert ingest_agent_audit.parse_source(tmp_path / "nope") == []
