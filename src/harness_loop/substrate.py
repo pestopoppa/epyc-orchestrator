@@ -1,0 +1,214 @@
+"""Narrow facade over the AutoPilot substrate the HIL sibling loop shares (HIL-3 / HIL-6 option B).
+
+One implementation, two callers. Every function here delegates to the module AutoPilot itself
+uses; nothing is re-implemented. What the facade ADDS is only the sibling's boundary:
+
+* **Journal** (``scripts/autopilot/experiment_journal.py``): :func:`open_loop_journal` demands an
+  explicit directory and refuses AutoPilot's live journal directory (``ExperimentJournal()``'s
+  default) or any directory that already holds an AutoPilot journal. Storage, append-only,
+  flock + fsync and torn-tail repair are the journal's own.
+* **AP-53 rejected-mutation ledger** (``scripts/autopilot/rejected_mutation_ledger.py``): the same
+  record builder and durable append, written beside the LOOP journal, never AutoPilot's.
+* **MHS guards** (``src/autopilot_core/mutation_guards.py``, extraction seam S1): import-safe, no
+  PromptForge proposer is imported or instantiated to call them. The MHS-3 eval-leakage guard is
+  not extracted yet (seam S2), so :func:`leakage_reason` FAILS CLOSED until it is.
+* **AP-55 infra fingerprint** (``src/autopilot_core/infra_fingerprint.py``): reused directly;
+  identity is passed as data.
+* **AP-54 eval fence** (``src/repl_environment/knowledge_fence.py``, request field
+  ``eval_fence``): the sibling arms the existing request seam on BOTH arms and creates no second
+  fence. :func:`fenced_eval_request` and :func:`require_fence_active` are the two checks.
+* **Safety/promotion gate**: the no-side-effect verdict entry point is extraction seam S4 and does
+  not exist yet; :func:`autopilot_gate_verdict` refuses rather than calling ``SafetyGate.check``
+  (which mutates gate state and reads AutoPilot's live archive). The sibling consumes a verdict;
+  it can never ratchet AutoPilot's baseline.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Mapping
+
+from src.autopilot_core import infra_fingerprint as _infra
+from src.autopilot_core.mutation_guards import (
+    MutationEffect,
+    classify_prompt_effect,
+    mutation_effect_risk,
+    mutation_risk_gate_reason,
+    prompt_interference_lint,
+    rank_mutations_by_risk,
+    screen_static_safety,
+)
+
+__all__ = [
+    "AUTOPILOT_JOURNAL_STEM",
+    "EVAL_FENCE_FIELD",
+    "LOOP_JOURNAL_MARKER",
+    "LiveSubstrateRefused",
+    "MutationEffect",
+    "SeamNotExtracted",
+    "append_rejection",
+    "autopilot_gate_verdict",
+    "classify_prompt_effect",
+    "compare_infra_fingerprints",
+    "fenced_eval_request",
+    "leakage_reason",
+    "load_rejections",
+    "mutation_effect_risk",
+    "mutation_risk_gate_reason",
+    "open_loop_journal",
+    "prompt_interference_lint",
+    "rank_mutations_by_risk",
+    "regime_digest",
+    "require_fence_active",
+    "screen_static_safety",
+]
+
+#: File stem AutoPilot's ``ExperimentJournal`` writes (``autopilot_journal*.jsonl`` / ``.tsv``).
+AUTOPILOT_JOURNAL_STEM = "autopilot_journal"
+#: Marker the sibling writes into a directory it owns; a directory with AutoPilot journal shards
+#: and no marker is AutoPilot's, never the loop's.
+LOOP_JOURNAL_MARKER = ".harness_loop_journal"
+#: Request field of the AP-54 fence (``src/api/models/requests.py`` ``ChatRequest.eval_fence``).
+EVAL_FENCE_FIELD = "eval_fence"
+
+# Shared-clone and symlinked spellings of AutoPilot's live journal directory. The worktree's own
+# ``DEFAULT_JOURNAL_DIR`` is added at call time (it differs per checkout).
+_KNOWN_LIVE_JOURNAL_DIRS = (
+    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration"),
+    Path("/workspace/repos/epyc-orchestrator/orchestration"),
+)
+
+
+class LiveSubstrateRefused(ValueError):
+    """The sibling was pointed at AutoPilot's live journal/ledger, or at no path at all."""
+
+
+class SeamNotExtracted(RuntimeError):
+    """A substrate seam the sibling needs is planned but not extracted yet (fail closed)."""
+
+
+# ── journal ────────────────────────────────────────────────────────────────
+
+
+def _autopilot_default_journal_dir() -> Path:
+    from scripts.autopilot.experiment_journal import DEFAULT_JOURNAL_DIR
+
+    return Path(DEFAULT_JOURNAL_DIR)
+
+
+def _live_journal_dirs() -> set[Path]:
+    dirs = {_autopilot_default_journal_dir()} | set(_KNOWN_LIVE_JOURNAL_DIRS)
+    out: set[Path] = set()
+    for d in dirs:
+        try:
+            out.add(d.resolve())
+        except OSError:
+            out.add(d)
+    return out
+
+
+def _check_loop_dir(journal_dir: Path | str | None) -> Path:
+    if journal_dir is None or str(journal_dir).strip() == "":
+        raise LiveSubstrateRefused(
+            "the sibling loop needs an explicit journal directory; ExperimentJournal()'s default "
+            "is AutoPilot's live journal"
+        )
+    resolved = Path(journal_dir).resolve()
+    if resolved in _live_journal_dirs():
+        raise LiveSubstrateRefused(f"{resolved} is AutoPilot's live journal directory")
+    if resolved.is_dir() and not (resolved / LOOP_JOURNAL_MARKER).exists():
+        if any(resolved.glob(f"{AUTOPILOT_JOURNAL_STEM}*")):
+            raise LiveSubstrateRefused(
+                f"{resolved} holds an AutoPilot journal and no {LOOP_JOURNAL_MARKER} marker"
+            )
+    return resolved
+
+
+def open_loop_journal(journal_dir: Path | str, *, segment_snapshots: bool = False) -> Any:
+    """Open (create) the LOOP's own ``ExperimentJournal``; never AutoPilot's live one.
+
+    The loop writes typed ledger events (``ExperimentJournal.append_ledger_event``) rather than
+    AutoPilot ``JournalEntry`` trial rows, so it emits nothing into the shared trace store and
+    never closes AutoPilot-shaped segments. ``segment_snapshots`` defaults off for the same reason.
+    """
+    resolved = _check_loop_dir(journal_dir)
+    resolved.mkdir(parents=True, exist_ok=True)
+    marker = resolved / LOOP_JOURNAL_MARKER
+    if not marker.exists():
+        marker.write_text("harness-improvement sibling loop journal (HIL-6 option B)\n")
+    from scripts.autopilot.experiment_journal import ExperimentJournal
+
+    return ExperimentJournal(journal_dir=resolved, segment_snapshots=segment_snapshots)
+
+
+# ── AP-53 rejected-mutation ledger ───────────────────────────────────────────
+
+
+def append_rejection(journal_dir: Path | str, **record_fields: Any) -> bool:
+    """Build an AP-53 record with AutoPilot's own builder and append it beside the LOOP journal."""
+    from scripts.autopilot import rejected_mutation_ledger as ledger
+
+    resolved = _check_loop_dir(journal_dir)
+    return ledger.append_record(resolved, ledger.build_record(**record_fields))
+
+
+def load_rejections(journal_dir: Path | str) -> list[dict[str, Any]]:
+    from scripts.autopilot import rejected_mutation_ledger as ledger
+
+    return ledger.load_records(_check_loop_dir(journal_dir))
+
+
+# ── MHS-3 leakage (seam S2, not extracted) ──────────────────────────────────
+
+
+LEAKAGE_NOT_EXTRACTED = "mhs3_leakage_guard_not_extracted"
+
+
+def leakage_reason(text: str, **_: Any) -> str | None:
+    """Fail-closed placeholder: every text is refused until seam S2 extracts the MHS-3 guard.
+
+    MHS-3 is fail-closed by contract (an unavailable vocabulary rejects every mutation); the
+    sibling keeps that contract instead of importing the PromptForge module to reach it.
+    """
+    return LEAKAGE_NOT_EXTRACTED
+
+
+# ── AP-55 infra fingerprint ───────────────────────────────────────────────────
+
+compare_infra_fingerprints = _infra.compare_infra_fingerprints
+regime_digest = _infra.regime_digest
+NON_COMPARABLE = _infra.NON_COMPARABLE
+COMPARABLE = _infra.COMPARABLE
+UNVERIFIED = _infra.UNVERIFIED
+
+
+# ── AP-54 eval fence ─────────────────────────────────────────────────────────
+
+
+def fenced_eval_request(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return ``payload`` with the AP-54 fence armed. An explicit disarm is refused, not overridden."""
+    out = dict(payload)
+    if EVAL_FENCE_FIELD in out and out[EVAL_FENCE_FIELD] is not True:
+        raise ValueError(
+            f"HIL-2 item 7: loop eval requests arm the fence on both arms; got "
+            f"{EVAL_FENCE_FIELD}={out[EVAL_FENCE_FIELD]!r}"
+        )
+    out[EVAL_FENCE_FIELD] = True
+    return out
+
+
+def require_fence_active(response_fence: Mapping[str, Any] | None) -> None:
+    """Refuse a result whose response does not echo an ACTIVE fence (``eval_fence.state``)."""
+    state = (response_fence or {}).get("state")
+    if state != "active":
+        raise ValueError(f"HIL-2 item 7: eval fence state {state!r}, expected 'active'")
+
+
+# ── safety/promotion gate (seam S4, not extracted) ────────────────────────────
+
+
+def autopilot_gate_verdict(*_: Any, **__: Any) -> Any:
+    raise SeamNotExtracted(
+        "seam S4 (no-side-effect SafetyGate verdict over explicit immutable evidence) is not "
+        "extracted; SafetyGate.check mutates gate state and reads AutoPilot's live archive"
+    )
