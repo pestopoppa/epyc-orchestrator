@@ -305,6 +305,11 @@ class _Call:
     events: int = 0
     timings: dict[str, Any] | None = None
     usage: dict[str, Any] | None = None
+    # UFH14-LB2/LB6: the upstream's own stop signal and the wall gaps between consecutive
+    # SSE output events (ms; the first event starts the clock, so TTFT is not a gap).
+    finish_reason: str | None = None
+    gaps_ms: list[float] = field(default_factory=list, repr=False)
+    last_event_mono: float | None = field(default=None, repr=False)
     upstream_error: str | None = None
     pool_exhausted: bool = False
     client_disconnected: bool = False
@@ -357,13 +362,21 @@ class _SSEScanner:
         self._call.events += 1
         if data == b"[DONE]":
             return
+        if b"prompt_progress" not in data:
+            mono = time.monotonic()
+            call = self._call
+            if call.last_event_mono is not None and len(call.gaps_ms) < 1_000_000:
+                call.gaps_ms.append((mono - call.last_event_mono) * 1000.0)
+            call.last_event_mono = mono
         if not self._first_seen and b"prompt_progress" not in data:
             self._first_seen = True
             self._on_first_output()
         if _POOL_EXHAUSTED_MARKER in data:
             self._call.pool_exhausted = True
         if (b'"timings"' in data or b'"usage"' in data or b'"error"' in data
-                or b'"id_slot"' in data):
+                or b'"id_slot"' in data
+                # only a NON-null finish_reason (every content event carries a null one)
+                or b'"finish_reason":"' in data or b'"finish_reason": "' in data):
             try:
                 obj = json.loads(data)
             except ValueError:
@@ -381,6 +394,11 @@ def absorb_payload(call: _Call, obj: Any) -> None:
     id_slot = obj.get("id_slot")
     if isinstance(id_slot, int) and not isinstance(id_slot, bool) and id_slot >= 0:
         call.server_slot = id_slot
+    choices = obj.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        fr = choices[0].get("finish_reason")
+        if isinstance(fr, str) and fr:
+            call.finish_reason = fr
     usage = obj.get("usage")
     if not isinstance(usage, dict):
         resp = obj.get("response")  # /v1/responses response.completed event
@@ -892,6 +910,8 @@ def write_serving_record(call: _Call, error: BaseException | None) -> None:
             notes["first_chunk_ms"] = round((call.t_first_chunk - call.t_dispatch) * 1000.0, 3)
         if call.server_slot is not None:
             notes["server_slot"] = call.server_slot  # same key as serving_calls.note_server_slot
+        if call.stream and call.gaps_ms:
+            notes["stream_gaps"] = serving_calls.stream_gap_stats(call.gaps_ms)
         record = serving_calls.build_record(
             method="passthrough",
             role_config=call.role_config,
@@ -905,6 +925,7 @@ def write_serving_record(call: _Call, error: BaseException | None) -> None:
         )
         record["role"] = call.role
         record["request_role"] = call.role
+        record["finish_reason"] = call.finish_reason
         # UFH14-B6b: the same ``port`` / ``backend_url`` the primitives lanes
         # stage, so per-port analyses do not drop passthrough calls.
         record["caller"] = {

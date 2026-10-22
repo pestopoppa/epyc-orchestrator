@@ -245,6 +245,30 @@ def _extract_json_object(text: str) -> str | None:
 def parse_review_decision(
     text: str,
 ) -> tuple[dict[str, Any] | None, ParseFailure | None]:
+    """Parse + validate a reviewer emission; see :func:`_parse_review_decision`.
+
+    UFH14-LB2: every outcome is also persisted as a ``review_decision`` parse event with
+    the generation's ``finish_reason`` so a length-truncated reviewer reply is told apart
+    from a malformed one. The event write never raises and never changes the result.
+    """
+    obj, failure = _parse_review_decision(text)
+    try:
+        from src.structured_output import parse_events
+
+        parse_events.record_parse_event(
+            "review_decision", "review_grammar",
+            "parsed" if failure is None else "failed",
+            reason="" if failure is None else str(getattr(failure.reason, "value", failure.reason)),
+            extra={"text_chars": len(text or "")},
+        )
+    except Exception:
+        pass
+    return obj, failure
+
+
+def _parse_review_decision(
+    text: str,
+) -> tuple[dict[str, Any] | None, ParseFailure | None]:
     """Parse + validate a reviewer emission into a ReviewDecision object.
 
     Returns ``(obj, None)`` on success or ``(None, ParseFailure)`` on failure. The

@@ -42,6 +42,8 @@ import contextvars
 import functools
 import hashlib
 import json
+import logging
+import math
 import os
 import socket
 import threading
@@ -106,6 +108,62 @@ _NOTES: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
 _IN_CALL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "serving_calls_in_call", default=False
 )
+#: UFH14-LB2: the summary of the last recorded call made in THIS context (set by
+#: ``recorded_call`` after the call returns), so a parse event can say which
+#: generation it is parsing and how that generation ended (``finish_reason``).
+_LAST_CALL: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "serving_calls_last_call", default=None
+)
+
+# UFH14-LB6: the writer used to swallow every failure silently, so a live process whose
+# records stopped arriving (19 records in 17 days against ~9k logged ``llama POST``
+# lines) could not tell "disabled", "nested" and "write failed" apart. These counters
+# are per process and are surfaced by :func:`health` and a one-time WARNING.
+_STATS: dict[str, int] = {
+    "recorded": 0,
+    "skipped_disabled": 0,
+    "skipped_nested": 0,
+    "build_failed": 0,
+    "write_failed": 0,
+}
+_stats_lock = threading.Lock()
+_logged_failure_kinds: set[str] = set()
+_log = logging.getLogger(__name__)
+
+
+def _bump(key: str, exc: BaseException | None = None) -> None:
+    """Count a recorder event; the FIRST failure of each kind is logged with its
+    exception (fail-open must stay visible: a swallowed failure is invisible)."""
+    with _stats_lock:
+        _STATS[key] = _STATS.get(key, 0) + 1
+        first = key.endswith("_failed") and key not in _logged_failure_kinds
+        if first:
+            _logged_failure_kinds.add(key)
+    if first:
+        _log.warning(
+            "serving_calls %s (first occurrence this process): %s: %s",
+            key, type(exc).__name__ if exc else "-", exc,
+        )
+
+
+def health() -> dict[str, Any]:
+    """Per-process recorder state: where records go and what happened to the calls.
+
+    ``skipped_disabled`` > 0 with ``enabled`` false means the kill switch is set in
+    this process's environment; ``build_failed`` / ``write_failed`` > 0 means records
+    were dropped by an exception (the first of each kind is logged at WARNING).
+    """
+    path = log_path()
+    with _stats_lock:
+        stats = dict(_STATS)
+    return {"enabled": path is not None, "path": str(path) if path else None, **stats,
+            "pid": os.getpid()}
+
+
+def last_call() -> dict[str, Any] | None:
+    """Summary of the last recorded call made in this context (copy), or None."""
+    value = _LAST_CALL.get()
+    return dict(value) if value else None
 
 
 # ---------------------------------------------------------------------------
@@ -501,8 +559,10 @@ def write_record(record: dict[str, Any]) -> bool:
                 if fcntl is not None:
                     fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
         _feed_serving_params(record)
+        _bump("recorded")
         return True
-    except Exception:
+    except Exception as exc:
+        _bump("write_failed", exc)
         return False
 
 
@@ -654,6 +714,14 @@ def build_record(
             "first_token_ms": getattr(result, "first_token_ms", None) or None,
             "stream_chunks": getattr(result, "stream_chunks", None) or None,
         }
+    # UFH14-LB2/LB6: the backend's own stop signal as a first-class top-level field.
+    # ``/completion`` reports ``stop_type`` (eos/limit/word), the chat lane the OpenAI
+    # ``finish_reason`` (stop/length/tool_calls); both reach ``completion_reason``.
+    # A ``length``/``limit`` value with ``tokens_generated`` at ``request.n_tokens`` is a
+    # budget cut, which is what separates a truncated parse failure from a malformed one.
+    record["finish_reason"] = (
+        (record.get("result") or {}).get("completion_reason") if result is not None else None
+    )
     if exc is not None:
         record["error"] = {"type": type(exc).__name__, "message": str(exc)[:300]}
         refusal = getattr(exc, "refusal", None)
@@ -688,6 +756,21 @@ def build_record(
     if notes:
         record["notes"] = notes
     return record
+
+
+def _last_call_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """The few fields a parse event needs about the generation it is parsing."""
+    result = record.get("result") or {}
+    request = record.get("request") or {}
+    return {
+        "record_id": record.get("record_id"),
+        "role": record.get("role"),
+        "method": record.get("method"),
+        "finish_reason": record.get("finish_reason"),
+        "n_tokens": result.get("tokens_generated"),
+        "max_tokens": request.get("n_tokens"),
+        "outcome": record.get("outcome"),
+    }
 
 
 def record_refusal(
@@ -798,6 +881,52 @@ def abandon_staged(exc: BaseException | None = None) -> None:
         pass
 
 
+#: UFH14-LB6: inter-chunk gap capture. A "gap" is the wall time between two consecutive
+#: ``on_chunk`` deliveries of one streamed call (first chunk to last chunk; time to first
+#: token is NOT a gap). A "stall" is a gap at or above ``STALL_THRESHOLD_MS``. The raw gap
+#: list is kept (capped) so any percentile can be re-derived and its sample audited: a
+#: p99.9 over 80 gaps is the max of 80 gaps, and the record says so (``n_gaps``,
+#: ``p999_min_samples_met``, ``stall_idx``) rather than leaving the reader to guess.
+STALL_THRESHOLD_MS = 500.0
+GAP_LIST_CAP = 4096
+P999_MIN_SAMPLES = 1000
+
+
+def _nearest_rank(sorted_vals: list[float], q: float) -> float | None:
+    if not sorted_vals:
+        return None
+    rank = max(1, min(len(sorted_vals), math.ceil(q * len(sorted_vals) - 1e-9)))
+    return sorted_vals[rank - 1]
+
+
+def stream_gap_stats(gaps_ms: list[float], *, stall_ms: float = STALL_THRESHOLD_MS) -> dict[str, Any] | None:
+    """Summary block for one stream's inter-chunk gaps (None when fewer than one gap).
+
+    Percentiles are nearest-rank over the full gap list. ``stall_idx`` lists the arrival
+    index (0-based position in the gap list) of each stall, so stall arrivals can be
+    counted per stream and not only in aggregate. The raw list is truncated at
+    ``GAP_LIST_CAP`` entries (``gaps_truncated``); the statistics always use every gap.
+    """
+    if not gaps_ms:
+        return None
+    ordered = sorted(gaps_ms)
+    n = len(gaps_ms)
+    stall_idx = [i for i, g in enumerate(gaps_ms) if g >= stall_ms]
+    return {
+        "n_gaps": n,
+        "p50_ms": round(_nearest_rank(ordered, 0.50), 3),
+        "p99_ms": round(_nearest_rank(ordered, 0.99), 3),
+        "p999_ms": round(_nearest_rank(ordered, 0.999), 3),
+        "p999_min_samples_met": n >= P999_MIN_SAMPLES,
+        "max_ms": round(ordered[-1], 3),
+        "stall_threshold_ms": stall_ms,
+        "stall_count": len(stall_idx),
+        "stall_idx": stall_idx[:256],
+        "gaps_ms": [round(g, 3) for g in gaps_ms[:GAP_LIST_CAP]],
+        "gaps_truncated": n > GAP_LIST_CAP,
+    }
+
+
 def _wrap_on_chunk(on_chunk: Callable[[str], Any] | None, notes: dict[str, Any]):
     if on_chunk is None:
         return None
@@ -805,6 +934,11 @@ def _wrap_on_chunk(on_chunk: Callable[[str], Any] | None, notes: dict[str, Any])
     def _observed(content: str) -> Any:
         if "first_chunk_at" not in notes:
             notes["first_chunk_at"] = time.time()
+        mono = time.monotonic()  # monotonic for the gap; wall time only stamps chunk 1
+        prev = notes.get("_last_chunk_mono")
+        if prev is not None:
+            notes.setdefault("_gaps_ms", []).append((mono - prev) * 1000.0)
+        notes["_last_chunk_mono"] = mono
         try:
             return on_chunk(content)
         except StopIteration:
@@ -865,7 +999,11 @@ def recorded_call(method: str) -> Callable:
     def decorator(fn: Callable) -> Callable:
         @functools.wraps(fn)
         def wrapper(self: Any, role_config: Any, request: Any, *args: Any, **kwargs: Any):
-            if _IN_CALL.get() or log_path() is None:
+            if _IN_CALL.get():
+                _bump("skipped_nested")
+                return fn(self, role_config, request, *args, **kwargs)
+            if log_path() is None:
+                _bump("skipped_disabled")
                 return fn(self, role_config, request, *args, **kwargs)
             staged = _STAGED.get()
             _STAGED.set(None)
@@ -892,6 +1030,10 @@ def recorded_call(method: str) -> Callable:
                     first = notes.pop("first_chunk_at", None)
                     if first is not None:
                         notes["first_chunk_ms"] = round((first - ts_start) * 1000.0, 3)
+                    notes.pop("_last_chunk_mono", None)
+                    gaps = notes.pop("_gaps_ms", None)
+                    if gaps:
+                        notes["stream_gaps"] = stream_gap_stats(gaps)
                     record = build_record(
                         method=method,
                         role_config=role_config,
@@ -904,6 +1046,7 @@ def recorded_call(method: str) -> Callable:
                         staged=staged,
                         notes=notes,
                     )
+                    _LAST_CALL.set(_last_call_summary(record))
                     write_record(record)
                     try:
                         from src.backends import prompt_layout
@@ -914,8 +1057,8 @@ def recorded_call(method: str) -> Callable:
                     _dispatch_direct(staged, request, role_config, self, ts_start, result, error)
                     remember_served(record, prefix_ladder(request))
                     observe_prefix_index(record, request)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _bump("build_failed", exc)
 
         return wrapper
 

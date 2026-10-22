@@ -128,6 +128,13 @@ def _record(site: str, status: str, *, repair_calls: int = 0, reason: str = "") 
     key = (site, status)
     with _counts_lock:
         STRUCTURED_OUTPUT_REPAIR_COUNTS[key] = STRUCTURED_OUTPUT_REPAIR_COUNTS.get(key, 0) + 1
+    # UFH14-LB2: the counters above die with the process; the event survives and carries
+    # the generation's finish_reason. Never raises.
+    from src.structured_output import parse_events
+
+    parse_events.record_parse_event(
+        "structured_output", site, status, reason=reason, repair_calls=repair_calls
+    )
     if status == "parsed":
         _log.debug("structured_output_repair site=%s status=%s", site, status)
     else:
@@ -742,6 +749,9 @@ def parse_with_repair(
     parameter exists so a future site with that shape has an explicit,
     documented way to opt out instead of silently losing the force.
     """
+    from src.structured_output import parse_events
+
+    parse_events.begin_parse()  # UFH14-LB2: freeze the parsed generation's finish_reason
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
     if validator is None:
@@ -883,6 +893,9 @@ async def parse_with_repair_async(
     literal parallel implementation rather than a wrapper so neither path
     pays an event-loop indirection for the other.
     """
+    from src.structured_output import parse_events
+
+    parse_events.begin_parse()  # UFH14-LB2: freeze the parsed generation's finish_reason
     working_schema = _closed_schema(schema)
     validator = _build_validator(working_schema, site=site)
     if validator is None:
@@ -986,6 +999,14 @@ def http_chat_completer(
         )
         with urllib.request.urlopen(request, timeout=timeout_s) as response:
             payload = json.loads(response.read().decode("utf-8", "replace"))
+        from src.structured_output import parse_events
+
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        parse_events.note_repair_turn(
+            finish_reason=payload["choices"][0].get("finish_reason"),
+            max_tokens=max_tokens,
+            n_tokens=usage.get("completion_tokens"),
+        )
         return payload["choices"][0]["message"]["content"]
 
     return complete
@@ -1040,7 +1061,7 @@ def primitives_completer(
             f"[{m.get('role', 'user')}]\n{m.get('content', '')}" for m in messages
         ))
         with thinking_off():
-            return primitives.llm_call(
+            text = primitives.llm_call(
                 prompt,
                 role=role,
                 json_schema=dict(schema),
@@ -1048,5 +1069,10 @@ def primitives_completer(
                 n_tokens=n_tokens,
                 skip_suffix=True,
             )
+        # UFH14-LB2: the repair turn's own stop signal (last recorded call in this context).
+        from src.structured_output import parse_events
+
+        parse_events.note_repair_turn_from_last_call(max_tokens=n_tokens)
+        return text
 
     return complete

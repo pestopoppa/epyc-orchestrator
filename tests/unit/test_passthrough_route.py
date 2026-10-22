@@ -845,3 +845,21 @@ def test_derived_read_timeout_is_flagged_recorded_and_body_verbatim(
     assert block["timeout_s"] == int(expected_timeout)
     assert block["timeout_raised"] is flag
     assert block["at_risk"] is (not flag)
+
+
+def test_sse_scanner_captures_finish_reason_and_inter_event_gaps(monkeypatch):
+    """UFH14-LB2/LB6: the stop signal and the output-event gaps ride the serving record."""
+    call = pt._Call(role="r", base_url="http://x:1", endpoint="chat/completions", raw_body=b"",
+                    stream=True, prompt_tokens_est=1, prompt_tokens_rough=1, new_tokens=8,
+                    client_host="h", request_id="r1", client_id=None)
+    ticks = iter([1.0, 1.01, 2.01, 2.02])
+    monkeypatch.setattr(pt.time, "monotonic", lambda: next(ticks))
+    scanner = pt._SSEScanner(call, lambda: None)
+    ev = lambda d: b"data: " + json.dumps(d).encode() + b"\n\n"
+    scanner.feed(ev({"choices": [{"delta": {"content": "a"}, "finish_reason": None}]}))
+    scanner.feed(ev({"prompt_progress": {"processed": 1}}))  # not an output event: no gap
+    scanner.feed(ev({"choices": [{"delta": {"content": "b"}, "finish_reason": None}]}))
+    scanner.feed(ev({"choices": [{"delta": {"content": "c"}, "finish_reason": None}]}))
+    scanner.feed(ev({"choices": [{"delta": {}, "finish_reason": "length"}]}))
+    assert call.finish_reason == "length"
+    assert [round(g) for g in call.gaps_ms] == [10, 1000, 10]

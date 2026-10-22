@@ -59,6 +59,17 @@ def _record_repair_outcome(outcome: str, raw: str) -> None:
         "tool_call_json_repair outcome=%s bytes=%d encoding=utf-8-surrogatepass raw_content_sha256=%s",
         outcome, len(encoded_raw), hashlib.sha256(encoded_raw).hexdigest(),
     )
+    # UFH14-LB2: durable event with the generation's finish_reason (never the payload).
+    try:
+        from src.structured_output import parse_events
+
+        parse_events.record_parse_event(
+            "tool_call_json", "tool_call_parser", outcome,
+            reason=f"bytes={len(encoded_raw)}",
+            extra={"raw_bytes": len(encoded_raw)},
+        )
+    except Exception:
+        pass
 
 
 def _repair_json_text(raw: str) -> str | None:
