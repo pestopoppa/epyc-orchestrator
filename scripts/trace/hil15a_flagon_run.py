@@ -62,6 +62,9 @@ DEFAULT_TASKS = [
 ]
 
 
+from scripts.lib.epyc_root import default_epyc_root  # noqa: E402
+
+
 def load_tasks(path: str | None) -> list[dict]:
     tasks = json.loads(Path(path).read_text()) if path else DEFAULT_TASKS
     keys = [t["task_key"] for t in tasks]
@@ -245,7 +248,7 @@ def main(argv=None) -> int:
     ap.add_argument("--hashseed", default="0")
     ap.add_argument("--no-reexec", action="store_true")
     ap.add_argument("--min-task-keys", type=int, default=5)
-    ap.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"), help="root checkout that holds scripts/vidya/adapters (belief-sidecar writers)")
+    ap.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/l2_scan_capture.py"), help="root checkout that holds scripts/vidya/adapters (belief-sidecar writers)")
     ap.add_argument("--run-id", default=None)
     a = ap.parse_args(argv)
 

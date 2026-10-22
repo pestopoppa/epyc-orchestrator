@@ -27,7 +27,7 @@ Item 14 pins (closed set, every one required), and how they are computed here:
 
 CLI (for a runner that is not Python)::
 
-    hil_ab_sidecar.py --spec run.json --out-dir DIR [--epyc-root /workspace]
+    hil_ab_sidecar.py --spec run.json --out-dir DIR [--epyc-root DIR]  (default: $EPYC_ROOT, else the epyc-root-main view, else /workspace)
 
 where ``run.json`` = ``{"run_id", "results_path", "observations": [...], "arm_pins": {...},
 "protocol_id"?}``; each observation is the carrier's field set without ``arm_pins`` (the run-level
@@ -55,6 +55,9 @@ OBSERVATION_FIELDS = ("feature_id", "arm", "objective", "metric", "value", "unit
                       "native_verdict", "suite_id", "suite_version", "split", "scored", "attempted",
                       "prompt_param_path", "prompt_param_sha256", "harness_pin", "config_sha256",
                       "identities")
+
+
+from scripts.lib.epyc_root import default_epyc_root  # noqa: E402
 
 
 def canonical_sha256(obj: Any) -> str:
@@ -128,8 +131,10 @@ def arm_pins(*, tools: Iterable[Any] | None = None, tool_surface_sha256: str | N
     }
 
 
-def _carrier(epyc_root: str | Path):
-    vidya = str(Path(epyc_root) / "scripts" / "vidya")
+def _carrier(epyc_root: str | Path | None):
+    from scripts.lib.epyc_root import resolve_epyc_root
+
+    vidya = str(resolve_epyc_root(epyc_root) / "scripts" / "vidya")
     if not (Path(vidya) / "adapters" / "harness_improvement.py").is_file():
         raise FileNotFoundError(f"VB-HIL-WRITE carrier not found under {vidya}")
     if vidya not in sys.path:
@@ -141,7 +146,7 @@ def _carrier(epyc_root: str | Path):
 
 def finalize_hil_run(out_dir: str | Path, *, run_id: str, results_path: str | Path,
                      observations: Sequence[Mapping[str, Any]], pins: Mapping[str, Any],
-                     protocol_id: str | None = None, epyc_root: str | Path = "/workspace",
+                     protocol_id: str | None = None, epyc_root: str | Path | None = None,
                      emitted_at: str | None = None) -> Path:
     """THE finalize hook: one self-hashed row per run x arm x feature x objective metric.
 
@@ -172,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--spec", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--epyc-root", default="/workspace")
+    ap.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/harness_improvement.py"))
     a = ap.parse_args(argv)
     spec = json.loads(Path(a.spec).read_text(encoding="utf-8"))
     out = finalize_hil_run(a.out_dir, run_id=spec["run_id"], results_path=spec["results_path"],

@@ -436,6 +436,32 @@ def _metadata_from_request_or_env(
     return None
 
 
+def _request_constraints(request: Any, chat_payload: Any = None) -> list[str]:
+    """HIL-LB1a: which output-shape constraints the request carries, for the inference tap.
+
+    Same truth as ``_request_is_grammar_constrained`` (``json_schema`` / ``grammar``) plus a
+    structured ``response_format`` (type other than ``text``), read from the request or the bound
+    /v1 chat payload. Always a list: ``[]`` means "recorded, unconstrained"; the key being ABSENT
+    from a tap event means the event predates this hook and carries no label. Never raises.
+    """
+    try:
+        found: list[str] = []
+        js = getattr(request, "json_schema", None)
+        if isinstance(js, (dict, str)) and js:
+            found.append("json_schema")
+        gr = getattr(request, "grammar", None)
+        if isinstance(gr, str) and gr:
+            found.append("grammar")
+        rf = getattr(request, "response_format", None)
+        if rf is None and isinstance(chat_payload, dict):
+            rf = chat_payload.get("response_format")
+        if isinstance(rf, dict) and rf and str(rf.get("type", "")).lower() not in ("", "text"):
+            found.append("response_format")
+        return found
+    except Exception:  # noqa: BLE001 - a label must never break dispatch
+        return []
+
+
 def _build_tap_metadata(
     request: Any,
     *,
@@ -446,6 +472,7 @@ def _build_tap_metadata(
     parent_request_id: str | None = None,
     context_trial_id: Any = None,
     context_batch_id: Any = None,
+    chat_payload: Any = None,
 ) -> dict[str, Any]:
     parent_request_id = parent_request_id or _metadata_from_request_or_env(
         request,
@@ -484,6 +511,7 @@ def _build_tap_metadata(
         "role": role,
         "backend_url": backend_url,
         "port": port,
+        "request_constraints": _request_constraints(request, chat_payload),
     }
 
 
@@ -1517,6 +1545,7 @@ class InferenceMixin:
                                 if hasattr(self, "get_request_batch_id")
                                 else None
                             ),
+                            chat_payload=_request_chat_payload(self),
                         )
                         tap_metadata.update(direct_region_metadata)
                         trace_keys = _request_trace_keys(self)

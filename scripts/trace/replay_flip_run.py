@@ -26,6 +26,9 @@ from src.trace.replay.model import load_run, verify_integrity  # noqa: E402
 from src.trace.replay.report import build_report, dumps  # noqa: E402
 
 
+from scripts.lib.epyc_root import default_epyc_root  # noqa: E402
+
+
 def _factory(spec: str):
     mod, _, name = spec.partition(":")
     return getattr(importlib.import_module(mod), name)
@@ -54,7 +57,7 @@ def main() -> int:
     ap.add_argument("--original-outcome", default="fail"); ap.add_argument("--task-key")
     ap.add_argument("--out")
     ap.add_argument("--belief-sidecar", action="store_true", help="flip: also write <out>.beliefs.jsonl via the root belief-kernel writer (needs --out)")
-    ap.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"))
+    ap.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/hil_replay_capture.py"))
     a = ap.parse_args()
     if a.cas_dir:
         os.environ["ORCHESTRATOR_REPLAY_CAS_DIR"] = a.cas_dir   # harness factories build their own CAS() from it

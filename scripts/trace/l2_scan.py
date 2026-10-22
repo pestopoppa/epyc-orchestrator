@@ -21,6 +21,9 @@ from src.trace.l2.report import dumps, scan  # noqa: E402
 from src.trace.l2.schemas import export_tool_schemas  # noqa: E402
 
 
+from scripts.lib.epyc_root import default_epyc_root  # noqa: E402
+
+
 def write_sidecar(out: str, kind: str, run_id: str, epyc_root: str) -> None:
     """VB-L2-WRITE: emit <report>.beliefs.jsonl at write time (opt-in; never backfills)."""
     import subprocess
@@ -43,7 +46,7 @@ def main(argv=None) -> int:
     ap.add_argument("--boot", type=int, default=1000)
     ap.add_argument("--belief-sidecar", action="store_true", help="also write <out>.beliefs.jsonl via the root belief-kernel writer")
     ap.add_argument("--run-id", default="l2-run")
-    ap.add_argument("--epyc-root", default="/workspace")
+    ap.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/l2_scan_capture.py"))
     a = ap.parse_args(argv)
     traces = []
     if a.progress_logs:

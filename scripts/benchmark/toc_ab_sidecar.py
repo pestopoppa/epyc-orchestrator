@@ -37,6 +37,9 @@ sys.path.insert(0, str(ROOT))
 from src.graph import trajectory_artifact as ta  # noqa: E402
 
 
+from scripts.lib.epyc_root import default_epyc_root  # noqa: E402
+
+
 def policy_digest(policy: object) -> str:
     return hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -109,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--outcome-from-finish", action="store_true")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--epyc-root", default="/workspace")
+    ap.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/toc_ab.py"))
     a = ap.parse_args(argv)
     if not a.outcomes and not a.outcome_from_finish:
         ap.error("pass --outcomes (graded verdicts) or --outcome-from-finish")

@@ -25,6 +25,9 @@ from src.trace.spectrum_replay import (RunOutcome, build_report, dumps, load_man
                                        traces_for_manifest)
 
 
+from scripts.lib.epyc_root import default_epyc_root  # noqa: E402
+
+
 def write_sidecar(out: str, kind: str, run_id: str, epyc_root: str) -> Path:
     """VB-HIL-REPLAY-WRITE: emit <report>.beliefs.jsonl at write time (opt-in; never backfills a finished report)."""
     import subprocess
@@ -80,7 +83,7 @@ def main() -> int:
     p.add_argument("--human", help="json {task_key: [[role, tool, status], ...]}"); p.add_argument("--n-tasks", type=int, default=10)
     p.add_argument("--min-replays", type=int, default=20); p.add_argument("--top-m", type=int, default=3)
     p.add_argument("--belief-sidecar", action="store_true", help="also write <out>.beliefs.jsonl via the root belief-kernel writer")
-    p.add_argument("--run-id", default="spectrum-run"); p.add_argument("--epyc-root", default=os.environ.get("EPYC_ROOT", "/workspace"))
+    p.add_argument("--run-id", default="spectrum-run"); p.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/hil_replay_capture.py"))
     a = ap.parse_args()
     if a.cmd == "run":
         _require_window()

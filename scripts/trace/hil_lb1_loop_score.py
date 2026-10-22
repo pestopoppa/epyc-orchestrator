@@ -432,6 +432,11 @@ def main(argv=None) -> int:
     ap.add_argument("--claude-sample", type=int, default=150)
     ap.add_argument("--tokenizer", default=DEFAULT_TOKENIZER, help="tokenizer.json; 'regex' for the built-in")
     ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--belief-out", help="VB-HILLB1-WRITE: also write hil_lb1_loop_score.beliefs.jsonl "
+                    "into this dir via the root belief-kernel writer (opt-in; needs --whowhen-pro and the "
+                    "real tokenizer)")
+    ap.add_argument("--run-id", default="hil-lb1-run", help="run id for the belief sidecar")
+    ap.add_argument("--epyc-root", help="root checkout (default: $EPYC_ROOT, epyc-root-main view, /workspace)")
     a = ap.parse_args(argv)
     if a.tokenizer != "regex" and Path(a.tokenizer).exists():
         tok = LD.hf_tokenizer(a.tokenizer)
@@ -452,6 +457,30 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / "hil_lb1_loop_score.json").write_text(json.dumps(res, indent=1, sort_keys=True) + "\n")
     (out / "hil_lb1_loop_score.md").write_text(to_markdown(res))
+    if a.belief_out:
+        return write_belief_sidecar(a, out / "hil_lb1_loop_score.json")
+    return 0
+
+
+def write_belief_sidecar(a: argparse.Namespace, results: Path) -> int:
+    """VB-HILLB1-WRITE: emit the sidecar AFTER the result is on disk; a refusal is loud (exit 3)."""
+    import subprocess
+
+    from scripts.lib.epyc_root import load_adapter
+
+    ref = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True,
+                         text=True).stdout.strip()
+    try:
+        Path(a.belief_out).mkdir(parents=True, exist_ok=True)
+        side = load_adapter("hil_lb1_loop_score", a.epyc_root).write_belief_measurements(
+            a.belief_out, run_id=a.run_id,
+            producer="epyc-orchestrator/scripts/trace/hil_lb1_loop_score.py", results_path=results,
+            labelled_set_path=a.whowhen_pro if a.whowhen_pro and Path(a.whowhen_pro).is_file() else None,
+            code_ref=ref if len(ref) == 40 else None)
+    except Exception as exc:  # noqa: BLE001 - result exists; surface the refusal, never hide it
+        print(f"!!! BELIEF CAPTURE FAILED [hil-lb1]: REFUSED {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+    print(f"belief sidecar: {side}")
     return 0
 
 

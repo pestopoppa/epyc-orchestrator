@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark" / "hil_ab_sidecar.py"
-_ROOT = Path(os.environ.get("EPYC_ROOT", "/workspace"))
+from scripts.lib.epyc_root import resolve_epyc_root  # noqa: E402
+
+_ROOT = resolve_epyc_root(carrier="scripts/vidya/adapters/harness_improvement.py")
 _HAS_CARRIER = (_ROOT / "scripts" / "vidya" / "adapters" / "harness_improvement.py").is_file()
 
 

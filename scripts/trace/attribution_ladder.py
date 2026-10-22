@@ -211,6 +211,13 @@ def main(argv=None) -> int:
         "--export-adx", help="write the cases' AgentDebugX-schema trajectories (JSONL)"
     )
     out.add_argument("--export-only", action="store_true", help="only --export-adx; no judge")
+    out.add_argument(
+        "--belief-out",
+        help="VB-HIL17-WRITE: also write hil17_attribution.beliefs.jsonl into this dir via the root "
+        "belief-kernel writer (opt-in; refuses mock, unlabelled and undigested reports)",
+    )
+    out.add_argument("--run-id", default="hil17-run", help="run id for the belief sidecar")
+    out.add_argument("--epyc-root", help="root checkout (default: $EPYC_ROOT, epyc-root-main view, /workspace)")
     a = ap.parse_args(argv)
     if not a.dry_run and not a.export_only and (a.pro or a.cases or a.step_db) and not a.port_a:
         ap.error("a real run needs --port-a (and --port-b for the second family)")
@@ -219,6 +226,24 @@ def main(argv=None) -> int:
     if "rungs" in rep:
         Path(a.out).with_suffix(".md").write_text(markdown(rep))
     print(json.dumps({k: rep[k] for k in ("set", "n_cases", "mock") if k in rep} | {"out": a.out}))
+    if a.belief_out:
+        return write_belief_sidecar(a, rep)
+    return 0
+
+
+def write_belief_sidecar(a: argparse.Namespace, rep: dict) -> int:
+    """VB-HIL17-WRITE: emit the sidecar AFTER the report is on disk; a refusal is loud (exit 3)."""
+    from scripts.lib.epyc_root import load_adapter
+
+    try:
+        Path(a.belief_out).mkdir(parents=True, exist_ok=True)
+        side = load_adapter("hil17_attribution", a.epyc_root).write_belief_measurements(
+            a.belief_out, run_id=a.run_id,
+            producer="epyc-orchestrator/scripts/trace/attribution_ladder.py", results_path=a.out)
+    except Exception as exc:  # noqa: BLE001 - report exists; surface the refusal, never hide it
+        print(f"!!! BELIEF CAPTURE FAILED [hil17]: REFUSED {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 3
+    print(f"belief sidecar: {side}")
     return 0
 
 
