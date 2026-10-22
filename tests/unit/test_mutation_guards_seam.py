@@ -72,12 +72,21 @@ def test_guard_module_imports_only_the_standard_library():
 
     tree = ast.parse((ROOT / "src/autopilot_core/mutation_guards.py").read_text())
     roots = set()
-    for node in ast.walk(tree):
+    for node in tree.body:  # module level: standard library only
         if isinstance(node, ast.Import):
             roots |= {a.name.split(".")[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module:
             roots.add(node.module.split(".")[0])
-    assert roots <= {"__future__", "ast", "logging", "math", "os", "re", "dataclasses", "enum", "typing"}
+    assert roots <= {"__future__", "ast", "hashlib", "json", "logging", "math", "os", "re",
+                     "time", "dataclasses", "enum", "pathlib", "typing"}
+    # S2 (MHS-3) keeps PromptForge's lazy, function-local numpy/yaml imports; nothing else.
+    lazy = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            lazy |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            lazy.add(node.module.split(".")[0])
+    assert lazy - roots <= {"numpy", "yaml"}
 
 
 def test_logger_name_is_unchanged():

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,18 @@ PINS = {"tool_surface_sha256": "a" * 64, "served_context_window": 65536,
         "compaction_policy_sha256": "c" * 64, "wall_time_budget_s": 900.0, "turn_budget": 12,
         "final_result_selection_rule": "last FINAL()"}
 INCUMBENT = "Summarise the session.\nKeep tool outputs short.\n"
+
+
+def _empty_harness():
+    import numpy as np
+
+    from src.autopilot_core.mutation_guards import _HarnessContent
+
+    empty = np.empty(0, dtype=np.uint64)
+    return _HarnessContent(shingles=empty, tokens=empty, token_files=np.empty(0, np.int64))
+
+
+_EMPTY_HARNESS = _empty_harness()
 
 
 def _split(sid, role, n0, n1):
@@ -112,8 +125,11 @@ def test_fence_helpers_arm_and_refuse_disarm():
             substrate.require_fence_active(bad)
 
 
-def test_unextracted_seams_fail_closed():
-    assert substrate.leakage_reason("anything") == substrate.LEAKAGE_NOT_EXTRACTED
+def test_unextracted_seams_fail_closed(tmp_path, monkeypatch):
+    # S2 landed: MHS-3 is the real guard and keeps its fail-closed contract.
+    monkeypatch.setenv("AUTOPILOT_EVAL_ID_VOCAB_SOURCES", str(tmp_path / "absent_pool.jsonl"))
+    reason = substrate.leakage_reason("anything", harness=_EMPTY_HARNESS)
+    assert reason.startswith("eval_leakage_vocabulary_unavailable:missing_eval_id_source")
     with pytest.raises(substrate.SeamNotExtracted):
         substrate.autopilot_gate_verdict()
 
@@ -235,7 +251,7 @@ class FakeEvaluator:
                          fence_state="active")
 
 
-def _driver(tmp_path, texts, *, leakage=lambda t: None, judge=None, design=None):
+def _driver(tmp_path, texts, *, leakage=lambda t, **_: None, judge=None, design=None):
     j = substrate.open_loop_journal(tmp_path / "loop")
     pool = [INCUMBENT, *texts, *(INCUMBENT + t for t in texts)]
     ev = FakeEvaluator({sha256_text(t): t for t in pool})
@@ -290,14 +306,72 @@ def test_two_cycles_with_arriving_split(tmp_path):
     assert [a.outcome for a in drv.ledger.attempts()] == ["keep", "keep_base"]
 
 
-def test_default_leakage_seam_fails_closed_to_keep_base(tmp_path):
-    drv, _, _, _ = _driver(tmp_path, ["Prefer short answers.\n"], leakage=substrate.leakage_reason)
-    drv.leakage = substrate.leakage_reason
+def test_default_leakage_seam_fails_closed_to_keep_base(tmp_path, monkeypatch):
+    # The default driver leakage check is the real MHS-3 guard (S2); with no vocabulary it
+    # refuses every candidate, and the stalled round is KEEP_BASE, not a failure.
+    monkeypatch.setenv("AUTOPILOT_EVAL_ID_VOCAB_SOURCES", str(tmp_path / "absent_pool.jsonl"))
+    drv, _, _, _ = _driver(tmp_path, ["Prefer short answers.\n"])
+    drv.leakage = partial(substrate.leakage_reason, harness=_EMPTY_HARNESS)
     out = drv.run_cycle(_view(INCUMBENT), _spec(1, INCUMBENT, drv.design.train))
     assert out.outcome == "keep_base"
-    assert set(out.rejected.values()) == {substrate.LEAKAGE_NOT_EXTRACTED}
+    (reason,) = set(out.rejected.values())
+    assert reason.startswith("eval_leakage_vocabulary_unavailable:missing_eval_id_source")
     recs = substrate.load_rejections(tmp_path / "loop")
-    assert len(recs) == 1 and recs[0]["rejecting_gate"] == substrate.LEAKAGE_NOT_EXTRACTED
+    assert len(recs) == 1 and recs[0]["gate_detail"].startswith("eval_leakage_vocabulary_unavailable")
+
+
+def _fixture_pool(tmp_path):
+    import json
+
+    rows = [{"id": f"fixture_story_{i:04d}", "suite": "fixturebench",
+             "prompt": f"Which cartographer named Ignatius Pemberton{i} charted the Vorlaxian "
+                       f"archipelago using a heliograph relay in winter expedition number {i}?",
+             "expected": f"Quillon Varnesbury{i}"} for i in range(1, 6)]
+    pool = tmp_path / "question_pool.jsonl"
+    pool.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    return pool, rows
+
+
+def test_leakage_seam_is_promptforge_mhs3_over_the_added_text(tmp_path, monkeypatch):
+    from src.autopilot_core import mutation_guards as mg
+
+    pool, rows = _fixture_pool(tmp_path)
+    vocab = mg.load_eval_id_vocabulary(((pool, True),))
+    assert vocab.available
+    check = partial(substrate.leakage_reason, vocabulary=vocab, harness=_EMPTY_HARNESS)
+    # A named eval instance in the added text is refused...
+    assert check(INCUMBENT + "See fixture_story_0003 first.\n", original=INCUMBENT).startswith(
+        "eval_instance_leakage")
+    # ...but the same id already in the incumbent is not blamed on the candidate.
+    seeded = INCUMBENT + "See fixture_story_0003 first.\n"
+    assert check(seeded + "Be brief.\n", original=seeded) is None
+    # Verbatim eval content and suite keying are refused; plain advice is clean.
+    copied = INCUMBENT + rows[1]["prompt"] + "\n"
+    assert check(copied, original=INCUMBENT).startswith("eval_content_ngram_overlap")
+    assert check(INCUMBENT + 'if suite == "fixturebench": answer tersely\n',
+                 original=INCUMBENT).startswith("eval_suite_special_casing")
+    assert check(INCUMBENT + "Prefer short sentences.\n", original=INCUMBENT) is None
+    # Same verdicts as calling the guards the way PromptForge does.
+    added = mg._added_text(INCUMBENT, copied)
+    assert check(copied, original=INCUMBENT) == mg.eval_leakage_reason(
+        added, vocab, original=INCUMBENT, harness=_EMPTY_HARNESS)
+
+
+def test_driver_passes_original_and_rendered_traces_to_leakage(tmp_path):
+    seen = []
+
+    def spy(text, **kw):
+        seen.append((text, kw))
+        return None
+
+    drv, _, _, _ = _driver(tmp_path, ["Prefer short answers.\n"], leakage=spy)
+    drv.run_cycle(_view(INCUMBENT), _spec(1, INCUMBENT, drv.design.train))
+    (text, kw), = seen
+    assert kw["original"] == INCUMBENT and text != INCUMBENT
+    from src.autopilot_core.mutation_guards import _trace_blocks
+
+    assert [label for label, _ in _trace_blocks(kw["trace_context"])] == [
+        "[1] trace=t1 role=worker"]
 
 
 def test_tripwire_blocks_decoy_canary_and_answer_markers(tmp_path):

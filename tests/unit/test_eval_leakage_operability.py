@@ -23,6 +23,8 @@ for _p in (ROOT, ROOT / "scripts" / "autopilot"):
 from scripts.autopilot import eval_leakage_monitor as mon  # noqa: E402
 from scripts.autopilot.experiment_journal import ExperimentJournal  # noqa: E402
 from scripts.autopilot.species import prompt_forge as pf  # noqa: E402
+# HIL-6 S2: the MHS-3 guards live in mutation_guards; patch module attributes THERE.
+from src.autopilot_core import mutation_guards as mg  # noqa: E402
 
 EPYC_ROOT_ALARM = Path("/mnt/raid0/llm/epyc-root/scripts/coordination/alarm_channel.py")
 LEAKY = "Use gsm8k_00003 as the worked example."
@@ -284,7 +286,7 @@ def test_malformed_pool_is_negative_cached_by_identity(pool_env, monkeypatch):
         calls["n"] += 1
         return real(path)
 
-    monkeypatch.setattr(pf, "_iter_eval_rows", counting)
+    monkeypatch.setattr(mg, "_iter_eval_rows", counting)
     first = pf.load_eval_id_vocabulary()
     assert first.error.startswith("eval_id_source_unreadable")
     for _ in range(5):
@@ -309,7 +311,7 @@ def test_negative_cache_expires_after_ttl(pool_env, monkeypatch):
         calls["n"] += 1
         return real(path)
 
-    monkeypatch.setattr(pf, "_iter_eval_rows", counting)
+    monkeypatch.setattr(mg, "_iter_eval_rows", counting)
     pf.load_eval_id_vocabulary()
     ticks["t"] += 29
     pf.load_eval_id_vocabulary()

@@ -23,6 +23,8 @@ AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 import species.prompt_forge as pf  # noqa: E402
+# HIL-6 S2: the MHS-3 guards and their tunables live in mutation_guards; patch them THERE.
+import src.autopilot_core.mutation_guards as mg  # noqa: E402
 from species.prompt_forge import (  # noqa: E402
     CODE_MUTATION_ALLOWLIST,
     EvalIdVocabulary,
@@ -119,7 +121,7 @@ def test_token_hash_is_position_and_case_independent() -> None:
 def test_chunked_hashing_matches_single_buffer(monkeypatch) -> None:
     text = " ".join(f"word{i % 97} tok{i}" for i in range(4000))
     whole = pf._content_tokens(text)
-    monkeypatch.setattr(pf, "_CONTENT_CHUNK_BYTES", 1000)
+    monkeypatch.setattr(mg, "_CONTENT_CHUNK_BYTES", 1000)
     pieces = pf._content_tokens(text)
     assert np.array_equal(whole[3], pieces[3])
     assert np.array_equal(whole[1], pieces[1]) and np.array_equal(whole[2], pieces[2])
@@ -174,7 +176,7 @@ def test_template_text_shared_by_many_rows_is_not_refused(vocab) -> None:
 
 
 def test_unanchored_overlap_needs_a_long_verbatim_run(monkeypatch) -> None:
-    monkeypatch.setattr(pf, "_CONTENT_RARE_TF", 0)  # nothing is rare -> no anchors
+    monkeypatch.setattr(mg, "_CONTENT_RARE_TF", 0)  # nothing is rare -> no anchors
     vocab = EvalIdVocabulary.from_rows(ROWS)
     words = pf._content_tokens(PASSAGE)[0].decode().split()
     needed = pf._CONTENT_NGRAM + pf._CONTENT_MIN_UNANCHORED_RUN - 1  # 15 tokens
@@ -184,8 +186,8 @@ def test_unanchored_overlap_needs_a_long_verbatim_run(monkeypatch) -> None:
 
 
 def test_long_row_edges_are_exact_and_middle_is_winnowed(monkeypatch) -> None:
-    monkeypatch.setattr(pf, "_CONTENT_LONG_ROW_BYTES", 2000)
-    monkeypatch.setattr(pf, "_CONTENT_LONG_EDGE_SHINGLES", 20)
+    monkeypatch.setattr(mg, "_CONTENT_LONG_ROW_BYTES", 2000)
+    monkeypatch.setattr(mg, "_CONTENT_LONG_EDGE_SHINGLES", 20)
     words = [f"lexeme{i}x" for i in range(3000)]
     row = {"id": "fixture_long_0001", "suite": "longbench", "prompt": " ".join(words)}
     vocab = EvalIdVocabulary.from_rows([row])
@@ -528,7 +530,7 @@ def test_content_check_crash_fails_closed(vocab, monkeypatch) -> None:
     def boom(*_a, **_kw):
         raise RuntimeError("kaput")
 
-    monkeypatch.setattr(pf, "eval_content_leakage_reason", boom)
+    monkeypatch.setattr(mg, "eval_content_leakage_reason", boom)
     reason = _reason("harmless text", vocab)
     assert reason is not None
     assert reason.startswith("eval_leakage_vocabulary_unavailable:content_check_failed")

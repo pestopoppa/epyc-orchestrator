@@ -8,8 +8,9 @@ cannot reach inference. A later, separately authorized change supplies those and
 One cycle (HIL-6 pilot requirement 1; HIL-2 items 3, 7, 9, 21):
 
 1. tripwire every string handed to the proposer (answer-key markers + decoy-rubric canary);
-2. propose; screen each candidate (HIL-1 policy boundary, MHS-4 risk gate, MHS-3 leakage
-   (fail-closed until seam S2), MHS-15 lint recorded); rejections go to the LOOP's AP-53 ledger;
+2. propose; screen each candidate (HIL-1 policy boundary, MHS-4 risk gate, MHS-3 leakage over
+   the added text with the rendered traces as context (fail-closed), MHS-15 lint recorded);
+   rejections go to the LOOP's AP-53 ledger;
 3. evaluate the incumbent and each surviving candidate on the VALIDATION split only, fence
    armed and echoed active on both arms, infra regimes compared (NON_COMPARABLE refuses);
 4. one attempt-ledger row per candidate, alpha reserved before evaluation;
@@ -126,7 +127,7 @@ class SiblingLoopDriver:
         evaluator: Evaluator,
         decision_rule: DecisionRule | None = None,
         judge: Judge | None = None,
-        leakage: Callable[[str], str | None] = substrate.leakage_reason,
+        leakage: Callable[..., str | None] = substrate.leakage_reason,
         answer_markers: Sequence[str] = (),
     ) -> None:
         unmet = unmet_requirements(design)
@@ -183,7 +184,11 @@ class SiblingLoopDriver:
         reason = substrate.mutation_risk_gate_reason(effect)
         if reason:
             return reason, lint
-        reason = self.leakage(cand.mutated_text)
+        reason = self.leakage(
+            cand.mutated_text,
+            original=cand.original_text,
+            trace_context=substrate.render_trace_context(view.traces),
+        )
         if reason:
             return reason, lint
         return None, lint

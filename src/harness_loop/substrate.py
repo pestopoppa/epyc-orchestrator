@@ -9,9 +9,11 @@ uses; nothing is re-implemented. What the facade ADDS is only the sibling's boun
   flock + fsync and torn-tail repair are the journal's own.
 * **AP-53 rejected-mutation ledger** (``scripts/autopilot/rejected_mutation_ledger.py``): the same
   record builder and durable append, written beside the LOOP journal, never AutoPilot's.
-* **MHS guards** (``src/autopilot_core/mutation_guards.py``, extraction seam S1): import-safe, no
-  PromptForge proposer is imported or instantiated to call them. The MHS-3 eval-leakage guard is
-  not extracted yet (seam S2), so :func:`leakage_reason` FAILS CLOSED until it is.
+* **MHS guards** (``src/autopilot_core/mutation_guards.py``, extraction seams S1 and S2):
+  import-safe, no PromptForge proposer is imported or instantiated to call them.
+  :func:`leakage_reason` applies the same MHS-3 checks PromptForge applies to a prompt mutation
+  (eval-instance and eval-content leakage over the ADDED text, then suite special-casing), with
+  the same fail-closed contract: an unavailable eval-id vocabulary refuses every text.
 * **AP-55 infra fingerprint** (``src/autopilot_core/infra_fingerprint.py``): reused directly;
   identity is passed as data.
 * **AP-54 eval fence** (``src/repl_environment/knowledge_fence.py``, request field
@@ -29,6 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from src.autopilot_core import infra_fingerprint as _infra
+from src.autopilot_core import mutation_guards as _guards
 from src.autopilot_core.mutation_guards import (
     MutationEffect,
     classify_prompt_effect,
@@ -59,6 +62,7 @@ __all__ = [
     "prompt_interference_lint",
     "rank_mutations_by_risk",
     "regime_digest",
+    "render_trace_context",
     "require_fence_active",
     "screen_static_safety",
 ]
@@ -158,19 +162,54 @@ def load_rejections(journal_dir: Path | str) -> list[dict[str, Any]]:
     return ledger.load_records(_check_loop_dir(journal_dir))
 
 
-# ── MHS-3 leakage (seam S2, not extracted) ──────────────────────────────────
+# ── MHS-3 leakage (seam S2) ─────────────────────────────────────────────────
 
 
-LEAKAGE_NOT_EXTRACTED = "mhs3_leakage_guard_not_extracted"
+def leakage_reason(
+    text: str,
+    *,
+    original: str = "",
+    trace_context: str = "",
+    vocabulary: Any = None,
+    harness: Any = None,
+) -> str | None:
+    """MHS-3 verdict for a candidate: a refusal reason, or None when clean.
 
-
-def leakage_reason(text: str, **_: Any) -> str | None:
-    """Fail-closed placeholder: every text is refused until seam S2 extracts the MHS-3 guard.
-
-    MHS-3 is fail-closed by contract (an unavailable vocabulary rejects every mutation); the
-    sibling keeps that contract instead of importing the PromptForge module to reach it.
+    ``text`` is the candidate's full mutated text. The checks and their order are PromptForge's
+    for a prompt mutation (``PromptForge._leakage_reason`` then ``suite_special_casing_reason``):
+    eval-instance ids and eval content are scored over the text the candidate ADDS to
+    ``original``; ``trace_context`` is what the proposer was shown. ``vocabulary`` defaults to the
+    data-sourced eval-id vocabulary and ``harness`` to this checkout's harness corpus. Fail
+    closed: an unavailable vocabulary (or a crashed content check) refuses every text.
     """
-    return LEAKAGE_NOT_EXTRACTED
+    vocab = vocabulary if vocabulary is not None else _guards.load_eval_id_vocabulary()
+    known = harness if harness is not None else _guards.harness_content()
+    reason = _guards.eval_leakage_reason(
+        _guards._added_text(original, text),
+        vocab,
+        original=original,
+        trace_context=trace_context,
+        harness=known,
+    )
+    if reason is not None:
+        return reason
+    return _guards.suite_special_casing_reason(original, text, vocab, harness=known)
+
+
+def render_trace_context(traces: Any) -> str:
+    """The view's traces in the contrastive-trace shape the MHS-3 trace-bank checks parse.
+
+    One ``[i] trace=<id> role=<role>`` entry per trace with its excerpt and event names, under
+    the ``## Contrastive Execution Traces`` heading (``mutation_guards._trace_blocks``). Without
+    a recognised heading the trace-bank n-gram and source-identity checks would see no blocks.
+    """
+    entries = []
+    for i, t in enumerate(traces, start=1):
+        body = "\n".join(x for x in (t.excerpt, " ".join(t.events)) if x)
+        entries.append(f"[{i}] trace={t.trace_id} role={t.role}\n{body}")
+    if not entries:
+        return ""
+    return "## Contrastive Execution Traces\n" + "\n".join(entries) + "\n"
 
 
 # ── AP-55 infra fingerprint ───────────────────────────────────────────────────

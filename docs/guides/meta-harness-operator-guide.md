@@ -258,7 +258,7 @@ The main loop in `_inner_loop()` (autopilot.py, line 779) loads state, builds th
 
 ## 7. Mutations all rejected: eval_leakage_vocabulary_unavailable
 
-The RTG-55 MHS-3 leakage guard (`species/prompt_forge.py`) rejects a mutation that names a
+The RTG-55 MHS-3 leakage guard (`src/autopilot_core/mutation_guards.py`, re-exported by `species/prompt_forge.py` since HIL-6 S2) rejects a mutation that names a
 specific eval instance. It builds its id vocabulary from the eval data the tower samples from.
 If that vocabulary cannot be built, the guard **fails closed**: every prompt, GEPA and code
 mutation is rejected with `eval_leakage_vocabulary_unavailable:<error>`, and the trial is skipped.
