@@ -45,3 +45,57 @@ def test_classifier():
     assert c('# done\nFINAL("42")\n') == "final-call"
     assert c("# thinking\nx = 1 + 2\n") == "code-line"
     assert c("# only a comment\n") == "empty"
+
+
+# ---- GRAM-LAZY-1 / UFH14-LB3.1b: lazy-legacy payload shape ----------------------------------
+def test_lazy_legacy_grammar_starts_at_the_call_and_has_no_escape():
+    g = _registry_with_tools().generate_gbnf_grammar(None, shape="lazy-legacy")
+    assert g.startswith("root ::= tool-call | final-call\n")
+    assert "thought" not in g and "code-line" not in g
+    assert 'tool-call ::= "TOOL(\\"" tool-name' in g and 'final-call ::= "FINAL("' in g
+    # legacy stays byte-identical (production default untouched)
+    legacy = _registry_with_tools().generate_gbnf_grammar(None)
+    assert "action ::= tool-call | final-call | code-line" in legacy
+
+
+def test_lazy_grammar_wire_fields():
+    import re
+
+    from src.backends.grammar_guard import LazyGrammar, apply_grammar_fields
+    from src.registry.tool_registry import LAZY_LEGACY_TRIGGERS
+
+    g = LazyGrammar("root ::= x", LAZY_LEGACY_TRIGGERS)
+    assert isinstance(g, str) and g == "root ::= x"
+    p: dict = {}
+    apply_grammar_fields(p, g)
+    assert p["grammar"] == "root ::= x" and type(p["grammar"]) is str
+    assert p["grammar_lazy"] is True
+    trig = p["grammar_triggers"]
+    assert trig and all(set(t) == {"type", "value"} and t["type"] == 2 for t in trig)
+    rx = re.compile(trig[0]["value"])
+    assert rx.search("# plan\nTOOL(\"web_search\")").group(1) == "TOOL("
+    assert rx.search("FINAL('a')").group(1) == "FINAL("
+    assert rx.search("# I will FINAL( later\nx = 1") is None  # mid-line mention does not fire
+    # plain str grammar: eager, no lazy fields (legacy/call/off wire unchanged)
+    q: dict = {}
+    apply_grammar_fields(q, "root ::= x")
+    assert q == {"grammar": "root ::= x"}
+    apply_grammar_fields(q, None)
+    assert q == {"grammar": "root ::= x"}
+
+
+def test_lazy_grammar_still_passes_the_llguidance_guard():
+    import pytest
+    from fastapi import HTTPException
+
+    from src.backends.grammar_guard import LazyGrammar, apply_grammar_fields
+
+    with pytest.raises(HTTPException):
+        apply_grammar_fields({}, LazyGrammar("%llguidance {}", [{"type": 2, "value": "x"}]))
+
+
+def test_helpers_selector_records_lazy_legacy(monkeypatch):
+    import src.graph.helpers as h
+
+    src = Path(h.__file__).read_text()
+    assert '"lazy-legacy"' in src and "state.turn1_grammar_shape = _turn1_shape" in src

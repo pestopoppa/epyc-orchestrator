@@ -29,7 +29,7 @@ from typing import Any, Iterator
 import httpx
 
 from src.backends import serving_calls
-from src.backends.grammar_guard import reject_unsafe_grammar
+from src.backends.grammar_guard import apply_grammar_fields, reject_unsafe_grammar
 from src.backends.context_overflow import (
     ContextOverflowInfo,
     classify_error_body,
@@ -1535,8 +1535,7 @@ class LlamaServerBackend(ModelBackend):
                 "json_schema": {"name": "response", "schema": request.json_schema},
             }
         if request.grammar:
-            reject_unsafe_grammar(request.grammar)
-            payload["grammar"] = request.grammar
+            apply_grammar_fields(payload, request.grammar)
 
     def _build_payload(
         self,
@@ -1573,8 +1572,7 @@ class LlamaServerBackend(ModelBackend):
         if request.json_schema:
             payload["json_schema"] = request.json_schema
         if request.grammar:
-            reject_unsafe_grammar(request.grammar)
-            payload["grammar"] = request.grammar
+            apply_grammar_fields(payload, request.grammar)
 
         if request.n_probs is not None and int(request.n_probs) > 0:
             payload["n_probs"] = min(128, int(request.n_probs))

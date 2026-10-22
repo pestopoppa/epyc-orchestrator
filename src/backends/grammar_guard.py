@@ -26,3 +26,38 @@ def reject_unsafe_grammar(grammar: str | None) -> None:
     """
     if isinstance(grammar, str) and grammar.lstrip().startswith(LLGUIDANCE_PREFIX):
         raise HTTPException(status_code=400, detail=LLGUIDANCE_REJECTED_DETAIL)
+
+
+# --- GRAM-LAZY-1 / UFH14-LB3.1b: lazy (trigger-gated) raw grammars ---------------------------
+# v10 ``tools/server/server-schema.cpp`` takes ``grammar_lazy`` (bool) and ``grammar_triggers``
+# (list of {"type": int, "value": str}; type enum ``common/common.h``: 0 TOKEN, 1 WORD,
+# 2 PATTERN, 3 PATTERN_FULL) on the request. Lazy with no triggers is a server error.
+# For PATTERN the grammar is fed from the first non-empty capture group (else the whole match).
+GRAMMAR_TRIGGER_TYPE_PATTERN = 2
+
+
+class LazyGrammar(str):
+    """A GBNF ``str`` that also carries the lazy-trigger list.
+
+    Subclassing ``str`` lets it ride the existing ``grammar: str`` plumbing untouched; only the
+    wire builders (:func:`apply_grammar_fields`) look at ``.triggers``.
+    """
+
+    triggers: tuple[dict, ...]
+
+    def __new__(cls, grammar: str, triggers):
+        obj = super().__new__(cls, grammar)
+        obj.triggers = tuple(dict(t) for t in triggers)
+        return obj
+
+
+def apply_grammar_fields(payload: dict, grammar: str | None) -> None:
+    """Set ``grammar`` (+ ``grammar_lazy``/``grammar_triggers`` for a :class:`LazyGrammar`)."""
+    if not grammar:
+        return
+    reject_unsafe_grammar(grammar)
+    payload["grammar"] = str(grammar)
+    triggers = getattr(grammar, "triggers", None)
+    if triggers:
+        payload["grammar_lazy"] = True
+        payload["grammar_triggers"] = [dict(t) for t in triggers]

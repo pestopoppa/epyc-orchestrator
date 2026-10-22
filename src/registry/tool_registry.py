@@ -255,6 +255,15 @@ class ToolOutput:
         }
 
 
+#: GRAM-LAZY-1: lazy-grammar triggers for ``shape="lazy-legacy"``. v10 ``grammar_triggers``
+#: entries are ``{"type": <int>, "value": <str>}``; type 2 = PATTERN (regex, grammar is fed from
+#: the first non-empty capture group). Line-start anchored so a ``FINAL(`` inside a ``# thought``
+#: comment cannot fire the grammar.
+LAZY_LEGACY_TRIGGERS: tuple[dict, ...] = (
+    {"type": 2, "value": r"(?:^|\n)(TOOL\(|FINAL\()"},
+)
+
+
 class ToolRegistry:
     """Registry of tools available to orchestrator models.
 
@@ -736,7 +745,11 @@ class ToolRegistry:
                 ``TOOL(...)`` call, a ``FINAL(...)`` call, or ANY code line) or ``"call"``
                 (UFH14-LB3 tightened turn-1 shape: a ``CALL("tool", k=v)`` statement, optionally
                 assigned, or ``FINAL(...)``; the any-line ``code-line`` escape is gone, so
-                the thought line must be followed by a real action).
+                the thought line must be followed by a real action) or ``"lazy-legacy"``
+                (GRAM-LAZY-1: the legacy action rules WITHOUT the ``thought`` prefix and WITHOUT
+                the ``code-line`` escape, meant to be sent with ``grammar_lazy`` and line-start
+                ``TOOL(``/``FINAL(`` triggers, see :data:`LAZY_LEGACY_TRIGGERS`; the grammar is fed
+                from the trigger onward so its root must begin at the call).
 
         Returns:
             GBNF grammar string.
@@ -750,6 +763,20 @@ class ToolRegistry:
 
         # Build tool-name alternation
         name_alts = " | ".join(f'"{name}"' for name in tool_names)
+
+        if shape == "lazy-legacy":
+            return f"""\
+root ::= tool-call | final-call
+tool-call ::= "TOOL(\\"" tool-name "\\"" args ")\\n"
+tool-name ::= {name_alts}
+args ::= ("," ws arg)*
+arg ::= [a-zA-Z_]+ "=" value
+value ::= quoted-string | number | "True" | "False" | "None"
+quoted-string ::= "\\"" [^\\"]* "\\""
+number ::= "-"? [0-9]+ ("." [0-9]+)?
+final-call ::= "FINAL(" value ")\\n"
+ws ::= " "*
+"""
 
         if shape == "call":
             return f"""\

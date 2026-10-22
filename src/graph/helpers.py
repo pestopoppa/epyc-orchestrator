@@ -1448,16 +1448,24 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         try:
             tool_reg = deps.repl.tool_registry if hasattr(deps.repl, "tool_registry") else None
             # UFH14-LB3: ``ORCHESTRATOR_TURN1_GRAMMAR`` = legacy (default, unchanged) | call
-            # (CALL(...)/FINAL(...) only, no any-line escape) | off (no turn-1 grammar).
+            # (CALL(...)/FINAL(...) only, no any-line escape) | off (no turn-1 grammar) |
+            # lazy-legacy (GRAM-LAZY-1 / LB3.1b: legacy actions, trigger-gated ``grammar_lazy``).
             _turn1_shape = os.environ.get("ORCHESTRATOR_TURN1_GRAMMAR", "legacy").strip().lower()
+            if _turn1_shape not in ("legacy", "call", "off", "lazy-legacy"):
+                _turn1_shape = "legacy"
             if tool_reg is not None and _turn1_shape != "off":
                 grammar = tool_reg.generate_gbnf_grammar(
-                    str(role), shape="call" if _turn1_shape == "call" else "legacy"
+                    str(role), shape=_turn1_shape if _turn1_shape in ("call", "lazy-legacy") else "legacy"
                 )
                 if grammar:
+                    if _turn1_shape == "lazy-legacy":
+                        from src.backends.grammar_guard import LazyGrammar
+                        from src.registry.tool_registry import LAZY_LEGACY_TRIGGERS
+
+                        grammar = LazyGrammar(grammar, LAZY_LEGACY_TRIGGERS)
                     llm_kwargs["grammar"] = grammar
                     state.grammar_enforced = True
-                    state.turn1_grammar_shape = "call" if _turn1_shape == "call" else "legacy"
+                    state.turn1_grammar_shape = _turn1_shape
         except Exception:
             pass  # Fall back to unconstrained generation
 
