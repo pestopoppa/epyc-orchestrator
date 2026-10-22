@@ -40,6 +40,7 @@ from typing import Any, Optional
 
 import aiohttp
 
+from src.backends.grammar_guard import reject_unsafe_grammar
 from src.config import _registry_timeout
 from src.security.control_tokens import neutralise_control_tokens
 
@@ -722,6 +723,7 @@ class WorkerPoolManager:
         Returns:
             Model response text.
         """
+        reject_unsafe_grammar(grammar)
         await self.initialize()
 
         workers = await self._select_workers(task_type, parallelism=1)
@@ -773,6 +775,7 @@ class WorkerPoolManager:
         Returns:
             List of responses in order.
         """
+        reject_unsafe_grammar(grammar)  # batch() swallows per-prompt errors
         await self.initialize()
 
         workers = await self._select_workers(task_type, parallelism=len(prompts))
@@ -840,6 +843,7 @@ class WorkerPoolManager:
         Returns:
             Response text.
         """
+        reject_unsafe_grammar(grammar)  # llguidance aborts the llama-server process
         url = f"{worker.url}/completion"
 
         # Per-model chat template (mirrors the chat.py:498 fix). /completion

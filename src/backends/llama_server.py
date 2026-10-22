@@ -29,6 +29,7 @@ from typing import Any, Iterator
 import httpx
 
 from src.backends import serving_calls
+from src.backends.grammar_guard import reject_unsafe_grammar
 from src.backends.context_overflow import (
     ContextOverflowInfo,
     classify_error_body,
@@ -1534,6 +1535,7 @@ class LlamaServerBackend(ModelBackend):
                 "json_schema": {"name": "response", "schema": request.json_schema},
             }
         if request.grammar:
+            reject_unsafe_grammar(request.grammar)
             payload["grammar"] = request.grammar
 
     def _build_payload(
@@ -1571,6 +1573,7 @@ class LlamaServerBackend(ModelBackend):
         if request.json_schema:
             payload["json_schema"] = request.json_schema
         if request.grammar:
+            reject_unsafe_grammar(request.grammar)
             payload["grammar"] = request.grammar
 
         if request.n_probs is not None and int(request.n_probs) > 0:

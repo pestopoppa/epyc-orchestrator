@@ -100,6 +100,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from src.api.dependencies import dep_app_state
 from src.api.state import AppState
 from src.backends import serving_calls
+from src.backends.grammar_guard import reject_unsafe_grammar
 from src.exceptions import ContextOverflowError
 
 logger = logging.getLogger(__name__)
@@ -994,6 +995,8 @@ async def _passthrough(endpoint: str, role: str, http_request: Request, state: A
         raise HTTPException(status_code=400, detail=f"request body is not JSON: {exc}") from exc
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    # The body is forwarded as raw bytes, so a client ``grammar`` reaches the server verbatim.
+    reject_unsafe_grammar(body.get("grammar"))
 
     from src.backends.context_limits import estimate_tokens, estimate_tokens_conservative
     from src.llm_primitives.inference import _role_config_for_backend
