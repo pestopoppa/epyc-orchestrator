@@ -21,7 +21,7 @@ class StepRec:
     output_cas: str | None
     ok: bool
     error_class: str | None = None
-    extra: dict[str, Any] = field(default_factory=dict)   # HIL-16b: output_kind / envelope / exc
+    extra: dict[str, Any] = field(default_factory=dict)   # HIL-16b/16c: output_kind / payload_cas / envelope / exc
 
 
 @dataclass
@@ -34,7 +34,7 @@ class TurnRec:
     step_mark: int
     chain: str
     steps: list[StepRec] = field(default_factory=list)
-    aux: list[dict[str, Any]] = field(default_factory=list)   # HIL-16b: other LLM calls made before the main call
+    aux: list[dict[str, Any]] = field(default_factory=list)   # HIL-16b/16c: other LLM calls since the previous row, before the main call
     clock: list[float] = field(default_factory=list)          # HIL-16b: wall-clock reads since the previous row
     meta: dict[str, Any] = field(default_factory=dict)        # HIL-16b: the call's inference meta (token counts feed budgets)
     force_answer: bool | None = None                          # HIL-16b: the (wall-time derived) forced-answer decision
@@ -71,7 +71,7 @@ def load_run(db_path: Path | str, run_id: str) -> RecordedRun:
             if s["idx"] >= t.step_mark and (hi is None or s["idx"] < hi):
                 t.steps.append(StepRec(s["idx"], s["kind"], s.get("tool"), s.get("args_hash"), s.get("args_cas"),
                                        s.get("output_cas"), bool(s.get("ok")), s.get("error_class"),
-                                       {k: s[k] for k in ("output_kind", "envelope", "exc") if k in s}))
+                                       {k: s[k] for k in ("output_kind", "payload_cas", "envelope", "exc") if k in s}))
     return RecordedRun(run_id, turns, seed=dict(turns_raw[0].get("seed") or {}))
 
 
@@ -88,7 +88,18 @@ def verify_integrity(run: RecordedRun, cas: CAS) -> list[str]:
         prev = chain_next(prev, t.prompt_cas, t.output_cas)
         if prev != t.chain:
             problems.append(f"turn {t.turn}: chain mismatch")
+        for i, a in enumerate(t.aux):   # HIL-16c: auxiliary calls are answered from these blobs
+            for what in ("prompt_cas", "output_cas"):
+                try:
+                    cas.get(a[what])
+                except (CASIntegrityError, FileNotFoundError, KeyError) as e:
+                    problems.append(f"turn {t.turn} aux {i} {what}: {type(e).__name__}")
         for s in t.steps:
+            if s.extra.get("payload_cas"):   # HIL-16c: the order/type-faithful tool result
+                try:
+                    cas.get(s.extra["payload_cas"])
+                except (CASIntegrityError, FileNotFoundError) as e:
+                    problems.append(f"step {s.idx} payload: {type(e).__name__}")
             for what, addr in (("args", s.args_cas), ("output", s.output_cas)):
                 if s.kind == "tool_call" and addr is None:
                     problems.append(f"step {s.idx} {what}: not recorded")

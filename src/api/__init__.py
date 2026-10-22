@@ -131,59 +131,16 @@ async def lifespan(app: FastAPI):
     except Exception as _exc:
         logger.debug("cpu_region_lock warm-up skipped: %s", _exc)
 
-    # Tool registry (feature-gated)
-    ToolRegistry = get_tool_registry_class()
-    if f.tools and ToolRegistry:
-        try:
-            from src.tool_registry import load_from_yaml as load_tools_from_yaml
+    # Tool registry (feature-gated). Construction lives in src/registry/production.py so the
+    # replay harness (HIL-16c) rebuilds exactly the registry a recorded request's REPL had.
+    from src.registry.production import build_script_registry, build_tool_registry
 
-            state.tool_registry = ToolRegistry()
-
-            # Load tools from YAML registry (22 tools in orchestration/tool_registry.yaml)
-            from src.config import get_config as _get_config
-
-            _paths = _get_config().paths
-            loaded = load_tools_from_yaml(
-                state.tool_registry,
-                str(_paths.tool_registry_path),
-            )
-            logger.info(f"Loaded {loaded} tools from YAML registry")
-
-            # Load role permissions from model registry
-            state.tool_registry.load_permissions_from_registry(
-                str(_paths.registry_path),
-            )
-
-            # Register built-in tools (programmatic tools)
-            # These may overlap with YAML tools - duplicates are skipped
-            try:
-                from src.builtin_tools import register_builtin_tools
-
-                register_builtin_tools(state.tool_registry)
-            except ImportError:
-                logger.debug("No builtin_tools module found")
-            except ValueError as e:
-                # Tool already registered from YAML - this is fine
-                logger.debug(f"Some builtin tools skipped (already in YAML): {e}")
-        except Exception as e:
-            logger.info(f"Tool registry not available: {e}")
-            state.tool_registry = None
-    else:
-        state.tool_registry = None
+    state.tool_registry = build_tool_registry(f, registry_cls=get_tool_registry_class(), log=logger)
 
     # Script registry (feature-gated, requires tools)
-    ScriptRegistry = get_script_registry_class()
-    if f.scripts and ScriptRegistry and state.tool_registry:
-        try:
-            state.script_registry = ScriptRegistry()
-            state.script_registry.load_from_directory(
-                str(_paths.script_registry_dir),
-            )
-        except Exception as e:
-            logger.info(f"Script registry not available: {e}")
-            state.script_registry = None
-    else:
-        state.script_registry = None
+    state.script_registry = build_script_registry(
+        state.tool_registry, f, registry_cls=get_script_registry_class(), log=logger
+    )
 
     # Preflight check for knowledge tools (warn only, don't block startup)
     if f.tools:

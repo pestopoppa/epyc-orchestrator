@@ -154,6 +154,11 @@ class StepEventLog:
                 # HIL-16b: what a replay needs to hand the REPL back the SAME kind of object (str vs a
                 # JSON-able dict/list vs a ToolOutput envelope) and to re-raise the SAME exception.
                 extra["output_kind"] = ("none" if payload is None else "str" if isinstance(payload, str) else "json")
+                if extra["output_kind"] == "json":
+                    # HIL-16c: the canonical text sorts keys / loses container types; this keeps them
+                    from src.trace.replay.payload import encode as _encode_payload
+
+                    extra["payload_cas"] = self.cas.put(_encode_payload(payload))
                 if envelope:
                     extra["envelope"] = {"ok": bool(result.ok), "status": str(getattr(result, "status", "success"))}
                 if exc is not None:

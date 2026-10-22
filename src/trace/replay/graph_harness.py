@@ -18,17 +18,45 @@ transitions) with a replay LLM in place of the backend. One node run is one driv
 
 Not neutralisable after the fact: ``repr()`` of a ``set`` of strings in REPL variables (order depends on the
 recording process's hash seed, which is only recoverable when ``PYTHONHASHSEED`` was pinned at recording).
+
+REPL construction (HIL-16c). Two factories build the REPL a replay drives:
+
+* ``default_repl_factory`` (what ``make_harness()`` with no argument uses, unchanged): a bare REPL whose tool
+  registry is an empty stub. Right for recordings whose REPL had no real registry (scripted tests).
+* ``production_repl_factory`` (``make_production_harness``): the chat pipeline's construction
+  (``src/api/routes/chat_pipeline/repl_executor.py``): the registries built by the SAME functions the API
+  lifespan uses (``src/registry/production.py``), the harness's LLM primitives (so ``llm_call`` exists in
+  REPL code exactly when it did), and the recorded ``tool_context``. Collaborators the recording says were
+  absent stay absent.
+
+Either way the recorded tool-catalogue fingerprint (``seed.tool_catalog_fingerprint``) is compared with the
+rebuilt REPL's; a mismatch is ``environment_drift`` at turn 0 (a stub registry against a production
+recording is caught here, before any prompt is compared). Model calls made by REPL code after a turn's main
+call (``llm_call`` sub-calls, a reasoning retry) are recorded as the NEXT row's ``aux`` and answered from it
+when the prompt is byte-identical. ``llm_batch`` from REPL code is not recorded and is a divergence.
+
+Graph framework (HIL-16c decision): the harness drives pydantic-graph nodes (``src/graph/nodes.py``) only.
+* Per-node LangGraph dispatch (``langgraph_frontdoor`` etc., default off) IS covered: it runs inside the
+  pydantic node's ``run`` (``_run_via_langgraph``), the seed names that pydantic node, and the replayed
+  feature snapshot turns the same dispatch on again, so the same LangGraph node function runs in replay.
+* The full LangGraph graph (``src/graph/langgraph/graph.py:run_task_lg`` / ``run_task_lg_durable``) is NOT
+  supported: its only caller is the TM-7 parity driver (``scripts/trace/run_task_lg_parity.py``), no API
+  path runs it, and the ``langgraph_bridge`` flag is read nowhere. Its node-to-node transitions are
+  LangGraph conditional edges over a TypedDict state, which ``execute()`` would have to re-implement; a
+  speculative build with no production consumer. Its recordings are named ``langgraph:<function>`` in the
+  seed and refused as ``unknown_entry_node`` (never replayed through a pydantic node in their place).
+  Revisit when a LangGraph graph serves production traffic.
 """
 from __future__ import annotations
 
 import asyncio
 import copy
 import dataclasses
+import inspect
 import json
 import os
 import queue
 import threading
-from types import SimpleNamespace
 from typing import Any
 
 from src.trace.replay.cas import CAS
@@ -79,6 +107,7 @@ class ServedToolRegistry:
 
 
 def default_repl_factory(seed: dict, context: str) -> Any:
+    """Bare REPL with an empty stub tool registry (the HIL-16b default; ``make_harness()``)."""
     from src.repl_environment import REPLConfig, REPLEnvironment
     from src.repl_environment import environment as env_mod
 
@@ -86,6 +115,51 @@ def default_repl_factory(seed: dict, context: str) -> Any:
     cls = getattr(env_mod, r.get("class") or "REPLEnvironment", REPLEnvironment)
     return cls(context=context, artifacts=copy.deepcopy(r.get("artifacts")) or None, config=REPLConfig(**r.get("config", {})),
                role=r.get("role"), task_id=r["session_id"], tool_registry=ServedToolRegistry())   # no real handlers: replay only
+
+
+class UnsupportedReplClass(RuntimeError):
+    """The recorded REPL class cannot be rebuilt from the seed (e.g. ``DocumentREPLEnvironment``)."""
+
+
+def production_repl_factory(seed: dict, context: str, *, primitives: Any = None) -> Any:
+    """The chat pipeline's REPL construction, rebuilt from the seed (HIL-16c).
+
+    Same constructor arguments as ``repl_executor`` (context, LLM primitives, tool and script registries,
+    role, task id, ``tool_context``); the registries come from ``src.registry.production`` (the functions
+    the API lifespan calls) and are built FRESH per replay, so no registry state leaks between replays.
+    Registry calls are then served from the CAS by the harness; the real handlers never run in the prefix.
+    A collaborator the recording says was absent is not added. Recordings made before HIL-16c (no ``has``
+    block) follow the production feature gates. The retriever, hybrid router, progress logger and context
+    bundle are not rebuilt: the harness reports their absence (see ``GraphHarness._construction_drift``).
+    """
+    from src.repl_environment import REPLConfig
+    from src.repl_environment import environment as env_mod
+    from src.registry.production import build_script_registry, build_tool_registry
+
+    r = seed["repl"]
+    name = r.get("class") or "REPLEnvironment"
+    cls = getattr(env_mod, name, None)
+    if not (isinstance(cls, type) and issubclass(cls, env_mod.REPLEnvironment)):
+        raise UnsupportedReplClass(f"REPL class {name!r} cannot be rebuilt from a seed")
+    has = r.get("has")
+    want_tools = has.get("tool_registry", True) if has else True
+    want_scripts = has.get("script_registry", True) if has else True
+    want_prims = has.get("llm_primitives", True) if has else True
+    tools = build_tool_registry() if want_tools else None
+    scripts = build_script_registry(tools) if want_scripts else None
+    tctx = r.get("tool_context")
+    return cls(context=context, artifacts=copy.deepcopy(r.get("artifacts")) or None, config=REPLConfig(**r.get("config", {})),
+               llm_primitives=primitives if want_prims else None, tool_registry=tools, script_registry=scripts,
+               role=r.get("role"), task_id=r["session_id"],
+               tool_context=copy.deepcopy(tctx) if isinstance(tctx, dict) else None)
+
+
+def _accepts_primitives(factory: Any) -> bool:
+    try:
+        ps = inspect.signature(factory).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "primitives" or p.kind is inspect.Parameter.VAR_KEYWORD for p in ps)
 
 
 class _Prims:
@@ -104,6 +178,12 @@ class _Prims:
 
     def get_cache_stats(self) -> dict:
         return {"hits": 0, "misses": 0}
+
+    def llm_batch(self, prompts: list[str], role: str = "worker", **k: Any) -> list:
+        return self._batch(prompts, role, k)   # set by the harness (``GraphHarness._llm_batch``)
+
+    def _batch(self, prompts: list[str], role: str, kw: dict) -> list:   # pragma: no cover - replaced per harness
+        raise RuntimeError("replay: llm_batch is not recorded")
 
 
 class _BuiltinTap:
@@ -139,7 +219,8 @@ class GraphHarness:
         self._prompt_evt = threading.Event()
         self._prompt = ""
         self._n = 0
-        self._llm_calls = 0
+        self._aux_pos = 0          # next unconsumed entry of the current aux list (see ``_llm``)
+        self._exec_phase = False   # True once this turn's main call has been answered
 
     # ----------------------------------------------------------------------------- lifecycle
     def bind_tools(self, tools: ToolServer) -> None:
@@ -151,6 +232,7 @@ class GraphHarness:
     def reset(self, run: RecordedRun) -> None:
         self.close()
         self.run, self._n, self._div, self.warnings = run, 0, None, []
+        self._aux_pos, self._exec_phase = 0, False
         seed = run.seed
         if not seed:
             self._div = PrefixDivergence(0, "no_seed", "recording has no seed row (made before HIL-16b?)")
@@ -220,6 +302,36 @@ class GraphHarness:
                 out.append(f"path {k}: recorded {rec_p[k]!r} now {cur_p.get(k)!r}")
         return out
 
+    def _construction_drift(self, seed: dict) -> list[str]:
+        """HIL-16c: is the rebuilt REPL the recorded one? Compares the collaborators it was built with and
+        the tool-catalogue fingerprint. Old recordings (no ``tool_catalog`` key) cannot be checked: warning."""
+        from src.trace.replay.seed import repl_construction
+
+        rec = seed.get("repl") or {}
+        if "tool_catalog" not in rec:
+            self.warnings.append("recording predates HIL-16c construction capture: tool registry / catalogue drift not checked")
+            return []
+        cur = repl_construction(self.repl)
+        out: list[str] = []
+        rec_has, cur_has = rec.get("has") or {}, cur["has"]
+        for k in ("tool_registry", "script_registry", "llm_primitives", "context_bundle"):
+            if bool(rec_has.get(k)) != bool(cur_has.get(k)):
+                out.append(f"REPL {k}: recorded {bool(rec_has.get(k))} now {bool(cur_has.get(k))}")
+        for k in ("retriever", "hybrid_router"):
+            if rec_has.get(k) and not cur_has.get(k):
+                self.warnings.append(f"recorded REPL had a {k}; the replay has none (a builtin that consults it will "
+                                     "diverge as builtin_output_differs)")
+        if (rec.get("tool_context") or {}) != (cur["tool_context"] or {}):
+            out.append(f"tool_context: recorded {rec.get('tool_context')!r} now {cur['tool_context']!r}")
+        rc, cc = rec.get("tool_catalog"), cur["tool_catalog"]
+        if (rc or {}).get("sha256") != (cc or {}).get("sha256"):
+            rn, cn = set((rc or {}).get("names") or []), set((cc or {}).get("names") or [])
+            out.append(f"tool catalogue: recorded {(rc or {}).get('n_tools', 0)} tools sha {str((rc or {}).get('sha256'))[:12]} "
+                       f"now {(cc or {}).get('n_tools', 0)} sha {str((cc or {}).get('sha256'))[:12]}"
+                       f" (missing {sorted(rn - cn)[:8]}, extra {sorted(cn - rn)[:8]}; production recordings need "
+                       "make_production_harness)")
+        return out
+
     # ----------------------------------------------------------------------------- state
     def _build(self, seed: dict) -> None:
         from pydantic_graph import GraphRunContext
@@ -240,14 +352,28 @@ class GraphHarness:
         context = self.cas.get_text(seed["context_cas"]) if seed.get("context_cas") else ""
         self.state = TaskState(context=context, **st)
         self.prims = _Prims(self._llm)
-        self.repl = self.repl_factory(seed, context)
+        self.prims._batch = self._llm_batch   # type: ignore[method-assign]
+        try:
+            if _accepts_primitives(self.repl_factory):
+                self.repl = self.repl_factory(seed, context, primitives=self.prims)
+            else:
+                self.repl = self.repl_factory(seed, context)
+        except UnsupportedReplClass as e:
+            self._div = self._div or PrefixDivergence(0, "environment_drift", str(e))
+            self.repl = default_repl_factory(seed, context)   # a harmless REPL; the divergence is already set
+        drift = self._construction_drift(seed)
+        if drift:
+            self._div = self._div or PrefixDivergence(0, "environment_drift", "; ".join(drift))
         tap = _BuiltinTap(self._on_builtin)
         self.repl._exploration_log.step_events = tap
         self._wrap_tools()
         self.deps = TaskDeps(primitives=self.prims, repl=self.repl)
         self.ctx = GraphRunContext(state=self.state, deps=self.deps)
-        name = seed.get("node") or "FrontdoorNode"
-        cls = getattr(graph_nodes, name, None)
+        name = seed.get("node")
+        if not name:
+            self.warnings.append("seed names no entry node (turn not run inside a graph node?): replaying through FrontdoorNode")
+            name = "FrontdoorNode"
+        cls = getattr(graph_nodes, name, None) if not name.startswith("langgraph:") else None
         if cls is None:
             self._div = self._div or PrefixDivergence(0, "unknown_entry_node", name)
             cls = graph_nodes.FrontdoorNode
@@ -258,6 +384,8 @@ class GraphHarness:
     def _wrap_tools(self) -> None:
         repl = self.repl
         real = repl.tool_registry
+        if real is None:
+            return    # the recorded REPL had no tool registry: TOOL/CALL/list_tools do not exist, as recorded
         if isinstance(real, ServedToolRegistry):
             real._serve = self._serve_tool
         else:
@@ -287,7 +415,14 @@ class GraphHarness:
             cls = known if isinstance(known, type) and issubclass(known, Exception) else type(exc["type"], (Exception,), {})
             raise cls(msg)
         kind = extra.get("output_kind", "str")
-        payload: Any = None if kind == "none" else json.loads(text) if kind == "json" else text
+        if kind == "json" and extra.get("payload_cas"):
+            from src.trace.replay.payload import decode
+
+            payload: Any = decode(self.cas.get_text(extra["payload_cas"]))   # HIL-16c: key order and types kept
+        else:
+            # pre-HIL-16c recordings: rebuilt from the canonical (key-sorted) text; a dict whose recorded key
+            # order was not sorted will print differently and show up as a prompt divergence
+            payload = None if kind == "none" else json.loads(text) if kind == "json" else text
         env = extra.get("envelope")
         if env:
             from src.registry.tool_registry import ToolOutput
@@ -318,37 +453,55 @@ class GraphHarness:
     def _turn_rec(self):
         return self.run.turns[self._n] if self.run is not None and self._n < len(self.run.turns) else None
 
+    def _llm_batch(self, prompts: list[str], role: str, kw: dict) -> list:
+        """``llm_batch`` from REPL code: not recorded, so a divergence in replay; after the restart the live
+        model answers each prompt (sequentially; production sends them in parallel, same results contract)."""
+        if self._tools is not None and self._tools.live and self._live_llm is not None:
+            return [self._live_llm(p, role=role, **kw) for p in prompts]
+        e = PrefixDivergence(self._n, "unrecorded_llm_batch", "llm_batch from REPL code is not recorded")
+        self._stash(e)
+        raise e
+
+    def _aux_answer(self, aux: list, prompt: str, role: Any, kw: dict, live: bool, turn_no: int, where: str) -> str:
+        """Answer the call at ``self._aux_pos`` of ``aux``: from the recording when the prompt is byte-identical
+        (it belongs to the unchanged state before the intervention), live after the restart, else diverge."""
+        i = self._aux_pos
+        self._aux_pos += 1
+        if prompt.encode("utf-8") == self.cas.get(aux[i]["prompt_cas"]):
+            return self.cas.get_text(aux[i]["output_cas"])
+        if live and self._live_llm is not None:
+            return self._live_llm(prompt, role=role, **kw)
+        e = PrefixDivergence(turn_no, "aux_prompt_differs", f"auxiliary call {i} ({where})")
+        self._stash(e)
+        raise e
+
     def _llm(self, prompt: str, role: Any = None, **kw: Any) -> str:
+        live = self._tools is not None and self._tools.live
+        if self._exec_phase:
+            # After this turn's main call: REPL-code llm_call, a reasoning retry. The recorder files these at
+            # the head of the NEXT row's aux list (every model call since the previous row, before its main).
+            nxt = self.run.turns[self._n + 1] if self.run is not None and self._n + 1 < len(self.run.turns) else None
+            if live and self._live_llm is not None:
+                return self._live_llm(prompt, role=role, **kw)    # the new trajectory's own sub-calls
+            if nxt is not None and self._aux_pos < len(nxt.aux):
+                return self._aux_answer(nxt.aux, prompt, role, kw, live, self._n, "after the main call")
+            e = PrefixDivergence(self._n, "unrecorded_llm_call",
+                                 "model call after the main call (REPL llm_call / reasoning retry) is not in the recording"
+                                 + (" (after the last recorded row)" if nxt is None else ""))
+            self._stash(e)
+            raise e
         t = self._turn_rec()
         turn_no = t.turn if t is not None else self._n
         aux = t.aux if t is not None else []
-        i = self._llm_calls
-        self._llm_calls += 1
-        live = self._tools is not None and self._tools.live
-        if i < len(aux):
-            # An auxiliary call whose prompt is byte-identical to the recorded one is answered from the
-            # recording even after the restart (it belongs to the unchanged state before the intervention);
-            # a differing one is a divergence in replay and a live call after the restart.
-            same = prompt.encode("utf-8") == self.cas.get(aux[i]["prompt_cas"])
-            if same:
-                return self.cas.get_text(aux[i]["output_cas"])
-            if live and self._live_llm is not None:
-                return self._live_llm(prompt, role=role, **kw)
-            e = PrefixDivergence(turn_no, "aux_prompt_differs", f"auxiliary call {i}")
-            self._stash(e)
-            raise e
-        if i > len(aux):
-            if live and self._live_llm is not None:
-                return self._live_llm(prompt, role=role, **kw)
-            e = PrefixDivergence(turn_no, "unrecorded_llm_call", "second main call in one turn (reasoning retry?) is not recorded")
-            self._stash(e)
-            raise e
+        if self._aux_pos < len(aux):
+            return self._aux_answer(aux, prompt, role, kw, live, turn_no, "before the main call")
         self._prompt = prompt
         self.prims._last_inference_meta = dict(t.meta) if t is not None and t.meta else {}
         self._prompt_evt.set()
         out = self._out_q.get()
         if out is None:
             raise RuntimeError("replay harness closed")
+        self._exec_phase, self._aux_pos = True, 0    # later calls this turn consume the next row's aux
         return out
 
     # ----------------------------------------------------------------------------- driver protocol
@@ -369,7 +522,9 @@ class GraphHarness:
             self.state._replay_force_answer = t.force_answer    # type: ignore[attr-defined]
         else:
             self.state._replay_force_answer = None              # type: ignore[attr-defined]
-        self._llm_calls = 0
+        if not self._exec_phase:
+            self._aux_pos = 0       # first turn (or a turn after a failed one): its own aux list from the top
+        self._exec_phase = False    # else keep the position: the previous turn's REPL already consumed the head
         self._prompt_evt.clear()
         node, ctx, tape = self.node, self.ctx, self.tape
 
@@ -407,6 +562,15 @@ class GraphHarness:
         return Outcome(False, None, calls)
 
 
-def make_harness() -> GraphHarness:
-    """``--harness src.trace.replay.graph_harness:make_harness`` for ``scripts/trace/replay_flip_run.py``."""
-    return GraphHarness(CAS())
+def make_harness(repl_factory: Any = None) -> GraphHarness:
+    """``--harness src.trace.replay.graph_harness:make_harness`` for ``scripts/trace/replay_flip_run.py``.
+
+    With no argument: the HIL-16b default (``default_repl_factory``, stub tool registry), unchanged. Pass
+    ``production_repl_factory`` (or use ``make_production_harness``) for recordings made through the chat
+    pipeline's REPL construction; a stub against such a recording is reported as ``environment_drift``."""
+    return GraphHarness(CAS(), repl_factory=repl_factory)
+
+
+def make_production_harness() -> GraphHarness:
+    """``--harness src.trace.replay.graph_harness:make_production_harness``: REPL rebuilt the production way."""
+    return make_harness(production_repl_factory)

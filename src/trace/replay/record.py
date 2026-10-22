@@ -84,7 +84,10 @@ class ReplayRecorder:
         """Called at the top of ``_execute_turn``: activate this run's clock tape and LLM-call tap, take the
         step mark BEFORE any pre-prompt tool call (auto-gather peeks), and capture the seed on the first turn."""
         try:
-            self.step_mark, self._calls = step_mark, []
+            # ``_calls`` is NOT cleared here (HIL-16c): calls noted since the previous row -- REPL-code
+            # ``llm_call`` sub-calls and a reasoning retry, made after that row's main call -- become the head
+            # of this row's ``aux`` list, ahead of this turn's own pre-prompt calls. ``record_turn`` clears it.
+            self.step_mark = step_mark
             _ACTIVE.set(self)
             _activate_clock(self.tape)
             if primitives is not None and callable(getattr(primitives, "llm_call", None)):
@@ -111,7 +114,8 @@ class ReplayRecorder:
             rec = {"schema": SCHEMA, "run_id": self.run_id, "turn": self.turn, "role": role or self.role,
                    "prompt_cas": p, "output_cas": o, "kwargs": _jsonable(kwargs or {}),
                    "step_mark": self.step_mark if step_mark is None else step_mark, "chain": self.chain}
-            # every model call this turn before the main one (session summary, consolidation, compaction)
+            # every model call since the previous row before this main one: the previous turn's post-main calls
+            # (REPL llm_call, reasoning retry; HIL-16c), then this turn's session summary / consolidation / compaction
             main = next((i for i in range(len(self._calls) - 1, -1, -1) if self._calls[i]["prompt_cas"] == p), None)
             aux = self._calls[:main] if main is not None else list(self._calls)
             if aux:
