@@ -135,6 +135,8 @@ class EventType(str, Enum):
 
     # Plan review events (architect-in-the-loop)
     PLAN_REVIEWED = "plan_reviewed"
+    # KPF-26.1h: parsed planner delegate steps (one event per plan)
+    PLAN_STEPS_PARSED = "plan_steps_parsed"
 
     # Q-scoring events (from Q-scorer agent)
     Q_VALUE_UPDATED = "q_value_updated"

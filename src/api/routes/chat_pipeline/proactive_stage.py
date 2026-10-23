@@ -31,6 +31,49 @@ from src.task_ir import canonicalize_task_ir
 log = logging.getLogger(__name__)
 
 
+#: KPF-26.1h: cap on the logged `action` text (planner steps can be long).
+PLAN_STEPS_PARSED_ACTION_CAP = 2000
+
+
+def _log_plan_steps_parsed(state, task_id: str, steps: list[dict]) -> None:
+    """KPF-26.1h: emit one `plan_steps_parsed` progress event per parsed plan.
+
+    Accumulates a real sample of planner step `action` strings from normal
+    traffic. Action text is credential-redacted (redact_if_enabled) and capped.
+    Never raises: logging must not affect the delegation path.
+    """
+    try:
+        pl = getattr(state, "progress_logger", None)
+        if not pl:
+            return
+        from orchestration.repl_memory.progress_logger import EventType, ProgressEntry
+        from src.repl_environment.redaction import redact_if_enabled
+
+        rows = []
+        for st in steps:
+            action = st.get("action")
+            action = redact_if_enabled(action if isinstance(action, str) else str(action))
+            rows.append({
+                "step_id": str(st.get("id")),
+                "action": action[:PLAN_STEPS_PARSED_ACTION_CAP],
+                "action_len": len(action),
+                "actor": st.get("actor"),
+                "persona": st.get("persona") or st.get("persona_hint"),
+            })
+        pl.log(ProgressEntry(
+            event_type=EventType.PLAN_STEPS_PARSED,
+            task_id=task_id,
+            data={
+                "plan_id": task_id,
+                "n_steps": len(steps),
+                "step_ids": [r["step_id"] for r in rows],
+                "steps": rows,
+            },
+        ))
+    except Exception as e:  # noqa: BLE001
+        log.debug("plan_steps_parsed log failed: %s", e)
+
+
 def _should_inline_plan_call_for_test(primitives: LLMPrimitives) -> bool:
     """Use inline call only in test/mocked contexts to avoid teardown hangs."""
     if os.getenv("PYTEST_CURRENT_TEST"):
@@ -295,6 +338,8 @@ async def _execute_proactive(
             extra=task_extra(task_id=routing.task_id, stage="execute", mode="proactive"),
         )
         return None
+
+    _log_plan_steps_parsed(state, routing.task_id, steps)
 
     # Build TaskIR from parsed steps
     task_ir = canonicalize_task_ir({
