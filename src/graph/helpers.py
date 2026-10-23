@@ -295,6 +295,74 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
         pass
 
 
+_WARNED_EXC_TYPES: set[str] = set()
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+_FENCE_STOP = "\n```\n"
+
+
+def _bump_diag(state: Any, key: str, n: int = 1) -> None:
+    """Increment a per-task diagnostic counter on ``state.diag_counters``. Never raises."""
+    try:
+        counters = state.diag_counters
+        counters[key] = int(counters.get(key, 0)) + n
+    except Exception:
+        pass
+
+
+def _record_parse_event_safe(kind: str, site: str, status: str, reason: str) -> None:
+    try:
+        from src.structured_output import parse_events
+
+        parse_events.record_parse_event(kind, site, status, reason=reason)
+    except Exception:
+        pass
+
+
+def _note_turn1_grammar_error(state: Any, exc: BaseException) -> None:
+    """UFH14-LB3.3: surface a turn-1 grammar failure (WARNING once per exception type per
+    process, counter + parse_event every time). Never raises; the turn falls back unconstrained."""
+    name = type(exc).__name__
+    _bump_diag(state, "turn1_grammar_error")
+    if name not in _WARNED_EXC_TYPES:
+        _WARNED_EXC_TYPES.add(name)
+        log.warning("turn-1 grammar block failed (%s: %s); falling back to unconstrained generation",
+                    name, exc)
+    _record_parse_event_safe("turn1_grammar", "graph.helpers", "error", f"{name}: {exc}")
+
+
+def _ends_inside_unclosed_think(text: str) -> bool:
+    """True when the last ``<think>`` in *text* has no ``</think>`` after it."""
+    if not text:
+        return False
+    return text.rfind(_THINK_OPEN) > text.rfind(_THINK_CLOSE)
+
+
+def _trim_after_think_at_fence(text: str) -> str:
+    """Cut *text* at the first closing-fence stop after the last ``</think>`` (what the stop
+    sequence would have done had it not fired inside the think block)."""
+    close = text.rfind(_THINK_CLOSE)
+    if close < 0:
+        return text
+    start = close + len(_THINK_CLOSE)
+    # skip the answer block's own opening fence: only a stop AFTER an opener counts.
+    tail = text[start:]
+    opener = tail.find("```")
+    if opener < 0:
+        return text
+    idx = text.find(_FENCE_STOP, start + opener + 3)
+    return text if idx < 0 else text[:idx]
+
+
+def _repl_think_fence_continue_enabled() -> bool:
+    try:
+        from src.features import features
+
+        return bool(getattr(features(), "repl_think_fence_continue", False))
+    except Exception:
+        return False
+
+
 def _repl_loop_guard_enabled() -> bool:
     """REPL loop-guard (default-off): fence-repair for FINAL/CALL-truncated code blocks +
     identical-non-advancing-turn breaker. Gated on ORCHESTRATOR_REPL_LOOP_GUARD=1 so the
@@ -1460,8 +1528,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     llm_kwargs["grammar"] = grammar
                     state.grammar_enforced = True
                     state.turn1_grammar_shape = "call" if _turn1_shape == "call" else "legacy"
-        except Exception:
-            pass  # Fall back to unconstrained generation
+        except Exception as _grammar_exc:
+            # UFH14-LB3.3: a blanket pass here hid an UnboundLocalError for a day (LB3.2).
+            # Fall back to unconstrained generation, but never silently.
+            _note_turn1_grammar_error(state, _grammar_exc)
 
     # LLM call — stop at first code block close to prevent repetition loops.
     # REPL expects one action per turn; without this, the model can generate
@@ -1544,6 +1614,29 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     finally:
         if deps.primitives is not None:
             deps.primitives._early_stop_check = None
+
+    # UFH14-LB11.1: the fence stop sequence can cut a thinking role's raw /completion turn
+    # inside an unclosed <think>. Count it always (before/after "Max nudges" measurement);
+    # continue it once only behind ``repl_think_fence_continue`` (default off).
+    if _ends_inside_unclosed_think(code):
+        _bump_diag(state, "turn_ended_in_unclosed_think")
+        _record_parse_event_safe("think_fence_cut", "graph.helpers", "unclosed_think", str(role))
+        if _repl_think_fence_continue_enabled():
+            try:
+                _cont, _cont_meta = await _call_llm_capturing_meta(
+                    deps.primitives.llm_call, deps.primitives,
+                    prompt + code + _FENCE_STOP, role=str(role), stop_sequences=[],
+                    skip_suffix=True, **llm_kwargs,
+                )
+                _joined = _trim_after_think_at_fence(code + _FENCE_STOP + (_cont or ""))
+                _bump_diag(state, "think_fence_continued")
+                if _ends_inside_unclosed_think(_joined):
+                    _bump_diag(state, "think_fence_continue_still_unclosed")
+                code = _joined
+                _turn_call_meta = _cont_meta
+            except Exception as _cont_exc:
+                log.warning("think-fence continuation failed (%s: %s); keeping cut turn",
+                            type(_cont_exc).__name__, _cont_exc)
 
     _primary_llm_output = code
     if state.grammar_enforced and state.turns == 1:

@@ -232,6 +232,12 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # splits reasoning into reasoning_content. Read LIVE per request by both the backend
     # router and the orchestrator-side template skip, so the two cannot disagree across a
     # runtime flip. Default OFF in test and prod; flag off = byte-identical (RI-23b A/B).
+    # UFH14-LB11.1: the REPL stop sequence "\n```\n" can cut a thinking role's /completion turn
+    # inside an unclosed <think>; the extractor drops that text so the turn is wasted. ON: such a
+    # turn is continued once (fence restored, no fence stop, output trimmed at the first closing
+    # fence after </think>). Default OFF = byte-identical; the diag counter
+    # turn_ended_in_unclosed_think is recorded regardless.
+    FeatureSpec("repl_think_fence_continue", False, False, "REPL_THINK_FENCE_CONTINUE", "UFH14-LB11.1: continue a REPL turn once when the fence stop sequence cut it inside an unclosed <think> (thinking roles on raw /completion); default off"),
     FeatureSpec("thinking_roles_chat_lane", False, False, "THINKING_ROLES_CHAT_LANE", "RI-23: thinking-on roles (jinja + enable_thinking) route through /v1/chat/completions so chat_template_kwargs apply and reasoning_content is split and surfaced; short structured calls (review verdict, plan review/plan JSON) run thinking-off per call; default off pending the RI-23b A/B"),
     # Q38-T10 / Q38-T10.1 (operator ruling 2026-10-20, per-role parity): eval, judge, replay and
     # machine-parsed roles must emit output identical to non-speculative decoding. When ON, those
@@ -732,6 +738,7 @@ class Features:
     v1_subagent_link: bool = False  # HS-19a stage 1: record /v1 subagent parent links (tap + session log); default off
     v1_escalation: bool = False  # TE-1: opt-in /v1 frontdoor escalation via /chat's post-answer hooks (explicit x_escalation); default off
     thinking_roles_chat_lane: bool = False  # RI-23: thinking-on roles on /v1/chat/completions (kwargs + reasoning_content); default off
+    repl_think_fence_continue: bool = False  # UFH14-LB11.1: continue a turn cut inside an unclosed <think> by the fence stop; default off
     spec_off_bitwise_roles: bool = False  # Q38-T10: bitwise-required roles send per-request speculative.n_max=0; prod default ON (registry), Q38-T10.1 control arm passed 2026-10-20
 
     # Web research reranking (ColBERT snippet pre-fetch filtering)

@@ -147,6 +147,10 @@ class TaskState:
     # loop-guard intervention never fires (root cause of the BEP-2 multi-file non-firing, 2026-05-27).
     repl_noprogress_count: int = 0
 
+    # UFH14-LB3.3 / LB11.1: per-task diagnostic counters (declared so snapshot/restore keeps them):
+    # turn1_grammar_error, turn_ended_in_unclosed_think, think_fence_continued, ...
+    diag_counters: dict[str, int] = field(default_factory=dict)
+
     # Resume token for crash recovery (Phase 3B)
     resume_token: str = ""
 
