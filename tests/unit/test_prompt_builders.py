@@ -1257,6 +1257,60 @@ class TestBuildArchitectInvestigatePrompt:
         assert "Do NOT propose an implementation" in prompt
         assert "Do NOT assume omitted files are irrelevant" in prompt
 
+    def test_long_question_and_evidence_pass_through_whole(self):
+        """HS-4-PB-TRUNC: the old 2,000/3,000-char caps must not cut ordinary inputs."""
+        from src.prompt_builders import build_architect_investigate_prompt
+
+        question = "Q" + "q" * 9_000 + "END-OF-QUESTION"
+        evidence = "E" + "e" * 40_000 + "END-OF-EVIDENCE"
+        prompt = build_architect_investigate_prompt(question, context=evidence)
+        assert question in prompt
+        assert evidence in prompt
+        assert "omitted by the safety ceiling" not in prompt
+
+    def test_boundary_lengths_are_not_cut(self):
+        from src.prompt_builders import build_architect_investigate_prompt
+
+        for n in (2000, 2001, 3000, 3001):
+            prompt = build_architect_investigate_prompt("a" * n, context="b" * n)
+            assert "a" * n in prompt and "b" * n in prompt
+
+    def test_safety_ceiling_cuts_loudly(self, caplog):
+        from src.prompt_builders import build_architect_investigate_prompt
+
+        with caplog.at_level("WARNING"):
+            prompt = build_architect_investigate_prompt(
+                "q" * 50, context="e" * 200, question_ceiling=20, evidence_ceiling=100,
+            )
+        assert "q" * 20 in prompt and "q" * 21 not in prompt
+        assert "e" * 100 in prompt and "e" * 101 not in prompt
+        assert "30 characters of the question omitted by the safety ceiling" in prompt
+        assert "100 characters of the evidence bundle omitted by the safety ceiling" in prompt
+        assert "exceeds the safety ceiling" in caplog.text
+
+    def test_ceiling_none_is_unbounded(self):
+        from src.prompt_builders import build_architect_investigate_prompt
+
+        big = "z" * 500_000
+        prompt = build_architect_investigate_prompt(big, context=big, question_ceiling=None, evidence_ceiling=None)
+        assert prompt.count("z" * 500_000) == 2
+
+    def test_synthesis_prompt_keeps_a_long_question_whole(self):
+        from src.prompt_builders import build_architect_synthesis_prompt
+
+        question = "Q" + "q" * 9_000 + "END-OF-QUESTION"
+        prompt = build_architect_synthesis_prompt(question, "report", 1, 3)
+        assert question in prompt
+
+    def test_default_ceilings_cover_the_pilot_caps(self):
+        from src.prompt_builders.review import (
+            ARCHITECT_EVIDENCE_CEILING_CHARS,
+            ARCHITECT_QUESTION_CEILING_CHARS,
+        )
+
+        assert ARCHITECT_QUESTION_CEILING_CHARS > 2000
+        assert ARCHITECT_EVIDENCE_CEILING_CHARS > 3000
+
     def test_mentions_valid_roles(self):
         from src.prompt_builders import build_architect_investigate_prompt
 

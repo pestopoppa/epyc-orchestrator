@@ -98,8 +98,9 @@ STRATA = ("mmlu_pro", "simpleqa", "math", "cruxeval", "livecodebench")
 #: Per-stratum sizes, assigned as consecutive slices of one seeded order, in this order.
 PER_STRATUM = (("train", 30), ("validation", 84), ("arrival", 30), ("arrival_2", 30), ("test", 48))
 SPLIT_SEED = "hil6i-first-feature-v1"
-#: ``build_architect_investigate_prompt`` slices ``question[:2000]`` and ``context[:3000]``
-#: (src/prompt_builders/review.py). Items longer than that would measure the cap, not the prompt.
+#: Pool filter, frozen with the manifest. ``build_architect_investigate_prompt`` used to slice
+#: ``question[:2000]`` and ``context[:3000]``; since HS-4-PB-TRUNC (2026-10-23) it passes inputs whole
+#: (safety ceilings far above these). The filter is kept so the frozen split does not move.
 QUESTION_CAP_CHARS = 2000
 EVIDENCE_CAP_CHARS = 3000
 

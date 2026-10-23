@@ -770,7 +770,8 @@ def _architect_delegated_answer(
             from src.services.toon_encoder import encode, is_available
 
             if is_available() and len(context) > 100:
-                toon_context = encode({"ctx": context[:3000]})
+                # HS-4-PB-TRUNC: no 3,000-char pre-cut; the prompt builder owns the (safety-only) ceiling.
+                toon_context = encode({"ctx": context})
         except Exception as exc:
             log.debug("TOON encoding failed, using raw context: %s", exc)
 

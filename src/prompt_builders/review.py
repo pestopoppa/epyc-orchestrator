@@ -6,6 +6,7 @@ review gate DROP).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.prompt_builders.resolver import resolve_prompt
@@ -176,9 +177,36 @@ def build_plan_review_prompt(
 # ── Architect Delegation Prompts ─────────────────────────────────────────
 
 
+#: HS-4-PB-TRUNC (2026-10-23): the delegated path used to cut the question to 2,000 characters and
+#: the evidence bundle to 3,000, so 99.5% of pool ``hotpotqa`` prompts and every ``longbench`` prompt
+#: reached the architect truncated (HIL-6i design §14). Inputs now pass through whole. These
+#: ceilings are NOT content caps: they only bound a pathological input (about 100K tokens each) so a
+#: request cannot overrun the architect's context window and fail the whole turn. Hitting one is
+#: logged and marked inside the prompt, never silent.
+ARCHITECT_QUESTION_CEILING_CHARS = 400_000
+ARCHITECT_EVIDENCE_CEILING_CHARS = 400_000
+
+_log = logging.getLogger(__name__)
+
+
+def _apply_ceiling(text: str, ceiling: int | None, what: str) -> str:
+    """Return ``text`` whole unless it exceeds ``ceiling``; then cut loudly (log + in-prompt marker)."""
+    if ceiling is None or len(text) <= ceiling:
+        return text
+    dropped = len(text) - ceiling
+    _log.warning(
+        "architect_investigate %s exceeds the safety ceiling (%d > %d chars); cutting %d chars",
+        what, len(text), ceiling, dropped,
+    )
+    return f"{text[:ceiling]}\n[... {dropped} characters of the {what} omitted by the safety ceiling ...]"
+
+
 def build_architect_investigate_prompt(
     question: str,
     context: str = "",
+    *,
+    question_ceiling: int | None = ARCHITECT_QUESTION_CEILING_CHARS,
+    evidence_ceiling: int | None = ARCHITECT_EVIDENCE_CEILING_CHARS,
 ) -> str:
     """Build prompt asking architect to decide: answer directly or delegate investigation.
 
@@ -191,14 +219,18 @@ def build_architect_investigate_prompt(
     Args:
         question: The user's question.
         context: Optional TOON-encoded or plain-text context.
+        question_ceiling: Safety ceiling in characters for the question (None = unbounded).
+            Not a content cap: ordinary inputs pass through whole (HS-4-PB-TRUNC).
+        evidence_ceiling: Same, for the evidence bundle.
 
     Returns:
         Prompt string for architect.
     """
     context_section = ""
     if context:
+        evidence = _apply_ceiling(context, evidence_ceiling, "evidence bundle")
         context_section = (
-            f"\nEvidence bundle (for discovery; not a solution plan):\n{context[:3000]}\n"
+            f"\nEvidence bundle (for discovery; not a solution plan):\n{evidence}\n"
         )
         if _architect_boundary_on():  # CT-21: sentence directly above the untrusted block
             context_section = f"\n{ARCHITECT_EVIDENCE_BOUNDARY_SENTENCE}{context_section}"
@@ -209,7 +241,7 @@ def build_architect_investigate_prompt(
         _ARCHITECT_INVESTIGATE_FALLBACK,
         context_section=context_section,
         valid_roles_section=_architect_investigate_valid_roles_section(),
-        question=question[:2000],
+        question=_apply_ceiling(question, question_ceiling, "question"),
     ))
 
 
@@ -264,6 +296,6 @@ def build_architect_synthesis_prompt(
         "architect_synthesis",
         _ARCHITECT_SYNTHESIS_FALLBACK,
         investigate_option=investigate_option,
-        question=question[:2000],
+        question=_apply_ceiling(question, ARCHITECT_QUESTION_CEILING_CHARS, "question"),  # HS-4-PB-TRUNC
         report=report_section,
     ))

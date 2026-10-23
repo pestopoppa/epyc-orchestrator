@@ -87,8 +87,16 @@ def test_target_is_live_resolver_prompt_with_its_protected_layer():
     assert text.rstrip().endswith(ff.FINAL_ANCHOR)
     review = (ROOT / "src/prompt_builders/review.py").read_text()
     assert '"architect_investigate"' in review
-    assert f"question[:{ff.QUESTION_CAP_CHARS}]" in review
-    assert f"context[:{ff.EVIDENCE_CAP_CHARS}]" in review
+    # HS-4-PB-TRUNC: the builder no longer cuts at the pilot's 2,000/3,000 caps (safety ceilings only),
+    # so an eligible pilot item is never truncated; the caps stay as the frozen pool filter.
+    assert f"question[:{ff.QUESTION_CAP_CHARS}]" not in review
+    assert f"context[:{ff.EVIDENCE_CAP_CHARS}]" not in review
+    from src.prompt_builders.review import (
+        ARCHITECT_EVIDENCE_CEILING_CHARS,
+        ARCHITECT_QUESTION_CEILING_CHARS,
+    )
+    assert ARCHITECT_QUESTION_CEILING_CHARS >= ff.QUESTION_CAP_CHARS
+    assert ARCHITECT_EVIDENCE_CEILING_CHARS >= ff.EVIDENCE_CAP_CHARS
     stage = (ROOT / "src/api/routes/chat_pipeline/delegation_stage.py").read_text()
     assert f'str(initial_role) == "{ff.CONSUMER_ROLE}"' in stage
     features = (ROOT / "src/features.py").read_text()
