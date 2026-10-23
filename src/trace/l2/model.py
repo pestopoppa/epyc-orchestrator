@@ -58,7 +58,7 @@ class L2Trace:
     exception: str | None = None
     step_cap: int | None = None
     ctx_limit: int | None = None
-    tool_required: bool = False
+    tool_required: bool | None = None  # None = not captured (unobserved); only True supports zero_step claims
     steps: list[L2Step] = field(default_factory=list)
 
     @classmethod

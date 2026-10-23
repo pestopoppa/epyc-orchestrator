@@ -105,15 +105,18 @@ def scan(traces: list[L2Trace], cfg: DetectorConfig | None = None, seed: int = 0
         rep["step_events"] = {
             "runs": n_step,
             "with_joined_outcome": sum(1 for t in traces if t.source == "step_events" and t.outcome != "unknown"),
-            "not_captured": ["exit_status", "tokens_in", "ctx_limit", "step_cap", "tool_required"],
+            "not_captured": ["exit_status", "tokens_in", "ctx_limit", "step_cap"]
+            + ([] if any(t.tool_required is not None for t in traces if t.source == "step_events") else ["tool_required"]),
         }
     # (1) domain split
     dom = Counter(domain_of(t) for t in failed)
     rep["domain_split"] = {"denominator_failed": len(failed), "counts": dict(sorted(dom.items()))}
 
     def fires(t, cat):
-        if cat == "zero_step_violation" and not observed(t):
-            return None   # unobserved, not absent
+        # zero-step needs observed steps AND a captured tool requirement (HIL-15c): both unknowns are
+        # "unobserved, not absent", so the trace leaves that category's denominator.
+        if cat == "zero_step_violation" and not (observed(t) and t.tool_required is True):
+            return None
         return any(d.category == cat for d in dets[t.trace_id])
 
     # (4) category rates on failed AND passed, task-resampled intervals
@@ -126,6 +129,24 @@ def scan(traces: list[L2Trace], cfg: DetectorConfig | None = None, seed: int = 0
             row[name] = {"n": n, "fires": k, "rate": round(k / n, 4) if n else None, "ci95_task_resampled": _ci(vals, rng, B) if n else [None, None]}
         rates[cat] = row
     rep["category_rates"] = rates
+
+    # (4b) HIL-15c: precision / recall of each category AS A FAILURE SIGNAL, over runs with a known
+    # outcome that the category can observe. A protocol-conformance signature (premature_wrap_up,
+    # zero_step_violation) may be correct about the protocol and still not predict the outcome when the
+    # outcome checker does not test the protocol, so this is the number to gate "use as failure signal" on.
+    prec = {}
+    for cat in CATEGORIES:
+        tp = fp = fn = tn = 0
+        for t in failed + passed:
+            f = fires(t, cat)
+            if f is None:
+                continue
+            bad = t.outcome == "fail"
+            tp += bool(f and bad); fp += bool(f and not bad); fn += bool((not f) and bad); tn += bool((not f) and not bad)
+        prec[cat] = {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
+                     "precision": round(tp / (tp + fp), 4) if tp + fp else None,
+                     "recall": round(tp / (tp + fn), 4) if tp + fn else None}
+    rep["category_precision_vs_outcome"] = prec
 
     # (3) mechanical-signature share and unclassified share (no forced label)
     def has_sig(t):

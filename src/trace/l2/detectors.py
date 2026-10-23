@@ -54,6 +54,13 @@ class DetectorConfig:
     verifying_re: str = r"test|verify|check|lint|build|compile|assert|validate"
     schemas: dict[str, dict] = field(default_factory=dict)   # tool -> JSON schema
     truncation_status_re: str = r"trunc"
+    # HIL-15c: a read-only retrieval call between the last mutation and the final answer is a
+    # read-back, i.e. verification by observation (the same convention loop_detectors uses for
+    # ``examine``/``look`` after an edit). RUN-1 evidence: all 34 premature_wrap_up firings on
+    # passing runs were the write -> peek -> final protocol the task prescribed. Set False to get
+    # the pre-HIL-15c definition (tool-name regex only).
+    readback_verifies: bool = True
+    readback_tools: frozenset[str] = frozenset({"peek", "grep", "list_dir", "file_info", "read_file", "file_read"})
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,13 @@ def _is_verifying(s: L2Step, cfg: DetectorConfig) -> bool:
     return bool(s.tool and re.search(cfg.verifying_re, s.tool, re.I))
 
 
+def _is_readback(s: L2Step, cfg: DetectorConfig) -> bool:
+    """A successful, non-mutating retrieval call. Arguments are not captured with step events, so
+    this cannot prove the read touched the mutated path (documented limitation)."""
+    return bool(cfg.readback_verifies and s.kind == "tool_call" and s.tool in cfg.readback_tools
+                and s.mutating is not True and s.error is not True and s.invocation_error is None)
+
+
 def _validate(schema: dict, args: Any) -> str | None:
     from jsonschema import Draft202012Validator
     errs = sorted(Draft202012Validator(schema).iter_errors(args), key=lambda e: list(e.absolute_path))
@@ -94,10 +108,12 @@ def detect(t: L2Trace, cfg: DetectorConfig | None = None) -> list[Detection]:
     out: list[Detection] = []
     tools = t.tool_steps()
 
-    # zero-step / first-turn protocol violation
-    if not tools:
+    # zero-step / first-turn protocol violation. HIL-15c: both branches need ``tool_required is True``.
+    # ``None`` means "the task's tool requirement was not captured" and is UNOBSERVED, not False;
+    # firing on it measured 2/22 precision on RUN-1 (20 passing runs answered correctly with no tool).
+    if t.tool_required is True and not tools:
         out.append(Detection("zero_step_violation", None, "zero_step"))
-    elif t.tool_required and t.steps and t.steps[0].kind != "tool_call":
+    elif t.tool_required is True and t.steps and t.steps[0].kind != "tool_call":
         out.append(Detection("zero_step_violation", t.steps[0].idx, "first_turn_no_tool_call"))
 
     prev, count, fired = None, 0, False
@@ -142,7 +158,8 @@ def detect(t: L2Trace, cfg: DetectorConfig | None = None) -> list[Detection]:
     final = next((s for s in t.steps if s.is_final or s.kind == "final"), None)
     if final is not None:
         muts = [s for s in tools if _is_mutating(s, cfg) and s.idx < final.idx]
-        if muts and not any(_is_verifying(s, cfg) and s.idx > muts[-1].idx and s.idx < final.idx for s in tools):
+        if muts and not any((_is_verifying(s, cfg) or _is_readback(s, cfg))
+                            and s.idx > muts[-1].idx and s.idx < final.idx for s in tools):
             out.append(Detection("premature_wrap_up", final.idx, "no_verify_after_mutation"))
         if t.ctx_limit and final.tokens_in and final.tokens_in >= cfg.ctx_frac * t.ctx_limit:
             out.append(Detection("premature_wrap_up", final.idx, "near_context_limit"))

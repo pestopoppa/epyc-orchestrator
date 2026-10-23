@@ -203,7 +203,10 @@ def _scan_db(tmp_path, builders: dict):
     trace_store.ensure_schema(db).close()
     for rid, b in builders.items():
         _run_fixture(db, rid, b)
-    return {t.trace_id: t for t in load_step_events(db)}
+    ts = {t.trace_id: t for t in load_step_events(db)}
+    for t in ts.values():
+        t.tool_required = True      # HIL-15c: zero-step needs a CAPTURED requirement; None = unobserved
+    return ts
 
 
 def _cats(t):
@@ -262,6 +265,8 @@ def test_scan_reports_step_bearing_denominators_and_step_ratio(tmp_path):
     outcomes = {rid: SimpleNamespace(trace_id=rid, task_key=rid, outcome=("pass" if rid.startswith("p") else "fail"),
                                      role=None, status=None, exception=None) for rid in builders}
     joined = merge_step_traces([], list(load_step_events(db, outcomes)))
+    for t in joined:
+        t.tool_required = True      # HIL-15c: captured requirement (None would leave zero-step unobserved)
     rep = scan(joined, DetectorConfig(), B=20)
     assert rep["category_rates"]["zero_step_violation"]["failed"]["n"] == 5     # step-bearing denominators (4 + the zero-step run)
     assert rep["category_rates"]["zero_step_violation"]["failed"]["fires"] == 1

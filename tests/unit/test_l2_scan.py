@@ -67,6 +67,7 @@ def test_invalid_invocation_missing_arg_and_unknown_tool():
 
 def test_zero_step_violation():
     d = good(); d["steps"] = [{"idx": 0, "kind": "final", "is_final": True}]
+    d["tool_required"] = True
     assert cats(d) == [("zero_step_violation", None)]
 
 

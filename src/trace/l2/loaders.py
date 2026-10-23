@@ -170,7 +170,8 @@ def load_step_events(db_path: Path | str, outcomes: dict[str, L2Trace] | None = 
     registry rejected the invocation itself (``invocation_error``), which is invalid_invocation, not
     a tool failure. ``exit_status`` is not captured and stays None. ``step_cap``, ``ctx_limit`` and
     ``tokens_in`` are not captured, so the near-context-limit wrap-up signature is not computable
-    from these traces; ``tool_required`` defaults to False.
+    from these traces; ``tool_required`` is None (not captured) unless
+    ``apply_tool_required`` sets it from a task file.
     """
     import sqlite3
 
@@ -203,6 +204,33 @@ def load_step_events(db_path: Path | str, outcomes: dict[str, L2Trace] | None = 
             source="step_events", status=base.status if base else None,
             exception=base.exception if base else None, steps=steps,
         )
+
+
+_REQUIRES_TOOL_RE = re.compile(r"\buse the [\w.-]+ tool\b", re.I)
+
+
+def tool_required_map(tasks: list[dict]) -> dict[str, bool]:
+    """HIL-15c: task_key -> tool_required from a driver ``--tasks`` list. An explicit boolean
+    ``tool_required`` wins; otherwise the prompt must instruct a tool call ("use the write_file tool"),
+    else the task is recorded as NOT requiring one (so a no-tool pass is not a violation)."""
+    out: dict[str, bool] = {}
+    for t in tasks:
+        v = t.get("tool_required")
+        out[t["task_key"]] = v if isinstance(v, bool) else bool(_REQUIRES_TOOL_RE.search(t.get("prompt", "")))
+    return out
+
+
+def apply_tool_required(traces: list[L2Trace], required: dict[str, bool]) -> int:
+    """Set ``tool_required`` on step-bearing traces whose task key (run id ``<key>-r<i>`` -> ``<key>``)
+    is in ``required``; every other trace stays None (unobserved). Returns the number set."""
+    n = 0
+    for t in traces:
+        for k in (t.task_key, re.sub(r"-r\d+$", "", t.task_key or "")):
+            if k in required:
+                t.tool_required = required[k]
+                n += 1
+                break
+    return n
 
 
 def merge_step_traces(progress: list[L2Trace], steps: list[L2Trace]) -> list[L2Trace]:
