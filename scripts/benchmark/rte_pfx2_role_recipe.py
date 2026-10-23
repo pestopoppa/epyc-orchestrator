@@ -165,6 +165,18 @@ def resolve(port: int, n: int) -> dict:
             "pre_evict_gib": evict, "port": port}
 
 
+def linkage_root(kernel_dir: Path = None) -> str:
+    """Expected linkage root = realpath of the kernel bin dir (production/cpu is a symlink into builds/)."""
+    return os.path.realpath(kernel_dir if kernel_dir is not None else KERNEL_CPU)
+
+
+def with_store_ld_path(env: dict, kernel_dir: Path = None) -> dict:
+    """Every launcher sets its own LD_LIBRARY_PATH: resolved store bin dir first."""
+    root = linkage_root(kernel_dir)
+    old = env.get("LD_LIBRARY_PATH", "")
+    return {**env, "LD_LIBRARY_PATH": root + (":" + old if old else "")}
+
+
 def plan_checks(plan: dict, n: int) -> list[str]:
     bad = check_requirements(plan["argv"], n, plan["port"])
     pre = plan["numa_prefix"]
@@ -304,7 +316,7 @@ def do_run(a, plan: dict) -> int:
         print("numa-pre-evict:", ok, msg)
         if not ok:
             return 5
-    env = {**os.environ, **plan["env"]}
+    env = with_store_ld_path({**os.environ, **plan["env"]})
     log = open(out / "server.log", "ab")
     proc = subprocess.Popen(plan["numa_prefix"] + plan["argv"], stdout=log, stderr=subprocess.STDOUT, env=env)
     pid = proc.pid
@@ -336,7 +348,7 @@ def do_run(a, plan: dict) -> int:
         if pf_rc != 0:
             print("REFUSED: first-reply preflight failed", file=sys.stderr)
             return pf_rc
-        lk = subprocess.run(["bash", str(LINKAGE), plan["argv"][0], str(KERNEL_CPU.parent)],
+        lk = subprocess.run(["bash", str(LINKAGE), plan["argv"][0], linkage_root()],
                             capture_output=True, text=True, env=env)
         (out / "linkage.txt").write_text(lk.stdout + lk.stderr)
         if lk.returncode != 0:

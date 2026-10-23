@@ -136,3 +136,25 @@ def test_preflight_ok_and_refusals():
     assert M.first_reply_preflight(1, opener=_op({"content": "", "reasoning_content": ""}))[0] == 9
     def boom(req, timeout=0): raise OSError("down")
     assert M.first_reply_preflight(1, opener=boom)[0] == 8
+
+
+def test_linkage_root_resolves_symlinked_production_dir(tmp_path, monkeypatch):
+    real = tmp_path / "builds" / "cpu-x" / "bin"; real.mkdir(parents=True)
+    prod = tmp_path / "production"; prod.mkdir(); (prod / "cpu").symlink_to(real)
+    monkeypatch.setattr(M, "KERNEL_CPU", prod / "cpu")
+    assert M.linkage_root() == str(real)           # resolved into builds/, not the unresolved parent
+    assert not str(real).startswith(str(prod))      # the old parent-based root would have been wrong
+    env = M.with_store_ld_path({"LD_LIBRARY_PATH": "/usr/lib/llvm-20/lib"})
+    assert env["LD_LIBRARY_PATH"] == f"{real}:/usr/lib/llvm-20/lib"
+    assert M.with_store_ld_path({})["LD_LIBRARY_PATH"] == str(real)
+
+
+def test_linkage_helper_passes_resolved_root_fails_outside():
+    import subprocess
+    if not M.LINKAGE.exists() or not (M.KERNEL_CPU / "llama-server").exists():
+        pytest.skip("kernel store not present")
+    b = str(M.KERNEL_CPU / "llama-server")
+    ok = subprocess.run(["bash", str(M.LINKAGE), b, M.linkage_root()], capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stdout
+    bad = subprocess.run(["bash", str(M.LINKAGE), b, "/usr/lib"], capture_output=True, text=True)
+    assert bad.returncode != 0
