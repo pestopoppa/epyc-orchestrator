@@ -101,6 +101,10 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("streaming", False, True, "STREAMING", "SSE streaming endpoints"),
     FeatureSpec("openai_compat", False, True, "OPENAI_COMPAT", "OpenAI-compatible API"),
     FeatureSpec("voice_turn", False, False, "VOICE_TURN", "First-party session-backed voice-turn SSE route; opt-in until integrated acceptance"),
+    # Live speech text front end (CS-8.L4, operator 2026-10-23): Italian only, kill-switch
+    # ORCHESTRATOR_TTS_IT_NORMALIZE=0 / ORCHESTRATOR_TTS_IT_RESPELL=0.
+    FeatureSpec("tts_it_normalize", True, True, "TTS_IT_NORMALIZE", "Italian TTS text normalizer (numbers, units, pH) on the live voice path"),
+    FeatureSpec("tts_it_respell", True, True, "TTS_IT_RESPELL", "Italian TTS stress/proper-noun respelling on the live voice path"),
     # Core Features
     FeatureSpec("repl", True, True, "REPL", "REPL execution environment"),
     FeatureSpec("caching", False, True, "CACHING", "Response caching with prefix routing"),
@@ -560,6 +564,9 @@ class Features:
     streaming: bool = False
     openai_compat: bool = False
     voice_turn: bool = False  # First-party voice-turn route; opt-in pending integrated acceptance.
+
+    tts_it_normalize: bool = True  # CS-8.L4: Italian-only TTS number/unit/acronym normalizer, live path.
+    tts_it_respell: bool = True  # CS-8.L4: Italian-only stress/proper-noun respelling, live path.
 
     # Core Features (usually enabled)
     repl: bool = True

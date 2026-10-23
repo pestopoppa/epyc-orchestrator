@@ -7,6 +7,8 @@ pH (twice). All strings are short test strings written for this file.
 
 import pytest
 
+from src.features import get_features
+
 from src.voice.cascade import CascadeBackend
 from src.voice.contracts import VoiceEvent, VoiceTurn
 from src.voice.tts_text_normalize import (
@@ -258,9 +260,10 @@ def _run(backend, *, language=None, must_preserve=()):
     return list(backend.respond(turn))
 
 
-def test_cascade_default_off_passes_the_answer_object_unchanged():
+def test_cascade_explicit_off_passes_the_answer_object_unchanged():
     synth = _Synth()
-    events = _run(CascadeBackend(_Transcriber(), _VoiceTurn(_ANSWER), synth), language="it")
+    events = _run(CascadeBackend(_Transcriber(), _VoiceTurn(_ANSWER), synth,
+                                 tts_text_normalization=False, tts_respell=False), language="it")
     assert events[-1] == VoiceEvent("end")
     assert synth.texts == [_ANSWER]
     assert synth.texts[0].encode() == _ANSWER.encode()
@@ -297,3 +300,44 @@ def test_cascade_flag_validation():
         CascadeBackend(_Transcriber(), _VoiceTurn(""), _Synth(), tts_text_normalization="yes")
     with pytest.raises(ValueError):
         CascadeBackend(_Transcriber(), _VoiceTurn(""), _Synth(), tts_language=" ")
+
+
+# --------------------------------------------------------------------------- CS-8.L4 live default
+
+_LIVE = "Lo standard 802.11n usa 2.4Ghz. In maniera analoga, gli atomi di Giza e delle Marianne."
+
+
+def test_cascade_live_default_applies_normalizer_and_respelling_for_italian():
+    synth = _Synth()
+    _run(CascadeBackend(_Transcriber(), _VoiceTurn(_LIVE), synth), language="it")
+    out = synth.texts[0]
+    assert "ottocentodue punto undici enne" in out and "due virgola quattro gigahertz" in out
+    assert "anàloga" in out and "àtomi" in out and "Ghiza" in out
+    assert "Mariànne" in out
+
+
+def test_cascade_live_default_leaves_other_languages_byte_identical():
+    synth = _Synth()
+    _run(CascadeBackend(_Transcriber(), _VoiceTurn(_LIVE), synth), language="en")
+    assert synth.texts == [_LIVE]
+
+
+@pytest.mark.parametrize("var, kept, gone", [
+    ("ORCHESTRATOR_TTS_IT_NORMALIZE", "anàloga", "due virgola quattro"),
+    ("ORCHESTRATOR_TTS_IT_RESPELL", "due virgola quattro", "anàloga"),
+])
+def test_cascade_kill_switches_turn_each_step_off(monkeypatch, var, kept, gone):
+    monkeypatch.setenv(var, "0")
+    monkeypatch.setattr("src.features.features", lambda: get_features())
+    synth = _Synth()
+    _run(CascadeBackend(_Transcriber(), _VoiceTurn(_LIVE), synth), language="it")
+    assert kept in synth.texts[0] and gone not in synth.texts[0]
+
+
+def test_respell_it_57_and_it_26_style_inputs():
+    from src.voice.tts_text_normalize import respell_italian
+    assert normalize_for_tts("In maniera analoga, agli uomini", "it") == "In maniera anàloga, agli uomini"
+    assert normalize_for_tts("nella banda dei 2.4Ghz", "it") == "nella banda dei due virgola quattro gigahertz"
+    assert respell_italian("Giza") == "Ghiza" and respell_italian("GIZA") == "GHIZA"
+    assert respell_italian("anàloga àtomi") == "anàloga àtomi"  # idempotent
+    assert respell_italian("analogamente") == "analogamente"  # whole words only

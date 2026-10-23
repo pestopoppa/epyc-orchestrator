@@ -44,7 +44,8 @@ class CascadeBackend:
         voice_turn: VoiceTurnService,
         synthesizer: SpeechSynthesizer,
         *,
-        tts_text_normalization: bool = False,
+        tts_text_normalization: bool | None = None,
+        tts_respell: bool | None = None,
         tts_language: str | None = None,
     ) -> None:
         """``tts_text_normalization`` rewrites numbers, units and letter acronyms into words
@@ -53,18 +54,31 @@ class CascadeBackend:
         server was launched for; the pinned Qwen TTS HTTP contract carries none). Off, the
         synthesizer receives the route's answer string unchanged.
 
-        TODO(operator): default OFF on the live voice path. Enable it (pass True and the
-        server's language) once the CS-8.L re-listen of the normalized clips is rated; the
-        cascade/eval path (research g1_cascade_language.py) already runs it default-on.
+        CS-8.L4 (operator, 2026-10-23): both Italian steps (normalizer, ``tts_text_normalization``;
+        stress/proper-noun respelling, ``tts_respell``) are ON by default on the live path. ``None``
+        resolves from the ``tts_it_normalize`` / ``tts_it_respell`` feature flags; kill-switches
+        ``ORCHESTRATOR_TTS_IT_NORMALIZE=0`` and ``ORCHESTRATOR_TTS_IT_RESPELL=0``. Both are
+        language-gated: non-Italian text is never touched.
         """
+        if tts_text_normalization is None or tts_respell is None:
+            from src.features import features as _features
+
+            flags = _features()
+            if tts_text_normalization is None:
+                tts_text_normalization = flags.tts_it_normalize
+            if tts_respell is None:
+                tts_respell = flags.tts_it_respell
         if not isinstance(tts_text_normalization, bool):
             raise TypeError("tts_text_normalization must be a bool")
+        if not isinstance(tts_respell, bool):
+            raise TypeError("tts_respell must be a bool")
         if tts_language is not None and (not isinstance(tts_language, str) or not tts_language.strip()):
             raise ValueError("tts_language must be None or a non-empty string")
         self._transcriber = transcriber
         self._voice_turn = voice_turn
         self._synthesizer = synthesizer
         self._tts_text_normalization = tts_text_normalization
+        self._tts_respell = tts_respell
         self._tts_language = tts_language
 
     def ingest(self, audio_chunk: bytes) -> str:
@@ -155,9 +169,12 @@ class CascadeBackend:
         # must_preserve is checked on the route's own text above; normalization only changes
         # how the synthesizer is asked to say it.
         speech_text = answer
-        if self._tts_text_normalization:
+        if self._tts_text_normalization or self._tts_respell:
             speech_text = normalize_for_tts(
-                answer, turn.language if turn.language is not None else self._tts_language
+                answer,
+                turn.language if turn.language is not None else self._tts_language,
+                normalize=self._tts_text_normalization,
+                respell=self._tts_respell,
             )
         for index, chunk in enumerate(self._synthesizer.stream_pcm(speech_text, language=turn.language)):
             if index >= MAX_ROUTE_EVENTS:

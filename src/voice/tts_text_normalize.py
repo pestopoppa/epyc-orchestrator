@@ -42,7 +42,9 @@ __all__ = [
     "canonical_language",
     "normalize_for_tts",
     "normalize_italian",
+    "RESPELL_IT",
     "ordinal_it",
+    "respell_italian",
 ]
 
 
@@ -60,13 +62,52 @@ def canonical_language(language: str | None) -> str | None:
     return _LANGUAGE_ALIASES.get(language.strip().lower())
 
 
-def normalize_for_tts(text: str, language: str | None) -> str:
-    """Return ``text`` prepared for TTS in ``language``; non-Italian input is returned as is."""
+# Respelling table (CS-8.L4): the frozen qwentts kernel has no stress lexicon, so words it
+# stresses or pronounces wrongly are respelled with a written accent / hard-g digraph. Only
+# forms the operator rated better in the CS-8.L re-listen (5/5) are listed.
+RESPELL_IT: Mapping[str, str] = {
+    "atomi": "àtomi",
+    "idiozie": "idiozìe",
+    "analoga": "anàloga",
+    "giza": "Ghiza",
+    "marianne": "Mariànne",
+}
+_RESPELL_RE = re.compile(r"(?<![\w])(" + "|".join(RESPELL_IT) + r")(?![\w])", re.IGNORECASE)
+
+
+def _sub_respell(m: re.Match[str]) -> str:
+    word = m.group(1)
+    target = RESPELL_IT[word.lower()]
+    if word.isupper() and len(word) > 1:
+        return target.upper()
+    if word[0].isupper():
+        return target[0].upper() + target[1:]
+    return target
+
+
+def respell_italian(text: str) -> str:
+    """Respell known mis-stressed / mis-pronounced Italian words (idempotent)."""
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    return _RESPELL_RE.sub(_sub_respell, text)
+
+
+def normalize_for_tts(
+    text: str, language: str | None, *, normalize: bool = True, respell: bool = True
+) -> str:
+    """Return ``text`` prepared for TTS in ``language``; non-Italian input is returned as is.
+
+    ``normalize`` / ``respell`` switch the two Italian steps independently (live kill-switches).
+    """
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     if canonical_language(language) != "it":
         return text
-    return normalize_italian(text)
+    if normalize:
+        text = normalize_italian(text)
+    if respell:
+        text = respell_italian(text)
+    return text
 
 
 # --------------------------------------------------------------------------- Italian numbers
