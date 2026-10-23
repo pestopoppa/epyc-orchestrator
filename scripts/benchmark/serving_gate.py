@@ -22,7 +22,8 @@ from pathlib import Path
 # Deterministic host-thread pinning (2026-10-22): one shared helper with the stack launcher.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.server.launch_affinity import (  # noqa: E402
-    affinity_escapes, apply_pinned_launch_env, enforce_launch_affinity, prefix_cpuset)
+    affinity_escapes, affinity_reading, append_reading, apply_pinned_launch_env, enforce_launch_affinity,
+    prefix_cpuset)
 
 STAGE = Path('/mnt/raid0/llm/tmp/q38t101-serving-gate')
 CORPUS = STAGE / 'corpus.jsonl'
@@ -265,13 +266,24 @@ class Server:
             if not any('libggml-hip' in m for m in self.maps): raise RuntimeError(f'{self.label}: libggml-hip not mapped; not a HIP run: {self.maps}')
         pin = enforce_launch_affinity(self.pid, self.argv, label=self.label, emit=lambda _m: None)
         self.affinity = pin.as_dict() if pin is not None else None
+        if pin is not None: self._record_affinity('post_health_pin', pin)
         if pin is not None and not pin.ok: raise RuntimeError(f'{self.label}: tasks escape the placement after re-pin: {self.affinity}')
+    def _record_affinity(self, moment, pin=None):
+        # Belief-kernel write side (VB-LAUNCH-AFFINITY-WIRE): one self-hashed per-task reading with its read time,
+        # pid start time and executable sha256, appended to <out>/affinity_readings.jsonl. Never fails the gate.
+        try:
+            rec = affinity_reading(self.pid, prefix_cpuset(self.argv), moment=moment, label=self.label, pin=pin)
+            append_reading(self.out / 'affinity_readings.jsonl', rec)
+            self.affinity_readings = getattr(self, 'affinity_readings', []) + [rec['content_sha256']]
+        except Exception as e:
+            self.affinity_reading_errors = getattr(self, 'affinity_reading_errors', []) + [f'{moment}: {e!r}'[:256]]
     def stop_and_verify(self):
         dead = True
         cpuset = prefix_cpuset(self.argv)
         if self.proc is not None and self.proc.poll() is None and cpuset:
             # Post-warm-up re-check: threads born at the first request / draft load must have inherited the pin.
             self.affinity_escapes_at_stop = [{'tid': t.tid, 'comm': t.comm, 'cpus': t.cpu_list} for t in affinity_escapes(self.pid, cpuset)]
+            self._record_affinity('pre_stop')
         if self.proc is not None:
             if self.proc.poll() is None:
                 self.proc.send_signal(signal.SIGTERM)
@@ -293,7 +305,8 @@ class Server:
                 'vram_ready_gib': round(getattr(self, 'vram_ready', -1) / 2**30, 2), 'vram_peak_gib': round(max([x['vram'] for x in s] or [0]) / 2**30, 2),
                 'busy_max': max([x['busy'] for x in s] or [0]), 'busy_nonzero_samples': sum(1 for x in s if x['busy'] > 0),
                 'child_in_kfd_samples': sum(1 for x in s if x['child_in_kfd']),
-                'affinity': getattr(self, 'affinity', None), 'affinity_escapes_at_stop': getattr(self, 'affinity_escapes_at_stop', None)}
+                'affinity': getattr(self, 'affinity', None), 'affinity_escapes_at_stop': getattr(self, 'affinity_escapes_at_stop', None),
+                'affinity_readings': getattr(self, 'affinity_readings', None), 'affinity_reading_errors': getattr(self, 'affinity_reading_errors', None)}
 
 def gen_body(prompt, n=N_PREDICT):
     return {'prompt': prompt, 'n_predict': n, 'temperature': 0.0, 'top_k': 1, 'top_p': 1.0, 'min_p': 0.0, 'typical_p': 1.0, 'repeat_penalty': 1.0, 'seed': 42,
