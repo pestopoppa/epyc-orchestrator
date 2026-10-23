@@ -232,6 +232,83 @@ def test_cli_check_exit_codes(tmp_path, capsys):
     assert la.main(["--check", "424242", LANE, "--proc-root", str(proc)]) == 1  # no tasks = FAIL
 
 
+# ── belief-kernel reading record (VB-LAUNCH-AFFINITY-WIRE) ─────────────────────
+
+
+def _reading_proc(tmp_path: Path, knob: str | None = "0") -> tuple[Path, int, Path]:
+    proc, pid = _finding(tmp_path)
+    stat = " ".join([str(pid), "(llama-server)", "S", "1000"] + ["0"] * 17 + ["987654"])
+    (proc / str(pid) / "stat").write_text(stat + "\n")
+    exe = tmp_path / "llama-server"
+    exe.write_bytes(b"\x7fELF fake server")
+    (proc / str(pid) / "exe").symlink_to(exe)
+    env = [b"PATH=/usr/bin"] + ([f"{la.ROCR_AFFINITY_ENV_KEY}={knob}".encode()] if knob is not None else [])
+    (proc / str(pid) / "environ").write_bytes(b"\0".join(env) + b"\0")
+    return proc, pid, exe
+
+
+def test_reading_records_pid_identity_exe_digest_knob_and_every_task(tmp_path):
+    import datetime
+    import hashlib
+
+    proc, pid, exe = _reading_proc(tmp_path)
+    when = datetime.datetime(2026, 10, 23, 6, 37, 31, tzinfo=datetime.timezone.utc)
+    rec = la.affinity_reading(pid, LANE, moment="post_health_pin", label="arm-a", recipe="r1",
+                              proc_root=proc, now=when)
+    assert rec["schema"] == la.READING_SCHEMA and rec["read_at"] == "2026-10-23T06:37:31.000000Z"
+    assert rec["pid_starttime_ticks"] == 987654 and rec["exe"] == str(exe)
+    assert rec["exe_sha256"] == hashlib.sha256(exe.read_bytes()).hexdigest()
+    assert rec["rocr_env_readable"] is True and rec["rocr_env_value"] == "0"
+    assert rec["tasks_seen"] == 196 and len(rec["tasks"]) == 196
+    assert rec["escapes"] == [{"tid": pid + 7, "comm": "llama-server", "cpus": "0-191"}]
+    assert rec["content_sha256"] == la.reading_body_sha256(rec)
+    assert la.reading_body_sha256(dict(rec, tasks_seen=195)) != rec["content_sha256"]
+
+
+def test_reading_keeps_absence_absent(tmp_path):
+    proc, pid, _ = _reading_proc(tmp_path, knob=None)
+    rec = la.affinity_reading(pid, LANE, moment="check", label="x", proc_root=proc)
+    assert rec["rocr_env_readable"] is True and rec["rocr_env_value"] is None
+    gone = la.affinity_reading(424242, LANE, moment="check", label="x", proc_root=proc)
+    assert gone["tasks_seen"] == 0 and gone["exe"] is None and gone["exe_sha256"] is None
+    assert gone["pid_starttime_ticks"] is None and gone["rocr_env_readable"] is False
+    with pytest.raises(la.LaunchAffinityError):
+        la.affinity_reading(pid, LANE, moment="whenever", label="x", proc_root=proc)
+
+
+def test_cli_record_appends_one_reading_per_call(tmp_path, capsys):
+    import json
+
+    proc, pid, _ = _reading_proc(tmp_path)
+    out = tmp_path / "affinity_readings.jsonl"
+    assert la.main(["--check", str(pid), LANE, "--record", str(out), "--label", "probe",
+                    "--proc-root", str(proc)]) == 1
+    assert la.main(["--check", str(pid), "0-191", "--record", str(out), "--moment", "pre_stop",
+                    "--proc-root", str(proc)]) == 0
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [r["moment"] for r in rows] == ["check", "pre_stop"]
+    assert [len(r["escapes"]) for r in rows] == [1, 0]
+    assert all(r["content_sha256"] == la.reading_body_sha256(r) for r in rows)
+    assert "reading_sha256" in capsys.readouterr().out
+
+
+def test_serving_gate_server_appends_readings_and_never_fails_on_a_reading_error(tmp_path):
+    import json
+    import os
+
+    from scripts.benchmark import serving_gate as sg
+
+    srv = sg.Server.__new__(sg.Server)       # no launch: read our OWN pid, read-only
+    srv.pid, srv.label, srv.out = os.getpid(), "arm-a", tmp_path
+    srv.argv = ["taskset", "-c", la.format_cpu_list(os.sched_getaffinity(0)), "llama-server"]
+    srv._record_affinity("post_health_pin")
+    rec = json.loads((tmp_path / "affinity_readings.jsonl").read_text())
+    assert rec["label"] == "arm-a" and rec["moment"] == "post_health_pin" and rec["escapes"] == []
+    assert rec["exe_sha256"] and srv.affinity_readings == [rec["content_sha256"]]
+    srv._record_affinity("not-a-moment")
+    assert srv.affinity_reading_errors and "not-a-moment" in srv.affinity_reading_errors[0]
+
+
 # ── generate_attestation: the lenient match is gone ──────────────────────────
 
 

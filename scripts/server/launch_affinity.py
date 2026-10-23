@@ -48,13 +48,24 @@ CLI (read-only unless --repin):
     launch_affinity.py --check PID CPUS        # exit 1 on any escaping task
     launch_affinity.py --check PID CPUS --json
     launch_affinity.py --repin PID CPUS        # pin_all_tasks, then re-check
+    launch_affinity.py --check PID CPUS --record READINGS.jsonl [--moment M --label L --recipe R]
+
+``--record`` appends one self-hashed ``epyc.launch_affinity.reading.v1`` record (``affinity_reading``):
+the read time, the pid's start time and executable identity (realpath + sha256), the ROCr knob value
+from the process's own environ, and every task's mask. That record is the belief-kernel write side
+(VB-LAUNCH-AFFINITY-WIRE, epyc-root ``scripts/vidya/adapters/launch_affinity.py``): a reading is per
+pid, per task and per moment, and the moment, the binary and the pid identity cannot be recovered
+from a bare PinResult afterwards.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import os
+import socket
 import sys
 from collections.abc import Callable, Iterable, MutableMapping, Sequence
 from dataclasses import dataclass, field
@@ -369,6 +380,114 @@ def affinity_attestation_warnings(
     ]
 
 
+READING_SCHEMA = "epyc.launch_affinity.reading.v1"
+READING_PRODUCER = "epyc-orchestrator scripts/server/launch_affinity.py"
+READING_MOMENTS = frozenset({"check", "post_health_pin", "pre_stop"})
+
+
+def _pid_starttime(pid: int, proc_root: Path) -> int | None:
+    """Field 22 of /proc/<pid>/stat (clock ticks since boot): with the pid it names ONE process."""
+    try:
+        stat = (Path(proc_root) / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        return int(stat.rsplit(") ", 1)[1].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _exe_identity(pid: int, proc_root: Path) -> tuple[str | None, str | None]:
+    """(realpath, sha256) of the running executable, read through /proc/<pid>/exe."""
+    link = Path(proc_root) / str(pid) / "exe"
+    try:
+        target = os.readlink(link)
+    except OSError:
+        return None, None
+    digest = hashlib.sha256()
+    try:
+        with open(link, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError:
+        return target, None
+    return target, digest.hexdigest()
+
+
+def _environ_value(pid: int, key: str, proc_root: Path) -> tuple[bool, str | None]:
+    """(readable, value) of ``key`` in the process's own environ; value None = not set."""
+    try:
+        raw = (Path(proc_root) / str(pid) / "environ").read_bytes()
+    except OSError:
+        return False, None
+    prefix = key.encode() + b"="
+    for item in raw.split(b"\0"):
+        if item.startswith(prefix):
+            return True, item[len(prefix):].decode("utf-8", "replace")
+    return True, None
+
+
+def reading_body_sha256(record: dict) -> str:
+    body = {k: v for k, v in record.items() if k != "content_sha256"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def affinity_reading(
+    pid: int,
+    cpus: frozenset[int] | str,
+    *,
+    moment: str,
+    label: str,
+    recipe: str | None = None,
+    pin: PinResult | None = None,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+    now: datetime.datetime | None = None,
+) -> dict:
+    """One self-hashed per-task affinity reading of ``pid`` at this moment (read-only).
+
+    Absence stays absence: an unreadable exe, environ or start time is recorded as null, and a pid
+    with no readable tasks gives ``tasks_seen == 0`` -- which a reader must treat as UNCHECKED,
+    never as clean. ``pin`` (when the caller just ran ``pin_all_tasks``) is carried verbatim.
+    """
+    if moment not in READING_MOMENTS:
+        raise LaunchAffinityError(f"unknown reading moment {moment!r}; one of {sorted(READING_MOMENTS)}")
+    allowed = parse_cpu_list(cpus) if isinstance(cpus, str) else frozenset(cpus)
+    when = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc)
+    tasks = read_task_affinities(pid, proc_root)
+    exe, exe_sha256 = _exe_identity(pid, proc_root)
+    env_readable, env_value = _environ_value(pid, ROCR_AFFINITY_ENV_KEY, proc_root)
+    record = {
+        "schema": READING_SCHEMA,
+        "producer": READING_PRODUCER,
+        "read_at": when.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        "moment": moment,
+        "label": label,
+        "recipe": recipe,
+        "host": socket.gethostname(),
+        "pid": pid,
+        "pid_starttime_ticks": _pid_starttime(pid, proc_root),
+        "exe": exe,
+        "exe_sha256": exe_sha256,
+        "declared_cpus": format_cpu_list(allowed),
+        "rocr_env_key": ROCR_AFFINITY_ENV_KEY,
+        "rocr_env_readable": env_readable,
+        "rocr_env_value": env_value,
+        "tasks": [_task_row(t) for t in tasks],
+        "tasks_seen": len(tasks),
+        "escapes": [_task_row(t) for t in tasks if not t.cpus <= allowed],
+        "pin": pin.as_dict() if pin is not None else None,
+    }
+    record["content_sha256"] = reading_body_sha256(record)
+    return record
+
+
+def append_reading(path: Path | str, record: dict) -> None:
+    """Append one reading as a JSON line (O_APPEND: concurrent writers never interleave a line)."""
+    line = (json.dumps(record, sort_keys=True) + "\n").encode()
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.write(fd, line)
+    finally:
+        os.close(fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -377,10 +496,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("pid", type=int)
     parser.add_argument("cpus", help="taskset-style cpu list, e.g. 184-191")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--record", type=Path, default=None,
+                        help="append an epyc.launch_affinity.reading.v1 record to this JSONL file")
+    parser.add_argument("--moment", default="check", choices=sorted(READING_MOMENTS))
+    parser.add_argument("--label", default="cli")
+    parser.add_argument("--recipe", default=None)
     parser.add_argument("--proc-root", type=Path, default=DEFAULT_PROC_ROOT, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    pin = None
     if args.repin:
         result = pin_all_tasks(args.pid, args.cpus, proc_root=args.proc_root)
+        pin = result
         payload = result.as_dict()
         ok = result.ok
     else:
@@ -388,6 +514,11 @@ def main(argv: list[str] | None = None) -> int:
         escapes = [_task_row(t) for t in affinity_escapes(args.pid, args.cpus, args.proc_root)]
         payload = {"pid": args.pid, "cpus": args.cpus, "tasks_seen": len(tasks), "escapes": escapes}
         ok = bool(tasks) and not escapes
+    if args.record is not None:
+        record = affinity_reading(args.pid, args.cpus, moment=args.moment, label=args.label,
+                                  recipe=args.recipe, pin=pin, proc_root=args.proc_root)
+        append_reading(args.record, record)
+        payload["reading_sha256"] = record["content_sha256"]
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
