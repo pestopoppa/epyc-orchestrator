@@ -1263,7 +1263,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         # Pass solution file path when there's an error so the model can patch
         sol_file = ""
         if state.last_error and state.last_code:
-            import os
+            # (no function-local ``import os`` here: it made ``os`` a local of the whole function, so the turn-1
+            # grammar block's ``os.environ`` raised UnboundLocalError on every first turn and its ``except`` hid it)
             candidate = _solution_file_path(state)
             if os.path.exists(candidate):
                 sol_file = candidate
