@@ -539,10 +539,36 @@ def _sub_grouped(m: re.Match[str]) -> str:
     return _count_before_word(m, m.group(1).replace(".", ""))
 
 
+_YEAR_CUE_RE = re.compile(
+    r"(?:\b(?:nel|nell|del|dell|dal|dall|al|all|entro\s+il|fino\s+al|dopo\s+il|prima\s+del|"
+    r"anno|anni|in|gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)|\bdi)[\s'’]+$", re.IGNORECASE)
+_QUANTITY_NOUNS = frozenset(
+    "euro dollari persone abitanti copie anni giorni mesi ore minuti secondi metri chilometri "
+    "km kg grammi litri studenti utenti voti punti pezzi unità casi morti vittime posti "
+    "famiglie volte parole pagine righe file byte".split())
+
+
+def _is_year_context(m: re.Match[str]) -> bool:
+    """A 4-digit 1000-2999 integer is a year only in a date-like context (CS-8.L4a)."""
+    digits = m.group(1)
+    if len(digits) != 4 or digits[0] not in "12":
+        return False
+    text, start, end = m.string, m.start(1), m.end(1)
+    following = (m.group(2) or "").strip().lower()
+    if following in _QUANTITY_NOUNS:
+        return False
+    before, after = text[:start], text[end:]
+    if re.search(r"\(\s*$", before) and re.match(r"\s*\)", after):
+        return True
+    if re.match(r"[-–—]\d{4}(?!\d)", after) or re.search(r"(?<!\d)\d{4}[-–—]$", before):
+        return True
+    return _YEAR_CUE_RE.search(before) is not None
+
+
 def _sub_int(m: re.Match[str]) -> str:
     if len(m.group(1)) > 6:
         return m.group(0)  # Italian groups large quantities (1.000.000); a bare run is a code or phone number
-    return _count_before_word(m, m.group(1), year=True)
+    return _count_before_word(m, m.group(1), year=_is_year_context(m))
 
 
 def normalize_italian(text: str) -> str:

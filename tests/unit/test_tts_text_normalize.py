@@ -341,3 +341,15 @@ def test_respell_it_57_and_it_26_style_inputs():
     assert respell_italian("Giza") == "Ghiza" and respell_italian("GIZA") == "GHIZA"
     assert respell_italian("anàloga àtomi") == "anàloga àtomi"  # idempotent
     assert respell_italian("analogamente") == "analogamente"  # whole words only
+
+
+@pytest.mark.parametrize("raw,spoken", [
+    ("Angel (2006) illustra", "Angel (duemila sei) illustra"),
+    ("nel 1963", "nel millenovecento sessantatré"),
+    ("1500 euro", "millecinquecento euro"),
+    ("2006 persone", "duemilasei persone"),
+    ("1200 km", "milleduecento chilometri"),
+    ("dal 1990-1995", "dal millenovecento novanta-millenovecento novantacinque"),
+])
+def test_year_only_in_year_context(raw, spoken):
+    assert normalize_italian(raw) == spoken
