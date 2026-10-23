@@ -403,6 +403,28 @@ def _is_valid_python(code: str) -> bool:
         return False
 
 
+def _strip_think_blocks(text: str) -> str:
+    """Remove Qwen3-style ``<think>`` reasoning from *text*.
+
+    - complete ``<think>...</think>`` blocks (incl. empty) are removed;
+    - an unclosed ``<think>`` (e.g. a stop sequence cut the turn inside
+      reasoning) drops everything after it: that is reasoning, not an answer;
+    - a stray ``</think>`` with no opener (chat templates that prefill
+      ``<think>``) drops everything before it.
+    Text without think tags is returned unchanged.
+    """
+    if "think>" not in text:
+        return text
+    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL)
+    open_idx = text.find("<think>")
+    if open_idx != -1:
+        return text[:open_idx].strip()
+    close_idx = text.find("</think>")
+    if close_idx != -1:
+        return text[close_idx + len("</think>"):].lstrip()
+    return text
+
+
 def extract_code_from_response(response: str) -> str:
     """Extract Python code from an LLM response.
 
@@ -418,6 +440,11 @@ def extract_code_from_response(response: str) -> str:
     # Strip thinking channel tags (Gemma-4 uses <|channel>thought\n<channel|>)
     # Remove ^ anchor so it also matches when <end_prompt> consumed the line start
     response = re.sub(r'<\|channel>thought\n<channel\|>', '', response, flags=re.MULTILINE)
+
+    # Strip Qwen3-style <think>...</think> reasoning blocks BEFORE candidate
+    # extraction: reasoning prose containing '=' otherwise gets swept into the
+    # code candidate, ast.parse fails and the extractor returns ''.
+    response = _strip_think_blocks(response)
 
     # Strip Qwen3 thinking tags (</thinking> or </anthinking> markers)
     response = re.sub(r'</(?:an)?thinking>\s*\n?', '', response, flags=re.MULTILINE)

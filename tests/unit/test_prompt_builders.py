@@ -1756,3 +1756,48 @@ class TestBuildCorpusContext:
             task_description="implement a sorting algorithm",
         )
         assert isinstance(result, str)
+
+
+class TestExtractCodeThinkBlocks:
+    """<think>...</think> handling in extract_code_from_response (synthetic shapes)."""
+
+    def _x(self, s):
+        from src.prompt_builders.code_utils import extract_code_from_response
+
+        return extract_code_from_response(s)
+
+    def test_think_prose_with_equals_then_bare_code(self):
+        s = "<think>\nLet x = 5 and then y = x + 1, so the answer = 6.\n</think>\nresult = 6\nFINAL(result)"
+        assert self._x(s) == "result = 6\nFINAL(result)"
+
+    def test_think_then_fenced_code(self):
+        s = "<think>\nplan: a = 1\n</think>\n```python\nFINAL(1)\n```"
+        assert self._x(s) == "FINAL(1)"
+
+    def test_empty_think_block(self):
+        s = "<think>\n\n</think>\n\nFINAL(2)"
+        assert self._x(s) == "FINAL(2)"
+
+    def test_think_block_containing_equals_and_fence(self):
+        s = (
+            "<think>\nDraft: n = 3\n```python\nFINAL(n)\n```\nrevise: m = 4\n</think>\n"
+            "```python\nFINAL(42)\n```"
+        )
+        assert self._x(s) == "FINAL(42)"
+
+    def test_unclosed_think_yields_no_code(self):
+        s = "<think>\nconsider z = 1\n```python\nFINAL(z)\n"
+        assert self._x(s) == ""
+
+    def test_unclosed_think_keeps_code_before_it(self):
+        s = "```python\nFINAL(7)\n```\n<think>\nmore x = 2"
+        assert self._x(s) == "FINAL(7)"
+
+    def test_stray_close_without_opener(self):
+        s = "reasoning with a = 1 prose\n</think>\nFINAL(3)"
+        assert self._x(s) == "FINAL(3)"
+
+    def test_no_think_regression(self):
+        assert self._x("```python\nx = 1\nFINAL(x)\n```") == "x = 1\nFINAL(x)"
+        assert self._x("FINAL(5)") == "FINAL(5)"
+        assert "FINAL(x)" in self._x("x = 1\n</thinking>\nFINAL(x)")
