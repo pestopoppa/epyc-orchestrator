@@ -174,6 +174,20 @@ def _accent_final_tre(words: str) -> str:
     return " ".join(parts)
 
 
+def year_it(n: int) -> str:
+    """Year reading for 1000 <= n <= 2099: the below-100 tail is a separate word.
+
+    CS-8.L4a: spelled "duemilasei" synthesises a voiced "zei" (+7 dB on the year word); the
+    spaced "duemila sei" does not. Other numbers keep the fused form.
+    """
+    if not 1000 <= n <= 2099 or n % 100 == 0:
+        return cardinal_it(n)
+    head, tail = n - n % 100, n % 100
+    if tail == 0:
+        return cardinal_it(n)
+    return _accent_final_tre(f"{cardinal_it(head)} {_below_100(tail)}")
+
+
 def cardinal_it(n: int) -> str:
     """Italian cardinal for 0 <= |n| <= 999 999 999 999."""
     if not isinstance(n, int) or isinstance(n, bool):
@@ -433,7 +447,7 @@ def _sub_date(m: re.Match[str]) -> str:
     if not (1 <= day <= 31 and 1 <= month <= 12) or (len(year) == 4 and year[0] == "0"):
         return m.group(0)
     day_words = "primo" if day == 1 else cardinal_it(day)
-    return f"{day_words} {_MONTHS[month - 1]} {cardinal_it(int(year))}"
+    return f"{day_words} {_MONTHS[month - 1]} {year_it(int(year))}"
 
 
 def _clock(hour: int, minute: int) -> str:
@@ -506,7 +520,7 @@ def _sub_decimal(m: re.Match[str]) -> str:
     return f"{whole} virgola {_fraction_words(m.group(2))}"
 
 
-def _count_before_word(m: re.Match[str], digits: str) -> str:
+def _count_before_word(m: re.Match[str], digits: str, year: bool = False) -> str:
     following = m.group(2) or ""
     if digits == "1" and following:
         return m.group(0)  # uno/un/una depends on the noun's gender: leave it to the model
@@ -514,6 +528,8 @@ def _count_before_word(m: re.Match[str], digits: str) -> str:
     if words is None:
         return m.group(0)
     n = int(digits)
+    if year and len(digits) == 4 and digits[0] in "12":
+        words = year_it(n)
     if following and n >= 10**6 and n % 10**6 == 0:
         return f"{words} di{following}"  # un milione di abitanti
     return words + following
@@ -526,7 +542,7 @@ def _sub_grouped(m: re.Match[str]) -> str:
 def _sub_int(m: re.Match[str]) -> str:
     if len(m.group(1)) > 6:
         return m.group(0)  # Italian groups large quantities (1.000.000); a bare run is a code or phone number
-    return _count_before_word(m, m.group(1))
+    return _count_before_word(m, m.group(1), year=True)
 
 
 def normalize_italian(text: str) -> str:

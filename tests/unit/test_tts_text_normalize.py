@@ -26,7 +26,7 @@ from src.voice.tts_text_normalize import (
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("la diga nel 1963, poi", "la diga nel millenovecentosessantatré, poi"),
+        ("la diga nel 1963, poi", "la diga nel millenovecento sessantatré, poi"),
         ("tra le 150 e le 200 copie", "tra le centocinquanta e le duecento copie"),
         (
             "lo standard 802.11n nella banda dei 2.4Ghz e dei 5.0Ghz.",
@@ -95,12 +95,12 @@ def test_ordinals(n, feminine, words):
         # thousands grouping, years, decades, dates, times
         ("meno di 40.000 abitanti", "meno di quarantamila abitanti"),
         ("1.000.000 abitanti", "un milione di abitanti"),
-        ("il 15 agosto 1940", "il quindici agosto millenovecentoquaranta"),
+        ("il 15 agosto 1940", "il quindici agosto millenovecento quaranta"),
         ("negli anni '20, la", "negli anni venti, la"),
         ("negli anni ’20", "negli anni venti"),
-        ("Angel (2006) illustra", "Angel (duemilasei) illustra"),
+        ("Angel (2006) illustra", "Angel (duemila sei) illustra"),
         ("il 1° maggio e il 1 giugno", "il primo maggio e il primo giugno"),
-        ("il 15/08/1940", "il quindici agosto millenovecentoquaranta"),
+        ("il 15/08/1940", "il quindici agosto millenovecento quaranta"),
         ("alle 10.30 e alle 21:05", "alle dieci e trenta e alle ventuno e cinque"),
         ("alle 13:00", "alle tredici"),
         # decimals
@@ -164,7 +164,7 @@ def test_unit_symbol_needs_a_word_boundary():
 
 def test_compound_hyphen_keeps_number_reading():
     assert normalize_italian("COVID-19") == "COVID-diciannove"
-    assert normalize_italian("1940-1945") == "millenovecentoquaranta-millenovecentoquarantacinque"
+    assert normalize_italian("1940-1945") == "millenovecento quaranta-millenovecento quarantacinque"
 
 
 @pytest.mark.parametrize(
@@ -191,7 +191,7 @@ def test_acronym_table_is_extendable_and_letter_spelled():
 @pytest.mark.parametrize("language", ["it", "IT", "it-IT", "it_it", "Italian", "italiano", " it "])
 def test_italian_aliases_normalize(language):
     assert canonical_language(language) == "it"
-    assert normalize_for_tts("nel 1963", language) == "nel millenovecentosessantatré"
+    assert normalize_for_tts("nel 1963", language) == "nel millenovecento sessantatré"
 
 
 @pytest.mark.parametrize("language", [None, "en", "English", "fr", "auto", "", 3])
@@ -276,7 +276,7 @@ def test_cascade_on_normalizes_only_the_synthesizer_text():
     events = _run(backend, language="it", must_preserve=("1963",))
     # the displayed text stays the route's own; must_preserve is checked on it
     assert [e.payload for e in events if e.kind == "text_delta"] == [_ANSWER]
-    assert synth.texts == ["Il pi acca era sette nel millenovecentosessantatré."]
+    assert synth.texts == ["Il pi acca era sette nel millenovecento sessantatré."]
 
 
 def test_cascade_on_uses_server_language_when_turn_has_none():
@@ -284,7 +284,7 @@ def test_cascade_on_uses_server_language_when_turn_has_none():
     backend = CascadeBackend(_Transcriber(), _VoiceTurn(_ANSWER), synth,
                              tts_text_normalization=True, tts_language="it")
     _run(backend)
-    assert synth.texts == ["Il pi acca era sette nel millenovecentosessantatré."]
+    assert synth.texts == ["Il pi acca era sette nel millenovecento sessantatré."]
 
 
 def test_cascade_on_leaves_other_languages_untouched():
