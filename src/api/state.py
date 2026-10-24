@@ -89,6 +89,8 @@ class AppState:
 
     # Per-worker real-mode primitives shared by /chat requests (_init_primitives).
     _real_primitives: LLMPrimitives | None = None
+    # Built backend graphs shared by every LLMPrimitives this worker constructs (A2-04).
+    backend_pool: dict = field(default_factory=dict)
 
     # Backend health tracking (circuit breaker)
     health_tracker: BackendHealthTracker = field(default_factory=BackendHealthTracker)

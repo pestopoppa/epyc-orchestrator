@@ -1473,6 +1473,7 @@ async def chat_stream(
                 registry=state.registry,
                 health_tracker=state.health_tracker,
                 admission_controller=getattr(state, "admission", None),
+                backend_pool=getattr(state, "backend_pool", None),
                 server_urls_source="request" if request.server_urls else "config",
             )
         except Exception as e:

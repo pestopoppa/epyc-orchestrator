@@ -1474,6 +1474,7 @@ async def openai_chat_completions(
                 registry=state.registry,
                 health_tracker=state.health_tracker,
                 admission_controller=getattr(state, "admission", None),
+                backend_pool=getattr(state, "backend_pool", None),
             )
         except Exception as e:
             logger.warning("Failed to create LLMPrimitives: %s", e)

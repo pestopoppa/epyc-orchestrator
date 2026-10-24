@@ -180,6 +180,7 @@ class LLMPrimitives(
         gpu_lease_manager: Any | None = None,
         teleport_policy: TeleportPolicy | None = None,
         server_urls_source: str = "config",
+        backend_pool: dict | None = None,
     ):
         """Initialize LLM primitives.
 
@@ -198,6 +199,8 @@ class LLMPrimitives(
             admission_controller: Optional AdmissionController for per-backend queue limiting.
             gpu_lease_manager: Optional process-local lease manager for AXA-2 decisions.
             teleport_policy: Optional default-off AXA-2 teleport policy.
+            backend_pool: Optional shared pool of built backends (see
+                BackendMixin._init_caching_backends).
         """
         # Unbound contexts (scripts, tests, /v1's per-request instance) share the
         # instance-level default scope; begin_request() binds a fresh one.
@@ -236,7 +239,7 @@ class LLMPrimitives(
 
         # Initialize backends if server URLs provided and not mock mode
         if not mock_mode and server_urls:
-            self._init_caching_backends(server_urls, num_slots)
+            self._init_caching_backends(server_urls, num_slots, backend_pool)
 
         # Accurate token counting via llama-server /tokenize (C2)
         self._tokenizer = None

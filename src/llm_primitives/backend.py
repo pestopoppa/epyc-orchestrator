@@ -130,7 +130,46 @@ def _infer_topology_role_for_urls(
 class BackendMixin:
     """Mixin for backend initialization and access methods."""
 
-    def _init_caching_backends(self, server_urls: dict[str, str], num_slots: int) -> None:
+    def _init_caching_backends(
+        self,
+        server_urls: dict[str, str],
+        num_slots: int,
+        backend_pool: dict | None = None,
+    ) -> None:
+        """Build the per-role backends, or reuse a pooled build of the same inputs.
+
+        ``backend_pool`` (``AppState.backend_pool``) holds one build per distinct
+        config-sourced inputs, so per-request primitives (/v1, voice, /chat/stream)
+        share keep-alive connection pools and prefix routers instead of rebuilding
+        ~30 httpx clients per request (A2-04). Request-sourced URLs never pool.
+        """
+        key = owners = None
+        if isinstance(backend_pool, dict) and getattr(self, "server_urls_source", "config") == "config":
+            from src.chat_completions_roles import static_chat_completions_roles
+
+            owners = (
+                getattr(self, "registry", None),
+                getattr(self, "admission_controller", None),
+                getattr(self, "health_tracker", None),
+            )
+            key = (
+                tuple(sorted(server_urls.items())),
+                num_slots,
+                tuple(sorted(static_chat_completions_roles())),
+                os.environ.get("ORCHESTRATOR_FLEET_LAYER"),
+                os.environ.get("ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES"),
+                tuple(id(o) for o in owners),
+            )
+            entry = backend_pool.get(key)
+            if entry is not None and all(a is b for a, b in zip(entry[0], owners)):
+                self._backends.update(entry[1])
+                server_urls.update(entry[2])  # fleet-layer URL rewrites
+                return
+        self._build_caching_backends(server_urls, num_slots)
+        if key is not None:
+            backend_pool[key] = (owners, dict(self._backends), dict(server_urls))
+
+    def _build_caching_backends(self, server_urls: dict[str, str], num_slots: int) -> None:
         """Initialize CachingBackend instances for each role.
 
         Args:

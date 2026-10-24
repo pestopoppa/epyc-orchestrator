@@ -208,6 +208,7 @@ async def voice_turn(
             registry=state.registry,
             health_tracker=state.health_tracker,
             admission_controller=getattr(state, "admission", None),
+            backend_pool=getattr(state, "backend_pool", None),
         )
     except Exception as exc:
         await lease_guard.__aexit__(None, None, None)

@@ -540,6 +540,7 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     admission_controller=getattr(state, "admission", None),
                     num_slots=get_config().server.num_slots,
                     server_urls_source=("request" if request_specific_urls else "config"),
+                    backend_pool=getattr(state, "backend_pool", None),
                 )
                 if not request_specific_urls:
                     state._real_primitives = primitives

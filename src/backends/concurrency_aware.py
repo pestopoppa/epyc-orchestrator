@@ -59,6 +59,9 @@ logger = logging.getLogger(__name__)
 # Slot save/restore timeout — KV state can be 2-16 GB for production conversations
 _SLOT_SAVE_TIMEOUT = 30.0  # seconds
 _SLOT_RESTORE_TIMEOUT = 30.0
+# Session-affinity maps live as long as the (pooled, A2-04) backend; past this many
+# tracked sessions the least recently seen half is forgotten (A2-12).
+_MAX_TRACKED_SESSIONS = 4096
 
 _STATE_UNASSIGNED = "unassigned"
 _STATE_ASSIGNED_FULL = "assigned_full"
@@ -1113,6 +1116,20 @@ class ConcurrencyAwareBackend:
             with self._lock:
                 self._reverse_migration_in_flight.pop(session_id, None)
 
+    def _forget_idle_sessions_locked(self) -> None:
+        """Drop the least recently seen half of tracked sessions. Caller holds ``self._lock``."""
+        seen = self._session_last_seen
+        for sid in sorted(seen, key=seen.__getitem__)[: len(seen) // 2]:
+            if (
+                sid == self._full_last_session
+                or self._reverse_migration_in_flight.get(sid)
+                or self._session_state.get(sid, {}).get("state") == _STATE_MIGRATION_PENDING
+            ):
+                continue
+            for per_session in (seen, self._session_quarter, self._session_state,
+                                self._reverse_migration_counts):
+                per_session.pop(sid, None)
+
     def clear_session(self, session_id: str) -> None:
         """Remove session affinity (call when session completes)."""
         with self._lock:
@@ -1396,6 +1413,8 @@ class ConcurrencyAwareBackend:
         if session_id:
             with self._lock:
                 self._session_last_seen[session_id] = time.monotonic()
+                if len(self._session_last_seen) > _MAX_TRACKED_SESSIONS:
+                    self._forget_idle_sessions_locked()
         if not self._per_region_locks_enabled():
             backend, idx, is_full = self._select(session_id=session_id)
             try:
