@@ -34,6 +34,7 @@ from src.api.models import (
     OpenAIUsage,
 )
 from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role
+from src.api.routes.chat_utils import watch_disconnect
 from src.api.routes.v1_escalation import (
     STAGE_DIRECT,
     STAGE_REPL,
@@ -1418,6 +1419,8 @@ async def openai_chat_completions(
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
+    # A1-M1: set on client disconnect or stream close; read by every model call below.
+    cancel_event = threading.Event()
     if subagent_link is not None:
         log_subagent_link(
             getattr(state, "progress_logger", None),
@@ -1461,6 +1464,11 @@ async def openai_chat_completions(
         except Exception as e:
             logger.warning("Failed to create LLMPrimitives: %s", e)
             primitives = None
+        if primitives is not None:
+            # The instance is per request, so its instance-level request hooks reach
+            # every mode, including the streaming body's own task (A1-M1).
+            primitives._request_cancel_check = cancel_event.is_set
+            primitives._request_task_id = chat_id
         if primitives is not None and request_keys:
             primitives.set_request_trace_keys(request_keys)
 
@@ -2014,6 +2022,7 @@ async def openai_chat_completions(
         try:
             first = await anext(stream, None)
         except BaseException:
+            cancel_event.set()
             try:
                 await stream.aclose()
             finally:
@@ -2042,6 +2051,7 @@ async def openai_chat_completions(
                 async for event in stream:
                     yield event
             finally:
+                cancel_event.set()
                 try:
                     await stream.aclose()
                 finally:
@@ -2071,6 +2081,7 @@ async def openai_chat_completions(
         else:
             # Real orchestration
             repl_for_metadata = None
+            watcher = asyncio.create_task(watch_disconnect(http_request, cancel_event))
             try:
                 if primitives is None:
                     raise HTTPException(
@@ -2238,6 +2249,8 @@ async def openai_chat_completions(
                     status_code=502, detail=f"Backend failed: {e}"
                 ) from e
             finally:
+                cancel_event.set()
+                watcher.cancel()
                 _clear_request_trace_keys(primitives, request_keys)
 
         elapsed = time.perf_counter() - start_time

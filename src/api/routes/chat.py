@@ -82,6 +82,7 @@ from src.sse_utils import (
 # Decomposed modules (Phase 1 — extract-and-move, no behavior changes)
 from src.api.routes.chat_utils import (
     _resolve_answer,
+    watch_disconnect,
 )
 from src.api.routes.chat_review import (
     _plan_review_abort_message,
@@ -269,22 +270,14 @@ async def chat(
     # Track active requests for idle-time Q-scoring (thread-safe)
     state.increment_active()
     cancel_event = threading.Event()
-
-    async def _watch_disconnect() -> None:
-        while not cancel_event.is_set():
-            try:
-                if await http_request.is_disconnected():
-                    cancel_event.set()
-                    return
-            except Exception:
-                # Best-effort disconnect tracking; ignore transient request state errors.
-                return
-            await asyncio.sleep(0.1)
-
     use_disconnect_watcher = bool(
         request.real_mode and "PYTEST_CURRENT_TEST" not in os.environ
     )
-    watcher = asyncio.create_task(_watch_disconnect()) if use_disconnect_watcher else None
+    watcher = (
+        asyncio.create_task(watch_disconnect(http_request, cancel_event))
+        if use_disconnect_watcher
+        else None
+    )
     prompt_dir = _validated_prompt_dir_override(request.x_orchestrator_prompt_root)
     # BRIDGE RESIDUAL 1 — collect the contention verdict for THIS request. Both
     # exits below (the error JSONResponse and the plain return) are downstream of

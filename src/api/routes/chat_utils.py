@@ -7,10 +7,12 @@ output quality heuristics, format enforcement, and shared constants.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.features import features
 from src.prompt_builders import (
@@ -25,6 +27,19 @@ if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
     from src.repl_environment.types import ExecutionResult
     from src.services.document_preprocessor import PreprocessingResult
+
+
+async def watch_disconnect(http_request: Any, cancel_event: threading.Event) -> None:
+    """Set ``cancel_event`` once the HTTP client disconnects (polled every 100 ms)."""
+    while not cancel_event.is_set():
+        try:
+            if await http_request.is_disconnected():
+                cancel_event.set()
+                return
+        except Exception:
+            # Best-effort disconnect tracking; ignore transient request state errors.
+            return
+        await asyncio.sleep(0.1)
 
 
 # ── Role-specific timeouts (Phase 1b: KV cache bug mitigation) ──────────
