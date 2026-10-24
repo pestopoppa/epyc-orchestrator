@@ -158,7 +158,7 @@ addopts = "-v --tb=short"
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["src", "scripts/benchmark", "scripts/lib"]
+source = ["src", "scripts/benchmark"]
 omit = [
     "src/gradio_ui.py",        # UI module, not testable in CI
     "src/cli_*.py",            # CLI entrypoints

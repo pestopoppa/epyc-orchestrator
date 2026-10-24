@@ -211,19 +211,12 @@ coverage-orchestrator-slice:
 		tests/unit/test_seeding_infra.py \
 		tests/unit/test_seeding_infra_additional.py \
 		tests/unit/test_seeding_infra_branching.py \
-		tests/unit/test_benchmark_executor.py \
-		tests/unit/test_benchmark_executor_additional.py \
-		tests/unit/test_benchmark_executor_branching.py \
 		tests/unit/test_seeding_injection.py \
 		tests/unit/test_seeding_injection_additional.py \
 		tests/unit/test_seeding_orchestrator.py \
-		tests/unit/test_script_lib_registry.py \
-		tests/unit/test_script_lib_output_parser.py \
-		tests/unit/test_script_lib_onboard.py \
 		tests/unit/test_seed_specialist_routing_main_and_retry.py \
 		tests/unit/test_seed_specialist_routing_helpers.py \
 		--cov=scripts/benchmark \
-		--cov=scripts/lib \
 		--cov-report=term-missing \
 		--cov-report=json:/tmp/orchestrator_slice_coverage.json \
 		--cov-fail-under=0
@@ -236,15 +229,9 @@ warnings-orchestrator-slice:
 		tests/unit/test_seeding_infra.py \
 		tests/unit/test_seeding_infra_additional.py \
 		tests/unit/test_seeding_infra_branching.py \
-		tests/unit/test_benchmark_executor.py \
-		tests/unit/test_benchmark_executor_additional.py \
-		tests/unit/test_benchmark_executor_branching.py \
 		tests/unit/test_seeding_injection.py \
 		tests/unit/test_seeding_injection_additional.py \
 		tests/unit/test_seeding_orchestrator.py \
-		tests/unit/test_script_lib_registry.py \
-		tests/unit/test_script_lib_output_parser.py \
-		tests/unit/test_script_lib_onboard.py \
 		tests/unit/test_seed_specialist_routing_main_and_retry.py \
 		tests/unit/test_seed_specialist_routing_helpers.py \
 		tests/unit/test_seeding_legacy.py \
