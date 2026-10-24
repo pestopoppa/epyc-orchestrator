@@ -79,7 +79,7 @@ from .validation import (
     _env_str,
     _registry_runtime_value,
     _registry_timeout,
-    reset_runtime_defaults_cache,
+    reset_validation_caches,
 )
 
 # ============================================================================
@@ -97,11 +97,17 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         default_prompt_rate: float = 0.50
         default_completion_rate: float = 1.50
         qwen_stop_token: str = "<|im_end|>"
-        depth_role_overrides: str = str(
-            _registry_runtime_value(("llm", "depth_role_overrides"), "1:worker_general")
+        # Registry-derived defaults are factories so each get_config() (and so
+        # reset_config()) re-reads them; a class-body value froze at import (A3-07).
+        depth_role_overrides: str = PydanticField(
+            default_factory=lambda: str(
+                _registry_runtime_value(("llm", "depth_role_overrides"), "1:worker_general")
+            )
         )
-        depth_override_max_depth: int = int(
-            _registry_runtime_value(("llm", "depth_override_max_depth"), 3)
+        depth_override_max_depth: int = PydanticField(
+            default_factory=lambda: int(
+                _registry_runtime_value(("llm", "depth_override_max_depth"), 3)
+            )
         )
 
         model_config = SettingsConfigDict(
@@ -216,34 +222,36 @@ if PYDANTIC_SETTINGS_AVAILABLE:
             extra="ignore",
         )
 
+    def _timeout_default(name: str):
+        return PydanticField(default_factory=lambda: getattr(TimeoutsConfig(), name))
+
     class TimeoutsSettings(BaseSettings):
-        _timeout_defaults = TimeoutsConfig()
-        worker_explore: int = _timeout_defaults.worker_general
-        worker_math: int = _timeout_defaults.worker_math
-        worker_vision: int = _timeout_defaults.worker_vision
-        worker_summarize: int = _timeout_defaults.worker_summarize
-        worker_general: int = _timeout_defaults.worker_general
-        worker_coder: int = _timeout_defaults.worker_coder
-        worker_code: int = _timeout_defaults.worker_code
-        worker_fast: int = _timeout_defaults.worker_fast
-        frontdoor: int = _timeout_defaults.frontdoor
-        coder_escalation: int = _timeout_defaults.coder_escalation
-        vision_escalation: int = _timeout_defaults.vision_escalation
-        ingest_long_context: int = _timeout_defaults.ingest_long_context
-        architect_general: int = _timeout_defaults.architect_general
-        default_request: int = _timeout_defaults.default_request
-        server_request: int = _timeout_defaults.server_request
-        server_connect: int = _timeout_defaults.server_connect
-        ocr_single_page: float = _timeout_defaults.ocr_single_page
-        ocr_pdf: float = _timeout_defaults.ocr_pdf
-        health_check: float = _timeout_defaults.health_check
-        vision_inference: int = _timeout_defaults.vision_inference
-        vision_figure: float = _timeout_defaults.vision_figure
-        ffmpeg_version: int = _timeout_defaults.ffmpeg_version
-        ffmpeg_probe: int = _timeout_defaults.ffmpeg_probe
-        ffmpeg_extract: int = _timeout_defaults.ffmpeg_extract
-        exiftool: int = _timeout_defaults.exiftool
-        gradio_client: float = _timeout_defaults.gradio_client
+        worker_explore: int = _timeout_default("worker_explore")
+        worker_math: int = _timeout_default("worker_math")
+        worker_vision: int = _timeout_default("worker_vision")
+        worker_summarize: int = _timeout_default("worker_summarize")
+        worker_general: int = _timeout_default("worker_general")
+        worker_coder: int = _timeout_default("worker_coder")
+        worker_code: int = _timeout_default("worker_code")
+        worker_fast: int = _timeout_default("worker_fast")
+        frontdoor: int = _timeout_default("frontdoor")
+        coder_escalation: int = _timeout_default("coder_escalation")
+        vision_escalation: int = _timeout_default("vision_escalation")
+        ingest_long_context: int = _timeout_default("ingest_long_context")
+        architect_general: int = _timeout_default("architect_general")
+        default_request: int = _timeout_default("default_request")
+        server_request: int = _timeout_default("server_request")
+        server_connect: int = _timeout_default("server_connect")
+        ocr_single_page: float = _timeout_default("ocr_single_page")
+        ocr_pdf: float = _timeout_default("ocr_pdf")
+        health_check: float = _timeout_default("health_check")
+        vision_inference: int = _timeout_default("vision_inference")
+        vision_figure: float = _timeout_default("vision_figure")
+        ffmpeg_version: int = _timeout_default("ffmpeg_version")
+        ffmpeg_probe: int = _timeout_default("ffmpeg_probe")
+        ffmpeg_extract: int = _timeout_default("ffmpeg_extract")
+        exiftool: int = _timeout_default("exiftool")
+        gradio_client: float = _timeout_default("gradio_client")
 
         model_config = SettingsConfigDict(
             env_prefix="ORCHESTRATOR_TIMEOUTS_",
@@ -943,7 +951,7 @@ def reset_config() -> None:
 
     Call this if environment variables change during runtime.
     """
-    reset_runtime_defaults_cache()
+    reset_validation_caches()
     reset_stack_prior_server_url_cache()
     get_config.cache_clear()
 

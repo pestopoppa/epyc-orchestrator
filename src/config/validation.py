@@ -30,6 +30,9 @@ def _env_str(name: str, default: str) -> str:
 # Registry timeout cache (avoids repeated YAML parsing)
 _REGISTRY_TIMEOUTS_CACHE: dict[str, int | float] | None = None
 _REGISTRY_RUNTIME_DEFAULTS_CACHE: dict[str, Any] | None = None
+# Parsed runtime_defaults keyed on (path, mtime_ns, size). Content-keyed, so it
+# survives reset_validation_caches() and a reset_config() costs no re-parse.
+_PARSED_RUNTIME_DEFAULTS: tuple[tuple[str, int, int], dict[str, Any]] | None = None
 _LOADING_REGISTRY_TIMEOUTS = False
 _LOADING_RUNTIME_DEFAULTS = False
 _REGISTRY_DIAGNOSTICS: dict[str, Any] = {
@@ -154,6 +157,7 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
     """Load runtime_defaults block from registry (cached)."""
     global _REGISTRY_RUNTIME_DEFAULTS_CACHE
     global _LOADING_RUNTIME_DEFAULTS
+    global _PARSED_RUNTIME_DEFAULTS
     if _REGISTRY_RUNTIME_DEFAULTS_CACHE is not None:
         return _REGISTRY_RUNTIME_DEFAULTS_CACHE
     if _LOADING_RUNTIME_DEFAULTS:
@@ -183,14 +187,21 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
             )
             return _REGISTRY_RUNTIME_DEFAULTS_CACHE
 
+        import copy
+
         import yaml
 
-        with registry_path.open(encoding="utf-8") as fh:
-            payload = yaml.safe_load(fh) or {}
-        runtime_defaults = payload.get("runtime_defaults", {})
-        _REGISTRY_RUNTIME_DEFAULTS_CACHE = (
-            dict(runtime_defaults) if isinstance(runtime_defaults, dict) else {}
-        )
+        st = registry_path.stat()
+        key = (str(registry_path.resolve()), st.st_mtime_ns, st.st_size)
+        if _PARSED_RUNTIME_DEFAULTS is None or _PARSED_RUNTIME_DEFAULTS[0] != key:
+            with registry_path.open(encoding="utf-8") as fh:
+                payload = yaml.load(fh, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
+            runtime_defaults = payload.get("runtime_defaults", {})
+            _PARSED_RUNTIME_DEFAULTS = (
+                key,
+                dict(runtime_defaults) if isinstance(runtime_defaults, dict) else {},
+            )
+        _REGISTRY_RUNTIME_DEFAULTS_CACHE = copy.deepcopy(_PARSED_RUNTIME_DEFAULTS[1])
         _record_registry_diag(
             "runtime_defaults",
             {
@@ -240,9 +251,3 @@ def reset_validation_caches() -> None:
     _LOADING_RUNTIME_DEFAULTS = False
     _REGISTRY_DIAGNOSTICS["runtime_defaults"] = {}
     _REGISTRY_DIAGNOSTICS["timeouts"] = {}
-
-
-def reset_runtime_defaults_cache() -> None:
-    """Reset only runtime-default cache (preserves timeout cache behavior)."""
-    global _REGISTRY_RUNTIME_DEFAULTS_CACHE
-    _REGISTRY_RUNTIME_DEFAULTS_CACHE = None

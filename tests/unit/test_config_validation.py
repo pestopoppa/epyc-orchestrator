@@ -4,12 +4,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+import yaml
+
+from src.config import get_config, reset_config
 from src.config.validation import (
     _load_registry_runtime_defaults,
     _load_registry_timeouts,
     get_validation_diagnostics,
     reset_validation_caches,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_registry_caches():
+    # Autouse, so it tears down after monkeypatch has restored the env: no test
+    # leaves a tmp registry's values in the process-wide caches.
+    yield
+    reset_validation_caches()
+    reset_config()
 
 
 def test_runtime_defaults_records_missing_registry(monkeypatch, tmp_path: Path):
@@ -38,3 +51,27 @@ def test_timeouts_records_yaml_parse_fallback(monkeypatch, tmp_path: Path):
     assert diag["status"] == "fallback"
     assert diag["failure_reason"]
     assert diag["entries"] == 1
+
+
+def test_reset_config_rereads_registry_defaults(monkeypatch, tmp_path: Path):
+    """A3-07: Settings class bodies froze registry values at import."""
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        yaml.safe_dump(
+            {
+                "runtime_defaults": {
+                    "timeouts": {"roles": {"frontdoor": 4242, "architect_general": 4343}},
+                    "llm": {"depth_override_max_depth": 9},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    get_config()
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_REGISTRY_PATH", str(registry_path))
+    reset_config()
+
+    cfg = get_config()
+    assert cfg.timeouts.frontdoor == 4242
+    assert cfg.timeouts.architect_general == 4343
+    assert cfg.llm.depth_override_max_depth == 9
