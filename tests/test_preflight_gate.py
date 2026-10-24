@@ -252,7 +252,7 @@ def test_topology_hash_recorded_without_expected(tmp_path):
 def test_topology_hash_match_and_drift(tmp_path, monkeypatch):
     reg = tmp_path / "reg.yaml"
     reg.write_text("roles: {a: 1}\n")
-    monkeypatch.setattr(pg, "_live_topology_hash", lambda matrix_path: "8c8cfcbb13d2611d")
+    monkeypatch.setattr(pg, "_topology_hash_or_cause", lambda matrix_path: ("8c8cfcbb13d2611d", None))
     good = pg.check_topology_hashes(expected_topology_hash="8c8cfcbb13d2611d",
                                     live_registry=reg)
     assert good["ok"] is True and good["topology_match"] is True
@@ -263,8 +263,19 @@ def test_topology_hash_match_and_drift(tmp_path, monkeypatch):
     assert "drift" in bad["error"]
 
 
+def test_corrupt_matrix_is_reported_unreadable_not_drift(tmp_path):
+    """A5-22: a corrupt matrix used to fall back to the full-topology hash -> 'drift'."""
+    reg = tmp_path / "reg.yaml"
+    reg.write_text("roles: {}\n")
+    matrix = tmp_path / "matrix.yaml"
+    matrix.write_text("pairs:\n  - roles: [frontdoor]\n")
+    res = pg.check_topology_hashes(expected_topology_hash="x", live_registry=reg, matrix_path=matrix)
+    assert res["ok"] is False and res["topology_hash"] is None
+    assert "matrix unreadable" in res["error"] and "drift" not in res["error"]
+
+
 def test_topology_hash_missing_live_topology(tmp_path, monkeypatch):
-    monkeypatch.setattr(pg, "_live_topology_hash", lambda matrix_path: None)
+    monkeypatch.setattr(pg, "_topology_hash_or_cause", lambda matrix_path: (None, "x"))
     missing = tmp_path / "does_not_exist.yaml"
     res = pg.check_topology_hashes(live_registry=missing, matrix_path=missing)
     assert res["ok"] is False

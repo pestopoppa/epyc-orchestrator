@@ -118,8 +118,12 @@ def _sha256(path: Path) -> str | None:
     return digest.hexdigest()
 
 
-def _live_topology_hash(matrix_path: Path = CONTENTION_MATRIX) -> str | None:
-    """Return the same 16-char topology hash used by the contention matrix gate."""
+def _topology_hash_or_cause(matrix_path: Path = CONTENTION_MATRIX) -> tuple[str | None, str | None]:
+    """(16-char topology hash used by the contention matrix gate, None) or (None, cause).
+
+    Only a MISSING matrix falls back to the full-topology fingerprint; a corrupt one
+    is a read error, not "topology hash drift" (A5-22).
+    """
     try:
         from scripts.server.stack_numa import NUMA_CONFIG
         from src.scheduling.contention import (
@@ -127,20 +131,20 @@ def _live_topology_hash(matrix_path: Path = CONTENTION_MATRIX) -> str | None:
             topology_fingerprint,
             topology_fingerprint_for_matrix,
         )
-    except Exception:
-        return None
-    matrix = None
+    except Exception as exc:  # noqa: BLE001 — e.g. KernelPathError at stack_numa import
+        return None, f"topology modules unavailable: {exc!r}"
     try:
         matrix = load_contention_matrix(matrix_path)
     except FileNotFoundError:
-        pass
-    except Exception:
-        pass
-    return (
-        topology_fingerprint_for_matrix(NUMA_CONFIG, matrix)
-        if matrix is not None
-        else topology_fingerprint(NUMA_CONFIG)
-    )
+        return topology_fingerprint(NUMA_CONFIG), None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"matrix unreadable: {exc!r}"
+    return topology_fingerprint_for_matrix(NUMA_CONFIG, matrix), None
+
+
+def _live_topology_hash(matrix_path: Path = CONTENTION_MATRIX) -> str | None:
+    """The live topology hash, or None (epyc-root derive_topology_hash.py reads this)."""
+    return _topology_hash_or_cause(matrix_path)[0]
 
 
 def _tail(text: str | None, n: int = 2) -> list[str]:
@@ -362,7 +366,7 @@ def check_topology_hashes(expected_topology_hash: str | None = None,
     match (drift ⇒ FAIL). If not provided, the topology hash is recorded as an
     observation and ok is True as long as it is computable.
     """
-    topo = _live_topology_hash(Path(matrix_path))
+    topo, cause = _topology_hash_or_cause(Path(matrix_path))
     reg = _sha256(Path(live_registry))
     result: dict = {
         "topology_hash": topo,
@@ -374,7 +378,7 @@ def check_topology_hashes(expected_topology_hash: str | None = None,
     if topo is None:
         result["ok"] = False
         result["topology_match"] = None
-        result["error"] = f"live topology hash unavailable for matrix: {matrix_path}"
+        result["error"] = f"live topology hash unavailable for matrix: {matrix_path}: {cause}"
     elif expected_topology_hash is not None:
         match = topo == expected_topology_hash
         result["ok"] = match
