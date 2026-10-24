@@ -849,20 +849,37 @@ ENFORCEMENT = fk.probe_enforcement()
 _HAVE_KERNEL = ENFORCEMENT in (fk.LANDLOCK, fk.MOUNTNS)
 _kernel = pytest.mark.skipif(not _HAVE_KERNEL, reason=f"no kernel enforcement here ({ENFORCEMENT})")
 
-# The wiki path is assembled at runtime so the source pre-check never sees a
+# Payloads name the fenced wiki under the hermetic root ``R`` (and a writable
+# sink ``S``) by runtime concatenation, so the source pre-check never sees a
 # literal marker; that forces the request through the kernel layer.
-_WIKI = "chr(47).join(['', 'mnt', 'raid0', 'llm']) + '/ep' + 'yc-ro' + 'ot/wi' + 'ki/INDEX.md'"
-_WIKI_DIR = "'/mnt/raid0/llm/wor' + 'ktrees/mains/mainA/wi' + 'ki'"
+_WIKI = "R + '/ep' + 'yc-ro' + 'ot/wi' + 'ki/INDEX.md'"
+_WIKI_DIR = "R + '/wor' + 'ktrees/mains/mainA/wi' + 'ki'"
 _LEAK = "EPYC Root"
 
 
-def _real_wiki_present() -> bool:
-    return Path("/mnt/raid0/llm/epyc-root/wiki/INDEX.md").is_file()
+@pytest.fixture
+def _kernel_fences_tmp(monkeypatch) -> None:
+    # kernel_fenced_paths never fences roots under /tmp (VOLATILE_DIRS), so a
+    # tmp_path tree would reach the hook layer only; let it reach the kernel shim.
+    monkeypatch.setattr(fk, "VOLATILE_DIRS", tuple(d for d in fk.VOLATILE_DIRS if d != "/tmp"))
+
+
+@pytest.fixture
+def fenced_wiki(llm_root: Path, tmp_path: Path, _kernel_fences_tmp) -> str:
+    """Hermetic payload targets, never the real wiki: the prelude binding ``R`` and sink ``S``."""
+    for rel in ("epyc-root", "worktrees/mains/mainA"):
+        wiki = llm_root / rel / "wiki"
+        wiki.mkdir(parents=True, exist_ok=True)
+        (wiki / "INDEX.md").write_text(f"# {_LEAK} wiki\n")
+    sink = tmp_path / "sink"
+    sink.mkdir()
+    kf.refresh_roots()
+    return f"R = {str(llm_root)!r}; S = {str(sink) + '/'!r}\n"
 
 
 def test_enforcement_level_is_landlock_here() -> None:
-    # This container (kernel 6.14, non-root) has Landlock ABI >= 1.
-    assert fk.landlock_abi() is not None
+    if fk.landlock_abi() is None:
+        pytest.skip("no Landlock ABI on this kernel")
     assert ENFORCEMENT == fk.LANDLOCK
 
 
@@ -932,7 +949,7 @@ def _run_fenced_python(code: str, level: str, monkeypatch) -> str:
     [
         ("ctypes_libc", f"import ctypes; p={_WIKI}; libc=ctypes.CDLL(None,use_errno=True); "
                         "libc.open.restype=ctypes.c_int; fd=libc.open(p.encode(),0); "
-                        "print('LEAK' if fd>=0 and __import__('os').read(fd,20) else 'DENIED')"),
+                        "print(__import__('os').read(fd,20).decode() if fd>=0 else 'DENIED')"),
         ("os_system_var", f"import os; p={_WIKI}; os.system('cat '+p)"),
         ("bash_c_eval", f"import subprocess; p={_WIKI}; "
                         "subprocess.run(['bash','-c','q=$(echo '+p+'); cat $q'])"),
@@ -943,26 +960,24 @@ def _run_fenced_python(code: str, level: str, monkeypatch) -> str:
                           "print(open('/proc/self/cwd/INDEX.md').read())"),
         ("dir_fd_listdir", f"import os; d={_WIKI_DIR}; fd=os.open(d, os.O_RDONLY); "
                            "print(os.listdir(fd))"),
-        ("hardlink", f"import os; p={_WIKI}; t='/mnt/raid0/llm/tmp/hl_'+str(os.getpid()); "
+        ("hardlink", f"import os; p={_WIKI}; t=S+'hl_'+str(os.getpid()); "
                      "os.link(p,t); print(open(t).read())"),
-        ("os_rename_read", f"import os; p={_WIKI}; t='/mnt/raid0/llm/tmp/rn_'+str(os.getpid()); "
+        ("os_rename_read", f"import os; p={_WIKI}; t=S+'rn_'+str(os.getpid()); "
                            "os.rename(p,t); print(open(t).read())"),
         ("perl", f"import subprocess; p={_WIKI}; "
                  "subprocess.run(['perl','-e','open(F,\"<\".$ARGV[0]);print<F>', p])"),
         ("copied_interp", f"import subprocess,shutil,os; p={_WIKI}; "
-                          "n='/mnt/raid0/llm/tmp/notpy_'+str(os.getpid()); "
+                          "n=S+'notpy_'+str(os.getpid()); "
                           "shutil.copy('/usr/bin/python3',n); os.chmod(n,0o755); "
                           "subprocess.run([n,'-c','print(open(__import__(\"sys\").argv[1]).read())',p])"),
         ("tar_parent", f"import subprocess; d={_WIKI_DIR}; "
                        "subprocess.run(['tar','cf','-',d])"),
         ("cp_parent", f"import subprocess,os; d={_WIKI_DIR}; "
-                      "subprocess.run(['cp','-r',d,'/mnt/raid0/llm/tmp/cp_'+str(os.getpid())])"),
+                      "subprocess.run(['cp','-r',d,S+'cp_'+str(os.getpid())])"),
     ],
 )
-def test_kernel_enforcement_denies_every_leak(name, code, monkeypatch) -> None:
-    if not _real_wiki_present():
-        pytest.skip("real epyc-root wiki not present")
-    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+def test_kernel_enforcement_denies_every_leak(name, code, fenced_wiki, monkeypatch) -> None:
+    out = _run_fenced_python(fenced_wiki + code, ENFORCEMENT, monkeypatch)
     assert _LEAK not in out, f"{name} leaked: {out}"
 
 
@@ -985,10 +1000,8 @@ def test_kernel_enforcement_denies_every_leak(name, code, monkeypatch) -> None:
                            "except OSError: print('DENIED')"),
     ],
 )
-def test_kernel_enforcement_denies_writes_to_fenced(name, code, monkeypatch) -> None:
-    if not _real_wiki_present():
-        pytest.skip("real epyc-root wiki not present")
-    out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+def test_kernel_enforcement_denies_writes_to_fenced(name, code, fenced_wiki, monkeypatch) -> None:
+    out = _run_fenced_python(fenced_wiki + code, ENFORCEMENT, monkeypatch)
     assert "LEAK" not in out, f"{name}: {out}"
     # A real Landlock denial surfaced, not a silent success.
     assert "DENIED" in out or "EVAL FENCE" in out or "Permission" in out, f"{name}: {out}"
@@ -1032,9 +1045,7 @@ def test_kernel_enforcement_allows_legitimate_code(name, code, monkeypatch) -> N
 
 
 @_kernel
-def test_disarm_from_inside_is_denied(monkeypatch) -> None:
-    if not _real_wiki_present():
-        pytest.skip("real epyc-root wiki not present")
+def test_disarm_from_inside_is_denied(fenced_wiki, monkeypatch) -> None:
     attempts = [
         f"import gc; p={_WIKI}\n"
         "for o in gc.get_objects():\n"
@@ -1049,21 +1060,19 @@ def test_disarm_from_inside_is_denied(monkeypatch) -> None:
         "print(open(p).read())",
     ]
     for code in attempts:
-        out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
+        out = _run_fenced_python(fenced_wiki + code, ENFORCEMENT, monkeypatch)
         assert _LEAK not in out, out
 
 
-def test_hook_only_denies_ctypes_and_shell_indirection(monkeypatch) -> None:
-    if not _real_wiki_present():
-        pytest.skip("real epyc-root wiki not present")
+def test_hook_only_denies_ctypes_and_shell_indirection(fenced_wiki, monkeypatch) -> None:
     # Force the fallback layer even though the kernel offers more here.
     ctypes_code = (f"import ctypes; p={_WIKI}; libc=ctypes.CDLL(None,use_errno=True); "
                    "libc.open.restype=ctypes.c_int; fd=libc.open(p.encode(),0); "
                    "print('LEAK' if fd>=0 else 'DENIED')")
-    out = _run_fenced_python(ctypes_code, fk.HOOK_ONLY, monkeypatch)
+    out = _run_fenced_python(fenced_wiki + ctypes_code, fk.HOOK_ONLY, monkeypatch)
     assert "DENIED" in out and _LEAK not in out
     shell_code = f"import os; p={_WIKI}; os.system('q=$(echo '+p+'); cat $q')"
-    out = _run_fenced_python(shell_code, fk.HOOK_ONLY, monkeypatch)
+    out = _run_fenced_python(fenced_wiki + shell_code, fk.HOOK_ONLY, monkeypatch)
     assert _LEAK not in out
 
 
@@ -1146,63 +1155,47 @@ def test_unarmed_python_launch_is_output_identical(llm_root: Path, monkeypatch) 
 # ── inherited TMPDIR under a fenced-sibling container (orchestrator_stack sets TMPDIR=<llm>/tmp)
 
 
-_CONTAINER_TMP = "/mnt/raid0/llm/tmp"
-
-
 @pytest.fixture
-def _container_tmp_with_real_fenced_child(monkeypatch):
-    """Materialize one disposable protected child beneath the container TMPDIR.
+def _container_tmp(tmp_path: Path, monkeypatch, _kernel_fences_tmp) -> str:
+    """A stand-in for the container TMPDIR holding one real protected child.
 
     The nominal default artifact-root path is included in ``fence_roots`` even
     when it does not exist. Landlock only receives existing roots, so create an
     actual child and assert it reaches the kernel fence before testing the
     inherited parent directory.
     """
-    import shutil
-    import tempfile
-
-    if not Path(_CONTAINER_TMP).is_dir():
-        pytest.skip("no container tmp dir on this host")
-    protected = Path(
-        tempfile.mkdtemp(prefix="ap54-fenced-child-", dir=_CONTAINER_TMP)
-    )
+    container = tmp_path / "container_tmp"
+    protected = container / "ap54-fenced-child"
+    protected.mkdir(parents=True)
     monkeypatch.setenv("AUTOPILOT_EVAL_ARTIFACT_ROOT", str(protected))
-    try:
-        fk.reset_caches()
-        roots = kf.fence_roots()
-        assert str(protected) in roots.explicit_roots
-        assert str(protected) in fk.kernel_fenced_paths(roots)
-        yield protected
-    finally:
-        shutil.rmtree(protected, ignore_errors=True)
-        fk.reset_caches()
+    fk.reset_caches()
+    roots = kf.fence_roots()
+    assert str(protected) in roots.explicit_roots
+    assert str(protected) in fk.kernel_fenced_paths(roots)
+    return str(container)
 
 
 @_kernel
-def test_armed_tempfile_works_with_inherited_container_tmpdir(
-    monkeypatch, _container_tmp_with_real_fenced_child: Path,
-) -> None:
-    monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
+def test_armed_tempfile_works_with_inherited_container_tmpdir(monkeypatch, _container_tmp: str) -> None:
+    monkeypatch.setenv("TMPDIR", _container_tmp)
     monkeypatch.setattr(__import__("tempfile"), "tempdir", None)  # re-read TMPDIR
     code = (
         "import tempfile, os\n"
         "f = tempfile.NamedTemporaryFile('w', delete=False); f.write('hi'); f.close()\n"
         "d = tempfile.mkdtemp(); open(os.path.join(d, 'x'), 'w').write('y')\n"
-        "print('OK', open(f.name).read(), os.environ['TMPDIR'] != '" + _CONTAINER_TMP + "')\n"
+        "print('OK', open(f.name).read(), os.environ['TMPDIR'] != '" + _container_tmp + "')\n"
     )
     out = _run_fenced_python(code, ENFORCEMENT, monkeypatch)
     assert "OK hi True" in out, out
 
 
 @_kernel
-def test_inherited_container_tmpdir_is_itself_unwritable(
-    monkeypatch, _container_tmp_with_real_fenced_child: Path,
-) -> None:
+def test_inherited_container_tmpdir_is_itself_unwritable(monkeypatch, _container_tmp: str) -> None:
     """Negative control: the redirect is needed, because Landlock denies creating a
     file directly in the container dir (widening it would reach the fenced subtrees)."""
     code = (
         "import os\n"
-        "p = '" + _CONTAINER_TMP + "/direct_' + str(os.getpid())\n"
+        "p = '" + _container_tmp + "/direct_' + str(os.getpid())\n"
         "try:\n"
         "    open(p, 'w').write('x'); print('WROTE'); os.unlink(p)\n"
         "except OSError:\n"
@@ -1212,8 +1205,8 @@ def test_inherited_container_tmpdir_is_itself_unwritable(
     assert "DENIED" in out, out
 
 
-def test_shell_fence_command_redirects_tmp_only_when_kernel_armed(monkeypatch) -> None:
-    monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
+def test_shell_fence_command_redirects_tmp_only_when_kernel_armed(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     kf.begin(None)
     assert kf.shell_fence_command(["ls"]) == (["ls"], None, None)
     kf.begin(False)
@@ -1255,7 +1248,7 @@ def test_run_shell_removes_its_scratch_dir(monkeypatch) -> None:
         assert not Path(d).exists()
 
 
-def test_spec_files_live_under_the_scratch_root(monkeypatch) -> None:
-    monkeypatch.setenv("TMPDIR", _CONTAINER_TMP)
+def test_spec_files_live_under_the_scratch_root(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
     path = fk.hook_roots_file(kf.fence_roots())
     assert path.startswith(fk.SCRATCH_ROOT + "/epyc-eval-fence-")

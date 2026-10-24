@@ -1,0 +1,19 @@
+{
+  "active_instrument_eras": {"eval_quality": "E8"},
+  "baseline_state": {
+    "eval_quality_era": "E7-eval-instrument",
+    "baselines_by_tier": {"0": 2.0, "1": 2.0, "2": 2.0, "3": 2.0}
+  },
+  "e8_quality_rebaseline": {
+    "boundary": "2026-07-25T18:38:43Z",
+    "status": "hold_open",
+    "required_next_action": "apply the E8 quality baseline state"
+  },
+  "quality_history_by_tier": {"0": [2.0], "1": [2.0, 2.0], "2": [2.0, 2.0], "3": [2.0]},
+  "quality_history_provenance_by_tier": {
+    "0": [{"q": 2.0, "ts": "2026-07-20T00:00:00Z", "era": "E7-eval-instrument", "core_id": "core-0"}],
+    "1": [{"q": 2.0, "ts": "2026-07-20T00:00:00Z", "era": "E7-eval-instrument", "core_id": "core-1"}],
+    "2": [{"q": 2.0, "ts": "2026-07-20T00:00:00Z", "era": "E7-eval-instrument", "core_id": "core-2"}],
+    "3": [{"q": 2.0, "ts": "2026-07-20T00:00:00Z", "era": "E7-eval-instrument", "core_id": "core-3"}]
+  }
+}

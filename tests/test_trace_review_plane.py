@@ -314,13 +314,13 @@ def test_tm1_shard_paths_missing_primary_still_finds_shards(tmp_path: Path):
     assert shards == ["autopilot_journal_1.jsonl"]
 
 
+@pytest.mark.requires_materialized_trace
 def test_tm1_materialized_db_smoke():
     # If the shared DB has been materialized, sanity-check it is non-empty and
     # exposes the expected offline sources. Skips cleanly on a fresh checkout.
-    from src.trace.store import DEFAULT_DB_PATH
-
-    if not Path(DEFAULT_DB_PATH).exists():
+    db_path = Path(__file__).resolve().parents[1] / "data" / "trace" / "events.sqlite"
+    if not db_path.exists():
         pytest.skip("events.sqlite not materialized on this host")
-    s = stats(DEFAULT_DB_PATH)
+    s = stats(db_path)
     assert s["total"] > 0
     assert "agent_audit" in s["by_source"]
