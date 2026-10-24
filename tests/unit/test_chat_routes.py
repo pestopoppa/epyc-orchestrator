@@ -1279,6 +1279,7 @@ class TestHandleChatXmasCheapFirst:
         from unittest.mock import AsyncMock
 
         mock_primitives.request_context = MagicMock(return_value=nullcontext())
+        mock_primitives.get_request_prompt_tokens.return_value = 42
         xmas_meta = {
             "mode": "enforce",
             "applied": True,

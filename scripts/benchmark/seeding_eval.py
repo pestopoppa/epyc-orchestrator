@@ -418,6 +418,9 @@ def _build_role_result(
         error_type=error_type,
         tokens_generated=resp.get("tokens_generated", 0),
         turns=resp.get("turns", 0),
+        # Preserve the API's legacy approximate usage field independently from
+        # exact prompt-side usage below.
+        tokens_used=resp.get("tokens_used", 0),
         # This is generation prompt usage only when the API reports its exact
         # `prompt_tokens` field; decoded output tokens are a separate quantity.
         prompt_tokens=resp.get("prompt_tokens"),
