@@ -114,7 +114,7 @@ def test_calibrate_baseline_migrates_t2_and_persists_t1(tmp_path, monkeypatch):
     _baseline_yaml(path)
     saved_states: list[dict] = []
 
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.4)
     monkeypatch.setattr(autopilot, "load_state", lambda: {"trial_counter": 188})
     monkeypatch.setattr(autopilot, "save_state", lambda state: saved_states.append(state))
     monkeypatch.setattr(autopilot, "EvalTower", _FakeEvalTower)
@@ -153,7 +153,7 @@ def test_calibrate_baseline_migrate_only_skips_eval_and_writes_t2(tmp_path, monk
     _baseline_yaml(path)
     saved_states: list[dict] = []
 
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.4)
     monkeypatch.setattr(autopilot, "load_state", lambda: {})
     monkeypatch.setattr(autopilot, "save_state", lambda state: saved_states.append(state))
     monkeypatch.setattr(autopilot, "EvalTower", _FakeEvalTower)
@@ -177,7 +177,7 @@ def test_calibrate_baseline_dry_run_does_not_write(tmp_path, monkeypatch):
     _baseline_yaml(path)
     before = path.read_text()
 
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.4)
     monkeypatch.setattr(autopilot, "load_state", lambda: {})
     monkeypatch.setattr(autopilot, "save_state", lambda state: pytest.fail("dry-run saved state"))
     monkeypatch.setattr(autopilot, "EvalTower", _FakeEvalTower)

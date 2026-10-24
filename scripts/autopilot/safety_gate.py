@@ -5,6 +5,7 @@ Loads frozen baseline from autopilot_baseline.yaml and enforces constraints.
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import os
@@ -228,7 +229,11 @@ def _warn_matrix_pre_expiry() -> None:
         pass
 
 
-def _drop_over_archive_max_tiers(baselines_by_tier: dict[int, float], path: Path) -> None:
+def _drop_over_archive_max_tiers(
+    baselines_by_tier: dict[int, float],
+    path: Path,
+    ceiling: Callable[[int], float | None] | None = None,
+) -> None:
     """B3 / SG-4: drop tier baselines whose quality exceeds the same-tier Pareto archive max.
 
     A persisted/applied tier baseline strictly above the same-tier frontier max is
@@ -237,8 +242,9 @@ def _drop_over_archive_max_tiers(baselines_by_tier: dict[int, float], path: Path
     A tier whose archive is empty/unreadable (fresh bootstrap) is skipped so a legitimate
     first write is never blocked. Factored out of Baseline.load() so apply_state() applies
     the identical defense-in-depth guard to state-sourced tier baselines."""
+    ceiling = ceiling or _archive_quality_ceiling()
     for tier, tier_quality in list(baselines_by_tier.items()):
-        tier_archive_max = _pareto_frontier_best_quality(tier)
+        tier_archive_max = ceiling(tier)
         if tier_archive_max is None:
             continue
         if tier_quality > tier_archive_max + BASELINE_ARCHIVE_TOLERANCE:
@@ -556,11 +562,9 @@ def _pending_candidate_row(source_trial_id: int | None) -> dict[str, Any] | None
     return None
 
 
-def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[int]] | None:
-    """(best_quality, frozenset of same-tier frontier trial_ids) for the live Pareto archive, or None
-    if it is empty/unreadable. Lazy import + fail-soft so a missing archive (fresh bootstrap)
-    never blocks a baseline load or write; the caller treats None as "cannot verify → skip"."""
-    archive = _pareto_archive_for_safety_guard()
+def _frontier_context(archive: Any, tier: int | None = None) -> tuple[float, frozenset[int]] | None:
+    """(best_quality, frozenset of same-tier frontier trial_ids) of ``archive``, or None if it
+    is empty/unreadable (None); the caller treats None as "cannot verify → skip"."""
     if archive is None:
         return None
     frontier = archive.frontier(tier=tier)
@@ -570,6 +574,21 @@ def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[
     best_q = max(objective_value(e.objectives, OBJECTIVE_AXIS_QUALITY, t) for e in frontier)
     ids = frozenset(e.trial_id for e in frontier)
     return best_q, ids
+
+
+def _archive_quality_ceiling() -> Callable[[int], float | None]:
+    """Same-tier frontier max quality for the load-path corruption guards.
+
+    B2-20: the guard archive is a full journal replay; this builds it at most once (on first
+    use) for one Baseline.load / apply_state, which used to replay it 1 + tiers times each.
+    Fail-soft: an empty/unreadable archive yields None, so bootstrap is never blocked."""
+    archive = functools.cache(_pareto_archive_for_safety_guard)
+
+    def ceiling(tier: int) -> float | None:
+        found = _frontier_context(archive(), tier)
+        return found[0] if found is not None else None
+
+    return ceiling
 
 
 # Promotion-field name that carries a questions/hour rate. Deliberately NOT an EvalResult
@@ -611,12 +630,6 @@ def promotion_fields_from_objectives(
     if has_objective_axis(OBJECTIVE_AXIS_RELIABILITY, t):
         fields["reliability"] = objective_value(objectives, OBJECTIVE_AXIS_RELIABILITY, t)
     return fields
-
-
-def _pareto_frontier_best_quality(tier: int | None = None) -> float | None:
-    """Max quality on the live same-tier Pareto frontier, or None if empty/unreadable."""
-    ctx = _pareto_frontier_context(tier=tier)
-    return ctx[0] if ctx is not None else None
 
 
 def _normalize_float_by_tier(raw: Any, path: Path) -> dict[int, float]:
@@ -1118,130 +1131,139 @@ class Baseline:
     @classmethod
     def load(cls, path: Path | None = None, state: dict[str, Any] | None = None) -> Baseline:
         path = path or DEFAULT_BASELINE_PATH
+        baseline = cls(source_path=path)
+        ceiling = _archive_quality_ceiling()  # B2-20: one journal replay for every guard
         if not path.exists():
             log.warning("No baseline file at %s, using defaults", path)
-            baseline = cls(source_path=path)
-            if state:
-                baseline.apply_state(state, path)
-            return baseline
-        try:
-            data = yaml.safe_load(path.read_text())
-        except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
-            raise BaselineCorruptError(
-                f"Baseline file {path} is unreadable/unparseable ({exc}). {_BASELINE_REMEDIATION}"
-            ) from exc
-        if data is None or not isinstance(data, dict):
-            raise BaselineCorruptError(
-                f"Baseline file {path} is an empty or non-mapping baseline file. "
-                f"{_BASELINE_REMEDIATION}"
-            )
-        defaults = cls()
-        if "quality" not in data:
-            # RC-12 (audit 2026-09-08): a persisted baseline that never named a
-            # quality must not silently inherit the legacy calibration number.
-            # Loud: strict same-tier gating is unaffected (SG-3 already forces
-            # strict and skips when no same-tier baseline exists), but anything
-            # reading the legacy top-level value sees a number nobody re-derived.
-            log.warning(
-                "Baseline file %s names no quality source (no `quality` key); "
-                "applying the documented 2026-04-04 T2 calibration fallback %.3f "
-                "for legacy reads. Re-seed from a real eval before anything "
-                "decision-grade reads this baseline.",
-                path,
-                defaults.quality,
-            )
-            quality = defaults.quality
         else:
-            quality = cls._validate_quality(data.get("quality"), defaults.quality, "quality", path)
-        # Above-archive-max guard for the LOAD path (defense-in-depth). The scale guard
-        # above only catches values outside [0, QUALITY_MAX] — it passes a 2.900 baseline,
-        # which is within scale yet still unachievable when the Pareto frontier max is 2.400.
-        # A persisted baseline strictly above the frontier max force-reverts every honest
-        # trial and gate-locks the loop into no-op distillation (2026-05-31). The write-side
-        # update_baseline() guard cannot help here because a corrupt file is loaded directly.
-        # Fall back to the default floor and log loudly; the operator must recompute. Skipped
-        # when the archive is empty/unreadable (fresh start) so bootstrap is never blocked.
-        archive_max = _pareto_frontier_best_quality(DEFAULT_FRONTIER_TIER)
-        if (
-            quality is not None
-            and archive_max is not None
-            and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE
-        ):
-            log.error(
-                "Persisted baseline quality %.3f in %s exceeds Pareto archive max %.3f — "
-                "unachievable/corrupt; it would gate-lock the loop. Falling back to %.3f. "
-                "Recompute the baseline from a real eval (autopilot.py checkpoint --production-best).",
-                quality,
-                path,
-                archive_max,
-                defaults.quality,
+            try:
+                data = yaml.safe_load(path.read_text())
+            except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+                raise BaselineCorruptError(
+                    f"Baseline file {path} is unreadable/unparseable ({exc}). "
+                    f"{_BASELINE_REMEDIATION}"
+                ) from exc
+            if data is None or not isinstance(data, dict):
+                raise BaselineCorruptError(
+                    f"Baseline file {path} is an empty or non-mapping baseline file. "
+                    f"{_BASELINE_REMEDIATION}"
+                )
+            if "quality" not in data:
+                # RC-12 (audit 2026-09-08): a persisted baseline that never named a
+                # quality must not silently inherit the legacy calibration number.
+                # Loud: strict same-tier gating is unaffected (SG-3 already forces
+                # strict and skips when no same-tier baseline exists), but anything
+                # reading the legacy top-level value sees a number nobody re-derived.
+                log.warning(
+                    "Baseline file %s names no quality source (no `quality` key); "
+                    "applying the documented 2026-04-04 T2 calibration fallback %.3f "
+                    "for legacy reads. Re-seed from a real eval before anything "
+                    "decision-grade reads this baseline.",
+                    path,
+                    baseline.quality,
+                )
+            baseline._apply_fields(data, path, "", ceiling)
+        if state:
+            baseline.apply_state(state, path, ceiling=ceiling)
+        return baseline
+
+    def _apply_fields(
+        self,
+        data: Mapping[str, Any],
+        path: Path,
+        label_prefix: str,
+        ceiling: Callable[[int], float | None],
+    ) -> None:
+        """Validate and apply every persisted field present in ``data``.
+
+        B2-20: the one validator for the YAML file (load) and the state dict (apply_state).
+        An invalid value is logged loudly and the current one kept — the class default on a
+        fresh load, the previous value on a state apply."""
+        if "quality" in data:
+            quality = self._validate_quality(
+                data.get("quality"), self.quality, label_prefix + "quality", path
             )
-            quality = defaults.quality
-        per_suite = {
-            suite: cls._validate_quality(q, None, f"per_suite[{suite}]", path)
-            for suite, q in (data.get("per_suite_quality", {}) or {}).items()
-        }
-        baselines_by_tier = _normalize_float_by_tier(data.get("baselines_by_tier", {}), path)
-        _drop_over_archive_max_tiers(baselines_by_tier, path)
-        per_suite_by_tier = _normalize_suite_by_tier(
-            data.get("per_suite_quality_by_tier", {}), path
-        )
-        per_suite_counts_by_tier = _normalize_counts_by_tier(
-            data.get("per_suite_counts_by_tier", {}), path
-        )
-        tier_revisions = _normalize_tier_revisions(data.get("tier_revisions", {}), path)
-        reliability = data.get("reliability", defaults.reliability)
-        if reliability is not None and (
-            isinstance(reliability, bool)
-            or not isinstance(reliability, (int, float))
-            or not 0.0 <= reliability <= RELIABILITY_MAX
-        ):
-            log.error(
-                "Corrupt baseline reliability %r in %s (valid 0..%.1f); using default %.3f",
-                reliability,
-                path,
-                RELIABILITY_MAX,
-                defaults.reliability,
-            )
-            reliability = defaults.reliability
+            # Above-archive-max guard (defense-in-depth). The scale guard only catches values
+            # outside [0, QUALITY_MAX]; a 2.900 baseline over a 2.400 frontier max is in scale
+            # yet unachievable, and it force-reverts every honest trial (2026-05-31). Skipped
+            # when the archive is empty/unreadable (fresh start) so bootstrap is never blocked.
+            archive_max = ceiling(DEFAULT_FRONTIER_TIER) if quality is not None else None
+            if archive_max is not None and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
+                log.error(
+                    "Baseline %squality %.3f in %s exceeds Pareto archive max %.3f — "
+                    "unachievable/corrupt; it would gate-lock the loop. Keeping %.3f. "
+                    "Recompute the baseline from a real eval "
+                    "(autopilot.py checkpoint --production-best).",
+                    label_prefix,
+                    quality,
+                    path,
+                    archive_max,
+                    self.quality,
+                )
+            elif quality is not None:
+                self.quality = quality
         # speed/frontdoor_speed must be finite and > 0: a null/negative frontdoor_speed
         # either raises a TypeError inside check() (None * 0.8) or silently disarms the
         # throughput floor (result.speed < negative is never true). cost may be 0.
-        speed = cls._validate_positive_float(
-            data.get("speed", defaults.speed), defaults.speed, "speed", path
+        if "speed" in data:
+            self.speed = self._validate_positive_float(
+                data.get("speed"), self.speed, label_prefix + "speed", path
+            )
+        if "cost" in data:
+            self.cost = self._validate_positive_float(
+                data.get("cost"), self.cost, label_prefix + "cost", path, allow_zero=True
+            )
+        if "reliability" in data:
+            reliability = data.get("reliability")
+            if (
+                isinstance(reliability, bool)
+                or not isinstance(reliability, (int, float))
+                or not 0.0 <= reliability <= RELIABILITY_MAX
+            ):
+                log.error(
+                    "Corrupt baseline %sreliability %r in %s (valid 0..%.1f); keeping %.3f",
+                    label_prefix,
+                    reliability,
+                    path,
+                    RELIABILITY_MAX,
+                    self.reliability,
+                )
+            else:
+                self.reliability = float(reliability)
+        if "frontdoor_speed" in data:
+            self.frontdoor_speed = self._validate_positive_float(
+                data.get("frontdoor_speed"),
+                self.frontdoor_speed,
+                label_prefix + "frontdoor_speed",
+                path,
+            )
+        if "frontdoor_task_rate_qph" in data:
+            qph = self._optional_positive_float(
+                data.get("frontdoor_task_rate_qph"), label_prefix + "frontdoor_task_rate_qph", path
+            )
+            if qph is not None:
+                self.frontdoor_task_rate_qph = qph
+        if "per_suite_quality" in data:
+            self.per_suite_quality = {
+                suite: self._validate_quality(
+                    value, None, f"{label_prefix}per_suite_quality[{suite}]", path
+                )
+                for suite, value in (data.get("per_suite_quality") or {}).items()
+            }
+        self.baselines_by_tier.update(
+            _normalize_float_by_tier(data.get("baselines_by_tier", {}), path)
         )
-        frontdoor_speed = cls._validate_positive_float(
-            data.get("frontdoor_speed", defaults.frontdoor_speed),
-            defaults.frontdoor_speed,
-            "frontdoor_speed",
-            path,
+        # B3 / SG-4: the same above-archive-max guard per tier, for both sources.
+        _drop_over_archive_max_tiers(self.baselines_by_tier, path, ceiling)
+        self.per_suite_quality_by_tier.update(
+            _normalize_suite_by_tier(data.get("per_suite_quality_by_tier", {}), path)
         )
-        cost = cls._validate_positive_float(
-            data.get("cost", defaults.cost),
-            defaults.cost,
-            "cost",
-            path,
-            allow_zero=True,
+        self.per_suite_counts_by_tier.update(
+            _normalize_counts_by_tier(data.get("per_suite_counts_by_tier", {}), path)
         )
-        baseline = cls(
-            quality=quality,
-            speed=speed,
-            cost=cost,
-            reliability=reliability,
-            per_suite_quality=per_suite,
-            baselines_by_tier=baselines_by_tier,
-            per_suite_quality_by_tier=per_suite_by_tier,
-            per_suite_counts_by_tier=per_suite_counts_by_tier,
-            tier_revisions=tier_revisions,
-            frontdoor_speed=frontdoor_speed,
-            frontdoor_task_rate_qph=cls._optional_positive_float(
-                data.get("frontdoor_task_rate_qph"), "frontdoor_task_rate_qph", path
-            ),
-            source_path=path,
+        self.tier_revisions.update(
+            _normalize_tier_revisions(data.get("tier_revisions", {}), path)
         )
-        if state:
-            baseline.apply_state(state, path)
-        return baseline
 
     @staticmethod
     def _validate_quality(
@@ -1355,101 +1377,18 @@ class Baseline:
             data["frontdoor_task_rate_qph"] = self.frontdoor_task_rate_qph
         _atomic_write_text(path, yaml.dump(data, default_flow_style=False, allow_unicode=True))
 
-    def apply_state(self, state: dict[str, Any], path: Path | None = None) -> None:
+    def apply_state(
+        self,
+        state: dict[str, Any],
+        path: Path | None = None,
+        *,
+        ceiling: Callable[[int], float | None] | None = None,
+    ) -> None:
         state_path = path or self.source_path or DEFAULT_BASELINE_PATH
         # ``baseline_state`` is the live authority while present (see
-        # ``_baseline_state_for_startup_gate``). Historically this method only
-        # applied tier maps and era stamps, silently retaining the frozen YAML's
-        # top-level scalars. An operator reseed could therefore persist a complete
-        # state payload and still start with stale speed/reliability floors. Apply
-        # every field emitted by ``to_state_dict``.
-        if "quality" in state:
-            quality = self._validate_quality(
-                state.get("quality"), self.quality, "state.quality", state_path
-            )
-            archive_max = _pareto_frontier_best_quality(DEFAULT_FRONTIER_TIER)
-            if (
-                quality is not None
-                and archive_max is not None
-                and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE
-            ):
-                log.error(
-                    "State baseline quality %.3f in %s exceeds Pareto archive max %.3f; "
-                    "retaining %.3f.",
-                    quality,
-                    state_path,
-                    archive_max,
-                    self.quality,
-                )
-            elif quality is not None:
-                self.quality = quality
-        if "speed" in state:
-            self.speed = self._validate_positive_float(
-                state.get("speed"), self.speed, "state.speed", state_path
-            )
-        if "cost" in state:
-            self.cost = self._validate_positive_float(
-                state.get("cost"),
-                self.cost,
-                "state.cost",
-                state_path,
-                allow_zero=True,
-            )
-        if "reliability" in state:
-            reliability = state.get("reliability")
-            if (
-                isinstance(reliability, bool)
-                or not isinstance(reliability, (int, float))
-                or not 0.0 <= reliability <= RELIABILITY_MAX
-            ):
-                log.error(
-                    "Corrupt state baseline reliability %r in %s; retaining %.3f.",
-                    reliability,
-                    state_path,
-                    self.reliability,
-                )
-            else:
-                self.reliability = float(reliability)
-        if "frontdoor_speed" in state:
-            self.frontdoor_speed = self._validate_positive_float(
-                state.get("frontdoor_speed"),
-                self.frontdoor_speed,
-                "state.frontdoor_speed",
-                state_path,
-            )
-        if "frontdoor_task_rate_qph" in state:
-            qph = self._optional_positive_float(
-                state.get("frontdoor_task_rate_qph"), "state.frontdoor_task_rate_qph", state_path
-            )
-            if qph is not None:
-                self.frontdoor_task_rate_qph = qph
-        if "per_suite_quality" in state:
-            self.per_suite_quality = {
-                suite: self._validate_quality(
-                    value,
-                    None,
-                    f"state.per_suite_quality[{suite}]",
-                    state_path,
-                )
-                for suite, value in (state.get("per_suite_quality") or {}).items()
-            }
-        self.baselines_by_tier.update(
-            _normalize_float_by_tier(state.get("baselines_by_tier", {}), state_path)
-        )
-        # B3 / SG-4: apply the same above-archive-max guard load() uses. A state dict
-        # (autopilot_state.json) can carry a corrupt/wrong-scale tier baseline just as a
-        # YAML file can; without this, an over-max value applied here would gate-lock the
-        # loop exactly as the 2026-05-31 file-side value did.
-        _drop_over_archive_max_tiers(self.baselines_by_tier, state_path)
-        self.per_suite_quality_by_tier.update(
-            _normalize_suite_by_tier(state.get("per_suite_quality_by_tier", {}), state_path)
-        )
-        self.per_suite_counts_by_tier.update(
-            _normalize_counts_by_tier(state.get("per_suite_counts_by_tier", {}), state_path)
-        )
-        self.tier_revisions.update(
-            _normalize_tier_revisions(state.get("tier_revisions", {}), state_path)
-        )
+        # ``_baseline_state_for_startup_gate``): every field emitted by ``to_state_dict`` is
+        # applied, so an operator reseed cannot start with stale speed/reliability floors.
+        self._apply_fields(state, state_path, "state.", ceiling or _archive_quality_ceiling())
         era = state.get("eval_quality_era")
         if isinstance(era, str) and era.strip():
             self.eval_quality_era = era.strip()

@@ -107,7 +107,7 @@ def test_apply_state_drops_over_archive_max_tier(tmp_path, monkeypatch):
     """A corrupt state dict carrying an above-frontier tier baseline is dropped on apply,
     exactly as the load() path drops it — a 2.9 T2 value over a 2.4 frontier max would
     otherwise force-revert every honest trial (2026-05-31 gate-lock)."""
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.4)
     b = Baseline(source_path=tmp_path / "absent.yaml")
     b.apply_state({"baselines_by_tier": {"2": 2.9, "1": 1.5}})
     assert b.quality_for_tier(2, strict=True) is None, "over-max T2 baseline must be dropped"
@@ -117,10 +117,28 @@ def test_apply_state_drops_over_archive_max_tier(tmp_path, monkeypatch):
 def test_apply_state_keeps_tiers_when_archive_unreadable(tmp_path, monkeypatch):
     """Fresh bootstrap (archive empty/unreadable → None): the guard is skipped so a
     legitimate first state write is never blocked."""
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: None)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: None)
     b = Baseline(source_path=tmp_path / "absent.yaml")
     b.apply_state({"baselines_by_tier": {"2": 2.9}})
     assert b.quality_for_tier(2, strict=True) == pytest.approx(2.9)
+
+
+def test_load_with_state_replays_the_journal_once(tmp_path, monkeypatch):
+    """B2-20: every archive-max guard of one Baseline.load(path, state) shares ONE journal
+    replay (it was 1 + tiers for the file, then again for the state)."""
+    calls: list[int] = []
+
+    def archive():
+        calls.append(1)
+        return None  # unreadable: the guards skip
+
+    monkeypatch.setattr(sg, "_pareto_archive_for_safety_guard", archive)
+    path = tmp_path / "b.yaml"
+    path.write_text("quality: 1.5\nbaselines_by_tier:\n  1: 1.5\n  2: 1.4\n")
+    b = Baseline.load(path, state={"quality": 1.6, "baselines_by_tier": {"3": 1.2}})
+    assert len(calls) == 1
+    assert b.quality == pytest.approx(1.6)
+    assert b.baselines_by_tier == {1: 1.5, 2: 1.4, 3: 1.2}
 
 
 # ── MISC-1: update_tier top-level scalars are frontier-gated ───────────────────

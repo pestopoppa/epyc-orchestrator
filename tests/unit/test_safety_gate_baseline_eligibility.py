@@ -144,7 +144,7 @@ def test_baseline_state_round_trips_per_tier(tmp_path, monkeypatch):
     # state-sourced tier baselines too, reading the module-level Pareto frontier. Pin it
     # consistent with the archive max above so the round-tripped T2=2.9 baseline is NOT
     # dropped as over-max during restore (the guard reads the LIVE archive otherwise).
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.9)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.9)
     monkeypatch.setattr(
         SafetyGate, "_archive_frontier_entry", staticmethod(lambda source_trial_id, tier=None: _repro_entry())
     )
@@ -172,7 +172,7 @@ def test_baseline_state_overrides_all_live_scalar_authority(tmp_path, monkeypatc
         "frontdoor_speed: 9.0\n"
         "per_suite_quality: {old: 1.0}\n"
     )
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: None)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: None)
     state = {
         "quality": 1.75,
         "speed": 42.0,
@@ -255,7 +255,7 @@ def test_loader_rejects_above_archive_baseline(tmp_path, monkeypatch):
     import safety_gate as sg  # type: ignore[import-not-found]
     p = tmp_path / "baseline.yaml"
     p.write_text("quality: 2.9\nspeed: 99.0\ncost: 0.1\nreliability: 0.99\n")
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.4)
     b = sg.Baseline.load(p)
     assert b.quality == pytest.approx(sg.Baseline().quality), "above-archive baseline must fall back"
 
@@ -265,7 +265,7 @@ def test_loader_accepts_within_archive_baseline(tmp_path, monkeypatch):
     import safety_gate as sg  # type: ignore[import-not-found]
     p = tmp_path / "baseline.yaml"
     p.write_text("quality: 1.16\nspeed: 18.0\ncost: 0.5\nreliability: 0.86\n")
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
+    monkeypatch.setattr(sg, "_archive_quality_ceiling", lambda: lambda tier: 2.4)
     b = sg.Baseline.load(p)
     assert b.quality == pytest.approx(1.16), "within-archive baseline must load unchanged"
 

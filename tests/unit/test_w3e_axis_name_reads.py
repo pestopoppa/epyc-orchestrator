@@ -130,12 +130,10 @@ def test_summary_key_order_unchanged(policy: str, tier: int) -> None:
 
 @pytest.mark.parametrize("policy", POLICIES)
 @pytest.mark.parametrize("tier", [1, 2])
-def test_safety_gate_named_reads_identical(policy: str, tier: int, monkeypatch) -> None:
+def test_safety_gate_named_reads_identical(policy: str, tier: int) -> None:
     archive, golden = _replay(policy)
     expected = golden["tiers"][str(tier)]
-    monkeypatch.setattr(safety_gate, "_pareto_archive_for_safety_guard", lambda: archive)
-
-    best_q, ids = safety_gate._pareto_frontier_context(tier=tier)
+    best_q, ids = safety_gate._frontier_context(archive, tier=tier)
     assert best_q == expected["best_quality"]
     assert sorted(ids) == expected["frontier_ids"]
 
