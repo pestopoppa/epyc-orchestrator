@@ -498,6 +498,7 @@ def _required_gate_env() -> dict[str, str]:
         "AUTOPILOT_STEPPING_STONES",
         "AUTOPILOT_PLANNER_SPEND_BREAKER",
         "AUTOPILOT_PLANNER_ROSTER_POLICY_ACTIVE",
+        "AUTOPILOT_AP3_ROLE_RESTART_ENABLE",
     )
     try:
         import importlib.util as _ilu

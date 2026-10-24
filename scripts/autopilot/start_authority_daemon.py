@@ -123,6 +123,14 @@ AUTHORITY_ENV: dict[str, str] = {
     # and restart AutoPilot through this wrapper. The flip takes effect at restart only.
     "AUTOPILOT_AP55_PROMOTION_GATE": "shadow",
     "AUTOPILOT_AP55_SEED_RERUN": "0",
+    # DP-4 = (A), operator 2026-10-21 (root vidya-belief-substrate-program.md
+    # VB-AP-SPINUP-AP3-SCOPED): during the belief-kernel trial the AP3 role-restart gate
+    # runs SCOPED -- only the `spec_draft` and `kv_profile` knob families on
+    # architect_critic / frontdoor / worker_general may restart a role
+    # (`config_applicator.AP3_SCOPED_*`). Pinned here so an inherited "1" cannot widen it
+    # to the unscoped gate and an unset shell cannot silently turn it off; autopilot.py's
+    # `_required_gate_env` checks the live process carries it before the first trial.
+    "AUTOPILOT_AP3_ROLE_RESTART_ENABLE": "scoped",
 }
 
 LOCAL_PLANNER_DEFAULT_ENV: dict[str, str] = {
