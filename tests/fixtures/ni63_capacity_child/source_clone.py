@@ -17,9 +17,9 @@ from pathlib import Path
 PINNED_APP_COMMIT = "6bb8d860d410217895efb7806e9ef907a62a4350"
 # (Git blob SHA-1, content SHA-256), independently resolved from the pinned tree.
 SOURCE_PINS: dict[str, tuple[str, str]] = {
-    "scripts/server/bench_core_claim.py": ("58462c114e341beab0d0480d570f26e80b0072ba", "66a04cb66895b2898c65820088a23a14a0de9db54df93b74fe0860aef055eb5e"),
+    "scripts/server/bench_core_claim.py": ("7c03af5a90825ec7acd46b4ab3b4600828a75eba", "252c6dfc37bb4c34416cd7ba9f16158eb8a248ad4b56a9bfe94fd21466a34f16"),
     "scripts/server/fleet_markers.py": ("070b6ab8af62fbd33cffa4069133cca915c3258e", "8ef8df7703252f41f52c2f9033e941d28d4fea7017d220a7e3dc617e1a2aec68"),
-    "scripts/server/orchestrator_stack.py": ("a63a00b10e73edc9b46a5610800812395344c4eb", "645cef6e3ec5196734c3bf27a84fe1f1670302e5ac958431a54625b19104d833"),
+    "scripts/server/orchestrator_stack.py": ("19fea0df052f0abd520f5d2dfc225341b9f2b4cd", "446b66122fbb466b07ba029f5cabeed52bfc942c123cec9b3f383a94f4ab52d3"),
     "scripts/server/realized_fleet.py": ("12f01d3c17a2ccb13c193728d79e24d52148de4e", "9099aa115a22799ba2446bf2082e0d7ebb360a0df5f57aac654b6286c1ea9a31"),
     "scripts/server/runtime_facts_manifest.py": ("c18bb563aabfa092e6b378fdddbd5f516352cd5d", "e2bfec7bb580fac727ca184b2dd4d56bd487e443e89d4720cc037743ab1dc374"),
     "scripts/server/stack_env.py": ("0ad2da92f14a50e2145e36fe32e31011d0da8606", "c2dd2a40abf2ac3048e392a11bd910a27f6991e2a99cefdbd232172b67ea06a4"),
@@ -33,6 +33,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "scripts/server/stack_processes.py": ("df278a70d5801b81dc54c5ec663d19859ad4a50e", "e9ac8d7951fb6a11664c1d69e71050dfd44ed51ae3e215858ffd698198459812"),
     "scripts/server/stack_runtime.py": ("2d4489a3d4e6046973255dbf2b9a2d47b65c6a7e", "984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99"),
     "scripts/server/stack_state.py": ("5d7ad9483260e4e56f8105df702fc5ff1b7f782f", "a047f152ac478e8fead80700b73bcb782dfe61969f513aa69da422518c89da8c"),
+    "scripts/server/launch_affinity.py": ("c78ceb5f327491696d314153b4e3280a5ad96ee0", "f1ef273e86a4f7121e588d79a34a9d72ec9150889c72344b950f4608cca091da"),
     "src/__init__.py": ("ff893046a8e7d2598657b950e9e41449f358d25f", "16e20bce77e6470646b90def0e3d653a3bd9fb024b484f7cd034f96ff8a0a5f8"),
     "src/config/__init__.py": ("90c83b49ed877c1615661f4a3ac188efac02d644", "bd0a888d06c952e0899093233241029b6cac2b6c2e1d605fea4b56878fe04d17"),
     "src/config/models.py": ("a846546e725d448cbf9321fba84c2128905ccaf3", "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7"),
@@ -42,7 +43,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "src/registry/kernel_paths.py": ("6bb3dad23130a763dc4c456c7c432a9535536f30", "f5cd510ad2887a6276350c8939147ce66ba78a8eab573d42ee120094c0795066"),
     "src/registry/registry_loader.py": ("0bddc98c3a27c40d4e117783f70808f22551fc4f", "c4a4bf71f0f90384ffb64c673897c9fd496889e4e395a2e3eaf94933550ed18b"),
     "src/registry/model_descriptors.py": ("81d056260371f0da2f097aa1a184ee8c892e3f9c", "ba868c939eba8ebc1274bd2d05bcff865c702fcdef1e3d6ec7184833aad44f69"),
-    "src/registry/stack_priors.py": ("22a04ef5aba708f2f351acf740573eaba9f659f0", "188e4093675afc23308ad1c3b8afd0c4d104f9626d6658ae78849b3ab90fca7f"),
+    "src/registry/stack_priors.py": ("69de40e88e0a68015937f0dbb01332da7f9bfa94", "304f652cba847e157e8ac9e3098b5e9817e0c07071b921d0a3b359f81add1f5d"),
     "src/registry_loader.py": ("c68c5918b94e4a54a07a7c6642d92365480bf656", "81f3dc46dea4af9eb8df9adb4a73d2e900e1d040d107a73a04053f8ea72b77be"),
     "src/roles.py": ("59432d52c3c5ebb661c336f70627267073cfa4cb", "408f10be964705638562ec9a6d0e1cd56b26ac849fdb964e8bac0c9a7fe4be61"),
     "src/scheduling/__init__.py": ("e81d5c94b0479ae82472dfceec8393cd8f8286d2", "a65b963b3d38ca2d680827bfe3debe3e7d91095ea50723c5c40ce6b19dd0df51"),
@@ -50,8 +51,8 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
 }
 CAPACITY_ARTIFACT_PIN = (
     "orchestration/gpu_shadow_lane_np_ceiling.yaml",
-    "46e79920d1b88da5397f0cb0058295f9660f8f65",
-    "d4a45fbbbb33ce37ec1176ed2252596db4546a7755d9757151aca670c42fb1dd",
+    "0bf348c1dae4bd44698a2ed9d3920c98d9eb1bc0",
+    "deeb744c4a411bc0f364d1209c402c29504c23a19c96eddc22b9b0bd0326c04f",
 )
 FIXTURE_PINS: dict[str, str] = {
     "launch_manifest.yaml": "583bbb9ee8910c5633e454f5a3528e4f9a86146b6641448e92ebf6b573cfd41b",
