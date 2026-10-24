@@ -28,7 +28,6 @@ from src.api.routes.chat_pipeline.routing_decision import (
     classify_trinity_role,
     derive_task_type_from_route,
     estimate_routing_cost,
-    extract_skill_ids,
     fence_nonserving_route,
     log_routing_start,
     resolve_timeout,
@@ -313,7 +312,7 @@ def _route_request(
 
     # Determine routing using HybridRouter if available, otherwise rules
     with routing_stage_timing.timed("route"):
-        routing_decision, routing_strategy, skill_context = select_initial_route(
+        routing_decision, routing_strategy, skill_context, skill_ids = select_initial_route(
             request,
             state,
             task_ir,
@@ -441,9 +440,6 @@ def _route_request(
     from src.api.routes.chat_routing import detect_tool_requirement
 
     tool_required, tool_hint = detect_tool_requirement(request.prompt)
-
-    # Extract skill IDs from skill-augmented routing results
-    skill_ids = extract_skill_ids(skill_context, state)
 
     # WS-3: Derive task_type from routed role so cascading tool policy can deny
     # web tools for reasoning domains. Without this, task_type stays "chat" and
