@@ -242,6 +242,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         vision_escalation: int = _timeout_default("vision_escalation")
         ingest_long_context: int = _timeout_default("ingest_long_context")
         architect_general: int = _timeout_default("architect_general")
+        architect_critic: int = _timeout_default("architect_critic")
         default_request: int = _timeout_default("default_request")
         server_request: int = _timeout_default("server_request")
         server_connect: int = _timeout_default("server_connect")
@@ -536,73 +537,7 @@ def _load_from_env() -> OrchestratorConfigData:
         # ServerURLsConfig defaults are the single source of truth.
         # Env vars (ORCHESTRATOR_SERVER_URLS_<FIELD>) override individual fields.
         server_urls=_build_server_urls(P),
-        timeouts=TimeoutsConfig(
-            # All defaults come from registry; env vars can override
-            worker_explore=_env_int(
-                f"{P}TIMEOUTS_WORKER_EXPLORE",
-                int(_registry_timeout("roles", "worker_general", 60)),
-            ),
-            worker_math=_env_int(
-                f"{P}TIMEOUTS_WORKER_MATH",
-                int(_registry_timeout("roles", "worker_math", 60)),
-            ),
-            worker_vision=_env_int(
-                f"{P}TIMEOUTS_WORKER_VISION",
-                int(_registry_timeout("roles", "worker_vision", 60)),
-            ),
-            worker_summarize=_env_int(
-                f"{P}TIMEOUTS_WORKER_SUMMARIZE",
-                int(_registry_timeout("roles", "worker_summarize", 120)),
-            ),
-            worker_general=_env_int(
-                f"{P}TIMEOUTS_WORKER_GENERAL",
-                int(_registry_timeout("roles", "worker_general", 60)),
-            ),
-            worker_coder=_env_int(
-                f"{P}TIMEOUTS_WORKER_CODER",
-                int(_registry_timeout("roles", "worker_coder", 30)),
-            ),
-            worker_code=_env_int(
-                f"{P}TIMEOUTS_WORKER_CODE",
-                int(_registry_timeout("roles", "worker_coder", 30)),
-            ),
-            worker_fast=_env_int(
-                f"{P}TIMEOUTS_WORKER_FAST",
-                int(_registry_timeout("roles", "worker_fast", 30)),
-            ),
-            frontdoor=_env_int(
-                f"{P}TIMEOUTS_FRONTDOOR",
-                int(_registry_timeout("roles", "frontdoor", 90)),
-            ),
-            coder_escalation=_env_int(
-                f"{P}TIMEOUTS_CODER_ESCALATION",
-                int(_registry_timeout("roles", "coder_escalation", 120)),
-            ),
-            vision_escalation=_env_int(
-                f"{P}TIMEOUTS_VISION_ESCALATION",
-                int(_registry_timeout("roles", "vision_escalation", 120)),
-            ),
-            ingest_long_context=_env_int(
-                f"{P}TIMEOUTS_INGEST_LONG_CONTEXT",
-                int(_registry_timeout("roles", "ingest_long_context", 300)),
-            ),
-            architect_general=_env_int(
-                f"{P}TIMEOUTS_ARCHITECT_GENERAL",
-                int(_registry_timeout("roles", "architect_general", 600)),
-            ),
-            default_request=_env_int(
-                f"{P}TIMEOUTS_DEFAULT_REQUEST",
-                int(_registry_timeout("roles", "default_request", 120)),
-            ),
-            server_request=_env_int(
-                f"{P}TIMEOUTS_SERVER_REQUEST",
-                int(_registry_timeout("server", "request", 600)),
-            ),
-            server_connect=_env_int(
-                f"{P}TIMEOUTS_SERVER_CONNECT",
-                int(_registry_timeout("server", "connect", 5)),
-            ),
-        ),
+        timeouts=_build_timeouts(P),
         chat=ChatPipelineConfig(
             summarization_threshold_tokens=_env_int(
                 f"{P}CHAT_SUMMARIZATION_THRESHOLD_TOKENS", 5000
@@ -750,6 +685,17 @@ def _build_server_urls(prefix: str) -> ServerURLsConfig:
     return dataclasses.replace(defaults, **overrides) if overrides else defaults
 
 
+def _build_timeouts(prefix: str) -> TimeoutsConfig:
+    """TimeoutsConfig defaults (registry-backed) with ORCHESTRATOR_TIMEOUTS_<FIELD> overrides."""
+    defaults = TimeoutsConfig()
+    overrides = {}
+    for f in dataclasses.fields(defaults):
+        value = getattr(defaults, f.name)
+        parse = _env_float if isinstance(value, float) else _env_int
+        overrides[f.name] = parse(f"{prefix}TIMEOUTS_{f.name.upper()}", value)
+    return dataclasses.replace(defaults, **overrides)
+
+
 @lru_cache(maxsize=1)
 def get_config() -> OrchestratorConfigData:
     """Get the global configuration.
@@ -841,31 +787,7 @@ def get_config() -> OrchestratorConfigData:
                    if hasattr(settings.server_urls, f.name)}
             ),
             timeouts=TimeoutsConfig(
-                worker_explore=settings.timeouts.worker_explore,
-                worker_math=settings.timeouts.worker_math,
-                worker_vision=settings.timeouts.worker_vision,
-                worker_summarize=settings.timeouts.worker_summarize,
-                worker_general=settings.timeouts.worker_general,
-                worker_code=settings.timeouts.worker_code,
-                worker_fast=settings.timeouts.worker_fast,
-                frontdoor=settings.timeouts.frontdoor,
-                coder_escalation=settings.timeouts.coder_escalation,
-                vision_escalation=settings.timeouts.vision_escalation,
-                ingest_long_context=settings.timeouts.ingest_long_context,
-                architect_general=settings.timeouts.architect_general,
-                default_request=settings.timeouts.default_request,
-                server_request=settings.timeouts.server_request,
-                server_connect=settings.timeouts.server_connect,
-                ocr_single_page=settings.timeouts.ocr_single_page,
-                ocr_pdf=settings.timeouts.ocr_pdf,
-                health_check=settings.timeouts.health_check,
-                vision_inference=settings.timeouts.vision_inference,
-                vision_figure=settings.timeouts.vision_figure,
-                ffmpeg_version=settings.timeouts.ffmpeg_version,
-                ffmpeg_probe=settings.timeouts.ffmpeg_probe,
-                ffmpeg_extract=settings.timeouts.ffmpeg_extract,
-                exiftool=settings.timeouts.exiftool,
-                gradio_client=settings.timeouts.gradio_client,
+                **{f.name: getattr(settings.timeouts, f.name) for f in dataclasses.fields(TimeoutsConfig)}
             ),
             chat=ChatPipelineConfig(
                 summarization_threshold_tokens=settings.chat.summarization_threshold_tokens,

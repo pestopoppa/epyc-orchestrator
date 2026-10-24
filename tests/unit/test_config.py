@@ -639,6 +639,30 @@ class TestTimeoutsConfig:
         assert cfg.ocr_pdf > 0
         assert cfg.health_check > 0
 
+    def test_every_timeout_field_honours_its_env_override(self, monkeypatch) -> None:
+        """A3-04: get_config() dropped TIMEOUTS_WORKER_CODER and had no ARCHITECT_CRITIC."""
+        import dataclasses
+
+        from src.config import TimeoutsSettings, _load_from_env
+
+        names = [f.name for f in dataclasses.fields(TimeoutsConfig)]
+        assert set(names) == set(TimeoutsSettings.model_fields)
+        expected = {name: 1000 + i for i, name in enumerate(names)}
+        for name, value in expected.items():
+            monkeypatch.setenv(f"ORCHESTRATOR_TIMEOUTS_{name.upper()}", str(value))
+        reset_config()
+        try:
+            for timeouts in (get_config().timeouts, _load_from_env().timeouts):
+                assert {name: getattr(timeouts, name) for name in names} == expected
+        finally:
+            reset_config()
+
+    def test_env_loader_default_request_matches_dataclass(self, monkeypatch) -> None:
+        from src.config import _load_from_env
+
+        monkeypatch.delenv("ORCHESTRATOR_TIMEOUTS_DEFAULT_REQUEST", raising=False)
+        assert _load_from_env().timeouts.default_request == TimeoutsConfig().default_request
+
 
 # ============================================================================
 # get_config() singleton behavior

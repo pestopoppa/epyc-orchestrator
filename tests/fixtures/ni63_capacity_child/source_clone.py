@@ -36,7 +36,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "scripts/server/stack_state.py": ("5d7ad9483260e4e56f8105df702fc5ff1b7f782f", "a047f152ac478e8fead80700b73bcb782dfe61969f513aa69da422518c89da8c"),
     "scripts/server/launch_affinity.py": ("c78ceb5f327491696d314153b4e3280a5ad96ee0", "f1ef273e86a4f7121e588d79a34a9d72ec9150889c72344b950f4608cca091da"),
     "src/__init__.py": ("ff893046a8e7d2598657b950e9e41449f358d25f", "16e20bce77e6470646b90def0e3d653a3bd9fb024b484f7cd034f96ff8a0a5f8"),
-    "src/config/__init__.py": ("1cb0a125336f98cf7882d0203c5fbbf8be5154a2", "21bef8e331c105045d4a7457e99c2b9c1386b8ca9a8c65d5cac0ac493bdf6766"),
+    "src/config/__init__.py": ("644ecc9e4ee3e0afeb3235be651976a3562eb8ca", "e2c868f3481591c5b61a420b92bc2dba7e6a0699ef5fa93bade89a9672302831"),
     "src/config/models.py": ("a846546e725d448cbf9321fba84c2128905ccaf3", "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7"),
     "src/config/validation.py": ("0289312ab81a48ab69a5cc5fcbe1fad1b8256f5f", "785df5e822ce6b3742b518720e4827c69998ab7569deee965a8ac61ec57cd8a9"),
     "src/env_parsing.py": ("11e3b7c80df1a6f921d467f7a924d287e1ac28dc", "2626fb2c47012c56a7f7e99fe03f088977f9b061c77bcd1edf0dfa1e12b7d52f"),
