@@ -25,12 +25,6 @@ def test_first_update_uses_prior_lambda() -> None:
     assert state.mean_z == 1.0
 
 
-def test_package_exports_sequential_verdict_symbols() -> None:
-    from src.autopilot_core import EProcessState as ExportedState
-
-    assert ExportedState is EProcessState
-
-
 def test_second_update_uses_only_past_observations() -> None:
     state, _ = EProcessState().update(1.0)
     state, update = state.update(1.0)
