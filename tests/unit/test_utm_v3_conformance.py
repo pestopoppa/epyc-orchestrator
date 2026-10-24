@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from orchestration.repl_memory.memory_actions import MemoryAction, MemoryActionStore
@@ -12,7 +13,10 @@ from src.typed_decisions.types import Question, QuestionKind
 FIXTURES = Path(__file__).parent / "fixtures" / "utm_v3"
 CASES_PATH = FIXTURES / "synthetic_cases.json"
 RUBRIC_PATH = FIXTURES / "rubric.json"
-GENERATED_OUTPUT = Path("ni07_utm_v3_synthetic_readout.json")
+# The NI07 custody capture (epyc-root scripts/ci/ni07_utm_v3_capture.py) names its
+# declared output here; otherwise the readout stays in tmp_path, out of the checkout.
+READOUT_ENV = "NI07_UTM_READOUT"
+GENERATED_OUTPUT = "ni07_utm_v3_synthetic_readout.json"
 AXES = ("source_resolution", "privacy", "scope", "freshness", "poisoning", "manipulation")
 
 
@@ -121,9 +125,10 @@ def test_eight_synthetic_classes_have_only_source_supported_store_expectations(t
     }
     assert set(rubric["required_readout"]) <= set(readout)
     encoded = json.dumps(readout, sort_keys=True, separators=(",", ":")) + "\n"
-    with GENERATED_OUTPUT.open("x", encoding="utf-8") as output:
+    generated = Path(os.environ.get(READOUT_ENV) or tmp_path / GENERATED_OUTPUT)
+    with generated.open("x", encoding="utf-8") as output:
         output.write(encoded)
-    assert GENERATED_OUTPUT.read_text(encoding="utf-8") == encoded
+    assert generated.read_text(encoding="utf-8") == encoded
 
 
 class _FakePrimitives:

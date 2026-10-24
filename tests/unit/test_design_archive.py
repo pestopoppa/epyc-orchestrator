@@ -16,9 +16,6 @@ from orchestration.repl_memory.staged_scorer import StagedConfig
 from orchestration.repl_memory.replay.candidates import DesignCandidate, DesignArchive
 from orchestration.repl_memory.replay.metrics import ReplayMetrics
 
-TEST_ARCHIVE_BASE = Path("/mnt/raid0/llm/tmp/test_design_archive")
-
-
 @pytest.fixture()
 def archive_dir(tmp_path):
     """Per-test unique directory for archive DB."""

@@ -5,9 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,7 +17,6 @@ from src.features import Features, set_features, reset_features
 from src.graph import file_artifacts
 from src.graph.helpers import _spill_if_truncated
 
-_LLM_TMP = "/mnt/raid0/llm/tmp"
 _POINTER_RE = re.compile(r'peek\((\d+), file_path="([^"]+)", offset=(\d+)\)')
 
 
@@ -30,13 +27,12 @@ def _reset():
 
 
 @pytest.fixture()
-def spill_dir(monkeypatch):
-    """A private spill dir under the REPL-allowed llm tmp root, removed afterwards."""
-    base = _LLM_TMP if os.path.isdir(_LLM_TMP) else None
-    path = tempfile.mkdtemp(prefix="test_spill_", dir=base)
-    monkeypatch.setattr(file_artifacts, "SPILL_DIR", path)
-    yield path
-    shutil.rmtree(path, ignore_errors=True)
+def spill_dir(tmp_path, monkeypatch):
+    """A private spill dir; /tmp/ is always a REPL-allowed prefix."""
+    path = tmp_path / "spill"
+    path.mkdir()
+    monkeypatch.setattr(file_artifacts, "SPILL_DIR", str(path))
+    return str(path)
 
 
 class _FakeState:
@@ -162,10 +158,6 @@ class TestSpillIfTruncated:
         assert os.path.dirname(path) == spill_dir
 
 
-@pytest.mark.skipif(
-    os.environ.get("CI") == "true" or os.environ.get("ORCHESTRATOR_MOCK_MODE") == "true",
-    reason="REPL file tools require local paths",
-)
 class TestExactRecallThroughRepl:
     """The emitted pointer, executed verbatim in the REPL, returns exactly the omitted span."""
 
