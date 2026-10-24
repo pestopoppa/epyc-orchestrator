@@ -37,7 +37,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "scripts/server/launch_affinity.py": ("c78ceb5f327491696d314153b4e3280a5ad96ee0", "f1ef273e86a4f7121e588d79a34a9d72ec9150889c72344b950f4608cca091da"),
     "src/__init__.py": ("a43657f16f7063ccc1d61f7048b64c55433eddce", "26adaa6226a4b680574c4a105785b954465ea8a532a91d76aa9944e985bfb3ad"),
     "src/config/__init__.py": ("644ecc9e4ee3e0afeb3235be651976a3562eb8ca", "e2c868f3481591c5b61a420b92bc2dba7e6a0699ef5fa93bade89a9672302831"),
-    "src/config/models.py": ("a846546e725d448cbf9321fba84c2128905ccaf3", "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7"),
+    "src/config/models.py": ("fe17d91959c26dac8065f3b98d941392b2e75928", "49a29f9156e5112b5344e6f5ddc6b759674eab9d95f4d4224deeaafb51674cc0"),
     "src/config/validation.py": ("eab4945f939d5aa2f35cd167dcece1a55c5546ff", "e69b9b2ab0b38e0e2b50bcc435a19695ed20eb627b69fbb4dd302bea680bc51d"),
     "src/env_parsing.py": ("11e3b7c80df1a6f921d467f7a924d287e1ac28dc", "2626fb2c47012c56a7f7e99fe03f088977f9b061c77bcd1edf0dfa1e12b7d52f"),
     "src/registry/__init__.py": ("287333a63889217a52c0082a7e316dc64670ee1f", "50ddc75e291c2caaae688bbe94c4f3144a5751eb11e0a65ee35b5632ea3a9c6d"),

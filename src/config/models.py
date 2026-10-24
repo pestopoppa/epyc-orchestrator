@@ -8,6 +8,7 @@ import os
 import socket
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -267,7 +268,20 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _get_default_project_root() -> str:
     """Get project root from environment, else the checkout this module lives in."""
-    return os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", str(_REPO_ROOT))
+    root = os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT")
+    if root is None:
+        return str(_REPO_ROOT)
+    _warn_if_no_registry(root)
+    return root
+
+
+@lru_cache(maxsize=None)
+def _warn_if_no_registry(root: str) -> None:
+    # A3-M2: e.g. inherited from epyc-root's env.sh, which exports this name for itself.
+    if not (Path(root) / "orchestration/model_registry.yaml").is_file():
+        _LOGGER.warning(
+            "ORCHESTRATOR_PATHS_PROJECT_ROOT=%s has no orchestration/model_registry.yaml", root
+        )
 
 
 def _get_default_stack_priors_path() -> str:

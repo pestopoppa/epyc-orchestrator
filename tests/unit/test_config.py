@@ -321,6 +321,29 @@ class TestPathsConfig:
             cfg = PathsConfig()
             assert cfg.raid_prefix == "/mnt/raid0/"
 
+    def test_project_root_without_registry_is_warned(self, monkeypatch, tmp_path, caplog) -> None:
+        """A3-M2: epyc-root's env.sh exports this name for a tree with no registry."""
+        monkeypatch.setenv("ORCHESTRATOR_PATHS_PROJECT_ROOT", str(tmp_path))
+        with caplog.at_level("WARNING", logger="src.config.models"):
+            assert PathsConfig().project_root == tmp_path
+        assert "ORCHESTRATOR_PATHS_PROJECT_ROOT" in caplog.text and str(tmp_path) in caplog.text
+
+    @pytest.mark.parametrize("inherited", [None, "/nonexistent/epyc-root"])
+    def test_env_sh_project_root_holds_the_registry(self, inherited) -> None:
+        """A3-M2: env.sh defaulted to the archived monorepo and honoured any inherited root."""
+        import subprocess
+
+        repo = Path(__file__).resolve().parents[2]
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCHESTRATOR_PATHS_")}
+        if inherited:
+            env["ORCHESTRATOR_PATHS_PROJECT_ROOT"] = inherited
+        out = subprocess.run(
+            ["bash", "-c", 'source "$1" && printf "%s" "$ORCHESTRATOR_PATHS_REGISTRY_PATH"',
+             "bash", str(repo / "scripts/lib/env.sh")],
+            env=env, capture_output=True, text=True, check=True,
+        ).stdout
+        assert Path(out) == repo / "orchestration/model_registry.yaml"
+
 
 # ============================================================================
 # ServerURLsConfig.as_dict()
