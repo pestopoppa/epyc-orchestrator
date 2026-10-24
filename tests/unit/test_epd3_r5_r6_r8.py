@@ -1,6 +1,6 @@
-"""EPD-3-R5 / R6 / R8 guards (learned-routing-controller handoff).
+"""EPD-3-R6 / R8 guards (learned-routing-controller handoff).
 
-R5: the deprecated `type:chat` copy is annotated so it cannot be cargo-culted.
+R5's annotation guard went with the deleted scripts/benchmark/deprecated/ copy.
 R6: the seed write loop fails closed.
 R8: the failure / exploration / classification embedding conventions are built
     by the shared segment builder, byte-identical to the historical text.
@@ -144,26 +144,6 @@ class TestSerializersDelegateToTheSharedBuilder:
         assert '" | ".join' not in source
         for key in ("error:", "gate:", "tier:", "message:", "query:", "preview:", "classify:", "prompt:"):
             assert f'f"{key}' not in source, key
-
-
-# ── R5: the deprecated copy is annotated ──────────────────────────────────────
-
-
-def test_deprecated_hand_built_conventions_are_annotated():
-    """Every `objective:{` f-string under a deprecated/ tree carries EPD-3-R5."""
-    offenders: list[str] = []
-    found = 0
-    for root in (REPO_ROOT / "scripts", REPO_ROOT / "orchestration", REPO_ROOT / "src"):
-        for path in root.rglob("*.py"):
-            if "deprecated" not in path.parts:
-                continue
-            for lineno, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
-                if "objective:{" in line:
-                    found += 1
-                    if "EPD-3-R5" not in line:
-                        offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
-    assert found, "no deprecated convention found — the guard is vacuous; drop it with the file"
-    assert not offenders, f"unannotated deprecated embedding convention: {offenders}"
 
 
 # ── R6: the seed write loop fails closed ──────────────────────────────────────

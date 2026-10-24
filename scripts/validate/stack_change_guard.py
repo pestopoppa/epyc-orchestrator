@@ -358,7 +358,6 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         ),
         exclude_globs=(
             "scripts/validate/stack_change_guard.py",
-            "scripts/benchmark/deprecated/**",
         ),
         remediation="remove from live behavior or mark explicit legacy/test-only",
         derive_retired_roles=True,
