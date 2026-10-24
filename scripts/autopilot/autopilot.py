@@ -10649,6 +10649,9 @@ def _run_loop_inner(
         trial_infra_digest = fingerprint_digest(trial_infra_fingerprint)
         trial_regime_digest = regime_digest(trial_infra_fingerprint)
         trial_served = _served_content_for_row(trial_served_content)
+        trial_identity = action_config_identity(effective_action, trial_regime_digest, trial_served)
+        # B5-M2: the same key as the replay's representative_cluster_key on this trial's row.
+        trial_cluster_key = trial_identity or _config_fingerprint(effective_action)
         # Re-review B1: only an action that names its served-config delta may join a
         # reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw
         # per-trial points exactly as before.
@@ -10658,8 +10661,7 @@ def _run_loop_inner(
             and bool(verdict.passed)
             and rate_measured
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
-            and action_config_identity(effective_action, trial_regime_digest, trial_served)
-            is not None
+            and trial_identity is not None
         )
         frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
         provisional_row = _provisional_trial_row(
@@ -10690,7 +10692,7 @@ def _run_loop_inner(
             learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
         ):
-            fingerprint = _config_fingerprint(effective_action)
+            fingerprint = trial_cluster_key
             if rate_measured:
                 pareto_status, rep_objs = archive.upsert_representative(
                     fingerprint,
@@ -10778,7 +10780,7 @@ def _run_loop_inner(
                 # Decision (c): same median-representative admission as the replay applies
                 # to the stamped row, so the live archive and journal authority agree.
                 pareto_status, _rep_objs = archive.upsert_representative(
-                    _config_fingerprint(effective_action),
+                    trial_cluster_key,
                     eval_result.tier,
                     objectives_from(eval_result),
                     trial_id=trial_counter,

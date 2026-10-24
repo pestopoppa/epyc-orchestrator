@@ -35,7 +35,7 @@ from src.autopilot_core.tier_specs import (
     rate_axis_unit,
     seq_task_rate_qph_from,
 )
-from src.autopilot_core.action_identity import config_fingerprint_from_row, row_config_identity
+from src.autopilot_core.action_identity import representative_cluster_key, row_config_identity
 from src.autopilot_core.pareto_math import median_objectives
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.authority_consent import (
@@ -3004,7 +3004,7 @@ class SafetyGate:
             return False
         _view, frontier = found
         row = _pending_candidate_row(source_trial_id)
-        fingerprint = config_fingerprint_from_row(row) if row is not None else None
+        fingerprint = representative_cluster_key(row) if row is not None else None
         for entry in frontier:
             same_config = bool(fingerprint) and getattr(entry, "config_fingerprint", "") == fingerprint
             same_trial = source_trial_id is not None and int(entry.trial_id) == int(source_trial_id)

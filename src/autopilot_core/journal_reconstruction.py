@@ -6,7 +6,7 @@ import copy
 from datetime import datetime
 from typing import Any, Iterable, Sequence
 
-from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.action_identity import representative_cluster_key
 from src.autopilot_core.learning_exclusions import (
     row_is_representative_member,
 )
@@ -332,8 +332,7 @@ def reconstruct_archive_from_journal_rows(
             t0_audit.append(shaped)
             continue
         if trusted_within_noise:
-            fingerprint = config_fingerprint_from_row(row)
-            key = (tier, fingerprint)
+            key = (tier, representative_cluster_key(row))
             cluster = repr_clusters.setdefault(
                 key,
                 {"objs": [], "last_tid": -1, "shaped": shaped},

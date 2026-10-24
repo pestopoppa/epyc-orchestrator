@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.action_identity import representative_cluster_key
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
     fold_frontier_entry,
@@ -149,7 +149,7 @@ def representative_replay_state_from_rows(
             trial_id = int(row.get("trial_id"))
         except (TypeError, ValueError):
             continue
-        key = (int(shaped["eval_tier"]), config_fingerprint_from_row(row))
+        key = (int(shaped["eval_tier"]), representative_cluster_key(row))
         cluster = clusters.setdefault(
             key,
             {
@@ -428,7 +428,7 @@ def _fold_representative_tail_into_snapshot(
         except (TypeError, ValueError):
             continue
         if _row_requires_prefix_raw_samples(row):
-            key = (tier, config_fingerprint_from_row(row))
+            key = (tier, representative_cluster_key(row))
             cluster = clusters.setdefault(
                 key,
                 {

@@ -163,3 +163,10 @@ def row_config_identity(row: dict[str, Any]) -> str | None:
     details = row.get("eval_details") if isinstance(row, dict) else None
     served = details.get(SERVED_CONTENT_KEY) if isinstance(details, dict) else None
     return action_config_identity(action_from_journal_row(row), row_regime_digest(row), served)
+
+
+def representative_cluster_key(row: dict[str, Any]) -> str:
+    """Archive representative-cluster key: the served-config identity the promotion gate
+    counts reproductions by, else the action fingerprint (identity-less measurement rows
+    such as ``seed_batch``). B5-M2: one key for replay, snapshot fold and the live archive."""
+    return row_config_identity(row) or config_fingerprint_from_row(row)
