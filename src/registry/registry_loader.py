@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -951,6 +952,7 @@ def main() -> int:
 _CTK_LOADER: "RegistryLoader | None" = None
 _CTK_RETRY_AFTER_S = 30.0
 _CTK_RETRY_AT = 0.0  # monotonic; a failed load is not retried before this
+_CTK_LOAD_LOCK = threading.Lock()
 
 
 def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
@@ -962,17 +964,22 @@ def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
     """
     global _CTK_LOADER, _CTK_RETRY_AT
     if _CTK_LOADER is None:
-        if time.monotonic() < _CTK_RETRY_AT:
-            return None
-        try:
-            _CTK_LOADER = RegistryLoader(validate_paths=False)
-        except Exception as exc:
-            _CTK_RETRY_AT = time.monotonic() + _CTK_RETRY_AFTER_S
-            logger.warning(
-                "registry load failed; per-role chat_template_kwargs are dropped "
-                "(retry in %.0f s): %s", _CTK_RETRY_AFTER_S, exc,
-            )
-            return None
+        # Serialize only the first load/failure transition. Without the lock,
+        # concurrent request threads all observe an empty loader and bypass
+        # the failure backoff while the first construction is still running.
+        with _CTK_LOAD_LOCK:
+            if _CTK_LOADER is None:
+                if time.monotonic() < _CTK_RETRY_AT:
+                    return None
+                try:
+                    _CTK_LOADER = RegistryLoader(validate_paths=False)
+                except Exception as exc:
+                    _CTK_RETRY_AT = time.monotonic() + _CTK_RETRY_AFTER_S
+                    logger.warning(
+                        "registry load failed; per-role chat_template_kwargs are dropped "
+                        "(retry in %.0f s): %s", _CTK_RETRY_AFTER_S, exc,
+                    )
+                    return None
     try:
         return _CTK_LOADER.get_role_chat_template_kwargs(role_name)
     except Exception:
