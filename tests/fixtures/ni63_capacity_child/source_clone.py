@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import sys
 import sysconfig
 import tempfile
 from pathlib import Path
