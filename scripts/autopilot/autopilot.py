@@ -11849,6 +11849,7 @@ def _append_baseline_promotion_event(
                 "n_questions": eval_result.n_questions,
                 "pareto_status": pareto_status,
                 "refusal_detail": baseline_update.reason,
+                "refusal_code": getattr(baseline_update, "refusal_code", ""),
             },
             baseline_state=baseline_state,
             infra_fingerprint=infra_fingerprint,

@@ -304,3 +304,96 @@ def test_baseline_eligibility_is_explicit_decision_with_proof(tmp_path):
     assert isinstance(elig, bool)
     assert proof.get("speed_metric_mode") == "aggregate_batch_tps"
     assert ("matrix_status" in proof) or ("error" in proof), "must record topology/matrix proof or error"
+
+
+def _refusal_case(tmp_path, monkeypatch, case: str):
+    """B2-09: a gate + result driven down exactly one refusal path of update_baseline."""
+    import safety_gate as sg  # type: ignore[import-not-found]
+
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=case.startswith("seq"))
+    monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
+    entry = _repro_entry()
+    result, kwargs = _result(), {"source_trial_id": 123}
+    if case == "ineligible":
+        monkeypatch.setattr(g, "_baseline_eligible", lambda result: (False, "stale", {}))
+    elif case == "unmeasured":
+        result.quality_measured = False
+    elif case == "rebaseline":
+        g._eval_quality_era = "E99"
+    elif case == "seq_unavailable":
+        kwargs["seq_confirmed"] = None
+    elif case == "seq_not_confirmed":
+        kwargs["seq_confirmed"] = False
+    elif case == "audit_tier":
+        result.tier = 0
+    elif case == "scale":
+        result.quality = 3.5
+    elif case == "monotonic":
+        g.baseline.baselines_by_tier[2] = 2.95
+    elif case == "guard":
+        g.baseline.baselines_by_tier[2] = 2.0
+        sg.configure_promotion_guard_archive(lambda **_: (_ for _ in ()).throw(RuntimeError("x")))
+    elif case == "above_max":
+        monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.4))
+        monkeypatch.setattr(
+            SafetyGate, "_archive_frontier_trial_ids", staticmethod(lambda tier=None: frozenset())
+        )
+    elif case == "no_quantum":
+        result.n_questions = 0
+    elif case == "not_representative":
+        entry = None
+    elif case == "objective_tuple":
+        entry = dict(entry, objectives=())
+    elif case == "too_few":
+        entry = _repro_entry(n_reproductions=1)
+    elif case == "median_below_quantum":
+        g.baseline.baselines_by_tier[2] = 2.85
+        entry = _repro_entry(quality=2.86)
+    elif case == "pin_moved":
+        monkeypatch.setattr(g.baseline, "pin_moved", lambda pin: True)
+    monkeypatch.setattr(
+        SafetyGate, "_archive_frontier_entry", staticmethod(lambda source_trial_id, tier=None: entry)
+    )
+    return g, result, kwargs
+
+
+@pytest.mark.parametrize(
+    "case, code, needle",
+    [
+        ("ineligible", "refused_ineligible", "stale"),
+        ("unmeasured", "refused_quality_not_measured", "NOT MEASURED"),
+        ("rebaseline", "refused_quality_rebaseline_required", "RE-BASELINE"),
+        ("seq_unavailable", "refused_seq_inputs_unavailable", "UNAVAILABLE"),
+        ("seq_not_confirmed", "skipped_seq_not_confirmed", "not confirmed"),
+        ("audit_tier", "refused_audit_only_tier", "audit-only"),
+        ("scale", "refused_quality_scale", "quality outside valid scale"),
+        ("monotonic", "skipped_not_monotonic", "not a monotonic"),
+        ("guard", "refused_guard_unavailable", "promotion guard archive unavailable"),
+        ("above_max", "refused_above_archive_max", "exceeds same-tier archive max"),
+        ("no_quantum", "refused_no_quantum", "missing n_questions"),
+        ("not_representative", "refused_not_frontier_representative", "not a same-tier frontier"),
+        ("objective_tuple", "refused_objective_tuple", "missing objective tuple"),
+        ("too_few", "refused_too_few_reproductions", "reproductions; source has 1"),
+        ("median_below_quantum", "refused_repro_median_below_quantum", "does not clear baseline"),
+        ("pin_moved", "refused_reference_moved", "reference moved"),
+    ],
+)
+def test_every_refusal_carries_a_refusal_code(tmp_path, monkeypatch, case, code, needle):
+    import safety_gate as sg  # type: ignore[import-not-found]
+
+    g, result, kwargs = _refusal_case(tmp_path, monkeypatch, case)
+    try:
+        update = g.update_baseline(result, **kwargs)
+    finally:
+        sg.configure_promotion_guard_archive(None)
+    assert not update.updated
+    assert update.refusal_code == code
+    assert needle in update.reason
+
+
+def test_promotion_carries_no_refusal_code_and_its_rule(tmp_path, monkeypatch):
+    g, result, kwargs = _refusal_case(tmp_path, monkeypatch, "promote")
+    update = g.update_baseline(result, **kwargs)
+    assert update.updated and update.refusal_code == ""
+    assert update.promotion_rule == "frontier"

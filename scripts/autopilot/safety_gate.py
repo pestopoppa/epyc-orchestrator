@@ -1687,6 +1687,19 @@ class BaselineUpdateResult:
     # caller can journal an append-only ``speed_axis_reseed`` receipt. Empty unless
     # ``speed_reseeded`` is True.
     speed_reseed: dict[str, Any] = field(default_factory=dict)
+    # B2-09: machine token naming the refusal path (``refused_*`` / ``skipped_*``); empty on a
+    # completed promotion. The prose ``reason`` is for humans and may be reworded freely.
+    refusal_code: str = ""
+
+
+@dataclass(frozen=True)
+class _Refusal:
+    code: str
+    reason: str
+
+
+REFUSAL_NOT_MONOTONIC = "skipped_not_monotonic"
+_NO_QUANTUM_REASON = "missing n_questions/per-suite counts for reproduced baseline promotion"
 
 
 # ── HIL-6 S4: side-effect-free verdict legs ─────────────────────────────────────
@@ -3092,8 +3105,8 @@ class SafetyGate:
 
     def _select_promotion_rule(
         self, tier: int, previous_quality: float | None, source_trial_id: int | None
-    ) -> tuple[str, str]:
-        """(rule, refusal reason or ""). Rules: frontier | empty_frontier_repro | seed.
+    ) -> tuple[str, _Refusal | None]:
+        """(rule, refusal or None). Rules: frontier | empty_frontier_repro | seed.
 
         Never fails open: an unavailable guard archive refuses promotion over an existing
         baseline (a tier with no baseline may still seed — bootstrap is never blocked).
@@ -3101,21 +3114,22 @@ class SafetyGate:
         view = _promotion_guard_view()
         if view.error:
             if previous_quality is None:
-                return PROMOTION_RULE_SEED, ""
-            return "refused_guard_unavailable", (
+                return PROMOTION_RULE_SEED, None
+            return "refused_guard_unavailable", _Refusal(
+                "refused_guard_unavailable",
                 f"promotion guard archive unavailable ({view.error}); promotion over an "
-                "existing baseline REFUSED (fail-closed)"
+                "existing baseline REFUSED (fail-closed)",
             )
         if view.scope != "live":
             # Legacy all-era fallback keeps its pre-2026-09-16 semantics: check against the
             # frontier when it has a point, otherwise a genuinely fresh store (bootstrap).
             if self._archive_best_quality(tier) is not None:
-                return PROMOTION_RULE_FRONTIER, ""
+                return PROMOTION_RULE_FRONTIER, None
             if previous_quality is None:
-                return PROMOTION_RULE_SEED, ""
-            return PROMOTION_RULE_UNGUARDED, ""
+                return PROMOTION_RULE_SEED, None
+            return PROMOTION_RULE_UNGUARDED, None
         if previous_quality is None and self._prior_frontier_empty(tier, source_trial_id):
-            return PROMOTION_RULE_SEED, ""
+            return PROMOTION_RULE_SEED, None
         rule = (
             PROMOTION_RULE_EMPTY_FRONTIER_REPRO
             if self._prior_frontier_empty(tier, source_trial_id)
@@ -3131,12 +3145,13 @@ class SafetyGate:
                 or (candidate.get("config_snapshot") or {}).get("type")
                 or "?"
             )
-            return rule, (
+            return rule, _Refusal(
+                "refused_no_config_identity",
                 f"candidate action {action_type!r} carries no served-config identity (only "
                 "structural_experiment flags / numeric_trial params do); its reproductions "
-                "would span config changes, so it cannot promote a baseline; REFUSED"
+                "would span config changes, so it cannot promote a baseline; REFUSED",
             )
-        return rule, ""
+        return rule, None
 
     @staticmethod
     def _archive_frontier_entry(
@@ -3181,20 +3196,22 @@ class SafetyGate:
         tier: int,
         previous_quality: float | None,
         source_trial_id: int | None,
-    ) -> str | tuple[EvalResult, float | None]:
-        """Rule (b): a refusal reason, or (promotion_result, promoted q/h)."""
+    ) -> _Refusal | tuple[EvalResult, float | None]:
+        """Rule (b): a refusal, or (promotion_result, promoted q/h)."""
         n_min = empty_frontier_min_repro()
         found = self._candidate_live_reproductions(tier, source_trial_id)
         if found is None:
-            return (
+            return _Refusal(
+                "refused_b_no_candidate_row",
                 "empty-frontier rule (b): the candidate's journal row was not supplied, so its "
-                "config and live-regime reproductions cannot be identified; REFUSED"
+                "config and live-regime reproductions cannot be identified; REFUSED",
             )
         fingerprint, reps = found
         if not fingerprint:
-            return (
+            return _Refusal(
+                "refused_no_config_identity",
                 "empty-frontier rule (b): the candidate carries no served-config identity; "
-                "REFUSED"
+                "REFUSED",
             )
         trial_ids = sorted({int(r["trial_id"]) for r in reps})
         log.info(
@@ -3203,27 +3220,32 @@ class SafetyGate:
             tier, fingerprint, len(trial_ids), n_min, trial_ids,
         )
         if len(trial_ids) < n_min:
-            return (
+            return _Refusal(
+                "refused_b_too_few_reproductions",
                 f"empty-frontier rule (b): candidate config {fingerprint} has {len(trial_ids)} "
                 f"of {n_min} required independent live-regime reproductions "
                 "(COMPARABLE/UNVERIFIED only); REFUSED until the frontier fills or the config "
-                "reproduces"
+                "reproduces",
             )
         quantum = self._quality_quantum(result)
         if quantum is None:
-            return "missing n_questions/per-suite counts for reproduced baseline promotion"
+            return _Refusal("refused_no_quantum", _NO_QUANTUM_REASON)
         by_id = {int(r["trial_id"]): r for r in reps}
         median = median_objectives([list(by_id[t]["objectives"]) for t in trial_ids])
         policy = _promotion_guard_view().objective_policy
         fields = promotion_fields_from_objectives(tuple(median), tier, policy)
         if fields is None:
-            return "empty-frontier rule (b): reproduction median does not match the tier axes"
+            return _Refusal(
+                "refused_b_median_axes",
+                "empty-frontier rule (b): reproduction median does not match the tier axes",
+            )
         required = float(previous_quality or 0.0) + quantum
         if fields["quality"] + BASELINE_ARCHIVE_TOLERANCE < required:
-            return (
+            return _Refusal(
+                "refused_b_median_below_quantum",
                 f"empty-frontier rule (b): reproduced median q={fields['quality']:.3f} does not "
                 f"clear baseline {float(previous_quality or 0.0):.3f} by one quantum "
-                f"({quantum:.4f})"
+                f"({quantum:.4f})",
             )
         qph = fields.pop(PROMOTION_FIELD_TASK_RATE_QPH, None)
         return replace(result, **fields), qph
@@ -3248,14 +3270,10 @@ class SafetyGate:
         global _GUARD_CONTEXT
         previous_context = _GUARD_CONTEXT
         _GUARD_CONTEXT = {"pending_rows": tuple(pending_journal_rows or ())}
-        self._promotion_rule = ""
         try:
-            update = self._update_baseline_impl(
-                result, source_trial_id, seq_confirmed=seq_confirmed
-            )
+            return self._update_baseline_impl(result, source_trial_id, seq_confirmed=seq_confirmed)
         finally:
             _GUARD_CONTEXT = previous_context
-        return replace(update, promotion_rule=self._promotion_rule)
 
     def _update_baseline_impl(
         self,
@@ -3291,6 +3309,26 @@ class SafetyGate:
         # own write must not be reported against itself.
         entry_pin = self.baseline.pin_tier(tier, register=False)
         eligible, reason, proof = self._baseline_eligible(result)
+        rule = ""
+
+        def refuse(
+            code: str,
+            why: str,
+            *,
+            level: int | None = logging.WARNING,
+            verb: str = "REFUSED",
+            new_quality: float | None = None,
+            **extra: Any,
+        ) -> BaselineUpdateResult:
+            """B2-09: log and build one refusal; ``code`` is the machine-readable path."""
+            if level is not None:
+                log.log(level, "Baseline update %s — %s", verb, why)
+            quality = result.quality if new_quality is None else new_quality
+            return BaselineUpdateResult(
+                False, why, tier, previous_quality, quality, proof,
+                promotion_rule=rule, refusal_code=code, **extra,
+            )
+
         if not eligible:
             # B8 / SG-0: a frozen baseline ratchet is a loud failure, not a quiet skip —
             # nothing can promote until the operator refreshes the matrix, so log at ERROR
@@ -3303,15 +3341,7 @@ class SafetyGate:
                 reason,
                 proof,
             )
-            return BaselineUpdateResult(
-                False,
-                reason,
-                tier,
-                previous_quality,
-                result.quality,
-                proof,
-                ineligible_reason=reason,
-            )
+            return refuse("refused_ineligible", reason, level=None, ineligible_reason=reason)
         # ETR-2 (2026-07-20 audit): refuse to write a baseline from an UNMEASURED quality.
         # A placeholder 0.0 can only ever fail the monotonic check, but a placeholder is not
         # always 0.0-shaped: the flag is the only thing that separates "nothing was scored"
@@ -3327,14 +3357,8 @@ class SafetyGate:
                 "promotion REFUSED (ETR-2, fail-closed). Remediation: re-run the eval so a "
                 "real quality is scored (quality_measured=True) before it can ratchet."
             )
-            log.error("Baseline update REFUSED — %s", reason)
-            return BaselineUpdateResult(
-                False,
-                reason,
-                tier,
-                previous_quality,
-                result.quality,
-                proof,
+            return refuse(
+                "refused_quality_not_measured", reason, level=logging.ERROR,
                 ineligible_reason="quality_not_measured",
             )
         # Defect #3: eval-instrument re-baseline hold. A promotion computed against (or that
@@ -3366,14 +3390,8 @@ class SafetyGate:
                     f"measurement (autopilot_speed_era={self._autopilot_speed_era}, "
                     f"frontdoor_speed={self.baseline.frontdoor_speed:.1f} t/s)."
                 )
-            log.error("Baseline update REFUSED — %s", reason)
-            return BaselineUpdateResult(
-                False,
-                reason,
-                tier,
-                previous_quality,
-                result.quality,
-                proof,
+            return refuse(
+                "refused_quality_rebaseline_required", reason, level=logging.ERROR,
                 ineligible_reason="quality_rebaseline_required",
                 speed_reseeded=speed_reseeded,
                 speed_reseed=dict(self._last_speed_reseed) if speed_reseeded else {},
@@ -3400,14 +3418,8 @@ class SafetyGate:
                 "evidence so the anytime-valid e-process can render a confirmed/refuted "
                 "verdict before this candidate can ratchet the baseline."
             )
-            log.warning("Baseline update REFUSED — %s", reason)
-            return BaselineUpdateResult(
-                False,
-                reason,
-                tier,
-                previous_quality,
-                result.quality,
-                proof,
+            return refuse(
+                "refused_seq_inputs_unavailable", reason,
                 seq_refused_reason="seq_inputs_unavailable",
             )
         if self.use_sequential and seq_confirmed is not None and not seq_confirmed:
@@ -3415,21 +3427,14 @@ class SafetyGate:
                 "sequential verdict not confirmed (E_quality/E_rate_noninf below the "
                 "confirm threshold); baseline promotion blocked (LEDGER-W4)"
             )
-            log.info("Baseline update skipped — %s", reason)
-            return BaselineUpdateResult(
-                False,
-                reason,
-                tier,
-                previous_quality,
-                result.quality,
-                proof,
+            return refuse(
+                "skipped_seq_not_confirmed", reason, level=logging.INFO, verb="skipped",
                 seq_refused_reason="seq_not_confirmed",
             )
         if tier < MIN_FRONTIER_EVAL_TIER:
-            reason = f"tier {tier} is audit-only and cannot update production baselines"
-            log.warning("Baseline update REFUSED — %s", reason)
-            return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof
+            return refuse(
+                "refused_audit_only_tier",
+                f"tier {tier} is audit-only and cannot update production baselines",
             )
         if not 0.0 <= result.quality <= QUALITY_MAX:
             log.error(
@@ -3438,28 +3443,21 @@ class SafetyGate:
                 result.quality,
                 QUALITY_MAX,
             )
-            return BaselineUpdateResult(
-                False, "quality outside valid scale", tier, previous_quality, result.quality, proof
-            )
+            return refuse("refused_quality_scale", "quality outside valid scale", level=None)
         if previous_quality is not None and result.quality <= previous_quality:
-            reason = (
+            return refuse(
+                REFUSAL_NOT_MONOTONIC,
                 f"not a monotonic same-tier improvement: T{tier} q={result.quality:.3f} "
-                f"<= baseline {previous_quality:.3f}"
-            )
-            log.info("Baseline update skipped — %s", reason)
-            return BaselineUpdateResult(
-                False, reason, tier, previous_quality, result.quality, proof
+                f"<= baseline {previous_quality:.3f}",
+                level=logging.INFO,
+                verb="skipped",
             )
         rule, refusal = self._select_promotion_rule(tier, previous_quality, source_trial_id)
-        self._promotion_rule = rule
         log.info(
             "Baseline promotion rule for T%d source_trial_id=%s: %s", tier, source_trial_id, rule
         )
-        if refusal:
-            log.error("Baseline update REFUSED — %s", refusal)
-            return BaselineUpdateResult(
-                False, refusal, tier, previous_quality, result.quality, proof
-            )
+        if refusal is not None:
+            return refuse(refusal.code, refusal.reason, level=logging.ERROR)
         promotion_result = result
         promoted_task_rate_qph: float | None = None
         if rule == PROMOTION_RULE_EMPTY_FRONTIER_REPRO:
@@ -3468,11 +3466,8 @@ class SafetyGate:
             # AP-55-comparable reproductions under the live regime; the promoted fields are
             # the median over exactly those reproductions.
             outcome = self._empty_frontier_promotion(result, tier, previous_quality, source_trial_id)
-            if isinstance(outcome, str):
-                log.warning("Baseline update REFUSED — %s", outcome)
-                return BaselineUpdateResult(
-                    False, outcome, tier, previous_quality, result.quality, proof
-                )
+            if isinstance(outcome, _Refusal):
+                return refuse(outcome.code, outcome.reason)
             promotion_result, promoted_task_rate_qph = outcome
             archive_max = None
         elif rule == PROMOTION_RULE_FRONTIER:
@@ -3501,31 +3496,19 @@ class SafetyGate:
                     tier,
                     source_trial_id,
                 )
-                return BaselineUpdateResult(
-                    False,
-                    "quality exceeds same-tier archive max",
-                    tier,
-                    previous_quality,
-                    result.quality,
-                    proof,
+                return refuse(
+                    "refused_above_archive_max", "quality exceeds same-tier archive max", level=None
                 )
         if archive_max is not None:
             quantum = self._quality_quantum(result)
             if quantum is None:
-                reason = "missing n_questions/per-suite counts for reproduced baseline promotion"
-                log.warning("Baseline update REFUSED — %s", reason)
-                return BaselineUpdateResult(
-                    False, reason, tier, previous_quality, result.quality, proof
-                )
+                return refuse("refused_no_quantum", _NO_QUANTUM_REASON)
             repro_entry = self._archive_frontier_entry(source_trial_id, tier)
             if repro_entry is None:
-                reason = (
+                return refuse(
+                    "refused_not_frontier_representative",
                     "source trial is not a same-tier frontier representative; "
-                    "baseline promotions require reproduced frontier evidence"
-                )
-                log.warning("Baseline update REFUSED — %s", reason)
-                return BaselineUpdateResult(
-                    False, reason, tier, previous_quality, result.quality, proof
+                    "baseline promotions require reproduced frontier evidence",
                 )
             objectives = tuple(repro_entry.get("objectives") or ())
             repro_fields = promotion_fields_from_objectives(
@@ -3534,31 +3517,27 @@ class SafetyGate:
                 str(repro_entry.get("objective_policy") or LEGACY_OBJECTIVE_POLICY),
             )
             if repro_fields is None:
-                reason = "frontier representative missing objective tuple"
-                log.warning("Baseline update REFUSED — %s", reason)
-                return BaselineUpdateResult(
-                    False, reason, tier, previous_quality, result.quality, proof
+                return refuse(
+                    "refused_objective_tuple", "frontier representative missing objective tuple"
                 )
             n_reproductions = int(repro_entry.get("n_reproductions", 1) or 1)
             median_quality = repro_fields["quality"]
             required_quality = float(previous_quality or 0.0) + quantum
             if n_reproductions < BASELINE_PROMOTION_REPRO_MIN:
-                reason = (
+                return refuse(
+                    "refused_too_few_reproductions",
                     f"baseline promotion needs >= {BASELINE_PROMOTION_REPRO_MIN} "
-                    f"reproductions; source has {n_reproductions}"
-                )
-                log.info("Baseline update skipped — %s", reason)
-                return BaselineUpdateResult(
-                    False, reason, tier, previous_quality, result.quality, proof
+                    f"reproductions; source has {n_reproductions}",
+                    level=logging.INFO,
+                    verb="skipped",
                 )
             if median_quality + BASELINE_ARCHIVE_TOLERANCE < required_quality:
-                reason = (
+                return refuse(
+                    "refused_repro_median_below_quantum",
                     f"reproduced median q={median_quality:.3f} does not clear baseline "
-                    f"{previous_quality:.3f} by one quantum ({quantum:.4f})"
-                )
-                log.info("Baseline update skipped — %s", reason)
-                return BaselineUpdateResult(
-                    False, reason, tier, previous_quality, result.quality, proof
+                    f"{previous_quality:.3f} by one quantum ({quantum:.4f})",
+                    level=logging.INFO,
+                    verb="skipped",
                 )
             promoted_task_rate_qph = repro_fields.pop(PROMOTION_FIELD_TASK_RATE_QPH, None)
             promotion_result = replace(result, **repro_fields)
@@ -3578,16 +3557,14 @@ class SafetyGate:
         # impossible rather than merely unobserved — the same fail-closed shape as
         # the archive-max guard, one layer down.
         if self.baseline.pin_moved(entry_pin):
-            reason = (
+            return refuse(
+                "refused_reference_moved",
                 "baseline reference moved during promotion (tier revision "
                 f"{entry_pin.revision} -> {self.baseline.tier_revision(tier)}): the "
                 "monotonic/quantum gates compared against a reference that no longer "
                 "exists. REFUSED — re-run the promotion against the current baseline "
-                "(EV-14c: a silently-moved reference is impossible)."
-            )
-            log.warning("Baseline update REFUSED — %s", reason)
-            return BaselineUpdateResult(
-                False, reason, tier, previous_quality, promotion_result.quality, proof
+                "(EV-14c: a silently-moved reference is impossible).",
+                new_quality=promotion_result.quality,
             )
         self.baseline.update_tier(promotion_result, task_rate_qph=promoted_task_rate_qph)
         # Defect #4: stamp the era this baseline was promoted under so a future boundary can
@@ -3615,7 +3592,8 @@ class SafetyGate:
             promotion_result.speed,
         )
         return BaselineUpdateResult(
-            True, reason, tier, previous_quality, promotion_result.quality, proof
+            True, reason, tier, previous_quality, promotion_result.quality, proof,
+            promotion_rule=rule,
         )
 
     def reset_failures(self) -> None:
