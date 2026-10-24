@@ -1356,7 +1356,11 @@ class TestWorkerPoolBatch:
                 prims._worker_pool_batch(["prompt"], "worker_code")
 
             assert prims.get_request_prompt_tokens() is None
-            assert prims.get_request_output_usage() == (None, "unknown", [])
+            assert prims.get_request_output_usage() == (
+                None,
+                "unknown",
+                ["server:chat"],
+            )
 
     def test_worker_pool_batch_routes_correctly(self):
         """Test worker pool batch routes to correct task type."""

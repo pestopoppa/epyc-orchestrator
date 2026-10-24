@@ -58,7 +58,11 @@ def test_output_usage_is_unknown_for_no_calls_missing_counts_and_pending_calls()
     with primitives.request_context(request_id="pending"):
         attempt = primitives._begin_request_output_tokens()
         primitives._record_request_output_tokens(4, "server:completion")
-        assert primitives.get_request_output_usage() == (None, "unknown", [])
+        assert primitives.get_request_output_usage() == (
+            None,
+            "unknown",
+            ["server:completion"],
+        )
         primitives._record_request_output_tokens(3, "server:completion", attempt)
         assert primitives.get_request_output_usage() == (
             7,
@@ -73,7 +77,11 @@ def test_unmetered_generation_invalidates_complete_output_sum():
     with primitives.request_context(request_id="formalizer"):
         primitives._record_request_output_tokens(11, "server:completion")
         primitives.mark_request_output_usage_unknown()
-        assert primitives.get_request_output_usage() == (None, "unknown", [])
+        assert primitives.get_request_output_usage() == (
+            None,
+            "unknown",
+            ["server:completion"],
+        )
 
 
 def test_output_usage_isolated_between_concurrent_request_contexts_and_threads():
