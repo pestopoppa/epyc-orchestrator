@@ -1198,12 +1198,18 @@ def _artifact_integrity_step(config: StackChangePipelineConfig) -> PipelineStep:
     """SEC-ART-1/3/4: artifact pins, served-template pins and the community-uploader review gate.
 
     Malformed pins and a community tool-bearing role without a complete review record are ALWAYS errors.
-    Missing pins are warnings until ``REGISTRY_ARTIFACT_PINS_STRICT`` / ``REGISTRY_TEMPLATE_PINS_STRICT``
-    (or ``runtime_defaults.artifact_integrity.{pins_strict,template_pins_strict}``) flip them to errors.
+    Missing artifact pins (and a tool-bearing role with no uploader_class) are errors by default since
+    SEC-ART-1.1 (``REGISTRY_ARTIFACT_PINS_STRICT=0`` opts out), the same rule as the registry validator.
+    Missing template pins stay warnings until ``REGISTRY_TEMPLATE_PINS_STRICT`` /
+    ``runtime_defaults.artifact_integrity.template_pins_strict`` flips them.
     """
     from src.registry import artifact_integrity as ai
     from src.registry.artifact_review import check_uploader_review
-    from src.registry.registry_validator import check_artifact_pins, check_template_pins
+    from src.registry.registry_validator import (
+        check_artifact_pins,
+        check_template_pins,
+        validator_artifact_pins_strict,
+    )
 
     try:
         registry = yaml.safe_load(config.lean_registry.read_text()) or {}
@@ -1211,7 +1217,8 @@ def _artifact_integrity_step(config: StackChangePipelineConfig) -> PipelineStep:
         return PipelineStep(name="artifact_integrity", status="skipped", warnings=[f"lean registry unreadable: {exc}"])
     except yaml.YAMLError as exc:
         return PipelineStep(name="artifact_integrity", status="failed", errors=[f"lean registry is not valid YAML: {exc}"])
-    pins_strict = ai.strict_enabled(ai.PINS_STRICT, registry)
+    pins_strict = validator_artifact_pins_strict()
+    ledger_strict = ai.strict_enabled(ai.PINS_STRICT, registry)
     tmpl_strict = ai.strict_enabled(ai.TEMPLATE_PINS_STRICT, registry)
     malformed, missing = check_artifact_pins(registry)
     t_malformed, t_missing = check_template_pins(registry)
@@ -1226,7 +1233,8 @@ def _artifact_integrity_step(config: StackChangePipelineConfig) -> PipelineStep:
         status="failed" if errors else "ok",
         errors=errors,
         warnings=warnings,
-        details=[f"pins_strict={pins_strict} template_pins_strict={tmpl_strict}"],
+        details=[f"artifact_pins_strict={pins_strict} launcher_ledger_strict={ledger_strict} "
+                 f"template_pins_strict={tmpl_strict}"],
     )
 
 

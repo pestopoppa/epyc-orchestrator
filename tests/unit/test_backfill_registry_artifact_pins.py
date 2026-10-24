@@ -118,3 +118,33 @@ def test_split_gguf_with_one_bad_shard_pins_nothing():
     sizes = {"m-00001-of-00003.gguf": 100, "m-00002-of-00003.gguf": 200, "m-00003-of-00003.gguf": 301}
     rows = bf.plan(reg, {}, get, stat_size=lambda p: sizes.get(p.rsplit("/", 1)[-1]))
     assert rows[0]["status"] == "needs_local_hash" and "00003" in rows[0]["reason"]
+
+
+def test_relative_path_resolves_against_model_base_path():
+    """SEC-ART-1.1: `QuantFactory/<repo>/<file>.gguf` (relative, as draft_qwen25 is declared) derives its repo
+    from the base-resolved path, exactly as the launcher's pin_index resolves it."""
+    reg = {"runtime_defaults": {"model_base_path": M},
+           "roles": {"a": {"model": {"path": "org/repo/m-Q8_0.gguf"}}}}
+    seen: list[str] = []
+
+    def stat(p):
+        seen.append(p)
+        return sizes(p)
+    rows = bf.plan(reg, {}, fake_get([]), stat_size=stat)
+    assert rows[0]["status"] == "pin" and rows[0]["hf_repo"] == "org/repo" and rows[0]["path"] == f"{M}/org/repo/m-Q8_0.gguf"
+    assert seen == [f"{M}/org/repo/m-Q8_0.gguf"]
+
+
+def test_throttled_get_is_sequential_spaced_and_logged():
+    now = [0.0]
+    slept: list[float] = []
+    log: list[str] = []
+
+    def sleep(s):
+        slept.append(s)
+        now[0] += s
+    get = bf.throttled(lambda u: u.upper(), 1.5, clock=lambda: now[0], sleep=sleep, log=log)
+    assert get("a") == "A"                       # first call never waits
+    now[0] += 0.5
+    assert get("b") == "B"
+    assert slept == [1.0] and log == ["a", "b"]

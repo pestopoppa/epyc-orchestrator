@@ -21,7 +21,8 @@ The review record is a YAML file with:
 that changes generation (chat template file/kwargs, ...). The gate (``check_uploader_review``) runs inside
 ``registry_validator.validate_all`` (every ``orchestrator_stack.py start``) and the stack-change pipeline's
 ``artifact_integrity`` step. A community role without a complete record is an ERROR; a tool-bearing role with
-no ``uploader_class`` at all is a WARNING until the strict switch (``REGISTRY_ARTIFACT_PINS_STRICT``) flips.
+no ``uploader_class`` at all is an ERROR in the default strict mode (SEC-ART-1.1, 2026-10-24) and a WARNING only
+when ``REGISTRY_ARTIFACT_PINS_STRICT=0``.
 
 Which uploaders count as ``allowlisted_requantizer`` is an OPERATOR policy input; this module never infers it.
 """

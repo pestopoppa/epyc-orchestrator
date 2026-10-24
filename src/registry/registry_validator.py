@@ -66,9 +66,12 @@ log = logging.getLogger(__name__)
 # SEC-ART-1 (handoffs/active/model-artifact-integrity.md): every lineup role's GGUF is
 # traceable to a pinned upstream revision and a recorded sha256. The three fields live on
 # `roles.<role>.model` (they pass through registry_compiler.compile_lean unchanged).
-# Missing fields WARN until the backfill lands; set REGISTRY_ARTIFACT_PINS_STRICT=1 (or pass
-# strict_artifact_pins=True / --strict-artifact-pins) to make them errors. MALFORMED values
-# are always errors -- a wrong pin is worse than none.
+# SEC-ART-1.1 (2026-10-24, lineup backfilled): missing fields on a lineup role are ERRORS by
+# default. REGISTRY_ARTIFACT_PINS_STRICT=0 (or strict_artifact_pins=False) is the explicit opt-out
+# (warning only); =1 / --strict-artifact-pins forces strict. The registry flag
+# runtime_defaults.artifact_integrity.pins_strict does NOT relax this check: it governs only the
+# launcher's fingerprint-ledger refusal (SEC-ART-2). MALFORMED values are always errors -- a wrong
+# pin is worse than none.
 ARTIFACT_PIN_FIELDS = ("hf_repo", "hf_revision", "sha256")
 ARTIFACT_PINS_STRICT_ENV = "REGISTRY_ARTIFACT_PINS_STRICT"
 _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -438,6 +441,16 @@ def artifact_pins_strict_from_env() -> bool:
     return os.environ.get(ARTIFACT_PINS_STRICT_ENV, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def validator_artifact_pins_strict() -> bool:
+    """SEC-ART-1.1: strict unless REGISTRY_ARTIFACT_PINS_STRICT is an explicit off value (0/false/no/off).
+
+    Deliberately ignores ``runtime_defaults.artifact_integrity.pins_strict`` (the launcher's ledger switch):
+    a lineup role without hf_repo/hf_revision/sha256 is a registry defect whether or not the fingerprint
+    ledger has been registered yet.
+    """
+    return os.environ.get(ARTIFACT_PINS_STRICT_ENV, "").strip().lower() not in ("0", "false", "no", "off")
+
+
 def check_artifact_pins(registry: dict[str, Any]) -> tuple[list[str], list[str]]:
     """SEC-ART-1 over the registry's `roles`. Returns (malformed, missing).
 
@@ -520,8 +533,9 @@ def validate_all(
 
     Caller should print the errors and exit non-zero if any returned.
 
-    `strict_artifact_pins=None` reads REGISTRY_ARTIFACT_PINS_STRICT; missing pin fields are
-    then errors, otherwise one aggregated log warning (see `check_artifact_pins`).
+    `strict_artifact_pins=None` means strict unless REGISTRY_ARTIFACT_PINS_STRICT is set to an off
+    value (`validator_artifact_pins_strict`); strict makes missing pin fields errors, lax logs one
+    aggregated warning (see `check_artifact_pins`).
     """
     path = Path(registry_path)
     if not path.exists():
@@ -537,7 +551,7 @@ def validate_all(
     from src.registry import artifact_integrity as _ai
     from src.registry.artifact_review import check_uploader_review
 
-    strict = _ai.strict_enabled(_ai.PINS_STRICT, registry) if strict_artifact_pins is None else strict_artifact_pins
+    strict = validator_artifact_pins_strict() if strict_artifact_pins is None else strict_artifact_pins
     malformed, missing = check_artifact_pins(registry)
     errors += [f"artifact pin: {m}" for m in malformed]
     if strict:
@@ -545,7 +559,7 @@ def validate_all(
     elif missing:
         log.warning(
             "SEC-ART-1: %d lineup role(s) lack hf_repo/hf_revision/sha256 pins "
-            "(warning until backfill; %s=1 makes this fatal): %s",
+            "(warning only because %s is off; strict is the default): %s",
             len(missing), ARTIFACT_PINS_STRICT_ENV, "; ".join(missing),
         )
     t_malformed, t_missing = check_template_pins(registry)
