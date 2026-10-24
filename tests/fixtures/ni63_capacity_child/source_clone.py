@@ -1,7 +1,8 @@
 """Build an external, source-pinned clone for NI63's import-capacity child probes.
 
-This fixture copies only the Python modules in the import-time caller closure,
-plus the immutable declared GPU-capacity policy input and owned YAML fixtures.
+This fixture copies the Python modules in the import-time caller closure plus the
+lazy compiler/resolver modules instrumented by the side-effect probe. It also
+copies the immutable declared GPU-capacity policy input and owned YAML fixtures.
 It reads real /proc/meminfo; it never edits or substitutes host memory values.
 """
 
@@ -14,12 +15,12 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-PINNED_APP_COMMIT = "6bb8d860d410217895efb7806e9ef907a62a4350"
-# (Git blob SHA-1, content SHA-256), independently resolved from the pinned tree.
+PINNED_APP_COMMIT = "6bb8d860d410217895efb7806e9ef907a62a4350"  # original NI63 fixture baseline
+# (Git blob SHA-1, content SHA-256), pinned per reviewed import-closure source.
 SOURCE_PINS: dict[str, tuple[str, str]] = {
     "scripts/server/bench_core_claim.py": ("7c03af5a90825ec7acd46b4ab3b4600828a75eba", "252c6dfc37bb4c34416cd7ba9f16158eb8a248ad4b56a9bfe94fd21466a34f16"),
     "scripts/server/fleet_markers.py": ("070b6ab8af62fbd33cffa4069133cca915c3258e", "8ef8df7703252f41f52c2f9033e941d28d4fea7017d220a7e3dc617e1a2aec68"),
-    "scripts/server/orchestrator_stack.py": ("19fea0df052f0abd520f5d2dfc225341b9f2b4cd", "446b66122fbb466b07ba029f5cabeed52bfc942c123cec9b3f383a94f4ab52d3"),
+    "scripts/server/orchestrator_stack.py": ("7c8087479cc75cce2c3b5ba0c4ab6e48236c6490", "ef909424ded22601cf87f2b712ad020c274e80e74e414e26fb3a92e2c0b8628e"),
     "scripts/server/realized_fleet.py": ("12f01d3c17a2ccb13c193728d79e24d52148de4e", "9099aa115a22799ba2446bf2082e0d7ebb360a0df5f57aac654b6286c1ea9a31"),
     "scripts/server/runtime_facts_manifest.py": ("c18bb563aabfa092e6b378fdddbd5f516352cd5d", "e2bfec7bb580fac727ca184b2dd4d56bd487e443e89d4720cc037743ab1dc374"),
     "scripts/server/stack_env.py": ("0ad2da92f14a50e2145e36fe32e31011d0da8606", "c2dd2a40abf2ac3048e392a11bd910a27f6991e2a99cefdbd232172b67ea06a4"),
@@ -42,7 +43,8 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "src/registry/__init__.py": ("287333a63889217a52c0082a7e316dc64670ee1f", "50ddc75e291c2caaae688bbe94c4f3144a5751eb11e0a65ee35b5632ea3a9c6d"),
     "src/registry/kernel_paths.py": ("6bb3dad23130a763dc4c456c7c432a9535536f30", "f5cd510ad2887a6276350c8939147ce66ba78a8eab573d42ee120094c0795066"),
     "src/registry/registry_loader.py": ("0bddc98c3a27c40d4e117783f70808f22551fc4f", "c4a4bf71f0f90384ffb64c673897c9fd496889e4e395a2e3eaf94933550ed18b"),
-    "src/registry/model_descriptors.py": ("81d056260371f0da2f097aa1a184ee8c892e3f9c", "ba868c939eba8ebc1274bd2d05bcff865c702fcdef1e3d6ec7184833aad44f69"),
+    "src/registry/model_descriptors.py": ("924ff6c98279a8e59ec7d006f3edc20dcb80e523", "f7eac72c2cf8b9549005f4195c2c143fd22ae9e1dad9de65bef141cce4a193b1"),
+    "src/registry/research_origin.py": ("f41a8de1d31942d223ad1e86a8415c43e6a005ec", "6b2f3aa7844887b491f8883878f97f2563cced61c5bb2bd51dc5e23f8027d226"),
     "src/registry/stack_priors.py": ("69de40e88e0a68015937f0dbb01332da7f9bfa94", "304f652cba847e157e8ac9e3098b5e9817e0c07071b921d0a3b359f81add1f5d"),
     "src/registry_loader.py": ("c68c5918b94e4a54a07a7c6642d92365480bf656", "81f3dc46dea4af9eb8df9adb4a73d2e900e1d040d107a73a04053f8ea72b77be"),
     "src/roles.py": ("59432d52c3c5ebb661c336f70627267073cfa4cb", "408f10be964705638562ec9a6d0e1cd56b26ac849fdb964e8bac0c9a7fe4be61"),

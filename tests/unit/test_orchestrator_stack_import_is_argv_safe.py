@@ -87,6 +87,42 @@ def _import_code(clone: Path, trailing: str = "") -> str:
     ) % (str(clone), trailing)
 
 
+def _guarded_import_code(clone: Path) -> str:
+    """Trap active startup work while leaving pure metadata/capacity validation intact."""
+    return """
+import argparse, os, socket, subprocess, sys, urllib.request
+from contextlib import ExitStack
+from unittest.mock import patch
+sys.path.insert(0, %r)
+pid = os.getpid()
+events = []
+def blocked(name):
+    def call(*args, **kwargs):
+        events.append(name)
+        raise AssertionError("unexpected import-time side effect: " + name)
+    return call
+targets = [
+    (argparse.ArgumentParser, "parse_args"),
+    (argparse.ArgumentParser, "parse_known_args"),
+    (os, "execv"), (os, "system"),
+    (subprocess, "Popen"), (subprocess, "run"), (subprocess, "check_output"),
+    (urllib.request, "urlopen"), (socket, "create_connection"),
+    (socket.socket, "connect"),
+]
+with ExitStack() as stack:
+    for target, name in targets:
+        stack.enter_context(patch.object(target, name, blocked(name)))
+    import src.registry.model_descriptors as descriptors
+    import src.registry.research_origin as research_origin
+    stack.enter_context(patch.object(descriptors, "compile_model_descriptors", blocked("registry compile")))
+    stack.enter_context(patch.object(research_origin, "resolve_research_registry", blocked("research resolution")))
+    stack.enter_context(patch.object(research_origin, "materialize_research_registry", blocked("research materialization")))
+    import scripts.server.orchestrator_stack as m
+    assert m.__file__ and os.getpid() == pid
+assert events == [], events
+""" % str(clone)
+
+
 def test_import_with_hostile_argv_does_not_exit_or_print(fit_clone: Path) -> None:
     for extra in HOSTILE_ARGV:
         proc = _run_probe(fit_clone, _import_code(fit_clone), extra)
@@ -106,6 +142,13 @@ def test_import_does_not_replace_the_importing_process(fit_clone: Path) -> None:
     proc = _run_probe(fit_clone, code, ["--master-registry", "foo.yaml"])
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr.strip() == "SURVIVED", (proc.stdout, proc.stderr)
+
+
+def test_import_does_not_parse_argv_start_process_or_resolve_research(fit_clone: Path) -> None:
+    proc = _run_probe(fit_clone, _guarded_import_code(fit_clone), HOSTILE_ARGV[0])
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""
+    assert proc.stderr == ""
 
 
 def test_reexec_helper_is_still_available_for_the_entry_point(fit_clone: Path) -> None:
