@@ -28,6 +28,7 @@ def _clean_kernel_override_env() -> dict[str, str]:
     env.pop("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", None)
     env.pop("ORCHESTRATOR_PATHS_LLAMA_MTMD", None)
     env.pop("ORCHESTRATOR_PATHS_LLAMA_SERVER", None)
+    env.pop("ORCHESTRATOR_PATHS_KERNEL_ROOT", None)
     return env
 
 
@@ -123,4 +124,32 @@ for construct in (PathsConfig, VisionConfig, WorkerPoolPathsConfig):
         """,
         env=env,
         args=(missing_store,),
+    )
+
+
+def test_named_kernel_root_is_used_and_still_fails_closed(tmp_path: Path) -> None:
+    """ORCHESTRATOR_PATHS_KERNEL_ROOT names another store; it is never a fallback."""
+    store = tmp_path / "kernels"
+    (store / "production" / "cpu").mkdir(parents=True)
+    env = _clean_kernel_override_env()
+
+    env["ORCHESTRATOR_PATHS_KERNEL_ROOT"] = str(store)
+    _run_isolated(
+        """
+        import sys
+        from pathlib import Path
+
+        import src.registry.kernel_paths as kernel_paths
+
+        assert kernel_paths.PRODUCTION_ROOT == Path(sys.argv[1]) / "production"
+        assert kernel_paths.backend_dir("cpu") == (Path(sys.argv[1]) / "production" / "cpu").resolve()
+        try:
+            kernel_paths.backend_dir("gpu")
+        except kernel_paths.KernelPathError:
+            pass
+        else:
+            raise AssertionError("a named store without a gpu backend resolved anyway")
+        """,
+        env=env,
+        args=(str(store),),
     )
