@@ -336,7 +336,7 @@ class TestStratifiedSampling:
 # ---------------------------------------------------------------------------
 
 class TestEmbeddingPrecomputation:
-    def test_precompute_with_batch_embedder(self):
+    def test_precompute_with_batch_embedder(self, tmp_path):
         entries = _complete_task_entries()
         mock_embedder = MagicMock()
         mock_embedder.embed_batch.return_value = np.random.randn(1, 1024).astype(np.float32)
@@ -344,7 +344,7 @@ class TestEmbeddingPrecomputation:
         extractor = TrajectoryExtractor(
             reader=FakeReader(entries),
             embedder=mock_embedder,
-            cache_dir=Path("/mnt/raid0/llm/tmp/test_cache"),
+            cache_dir=tmp_path,
         )
         trajectories = extractor.extract_complete(days=7, max_trajectories=0)
         result = extractor.precompute_embeddings(trajectories, cache_key="test")
@@ -363,7 +363,7 @@ class TestEmbeddingPrecomputation:
         assert len(result) == 1
         assert result[0].embedding is None
 
-    def test_precompute_with_text_embedder_fallback(self):
+    def test_precompute_with_text_embedder_fallback(self, tmp_path):
         entries = _complete_task_entries()
         mock_embedder = MagicMock(spec=[])  # No embed_batch
         mock_embedder.embed_text = MagicMock(return_value=np.random.randn(1024).astype(np.float32))
@@ -371,7 +371,7 @@ class TestEmbeddingPrecomputation:
         extractor = TrajectoryExtractor(
             reader=FakeReader(entries),
             embedder=mock_embedder,
-            cache_dir=Path("/mnt/raid0/llm/tmp/test_cache2"),
+            cache_dir=tmp_path,
         )
         trajectories = extractor.extract_complete(days=7, max_trajectories=0)
         result = extractor.precompute_embeddings(trajectories, cache_key="test2")
