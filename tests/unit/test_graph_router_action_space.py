@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import yaml
 
+import scripts.graph_router.extract_training_data as training_data_module
 from scripts.graph_router.action_space import (
     DEGRADED_CANONICAL_ACTIONS,
     action_index_for_raw_label,
@@ -234,11 +235,133 @@ def test_extract_training_data_remaps_preembedded_legacy_actions(
     assert result["actions_total"] == len(actions)
     assert list(label_map.values()) == actions
     assert stats["excluded"] == 1
+    assert stats["source"] == "npz"
+    assert stats["source_rows"] == 4
+    assert stats["included_after_min_updates"] == 4
+    assert stats["excluded_by_min_updates"] == 0
+    assert out["q_weights"].tolist() == pytest.approx([0.9, 0.8, 0.7])
     assert set(y.tolist()) == {
         actions.index("architect_general"),
         actions.index("worker_general"),
         actions.index("coder_escalation"),
     }
+
+
+def _write_routing_snapshot(path: Path, action: str) -> None:
+    np.savez_compressed(
+        path,
+        ids=np.array(["snapshot-row"], dtype=object),
+        embeddings=np.full((1, 1024), 3.0, dtype=np.float32),
+        actions=np.array([action], dtype=object),
+        q_values=np.array([0.95], dtype=np.float32),
+        contexts=np.array([json.dumps({"task_type": "chat"})], dtype=object),
+    )
+
+
+def test_extract_uses_requested_db_and_filters_update_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orchestration.repl_memory.episodic_store import EpisodicStore
+
+    actions = ["frontdoor", "worker_general", "coder_escalation"]
+    priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {role: _stack_prior_record(role) for role in actions},
+    )
+    db_path = tmp_path / "requested-db"
+    store = EpisodicStore(db_path=db_path, embedding_dim=1024)
+    excluded_id = store.store_immediate(
+        np.ones(1024, dtype=np.float32),
+        "frontdoor",
+        "routing",
+        {"task_type": "code"},
+        initial_q=0.4,
+    )
+    included_id = store.store_immediate(
+        np.full(1024, 2.0, dtype=np.float32),
+        "worker_general",
+        "escalation",
+        {"task_type": "architecture"},
+        initial_q=0.8,
+    )
+    with sqlite3.connect(db_path / "episodic.db") as conn:
+        conn.execute("UPDATE memories SET update_count = 0 WHERE id = ?", (excluded_id,))
+        conn.execute("UPDATE memories SET update_count = 2 WHERE id = ?", (included_id,))
+
+    default_snapshot = tmp_path / "default-reembedded.npz"
+    _write_routing_snapshot(default_snapshot, "coder_escalation")
+    monkeypatch.setattr(training_data_module, "REEMBEDDED_PATH", default_snapshot)
+    output_path = tmp_path / "training_data.npz"
+
+    result = extract_training_data(
+        db_path=db_path,
+        output_path=output_path,
+        min_updates=2,
+        stack_priors_path=priors,
+    )
+
+    out = np.load(output_path, allow_pickle=True)
+    stats = out["extraction_stats"].item()
+    assert result["source"] == "db"
+    assert result["included_after_min_updates"] == 1
+    assert result["excluded_by_min_updates"] == 1
+    assert stats["source_rows"] == 2
+    assert stats["included_after_min_updates"] == 1
+    assert stats["excluded_by_min_updates"] == 1
+    label_map = {int(row[0]): str(row[1]) for row in out["label_map"]}
+    assert [label_map[index] for index in sorted(label_map)] == actions
+    assert out["y"].tolist() == [actions.index("worker_general")]
+    assert out["q_weights"].tolist() == pytest.approx([0.8])
+    assert out["X"][0, :1024].tolist() == pytest.approx([2.0] * 1024)
+    assert out["X"][0, 1024:].tolist() == pytest.approx([0, 0, 1, 0, 0, 0, 0])
+
+
+def test_extract_rejects_snapshot_threshold_without_output(tmp_path: Path) -> None:
+    actions = ["frontdoor"]
+    priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {role: _stack_prior_record(role) for role in actions},
+    )
+    snapshot = tmp_path / "snapshot.npz"
+    _write_routing_snapshot(snapshot, "frontdoor")
+    output_path = tmp_path / "training_data.npz"
+
+    unused_db = tmp_path / "unused-db"
+    result = extract_training_data(
+        db_path=unused_db,
+        output_path=output_path,
+        min_updates=1,
+        embeddings_file=snapshot,
+        stack_priors_path=priors,
+    )
+
+    assert result["error"] == "min_updates_unavailable_for_embeddings_file"
+    assert not output_path.exists()
+    assert not unused_db.exists()
+
+
+def test_extract_rejects_missing_explicit_snapshot_without_db_fallback(
+    tmp_path: Path,
+) -> None:
+    actions = ["frontdoor"]
+    priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {role: _stack_prior_record(role) for role in actions},
+    )
+    output_path = tmp_path / "training_data.npz"
+
+    unused_db = tmp_path / "unused-db"
+    result = extract_training_data(
+        db_path=unused_db,
+        output_path=output_path,
+        embeddings_file=tmp_path / "missing.npz",
+        stack_priors_path=priors,
+    )
+
+    assert result["error"] == "embeddings_file_not_found"
+    assert not output_path.exists()
+    assert not unused_db.exists()
 
 
 def test_verifier_extraction_infers_action_width_from_classifier_artifact(

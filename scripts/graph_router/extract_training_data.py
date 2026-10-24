@@ -59,6 +59,7 @@ def task_type_onehot(task_type: str) -> np.ndarray:
     return vec
 
 
+# Legacy cache location. Extraction selects it only when passed explicitly.
 REEMBEDDED_PATH = PROJECT_ROOT / "orchestration/repl_memory/sessions/reembedded.npz"
 
 
@@ -75,9 +76,8 @@ def extract(
     Applies label normalization to map raw actions to canonical routing targets.
 
     If --embeddings-file is provided, loads pre-computed embeddings from that
-    .npz file (produced by reembed_episodic_store.py) instead of FAISS.
-    This is the expected path for the first training run, since most memories
-    lack FAISS embeddings.
+    .npz file (produced by reembed_episodic_store.py) instead of FAISS. Without
+    it, extraction uses the requested episodic DB.
 
     Returns:
         Extraction statistics dict.
@@ -93,13 +93,35 @@ def extract(
     X_list = []
     y_list = []
     q_list = []
-    stats = {"excluded": 0, "unknown": 0, "no_embedding": 0, "bad_dim": 0}
+    stats = {
+        "excluded": 0,
+        "unknown": 0,
+        "no_embedding": 0,
+        "bad_dim": 0,
+        "source": "npz" if embeddings_file is not None else "db",
+        "source_rows": 0,
+        "included_after_min_updates": 0,
+        "excluded_by_min_updates": 0,
+    }
 
-    # Determine data source
-    if embeddings_file is None:
-        embeddings_file = REEMBEDDED_PATH
+    if embeddings_file is not None:
+        if not embeddings_file.is_file():
+            logger.error("Explicit embeddings file does not exist: %s", embeddings_file)
+            return {
+                "error": "embeddings_file_not_found",
+                "embeddings_file": str(embeddings_file),
+            }
+        if min_updates > 0:
+            logger.error(
+                "Cannot apply min_updates=%d to an embeddings snapshot without captured update counts",
+                min_updates,
+            )
+            return {
+                "error": "min_updates_unavailable_for_embeddings_file",
+                "embeddings_file": str(embeddings_file),
+                "min_updates": min_updates,
+            }
 
-    if embeddings_file.exists():
         # ── Fast path: load from pre-computed embeddings file ──
         logger.info("Loading pre-computed embeddings from %s", embeddings_file)
         data = np.load(embeddings_file, allow_pickle=True)
@@ -108,6 +130,8 @@ def extract(
         q_values = data["q_values"]
         contexts = data["contexts"]
         total_count = len(actions)
+        stats["source_rows"] = total_count
+        stats["included_after_min_updates"] = total_count
         logger.info("Loaded %d pre-embedded memories", total_count)
 
         for i in range(total_count):
@@ -145,7 +169,15 @@ def extract(
         logger.info("Episodic store: %d total memories", total_count)
 
         memories = []
+        candidate_count = 0
         for action_type in ("routing", "escalation"):
+            if min_updates > 0:
+                candidates = store.get_all_memories(
+                    action_type=action_type,
+                    include_embeddings=False,
+                )
+                candidate_count += len(candidates)
+
             batch = store.get_all_memories(
                 action_type=action_type,
                 include_embeddings=True,
@@ -155,11 +187,23 @@ def extract(
                 "  action_type='%s': %d memories (min_update_count >= %d)",
                 action_type, len(batch), min_updates,
             )
+            if min_updates == 0:
+                candidate_count += len(batch)
             memories.extend(batch)
+
+        stats["source_rows"] = candidate_count
+        stats["included_after_min_updates"] = len(memories)
+        stats["excluded_by_min_updates"] = candidate_count - len(memories)
 
         if not memories:
             logger.error("No qualifying memories found.")
-            return {"error": "no_qualifying_memories", "total": total_count}
+            return {
+                "error": "no_qualifying_memories",
+                "total": total_count,
+                "source": stats["source"],
+                "included_after_min_updates": stats["included_after_min_updates"],
+                "excluded_by_min_updates": stats["excluded_by_min_updates"],
+            }
 
         for mem in memories:
             canonical = normalize_action(mem.action)
@@ -252,6 +296,9 @@ def extract(
         "actions_with_data": len(set(y_list)),
         "actions_total": len(canonical_actions),
         "output": str(output_path),
+        "source": stats["source"],
+        "included_after_min_updates": stats["included_after_min_updates"],
+        "excluded_by_min_updates": stats["excluded_by_min_updates"],
     }
 
 
@@ -272,7 +319,7 @@ def main():
     parser.add_argument(
         "--embeddings-file", type=str, default=None,
         help="Path to pre-computed embeddings .npz (from reembed_episodic_store.py). "
-             "Defaults to sessions/reembedded.npz if it exists.",
+             "Used only when explicitly provided; otherwise --db is used.",
     )
     parser.add_argument(
         "--stack-priors", type=str, default=str(DEFAULT_STACK_PRIORS_PATH),
