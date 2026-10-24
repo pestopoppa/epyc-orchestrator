@@ -858,10 +858,10 @@ def main() -> int:
     """CLI entry point for testing.
 
     Usage:
-        python -m src.model_server                    # List roles and health check
-        python -m src.model_server <role>             # Test inference with role
-        python -m src.model_server <role> "<prompt>"  # Inference with custom prompt
-        python -m src.model_server --server           # Test with llama-server backend
+        python -m src.inference.model_server                    # List roles and health check
+        python -m src.inference.model_server <role>             # Test inference with role
+        python -m src.inference.model_server <role> "<prompt>"  # Inference with custom prompt
+        python -m src.inference.model_server --server           # Test with llama-server backend
     """
     import json
     import sys

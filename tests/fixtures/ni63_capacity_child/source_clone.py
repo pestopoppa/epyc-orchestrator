@@ -35,7 +35,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "scripts/server/stack_runtime.py": ("2d4489a3d4e6046973255dbf2b9a2d47b65c6a7e", "984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99"),
     "scripts/server/stack_state.py": ("5d7ad9483260e4e56f8105df702fc5ff1b7f782f", "a047f152ac478e8fead80700b73bcb782dfe61969f513aa69da422518c89da8c"),
     "scripts/server/launch_affinity.py": ("c78ceb5f327491696d314153b4e3280a5ad96ee0", "f1ef273e86a4f7121e588d79a34a9d72ec9150889c72344b950f4608cca091da"),
-    "src/__init__.py": ("ff893046a8e7d2598657b950e9e41449f358d25f", "16e20bce77e6470646b90def0e3d653a3bd9fb024b484f7cd034f96ff8a0a5f8"),
+    "src/__init__.py": ("a43657f16f7063ccc1d61f7048b64c55433eddce", "26adaa6226a4b680574c4a105785b954465ea8a532a91d76aa9944e985bfb3ad"),
     "src/config/__init__.py": ("644ecc9e4ee3e0afeb3235be651976a3562eb8ca", "e2c868f3481591c5b61a420b92bc2dba7e6a0699ef5fa93bade89a9672302831"),
     "src/config/models.py": ("a846546e725d448cbf9321fba84c2128905ccaf3", "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7"),
     "src/config/validation.py": ("eab4945f939d5aa2f35cd167dcece1a55c5546ff", "e69b9b2ab0b38e0e2b50bcc435a19695ed20eb627b69fbb4dd302bea680bc51d"),

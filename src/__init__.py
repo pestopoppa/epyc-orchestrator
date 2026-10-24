@@ -22,63 +22,76 @@ Packages:
     vision: Image/video analysis with CLIP embeddings and batch processing
 """
 
-# --- src.inference_lock compat-alias bootstrap (TD-21) ----------------------
+# --- Compat-alias bootstrap (TD-21; A3-16/A4-08) -----------------------------
 #
-# `src/inference_lock.py` is a backward-compatible alias for
-# `src.runtime.inference_lock`. A naive shim body that does
-# `sys.modules[__name__] = _real` from inside its own module exec is unsafe
-# under concurrent first import: a concurrent importer's fast path can read
-# this name's `__spec__._initializing` off the wrong (already fully loaded)
-# target spec and skip CPython's own module lock, intermittently observing a
-# half-swapped placeholder (`ImportError: cannot import name 'inference_lock'
-# from 'src.inference_lock'`, confirmed at ~1% frequency under 24-way
-# concurrency; see tests/unit/test_inference_lock_concurrent_import.py).
+# Each key below is a backward-compatible top-level name for a module that now
+# lives in a subpackage. Shim files that did `sys.modules[__name__] = _real`
+# from inside their own module exec are unsafe under concurrent first import:
+# a concurrent importer's fast path can read the alias's
+# `__spec__._initializing` off the wrong (already fully loaded) target spec and
+# skip CPython's own module lock, intermittently observing a half-swapped
+# placeholder (`ImportError: cannot import name 'inference_lock' from
+# 'src.inference_lock'`, ~1% under 24-way concurrency; see
+# tests/unit/test_inference_lock_concurrent_import.py). Those shims also
+# renamed the target module to the alias.
 #
-# Fix: resolve "src.inference_lock" through a MetaPathFinder, installed here
-# ahead of the standard path finder, whose Loader implements
-# create_module() to return the already-imported target module object
-# directly. importlib then inserts that FINAL object into
-# sys.modules["src.inference_lock"] the one and only time anything is ever
-# inserted under that key -- there is no placeholder-then-swap window for a
-# concurrent importer to observe. This also keeps
-# `sys.modules["src.inference_lock"] is sys.modules["src.runtime.inference_lock"]`
-# (required so `monkeypatch.setattr("src.inference_lock.X", ...)` stays
-# visible to code that reads `X` from inside src.runtime.inference_lock).
+# Fix: resolve each alias through a MetaPathFinder, installed here ahead of the
+# standard path finder, whose Loader's create_module() returns the target
+# module object itself. importlib inserts that FINAL object into
+# sys.modules[alias] exactly once, so there is no placeholder-then-swap window,
+# and `sys.modules[alias] is sys.modules[target]` keeps
+# `monkeypatch.setattr("<alias>.X", ...)` visible to the target. exec_module()
+# restores the target's own __spec__, which module_from_spec() overwrites.
 #
-# This registration only teaches the import system how to resolve one
-# specific dotted name; it does not import the (lazily-loaded) target
-# module eagerly, and it has no effect on any other import.
+# This only teaches the import system how to resolve these dotted names; no
+# target is imported until its alias is.
 import sys as _sys
 from importlib.abc import Loader as _Loader, MetaPathFinder as _MetaPathFinder
 from importlib.util import spec_from_loader as _spec_from_loader
 
-_INFERENCE_LOCK_ALIAS = "src.inference_lock"
-_INFERENCE_LOCK_TARGET = "src.runtime.inference_lock"
+_COMPAT_ALIASES = {
+    "src.concurrency": "src.runtime.concurrency",
+    "src.delegation_cache": "src.orchestration.delegation_cache",
+    "src.delegation_reports": "src.orchestration.delegation_reports",
+    "src.dispatcher": "src.orchestration.dispatcher",
+    "src.escalation": "src.orchestration.escalation",
+    "src.executor": "src.runtime.executor",
+    "src.inference_lock": "src.runtime.inference_lock",
+    "src.inference_tap": "src.runtime.inference_tap",
+    "src.llm_cache": "src.inference.llm_cache",
+    "src.model_server": "src.inference.model_server",
+    "src.prefix_cache": "src.inference.prefix_cache",
+    "src.registry_loader": "src.registry.registry_loader",
+    "src.script_registry": "src.registry.script_registry",
+    "src.task_ir": "src.orchestration.task_ir",
+    "src.tool_loader": "src.registry.tool_loader",
+    "src.tool_registry": "src.registry.tool_registry",
+}
 
 
-class _InferenceLockAliasLoader(_Loader):
+class _CompatAliasLoader(_Loader):
     """``create_module()`` hands back the already-imported target module."""
 
     def create_module(self, spec):
         import importlib
 
-        return importlib.import_module(_INFERENCE_LOCK_TARGET)
+        module = importlib.import_module(_COMPAT_ALIASES[spec.name])
+        self._target_spec = module.__spec__
+        return module
 
     def exec_module(self, module):
-        # Target module is already fully initialized; nothing to execute.
-        pass
+        # Target module is already fully initialized; only undo the spec swap.
+        module.__spec__ = self._target_spec
 
 
-class _InferenceLockAliasFinder(_MetaPathFinder):
-    """Resolves only "src.inference_lock"; defers everything else."""
+class _CompatAliasFinder(_MetaPathFinder):
+    """Resolves only the names in ``_COMPAT_ALIASES``; defers everything else."""
 
     def find_spec(self, fullname, path, target=None):
-        if fullname != _INFERENCE_LOCK_ALIAS:
+        if fullname not in _COMPAT_ALIASES:
             return None
-        return _spec_from_loader(fullname, _InferenceLockAliasLoader())
+        return _spec_from_loader(fullname, _CompatAliasLoader())
 
 
-if not any(
-    isinstance(_finder, _InferenceLockAliasFinder) for _finder in _sys.meta_path
-):
-    _sys.meta_path.insert(0, _InferenceLockAliasFinder())
+if not any(isinstance(_finder, _CompatAliasFinder) for _finder in _sys.meta_path):
+    _sys.meta_path.insert(0, _CompatAliasFinder())
