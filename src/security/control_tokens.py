@@ -6,7 +6,7 @@ becomes real control tokens (CT-12.1: open on every Qwen family probed).  This
 module breaks every such spelling at the CONTENT boundary so it can no longer
 match a tokenizer special-token string.
 
-Escape: insert U+200B (zero-width space) immediately after the opening ``<``.
+Escape: insert U+200B (zero-width space) immediately after the opening ``<`` (or ``[`` for bracket specials).
 
 * it breaks the literal at its first character, so *every* family spelling
   (``<|x|>``, gemma-4 ``<|turn>``/``<turn|>``, ``</s>``, ``<start_of_turn>``)
@@ -37,14 +37,25 @@ from typing import Any
 
 ZWSP = "​"
 
-# <|...|> and the open-ended <|turn> / <|channel> forms, <name|>, </s> / <s>,
-# gemma start/end_of_turn, and bare bos/eos/pad/unk/mask markers.
+# Bars are ASCII U+007C or fullwidth U+FF5C (DeepSeek-V4.1: ``<｜begin▁of▁sentence｜>``);
+# names may carry U+2581 (``▁``) and ``/`` (CT-12.1b).  re.ASCII only narrows ``\\w``, so the
+# non-ASCII literals below match as written.
+#   <|x|> / <｜x｜> and the open-ended gemma <|turn> / <|channel> forms
+#   <name|> / <name｜>     <s> </s>      gemma start/end_of_turn      bare bos/eos/pad/unk/mask
+#   DeepSeek DSML         <｜DSML｜ ...>, <dsml:..., </dsml:...
+#   BERT / Mistral / Pixtral bracket specials ([CLS] [SEP] [MASK] [PAD] [UNK] [INST] [/INST] ...)
+#   Nemotron-diffusion    <SPECIAL_N>      Qwen3-TTS talker  <tts_pad> <tts_text_bos> ...
 DEFAULT_CONTROL_TOKEN_REGEX = (
-    r"<(?=\|[\w:.\-]{1,64}\|?>)"
-    r"|<(?=[\w\-]{1,32}\|>)"
+    r"<(?=[|｜][\w:.\-/▁\"]{1,64}[|｜]?>)"
+    r"|<(?=[\w\-]{1,32}[|｜]>)"
     r"|<(?=/?s>)"
     r"|<(?=(?:start|end)_of_turn>)"
     r"|<(?=(?:bos|eos|pad|unk|mask)>)"
+    r"|<(?=[|｜]DSML[|｜])"
+    r"|<(?=/?dsml:)"
+    r"|<(?=SPECIAL_\d{1,5}>)"
+    r"|<(?=tts_[a-z_]{1,24}>)"
+    r"|\[(?=/?(?:CLS|SEP|MASK|PAD|UNK|INST|SYSTEM_PROMPT|AVAILABLE_TOOLS|TOOL_RESULTS|TOOL_CALLS|IMG|IMG_BREAK|IMG_END)\])"
 )
 
 _ENV = "ORCHESTRATOR_CONTROL_TOKEN_REGEX"
@@ -66,7 +77,7 @@ def neutralise_control_tokens(text: str, *, pattern: str | None = None) -> str:
     The regex must match the zero-width position of the opening ``<`` (a
     lookahead on the rest of the spelling); the escape is inserted after it.
     """
-    if not text or "<" not in text:
+    if not text or ("<" not in text and "[" not in text):
         return text
     if os.environ.get(_ENV_OFF, "1").strip().lower() in ("0", "false", "off", "no"):
         return text
@@ -77,7 +88,7 @@ def neutralise_control_tokens(text: str, *, pattern: str | None = None) -> str:
 
 def has_control_tokens(text: str, *, pattern: str | None = None) -> bool:
     """True when ``text`` contains an un-neutralised control-token spelling."""
-    return bool(text) and "<" in text and _pattern(pattern).search(text) is not None
+    return bool(text) and ("<" in text or "[" in text) and _pattern(pattern).search(text) is not None
 
 
 def neutralise_value(value: Any) -> Any:

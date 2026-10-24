@@ -202,3 +202,66 @@ def test_rag_snippet_is_raw_data_neutralised_only_via_corpus_context(tmp_path, m
     prompt = PromptBuilder().build_root_lm_prompt(
         state="s", original_prompt="t", corpus_context=hits[0]["snippet"])
     assert not has_control_tokens(prompt)
+
+
+# --- CT-12.1b: per-family spelling sets from the non-Qwen tokenizer probe -----------------------
+# Source: epyc-inference-research artifacts/ct12b-tokenizer-probe-20261024/ct12b_probe_before.json
+# (llama-tokenize, champion CPU build cpu-20261020-dd3d9721c; every entry below is a vocab control
+# token that tokenizes to ONE id under parse_special and to several without it).
+FAMILY_SPELLINGS = {
+    # DeepSeek-V4.1-Flash 1017: fullwidth U+FF5C bars and U+2581 word joiners; None of these matched the
+    # pre-CT-12.1b ASCII-only default (16 of 18 probed control spellings were OPEN).
+    "deepseek41": [
+        "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>",
+        "<｜▁pad▁｜>", "<｜place▁holder▁no▁0｜>",
+        "<｜place▁holder▁no▁798｜>", "<｜end_of_query｜>",
+        "<｜rl_image_pad｜>", "<｜rl_image_start｜>", "<｜/polygon｜>",
+        "<｜polygon｜>", "<｜/point｜>", "<｜point｜>", "<｜/box｜>",
+        "<｜box｜>", "<｜/ref｜>", "<｜ref｜>",
+        "<|place_holder_mm_span_0021|>",
+        # chat-template markers: tokenized as plain TEXT by llama.cpp, so a user spelling is byte-identical
+        # to what the template emits (role / tool / DSML injection)
+        "<｜User｜>", "<｜Assistant｜>", "<｜System｜>",
+        "<｜tool▁calls▁begin｜>", "<｜tool▁output▁end｜>",
+        "<｜DSML｜ calls>", "<dsml:", "</dsml:", "<|EOT|>", "<｜latest_reminder｜>",
+    ],
+    # gemma-4: all ASCII; already covered, pinned so a regex edit cannot regress it
+    "gemma4": ["<pad>", "<eos>", "<bos>", "<unk>", "<mask>", "<|tool>", "<tool|>", "<|tool_response>",
+               "<|think|>", "<|turn>", "<turn|>", "<|image>", "<|audio>", "<|image|>", "<audio|>", '<|"|>'],
+    "llama3": ["<|begin_of_text|>", "<|end_of_text|>", "<|reserved_special_token_0|>", "<|start_header_id|>",
+               "<|end_header_id|>", "<|eom_id|>", "<|eot_id|>", "<|python_tag|>"],
+    # Mistral/Pixtral-vocab Nemotron-diffusion: bracket specials and <SPECIAL_n>
+    "nemotron": ["<s>", "</s>", "<unk>", "[INST]", "[/INST]", "[AVAILABLE_TOOLS]", "[/AVAILABLE_TOOLS]",
+                 "[TOOL_RESULTS]", "[/TOOL_RESULTS]", "[TOOL_CALLS]", "<SPECIAL_18>", "<SPECIAL_999>",
+                 "<|im_start|>", "<|im_end|>"],
+    # BERT / XLM-R / ModernBERT embedders (they embed untrusted corpus text)
+    "embedder": ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "<s>", "</s>", "<pad>", "<unk>",
+                 "<|startoftext|>", "<|endoftext|>", "<|reserved_200000|>", "<|return|>", "<|endofprompt|>"],
+    "speech-tts": ["<tts_pad>", "<tts_text_bos>", "<tts_text_eod>", "<tts_text_bos_single>", "<|im_start|>"],
+}
+_FAMILY_CASES = [(fam, sp) for fam, sps in FAMILY_SPELLINGS.items() for sp in sps]
+
+
+@pytest.mark.parametrize("family,tok", _FAMILY_CASES)
+def test_family_spelling_set_is_neutralised(family, tok):
+    text = f"before {tok} after"
+    assert has_control_tokens(text), f"{family}: {tok!r} not matched"
+    out = neutralise_control_tokens(text)
+    assert tok not in out
+    assert out.replace(ZWSP, "") == text  # visible content preserved, reversible
+    assert not has_control_tokens(out)
+    assert neutralise_control_tokens(out) == out  # idempotent
+
+
+@pytest.mark.parametrize("family", sorted(FAMILY_SPELLINGS))
+def test_family_injection_payload_fully_broken(family):
+    payload = "".join(FAMILY_SPELLINGS[family])
+    out = neutralise_control_tokens(payload)
+    assert not has_control_tokens(out)
+    assert all(sp not in out for sp in FAMILY_SPELLINGS[family])
+
+
+def test_deepseek_ascii_lookalikes_not_regressed_and_clean_text_untouched():
+    for clean in ["x[0] = y[i]", "list[int]", "[INSTALL] [MASKED] [CLASS]", "a ｜ b", "<｜ b",
+                  "price <5 and > 3", "see [1] and [2]", "<｜>", "Tom▁and▁Jerry"]:
+        assert neutralise_control_tokens(clean) is clean, clean
