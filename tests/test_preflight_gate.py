@@ -92,7 +92,19 @@ def test_attest_default_path_with_monkeypatched_probes(monkeypatch):
     assert any("contention_matrix" in r and "STALE" in r for r in att["fail_reasons"])
 
 
+def _set_primary_role_topology(monkeypatch):
+    """Pin the current alias layout: worker_general shares frontdoor, no ports of its own."""
+    from scripts.server import stack_numa
+
+    monkeypatch.setattr(
+        stack_numa,
+        "NUMA_CONFIG",
+        {"frontdoor": {"instances": [(0, 8070), (1, 8080), (2, 8180)]}},
+    )
+
+
 def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
+    _set_primary_role_topology(monkeypatch)
     seen = {}
 
     monkeypatch.setattr(pg, "check_live_affinity",
@@ -112,23 +124,21 @@ def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
 
     assert att["overall"] == "PASS"
     assert seen["require_servers"] is True
-    assert seen["ports"] == [
-        8070,
-        8080,
-        8180,
-        8072,
-        8082,
-        8182,
-    ]
+    assert seen["ports"] == [8070, 8080, 8180]
 
 
 def test_role_scoped_live_only_ports_skip_nonlive_configured_ports(monkeypatch):
-    monkeypatch.setattr(pg, "_pid_on_port", lambda port: "123" if port in {8080, 8082} else None)
+    _set_primary_role_topology(monkeypatch)
+    probed = []
 
-    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [
-        8080,
-        8082,
-    ]
+    def fake_pid_on_port(port):
+        probed.append(port)
+        return "123" if port == 8080 else None
+
+    monkeypatch.setattr(pg, "_pid_on_port", fake_pid_on_port)
+
+    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [8080]
+    assert probed == [8070, 8080, 8180]
 
 
 def test_server_health_only_skips_structural_health(monkeypatch):
