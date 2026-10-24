@@ -56,6 +56,7 @@ cascade** (see `wp9-wp10-lineup-event-prep.md`); treat it as a lineup event, not
 1. **Snapshot the operative URLs BEFORE**:
    `.venv/bin/python -c "from src.config import get_config; c=get_config(); [print(r, getattr(c.server_urls,r)) for r in ('frontdoor','worker_general','worker_math','coder_escalation','worker_summarize','ingest_long_context')]"`
 2. **Pipeline update**: `.venv/bin/python scripts/registry/stack_change_pipeline.py update`
+   - The master registry is read from research origin/main by default; never sync or edit the shared research clone to make a rebuild work; pass `--research-registry` only for a deliberate alternative checkout.
    - Compiles under the **realized fleet mode** (ESC-8 Fix 6). A clean shell cannot poison it
      with default-full. If it REFUSES (`StackPriorsModeError`): nothing is listening — pass an
      explicit mode only if you are deliberately compiling for a down fleet.

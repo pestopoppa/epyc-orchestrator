@@ -1246,6 +1246,13 @@ def resolve_portable_source_path(raw: str, repo_root: Path = _REPO_ROOT) -> Path
 
 
 def _source_metadata(path: Path) -> dict[str, Any]:
+    from src.registry.research_origin import provenance_for
+
+    origin = provenance_for(path)
+    if origin is not None:
+        # Materialized from research origin/main: the temp path means nothing, so record
+        # the stable label + origin/main commit (sha256 stays the content identity).
+        return {"path": origin[0], "repo_commit": origin[1], "sha256": _sha256(path)}
     return {
         "path": portable_source_path(path),
         "repo_commit": _repo_commit(path),

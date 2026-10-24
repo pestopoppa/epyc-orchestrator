@@ -1,14 +1,14 @@
 descriptor_version: 3
-compiled_at: '2026-10-24T13:35:46Z'
+compiled_at: '2026-10-24T13:54:23Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: orchestration/model_registry.yaml
-    repo_commit: 3c4d6881
+    repo_commit: f279d2de
     sha256: 472fcfd1b7ab263ac81d0ebd80623fb6ad7a67be1d7d83665f5249249108897e
   research:
-    path: /mnt/raid0/llm/worktrees/research-main-ro-20261024/orchestration/model_registry.yaml
+    path: origin/main:orchestration/model_registry.yaml
     repo_commit: 37fe0f50f
     sha256: 0be0e88c469c38e1767089f8d5e19b1610b647303b02a13cfb2fbbc3743821b9
 model_id_policy:

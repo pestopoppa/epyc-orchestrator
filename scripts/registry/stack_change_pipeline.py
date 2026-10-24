@@ -1539,7 +1539,19 @@ def _research_registry_staleness_step(config: StackChangePipelineConfig) -> Pipe
         return PipelineStep(
             name=name,
             status="skipped",
-            warnings=["--allow-stale-research-registry: research registry NOT checked against origin/main"],
+            warnings=[
+                "LOUD: --allow-stale-research-registry: research registry NOT checked against "
+                "origin/main; output may drop landed declarations -- do not commit it"
+            ],
+        )
+    from src.registry.research_origin import provenance_for
+
+    origin = provenance_for(Path(path))
+    if origin is not None:
+        return PipelineStep(
+            name=name,
+            status="ok",
+            details=[f"materialized from research {origin[0]} at commit {origin[1]} (not a working copy)"],
         )
     path = Path(path)
     if not path.exists():
@@ -1718,12 +1730,29 @@ def _print_report(report: PipelineReport) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run the no-inference stack-change check/update pipeline"
+        description=(
+            "Run the no-inference stack-change check/update pipeline. The master registry "
+            "is read from research origin/main by default; never sync or edit the shared "
+            "research clone to make a rebuild work; pass --research-registry only for a "
+            "deliberate alternative checkout."
+        ),
     )
     parser.add_argument("mode", choices=("check", "update"))
     parser.add_argument("--repo-root", type=Path, default=REPO_ROOT)
     parser.add_argument("--lean-registry", type=Path, default=DEFAULT_LEAN_REGISTRY)
-    parser.add_argument("--research-registry", type=Path, default=DEFAULT_RESEARCH_REGISTRY)
+    parser.add_argument(
+        "--research-registry",
+        type=Path,
+        default=None,
+        help=(
+            "Master registry to compile from. DEFAULT: research origin/main, fetched "
+            "(ref-only) and materialized from git into a private temp dir -- the master "
+            "registry is read from research origin/main by default; never sync or edit "
+            "the shared research clone to make a rebuild work. Pass this only for a "
+            "deliberate alternative checkout (it is still checked against that "
+            "checkout's origin/main)"
+        ),
+    )
     parser.add_argument("--descriptors", type=Path, default=DEFAULT_DESCRIPTOR_OUTPUT)
     parser.add_argument("--stack-priors", type=Path, default=DEFAULT_STACK_PRIORS)
     parser.add_argument("--operator-summary", type=Path, default=DEFAULT_OPERATOR_SUMMARY)
@@ -1767,7 +1796,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "Skip the check that the research registry file equals origin/main's "
-            "version (deliberate offline use only)"
+            "version and, with no --research-registry, compile from the shared research "
+            "clone's working copy. Deliberate offline use only: a stale master drops "
+            "landed declarations"
         ),
     )
     parser.add_argument(
@@ -1793,11 +1824,44 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    materialized = None
+    research_registry = args.research_registry
+    if research_registry is None:
+        if args.allow_stale_research_registry:
+            research_registry = DEFAULT_RESEARCH_REGISTRY
+            print(
+                "WARNING: --allow-stale-research-registry with no --research-registry: "
+                f"compiling from the shared research clone working copy {research_registry}, "
+                "which can be many commits behind origin/main. Output may DROP landed "
+                "declarations; do not commit it.",
+                file=sys.stderr,
+            )
+        else:
+            from src.registry.research_origin import (
+                ResearchOriginError,
+                materialize_research_registry,
+            )
+
+            try:
+                materialized = materialize_research_registry()
+            except ResearchOriginError as exc:
+                print(
+                    f"ERROR: cannot materialize research origin/main: {exc}\n"
+                    "Pass --research-registry <fresh checkout> or, for deliberate offline "
+                    "use only, --allow-stale-research-registry.",
+                    file=sys.stderr,
+                )
+                return 1
+            research_registry = materialized.path
+            for warning in materialized.warnings:
+                print(f"WARNING: {warning}", file=sys.stderr)
+            print(f"master registry: {materialized.label} @ {materialized.sha}", file=sys.stderr)
+
     config = StackChangePipelineConfig(
         mode=args.mode,
         repo_root=args.repo_root,
         lean_registry=args.lean_registry,
-        research_registry=args.research_registry,
+        research_registry=research_registry,
         descriptors=args.descriptors,
         stack_priors=args.stack_priors,
         operator_summary=args.operator_summary,
@@ -1816,7 +1880,11 @@ def main(argv: list[str] | None = None) -> int:
         numa_mode=args.numa_mode,
         allow_stale_research_registry=args.allow_stale_research_registry,
     )
-    report = run_stack_change_pipeline(config)
+    try:
+        report = run_stack_change_pipeline(config)
+    finally:
+        if materialized is not None:
+            materialized.cleanup()
     _print_report(report)
     return 0 if report.ok else 1
 

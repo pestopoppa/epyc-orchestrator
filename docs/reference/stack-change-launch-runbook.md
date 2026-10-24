@@ -16,6 +16,8 @@ Use this runbook whenever model, role, serving-topology, or stack-prior truth ch
    uv run python scripts/registry/stack_change_pipeline.py update
    ```
 
+   The master registry is read from research origin/main by default; never sync or edit the shared research clone to make a rebuild work; pass `--research-registry` only for a deliberate alternative checkout.
+
 3. Run the full no-inference stack-change gate:
 
    ```bash

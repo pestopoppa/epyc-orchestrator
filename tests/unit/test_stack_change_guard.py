@@ -3502,6 +3502,9 @@ def test_shipped_priors_and_descriptors_carry_no_checkout_absolute_pins() -> Non
     pins = dict(priors["source_artifacts"])
     pins.update({f"descriptors.{k}": v for k, v in descriptors["source_registries"].items()})
     for label, pin in pins.items():
+        if str(pin["path"]).startswith("origin/main:"):
+            # Research master materialized from git: a label, not a filesystem path.
+            continue
         path = Path(pin["path"])
         if path.is_absolute():
             # Only files OUTSIDE this repository may be pinned absolutely.

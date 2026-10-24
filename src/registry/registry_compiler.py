@@ -352,7 +352,14 @@ def _format_header_banner(
     role_list = ", ".join(sorted(active_roles))
     resolved_master = master_path.expanduser().resolve(strict=False)
     canonical_master = DEFAULT_MASTER_PATH.resolve(strict=False)
-    if resolved_master == canonical_master:
+    from src.registry.research_origin import provenance_for
+
+    origin = provenance_for(master_path)
+    if origin is not None:
+        master_source = (
+            f"# master registry materialized from research {origin[0]}\n"
+        )
+    elif resolved_master == canonical_master:
         master_source = f"# canonical master registry at {resolved_master}\n"
     else:
         master_source = (
