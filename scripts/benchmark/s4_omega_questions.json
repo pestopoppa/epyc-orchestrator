@@ -1,0 +1,28 @@
+{
+  "schema": "epyc.s4_omega_question_suite.v1",
+  "suite_id": "s4-omega-smoke-3-v1",
+  "description": "Pinned smoke fixture for the S4 Omega A/B runner; not a decision-grade suite.",
+  "questions": [
+    {
+      "id": "arith-multiply-17-23",
+      "prompt": "Calculate 17 multiplied by 23. Return only the integer.",
+      "expected": "391",
+      "scoring_method": "exact_match",
+      "scoring_config": {}
+    },
+    {
+      "id": "python-squares-1-10",
+      "prompt": "Using Python in the REPL, compute the sum of the squares of the integers from 1 through 10. Return only the integer.",
+      "expected": "385",
+      "scoring_method": "exact_match",
+      "scoring_config": {}
+    },
+    {
+      "id": "alphabetical-orchid-cedar",
+      "prompt": "Which word comes first alphabetically: orchid or cedar? Return only the word.",
+      "expected": "cedar",
+      "scoring_method": "exact_match",
+      "scoring_config": {}
+    }
+  ]
+}
