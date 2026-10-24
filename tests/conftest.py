@@ -26,9 +26,11 @@ See also:
 """
 
 import atexit
+import fnmatch
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import warnings
 from pathlib import Path
@@ -43,6 +45,12 @@ _PROGRESS_LOG_DIR_ENV = "ORCHESTRATOR_PROGRESS_LOG_DIR"
 _PREVIOUS_PROGRESS_LOG_DIR = os.environ.get(_PROGRESS_LOG_DIR_ENV)
 _TEST_PROGRESS_LOG_TEMP = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-progress-")
 os.environ[_PROGRESS_LOG_DIR_ENV] = _TEST_PROGRESS_LOG_TEMP.name
+
+# Runtime stores that default into the checkout, pinned to a temp dir for the whole run
+# (also before application imports: some bind their path at import).
+_TEST_RUNTIME_STORES = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-stores-")
+for _env, _name in (("ORCHESTRATOR_DELEGATION_REPORT_DIR", "delegation_reports"),):
+    os.environ[_env] = os.path.join(_TEST_RUNTIME_STORES.name, _name)
 
 _PRODUCTION_KERNEL_STORE_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
 
@@ -194,6 +202,58 @@ def pytest_configure(config):
                 "psutil not installed - cannot check memory. Install with: pip install psutil",
                 UserWarning,
             )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_CHECKOUT_LEAK_EXEMPT = (
+    "*__pycache__/*", ".pytest_cache/*", ".hypothesis/*", ".coverage*",  # tool caches
+    # Leaks seen in a full run with no fix yet; shrink this list, never grow it.
+    "data/trace/events.sqlite",
+    "logs/.bg_cleanup.lock",
+    "logs/dispatch/*",
+    "logs/progress/*",
+    "logs/serving_calls/*",
+    "logs/tool_call_audit.jsonl",
+    "orchestration/eval_instrument_ledger.json",
+    "orchestration/procedures/state/test_*.json",
+    "orchestration/repl_memory/sessions/*",
+)
+
+
+def _checkout_untracked() -> set[str] | None:
+    """Untracked and ignored paths in this checkout; None when git cannot say."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(_REPO_ROOT), "status", "--porcelain", "--ignored",
+             "--untracked-files=all", "-z"],
+            capture_output=True, text=True, timeout=120, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    paths = {entry[3:] for entry in out.split("\0") if entry[:2] in ("??", "!!")}
+    return {p for p in paths if not any(fnmatch.fnmatch(p, pat) for pat in _CHECKOUT_LEAK_EXEMPT)}
+
+
+def pytest_sessionstart(session):
+    # Leak guard (A6-02): a test that writes into the checkout fails the run. --ignored
+    # matters: every leak seen so far (MagicMock/, data/trace, logs/) is gitignored.
+    if not hasattr(session.config, "workerinput"):
+        session.config._checkout_before = _checkout_untracked()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    before = getattr(session.config, "_checkout_before", None)
+    after = _checkout_untracked() if before is not None else None
+    leaked = sorted(after - before) if after is not None else []
+    if leaked:
+        listing = "\n  ".join(leaked[:50])
+        session.config.get_terminal_writer().line(
+            f"\nTests wrote {len(leaked)} new path(s) into the checkout {_REPO_ROOT}; "
+            f"write under tmp_path instead:\n  {listing}",
+            red=True,
+        )
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.fixture(scope="session", autouse=True)
