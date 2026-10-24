@@ -18,7 +18,12 @@ and changes via stack-change); it prints a JSON plan and the YAML fragment to ap
 repo derivation: --repo-map JSON {"<gguf basename or role>": {"hf_repo": "org/repo", "hf_filename": "path/in/repo.gguf",
 "hf_revision": "<sha or ref>"}} wins; else a path /<models root>/<org>/<repo>/[sub/]file.gguf gives org/repo.
 
-Network: OFF unless --allow-network. Offline use: --tree-dir DIR holding `<org>__<repo>.json` (a saved tree
+A relative `model.path` resolves against `runtime_defaults.model_base_path` (as the launcher's pin_index does),
+so a role such as `QuantFactory/Qwen2.5-0.5B-GGUF/x.gguf` derives its repo from the path.
+
+Network: OFF unless --allow-network. Requests are strictly sequential (one at a time, cached per repo+ref) and
+spaced by --request-interval seconds (default 1.0); only the HF revision and tree METADATA endpoints are read,
+never a file. Offline use: --tree-dir DIR holding `<org>__<repo>.json` (a saved tree
 API response). Tests: tests/unit/test_backfill_registry_artifact_pins.py
 """
 from __future__ import annotations
@@ -28,6 +33,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -36,11 +42,31 @@ from typing import Any, Callable
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.registry.artifact_integrity import shard_paths  # noqa: E402
+from src.registry.artifact_integrity import _abs_model_path, shard_paths  # noqa: E402
 
 MODELS_ROOT = "/mnt/raid0/llm/models"
 HF = "https://huggingface.co"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def throttled(get: Callable[[str], Any], interval: float,
+              clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+              log: list[str] | None = None) -> Callable[[str], Any]:
+    """Wrap ``get`` so consecutive calls are at least ``interval`` s apart; ``log`` collects every URL requested."""
+    last: list[float] = []
+
+    def wrapped(url: str) -> Any:
+        if last:
+            wait = interval - (clock() - last[0])
+            if wait > 0:
+                sleep(wait)
+        if log is not None:
+            log.append(url)
+        try:
+            return get(url)
+        finally:
+            last[:] = [clock()]
+    return wrapped
 
 
 def http_get_json(url: str) -> Any:
@@ -68,11 +94,12 @@ def fetch_repo_state(repo: str, revision: str, get: Callable[[str], Any]) -> tup
 
 
 def lineup_ggufs(registry: dict) -> list[tuple[str, dict]]:
+    """(role, model) for each `roles.<role>.model` with a .gguf path; `_abs_path` is the base-resolved path."""
     out = []
     for role, cfg in sorted((registry.get("roles") or {}).items()):
         m = cfg.get("model") if isinstance(cfg, dict) else None
         if isinstance(m, dict) and str(m.get("path", "")).endswith(".gguf"):
-            out.append((role, m))
+            out.append((role, {**m, "_abs_path": _abs_model_path(str(m["path"]), registry)}))
     return out
 
 
@@ -118,7 +145,7 @@ def plan(registry: dict, repo_map: dict, get: Callable[[str], Any] | None,
     for role, m in lineup_ggufs(registry):
         if all(m.get(f) for f in ("hf_repo", "hf_revision", "sha256")):
             continue
-        path = m["path"]
+        path = m["_abs_path"]
         row: dict[str, Any] = {"role": role, "path": path}
         spec = derive_repo(path, role, repo_map)
         if not spec:
@@ -173,6 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tree-dir", help="offline: DIR/<org>__<repo>.json tree-API responses")
     ap.add_argument("--allow-network", action="store_true", help="query huggingface.co (off by default)")
     ap.add_argument("--only-role", action="append", help="limit to these roles (repeatable)")
+    ap.add_argument("--request-interval", type=float, default=1.0,
+                    help="network mode: minimum seconds between consecutive HF API requests (sequential always)")
     ap.add_argument("--out", help="write the JSON plan here (default stdout)")
     a = ap.parse_args(argv)
     reg = yaml.safe_load(Path(a.registry).read_text())
@@ -180,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         reg = {**reg, "roles": {k: v for k, v in reg["roles"].items() if k in a.only_role}}
     rmap = json.loads(Path(a.repo_map).read_text()) if a.repo_map else {}
     loader = get = None
+    requested: list[str] = []
     if a.tree_dir:
         def loader(repo: str, rev: str) -> tuple[str, dict]:  # noqa: F811
             data = json.loads((Path(a.tree_dir) / (repo.replace("/", "__") + ".json")).read_text())
@@ -187,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             tree = data["tree"] if isinstance(data, dict) else data
             return sha, {e["path"]: e for e in tree if e.get("type") == "file"}
     elif a.allow_network:
-        get = http_get_json
+        get = throttled(http_get_json, a.request_interval, log=requested)
     else:
         print("refusing: pass --tree-dir (offline) or --allow-network", file=sys.stderr)
         return 2
@@ -195,7 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     counts: dict[str, int] = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
-    doc = json.dumps({"counts": counts, "rows": rows, "yaml_fragment": yaml_fragment(rows)}, indent=2)
+    doc = json.dumps({"counts": counts, "rows": rows, "yaml_fragment": yaml_fragment(rows),
+                      "requests": requested}, indent=2)
     if a.out:
         Path(a.out).write_text(doc + "\n")
     else:

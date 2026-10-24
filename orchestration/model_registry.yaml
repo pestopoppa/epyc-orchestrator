@@ -2,9 +2,9 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# noncanonical master input at /mnt/raid0/llm/worktrees/ratify-ctxckpt-research-20261024/orchestration/model_registry.yaml
+# noncanonical master input at /mnt/raid0/llm/worktrees/f8-sec-art-11/orchestration/model_registry.yaml
 # canonical source of truth: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/worktrees/ratify-ctxckpt-orch-20261024/orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/worktrees/f8-sec-art-11-orch/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -13,8 +13,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-24T08:24:23+00:00
-# Cache key:   83ca1dffd1a062c9...
+# Compiled at: 2026-10-24T08:51:45+00:00
+# Cache key:   7f65c84dd160968d...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -2956,6 +2956,10 @@ roles:
     model:
       name: Qwen2.5-0.5B
       path: QuantFactory/Qwen2.5-0.5B-GGUF/Qwen2.5-0.5B.Q8_0.gguf
+      uploader_class: community
+      hf_repo: QuantFactory/Qwen2.5-0.5B-GGUF
+      hf_revision: 808e875628eb5b8d1e30728425039f4067b6ae16
+      sha256: f8ff0bcbf1899d4b98278fd28dfb2e5a06f3cbb6176f86538809057184bafa88
       quant: Q8_0
       size_gb: 0.5
       architecture: dense
@@ -2975,6 +2979,10 @@ roles:
     model:
       name: Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0
       path: /mnt/raid0/llm/models/Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0.gguf
+      uploader_class: community
+      hf_repo: jukofyork/Qwen3-Coder-Instruct-DRAFT-0.75B-GGUF
+      hf_revision: 07e59a562b865181360f93ca2087ceaa097dc949
+      sha256: b8471644cfd8f7721c49b97043b173245b230d306f3d149d7d3d235b58c83b53
       quant: Q4_0
       size_gb: 0.45
       architecture: dense

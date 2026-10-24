@@ -93,12 +93,13 @@ def test_pipeline_artifact_integrity_step_errors_and_warnings(tmp_path, monkeypa
     lean.write_text(yaml.safe_dump(reg))
     cfg = pipeline.StackChangePipelineConfig(mode="check", lean_registry=lean, repo_root=tmp_path)
     step = pipeline._artifact_integrity_step(cfg)
-    assert step.name == "artifact_integrity" and step.ok and step.warnings        # missing pins warn only
-    monkeypatch.setenv("REGISTRY_ARTIFACT_PINS_STRICT", "1")
+    # SEC-ART-1.1: strict by default -- missing pins on a lineup role are errors with no env set
+    assert step.name == "artifact_integrity" and not step.ok
+    assert any("artifact pin missing" in e for e in step.errors) and any("uploader_class" in e for e in step.errors)
+    monkeypatch.setenv("REGISTRY_ARTIFACT_PINS_STRICT", "0")                      # explicit opt-out warns only
     step = pipeline._artifact_integrity_step(cfg)
-    assert not step.ok and any("artifact pin missing" in e or "uploader_class" in e for e in step.errors)
+    assert step.ok and step.warnings
     reg["roles"]["frontdoor"]["model"]["sha256"] = "zz"
     lean.write_text(yaml.safe_dump(reg))
-    monkeypatch.delenv("REGISTRY_ARTIFACT_PINS_STRICT")
     step = pipeline._artifact_integrity_step(cfg)
     assert not step.ok and any("sha256" in e for e in step.errors)               # malformed is always an error
