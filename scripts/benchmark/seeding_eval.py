@@ -417,6 +417,7 @@ def _build_role_result(
         error=error,
         error_type=error_type,
         tokens_generated=resp.get("tokens_generated", 0),
+        turns=resp.get("turns", 0),
         prompt_tokens=resp.get("tokens_used", 0) or resp.get("prompt_tokens", 0),
         tool_output_tokens=resp.get("tool_output_tokens", 0),
         tools_used=resp.get("tools_used", 0),

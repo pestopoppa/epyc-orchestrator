@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -57,10 +58,12 @@ def test_build_role_result_infrastructure_and_success_paths():
     assert err_type_infra == "infrastructure"
     assert rr_infra.passed is False
     assert rr_infra.error == "timed out"
+    assert rr_infra.turns == 0
 
     success_resp = {
         "answer": "42",
         "tokens_generated": 7,
+        "turns": 3,
         "tokens_used": 12,
         "tools_called": ["x"],
         "delegation_events": [{"k": 1}],
@@ -73,7 +76,7 @@ def test_build_role_result_infrastructure_and_success_paths():
     with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
         rr_ok, err_type_ok = _MOD._build_role_result(
             role="frontdoor",
-            mode="direct",
+            mode="repl",
             resp=success_resp,
             elapsed=1.0,
             expected="42",
@@ -81,8 +84,11 @@ def test_build_role_result_infrastructure_and_success_paths():
             scoring_config={},
         )
     assert err_type_ok == "none"
+    assert rr_ok.mode == "repl"
     assert rr_ok.passed is True
     assert rr_ok.tokens_generated == 7
+    assert rr_ok.turns == 3
+    assert asdict(rr_ok)["turns"] == 3
     assert rr_ok.prompt_tokens == 12
     assert rr_ok.web_research_results == [{"query": "q"}]
     assert rr_ok.scratchpad_insights == [{"insight": "i"}]
