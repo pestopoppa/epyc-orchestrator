@@ -2,9 +2,8 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# noncanonical master input at /mnt/raid0/llm/worktrees/f8-sec-art-11/orchestration/model_registry.yaml
-# canonical source of truth: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/worktrees/f8-sec-art-11-orch/orchestration/stack_topology.yaml
+# master registry materialized from research origin/main:orchestration/model_registry.yaml
+# with drafter selection from orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -13,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-24T08:51:45+00:00
-# Cache key:   7f65c84dd160968d...
+# Compiled at: 2026-10-24T14:19:37+00:00
+# Cache key:   c4a5743699ceac48...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1813,7 +1812,8 @@ server_mode:
       template_diff: data/template_reviews/frontdoor.diff
       upstream_ref: Qwen/Qwen3.6-35B-A3B
       upstream_revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
-      template_diff_reviewed: generated 2026-10-21 by the SEC-ART-5 lane (diff upstream -> served); human review sign-off pending
+      template_diff_reviewed: SIGNED reviewed_by="Daniele" reviewed_on=2026-10-24 diff=data/template_reviews/frontdoor.diff diff_sha256=98b0d55c261f388bf11b919be59e0ce2eb7971f89117d716414fa136388715df upstream_sha256_12=e84f32a23fdd
+        served_sha256_12=1443ea9ab4bb review_digest_sha256=50c357749c54064da46aa8f9a0e49f9fd0d63f4cb08924469d8a6767b29e2516 gate=RATIFY-SEC-ART-POST-B-20261023
       base: froggeric v22.3 minus inline-tag scan plus Sharp terseness
       evidence: 'CT-1b A/B artifacts: /workspace/artifacts/chat-templates/epyc-qwen3x-v1/ab-cpu-20260821/ct1b-terse/. E-7: frontdoor''s calibration stamps are voided by the template axis and must re-measure.'
     model_role: qwen36_35b_a3b_mtp_q8_local
@@ -1923,7 +1923,8 @@ server_mode:
       template_diff: data/template_reviews/worker_vision.diff
       upstream_ref: Qwen/Qwen3-VL-30B-A3B-Instruct
       upstream_revision: 9c4b90e1e4ba969fd3b5378b57d966d725f1b86c
-      template_diff_reviewed: generated 2026-10-21 by the SEC-ART-5 lane (diff upstream -> served); human review sign-off pending
+      template_diff_reviewed: SIGNED reviewed_by="Daniele" reviewed_on=2026-10-24 diff=data/template_reviews/worker_vision.diff diff_sha256=05bdf611f26c4ad4af4a966400c697eb527ed5acb6d03fd01595d3101ea12bac
+        upstream_sha256_12=3636d0f0bd6b served_sha256_12=3636d0f0bd6b review_digest_sha256=50c357749c54064da46aa8f9a0e49f9fd0d63f4cb08924469d8a6767b29e2516 gate=RATIFY-SEC-ART-POST-B-20261023
     slots: 1
     serving_shape:
       n_ctx: 65536
@@ -1984,7 +1985,8 @@ server_mode:
       template_diff: data/template_reviews/architect_critic.diff
       upstream_ref: Qwen/Qwen3.8-27B
       upstream_revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
-      template_diff_reviewed: generated 2026-10-21 by the SEC-ART-5 lane (diff upstream -> served); human review sign-off pending
+      template_diff_reviewed: SIGNED reviewed_by="Daniele" reviewed_on=2026-10-24 diff=data/template_reviews/architect_critic.diff diff_sha256=cfdc36542b761d30ece2d0c65fc33be67cbbf776b833cb39a0b7b251162d6cbc
+        upstream_sha256_12=c3cf9e34abf4 served_sha256_12=1443ea9ab4bb review_digest_sha256=50c357749c54064da46aa8f9a0e49f9fd0d63f4cb08924469d8a6767b29e2516 gate=RATIFY-SEC-ART-POST-B-20261023
       base: froggeric v22.3 minus inline-tag scan plus Sharp terseness
       evidence: 'CT-1b A/B artifacts: /workspace/artifacts/chat-templates/epyc-qwen3x-v1/ab-cpu-20260821/ct1b-terse/ (measured on Qwen3.6-35B-A3B; UNMEASURED on this role''s Qwen3.8-27B). E-7: this role''s
         calibration stamps are voided by the template axis and must re-measure. NOTE this REPLACES the Unsloth-embedded template documented under the qwen38_27b_q8_local role row.'
@@ -2048,7 +2050,8 @@ server_mode:
       template_diff: data/template_reviews/architect_general.diff
       upstream_ref: Qwen/Qwen3.8-Flash-Next
       upstream_revision: de4b8e4d43b917e7706784d8bb445c9af86a3540
-      template_diff_reviewed: generated 2026-10-21 by the SEC-ART-5 lane (diff upstream -> served); human review sign-off pending
+      template_diff_reviewed: SIGNED reviewed_by="Daniele" reviewed_on=2026-10-24 diff=data/template_reviews/architect_general.diff diff_sha256=3f80812a214ada4967559cdc49edd473063d7b6cafc98ce2d936c5e9bd1659cd
+        upstream_sha256_12=c3cf9e34abf4 served_sha256_12=12827f24b742 review_digest_sha256=50c357749c54064da46aa8f9a0e49f9fd0d63f4cb08924469d8a6767b29e2516 gate=RATIFY-SEC-ART-POST-B-20261023
     description: 'Adversarial plan critic — Qwen3.8-Flash-Next UD-IQ4_XS (qwen4exp, 512 experts / 10 active, SSM+attention hybrid, trained ctx 262144 verified from the GGUF header). 2026-09-22: replaces
       Qwen3.5-122B-A10B UD-Q4_K_M (RETIRED). SOLE ROLE ON THIS PROCESS — ingest_long_context is NOT an alias here (operator ruling C2). Consultable (architect_critic.critique_plan) AND routable (boosted-reasoning
       escalation).'
