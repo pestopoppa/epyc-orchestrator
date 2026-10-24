@@ -280,8 +280,9 @@ def test_rubric_judge_flag_on_sends_zero(monkeypatch, flag_on):
 def test_eval_generation_call_never_carries_field(monkeypatch, flag_on):
     """The eval GENERATION call (call_kwargs path) is not a judge; it must not opt in."""
     src = (REPO_ROOT / "scripts" / "autopilot" / "eval_tower.py").read_text()
-    gen = src[src.index("resp = call_orchestrator_forced(**call_kwargs)") - 6000 :
-              src.index("resp = call_orchestrator_forced(**call_kwargs)")]
+    gen = src[src.index("resp = call_orchestrator_forced(**call_kwargs, **_bitwise_generation_spec_kwargs())") - 6000 :
+              src.index("resp = call_orchestrator_forced(**call_kwargs, **_bitwise_generation_spec_kwargs())")]
+    # Q38-T10.2(b): the only opt-in is the env-gated helper on the call line itself.
     assert "speculative_n_max" not in gen and "_bitwise_spec" not in gen
 
 
@@ -502,7 +503,7 @@ def test_only_bitwise_callers_of_call_orchestrator_forced_opt_in():
                         rel = str(path.relative_to(REPO_ROOT))
                         opted[rel] = opted.get(rel, 0) + 1
     assert total >= 12  # the table is not vacuous
-    assert opted == {"scripts/autopilot/eval_tower.py": 2, "src/pipeline_monitor/model_grader.py": 1}
+    assert opted == {"scripts/autopilot/eval_tower.py": 3, "src/pipeline_monitor/model_grader.py": 1}
 
 
 # ── Q38-T10.1 control-arm script (never launched here) ─────────────────────
@@ -521,3 +522,21 @@ def test_control_arm_script_builds_flat_key_and_refuses_production_ports(tmp_pat
     assert mod.main(["--out", str(tmp_path), "--print-commands"]) == 0
     assert "--spec-type none" in capsys.readouterr().out
     assert mod.first_div([1, 2, 3], [1, 2, 4]) == 2 and mod.first_div([1], [1]) is None
+
+
+# ── Q38-T10.2(b): EvalTower generation opt-in (env-gated) ──────────────────
+
+
+def test_eval_generation_opt_in_is_env_gated(monkeypatch):
+    et = eval_tower
+    monkeypatch.setattr(et, "_bitwise_spec_kwargs", lambda: {"speculative_n_max": 0})
+    monkeypatch.delenv(et.EVAL_BITWISE_GENERATION_ENV, raising=False)
+    assert et._bitwise_generation_spec_kwargs() == {}
+    for off in ("", "0", "false", "no"):
+        monkeypatch.setenv(et.EVAL_BITWISE_GENERATION_ENV, off)
+        assert et._bitwise_generation_spec_kwargs() == {}
+    for on in ("1", "true", "YES", "on"):
+        monkeypatch.setenv(et.EVAL_BITWISE_GENERATION_ENV, on)
+        assert et._bitwise_generation_spec_kwargs() == {"speculative_n_max": 0}
+    monkeypatch.setattr(et, "_bitwise_spec_kwargs", lambda: {})  # flag OFF -> still unchanged
+    assert et._bitwise_generation_spec_kwargs() == {}
