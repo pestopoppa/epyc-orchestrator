@@ -1142,8 +1142,10 @@ def _stack_manifest_info(
             _filter_by_numa_mode,
         )
         from scripts.server.stack_numa import instance_shape_class
-    except Exception:
-        return {}, {}
+    except Exception as exc:
+        # FAIL CLOSED: `return {}, {}` here compiled every role as a non-live
+        # candidate with status 'compiled' and zero gaps (A3-02).
+        raise StackPriorsCompileError({"*": [f"stack manifest unavailable: {exc!r}"]}) from exc
 
     # ESC-8 Fix 6: an explicit ``numa_mode`` (resolved against the realized fleet
     # by the WRITE/check compile path) wins; when None, preserve the legacy
@@ -2081,8 +2083,8 @@ def _launch_runtime_record(
             _V2_ROLES,
         )
         from src.roles import Role
-    except Exception:
-        return {}
+    except Exception as exc:
+        raise StackPriorsCompileError({role: [f"launch runtime unavailable: {exc!r}"]}) from exc
 
     descriptor_serving = descriptor.get("serving") if isinstance(descriptor.get("serving"), dict) else {}
     primary_role = _first_string(launch.get("primary_roles")) or role
@@ -3044,9 +3046,15 @@ def compile_stack_priors(
     # env. Off by default so a plain compile keeps the legacy behavior.
     if numa_mode is None and require_realized_mode:
         numa_mode = _realized_compile_numa_mode(connect=connect)
-    stack_aliases, stack_roles = _stack_manifest_info(numa_mode=numa_mode)
     role_records: dict[str, Any] = {}
     gaps_by_role: dict[str, list[str]] = {}
+    try:
+        stack_aliases, stack_roles = _stack_manifest_info(numa_mode=numa_mode)
+    except StackPriorsCompileError as exc:
+        if not allow_incomplete:
+            raise
+        stack_aliases, stack_roles = {}, {}
+        gaps_by_role.update(exc.gaps_by_role)
 
     for role in sorted(requested_roles):
         descriptor = descriptor_by_role.get(role)
@@ -3142,16 +3150,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    roles = set(args.roles) if args.roles else None
-    priors = compile_stack_priors(
-        registry_path=args.registry,
-        descriptor_path=args.descriptors,
-        active_roles=roles,
-        allow_incomplete=args.allow_incomplete,
-    )
+    sources = {
+        "registry_path": args.registry,
+        "descriptor_path": args.descriptors,
+        "active_roles": set(args.roles) if args.roles else None,
+        "allow_incomplete": args.allow_incomplete,
+    }
     if args.dry_run:
         yaml.safe_dump(
-            priors,
+            compile_stack_priors(**sources),
             sys.stdout,
             sort_keys=False,
             default_flow_style=False,
@@ -3159,13 +3166,7 @@ def main(argv: list[str] | None = None) -> int:
             width=200,
         )
     else:
-        write_stack_priors(
-            args.output,
-            registry_path=args.registry,
-            descriptor_path=args.descriptors,
-            active_roles=roles,
-            allow_incomplete=args.allow_incomplete,
-        )
+        priors = write_stack_priors(args.output, **sources)
         print(f"OK: wrote {len(priors.get('roles', {}))} role priors to {args.output}")
     return 0
 

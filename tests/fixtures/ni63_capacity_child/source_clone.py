@@ -45,7 +45,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "src/registry/registry_loader.py": ("04ce943c896ebe77492093967a024f667ef2614d", "cb30b408ab7aba3fe5946cd940d488d75d441a4825e93e9c8fb30d1699bd1616"),
     "src/registry/model_descriptors.py": ("924ff6c98279a8e59ec7d006f3edc20dcb80e523", "f7eac72c2cf8b9549005f4195c2c143fd22ae9e1dad9de65bef141cce4a193b1"),
     "src/registry/research_origin.py": ("f41a8de1d31942d223ad1e86a8415c43e6a005ec", "6b2f3aa7844887b491f8883878f97f2563cced61c5bb2bd51dc5e23f8027d226"),
-    "src/registry/stack_priors.py": ("c47b10ba48f9210fa05a07fe02828b77974c7870", "891253e3e3e45ce8f9939df63f2e0ed40dfc1e154801d3bff53e0b8ba284448d"),
+    "src/registry/stack_priors.py": ("2dad5510a3d98d786ea910a49d1ae1b5cb0b31c0", "83f9585c70fa37120a55b03d3bbc031a9de1e8fb895efa715bfae4403194a346"),
     "src/registry_loader.py": ("c68c5918b94e4a54a07a7c6642d92365480bf656", "81f3dc46dea4af9eb8df9adb4a73d2e900e1d040d107a73a04053f8ea72b77be"),
     "src/roles.py": ("59432d52c3c5ebb661c336f70627267073cfa4cb", "408f10be964705638562ec9a6d0e1cd56b26ac849fdb964e8bac0c9a7fe4be61"),
     "src/scheduling/__init__.py": ("e81d5c94b0479ae82472dfceec8393cd8f8286d2", "a65b963b3d38ca2d680827bfe3debe3e7d91095ea50723c5c40ce6b19dd0df51"),

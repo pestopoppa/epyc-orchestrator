@@ -1524,6 +1524,24 @@ def test_compile_refuses_missing_descriptor_without_allow_incomplete(tmp_path: P
     assert f"{_RETIRED_ARCHITECT_ROLE}: Missing model descriptor binding" in str(exc.value)
 
 
+def test_compile_refuses_when_stack_manifest_does_not_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3-02: a broken scripts.server import compiled 'status: compiled', 0 gaps, 0 live roles."""
+    import sys
+
+    registry_path = _write_yaml(tmp_path / "registry.yaml", {"server_mode": {}, "roles": {}})
+    descriptor_path = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    monkeypatch.setitem(sys.modules, "scripts.server.stack_manifest", None)
+    kwargs = {"registry_path": registry_path, "descriptor_path": descriptor_path, "active_roles": set()}
+
+    with pytest.raises(StackPriorsCompileError, match="stack manifest unavailable"):
+        compile_stack_priors(**kwargs)
+    priors = compile_stack_priors(**kwargs, allow_incomplete=True)
+    assert priors["status"] == "compiled_with_gaps"
+    assert "stack manifest unavailable" in priors["known_global_gaps"]["*"][0]
+
+
 # --------------------------------------------------------------------------- #
 # ESC-8 Fix 6: priors compile must not read the ambient default-full env.       #
 # --------------------------------------------------------------------------- #
