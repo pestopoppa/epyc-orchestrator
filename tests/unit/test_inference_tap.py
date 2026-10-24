@@ -4,7 +4,7 @@
 import json
 import threading
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import yaml
 
@@ -573,6 +573,20 @@ class TestSentinelFallback:
 
         assert is_active() is False
         assert _read_sentinel() == ""
+
+    def test_config_failure_fallback_is_not_cached(self, tmp_path, monkeypatch):
+        """A3-19: one failed get_config() must not pin the /mnt/raid0 fallback for good."""
+        import src.config
+        import src.runtime.inference_tap as tap
+
+        monkeypatch.setattr(tap, "_SENTINEL", None)
+        monkeypatch.setattr(src.config, "get_config", Mock(side_effect=RuntimeError("boom")))
+        assert tap._get_sentinel() == "/mnt/raid0/llm/tmp/.inference_tap_active"
+
+        cfg = Mock()
+        cfg.paths.tmp_dir = tmp_path
+        monkeypatch.setattr(src.config, "get_config", lambda: cfg)
+        assert tap._get_sentinel() == str(tmp_path / ".inference_tap_active")
 
 
 def test_grep_lines_reverse_finds_old_request_past_tail(tmp_path):

@@ -69,3 +69,25 @@ def test_alias_thinking_kwarg_agrees_with_its_host():
                 f"{host_ctk['enable_thinking']}"
             )
     assert checked, "no alias with a thinking kwarg found: the guard would be vacuous"
+
+
+def test_registry_load_failure_backs_off_and_warns_once(monkeypatch, caplog):
+    # A3-19: a failing registry used to be re-parsed on every request, silently.
+    attempts = []
+
+    def _boom(**_kwargs):
+        attempts.append(1)
+        raise rl.RegistryError("broken registry")
+
+    monkeypatch.setattr(rl, "RegistryLoader", _boom)
+    monkeypatch.setattr(rl, "_CTK_LOADER", None)
+    monkeypatch.setattr(rl, "_CTK_RETRY_AT", 0.0)
+    with caplog.at_level("WARNING", logger=rl.logger.name):
+        for _ in range(100):
+            assert rl.chat_template_kwargs_for_role("frontdoor") is None
+        assert len(attempts) == 1
+        assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+        assert rl._CTK_RETRY_AT > rl.time.monotonic()
+        monkeypatch.setattr(rl, "_CTK_RETRY_AT", 0.0)  # backoff window elapsed
+        assert rl.chat_template_kwargs_for_role("frontdoor") is None
+    assert len(attempts) == 2

@@ -68,7 +68,8 @@ def _get_sentinel() -> str:
             from src.config import get_config
             _SENTINEL = str(get_config().paths.tmp_dir / ".inference_tap_active")
         except Exception:
-            _SENTINEL = "/mnt/raid0/llm/tmp/.inference_tap_active"
+            # Not cached: the next read (rate-limited by _read_sentinel) retries.
+            return "/mnt/raid0/llm/tmp/.inference_tap_active"
     return _SENTINEL
 
 # Module-level lock for serialising writes across threads

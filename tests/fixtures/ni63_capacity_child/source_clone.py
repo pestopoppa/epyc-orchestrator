@@ -42,7 +42,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "src/env_parsing.py": ("11e3b7c80df1a6f921d467f7a924d287e1ac28dc", "2626fb2c47012c56a7f7e99fe03f088977f9b061c77bcd1edf0dfa1e12b7d52f"),
     "src/registry/__init__.py": ("287333a63889217a52c0082a7e316dc64670ee1f", "50ddc75e291c2caaae688bbe94c4f3144a5751eb11e0a65ee35b5632ea3a9c6d"),
     "src/registry/kernel_paths.py": ("fb006e99f7ab8f3706f1371934e51800256988eb", "3993e914d5436f753a114bd6d92aaf727c75230baa1efe32d28351183b42a379"),
-    "src/registry/registry_loader.py": ("0bddc98c3a27c40d4e117783f70808f22551fc4f", "c4a4bf71f0f90384ffb64c673897c9fd496889e4e395a2e3eaf94933550ed18b"),
+    "src/registry/registry_loader.py": ("04ce943c896ebe77492093967a024f667ef2614d", "cb30b408ab7aba3fe5946cd940d488d75d441a4825e93e9c8fb30d1699bd1616"),
     "src/registry/model_descriptors.py": ("924ff6c98279a8e59ec7d006f3edc20dcb80e523", "f7eac72c2cf8b9549005f4195c2c143fd22ae9e1dad9de65bef141cce4a193b1"),
     "src/registry/research_origin.py": ("f41a8de1d31942d223ad1e86a8415c43e6a005ec", "6b2f3aa7844887b491f8883878f97f2563cced61c5bb2bd51dc5e23f8027d226"),
     "src/registry/stack_priors.py": ("c47b10ba48f9210fa05a07fe02828b77974c7870", "891253e3e3e45ce8f9939df63f2e0ed40dfc1e154801d3bff53e0b8ba284448d"),

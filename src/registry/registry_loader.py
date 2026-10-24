@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -947,19 +948,29 @@ def main() -> int:
 # RegistryLoader handle through every call site. Lazily loads the default
 # registry once (validate_paths=False — read-only metadata lookup).
 _CTK_LOADER: "RegistryLoader | None" = None
+_CTK_RETRY_AFTER_S = 30.0
+_CTK_RETRY_AT = 0.0  # monotonic; a failed load is not retried before this
 
 
 def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
     """Per-role chat_template_kwargs from the default registry, or None.
 
     Cached + fail-soft: any load/lookup error returns None (no injection),
-    so a missing/invalid registry never breaks inference.
+    so a missing/invalid registry never breaks inference. A failed load is
+    logged and retried at most every _CTK_RETRY_AFTER_S (it runs per request).
     """
-    global _CTK_LOADER
+    global _CTK_LOADER, _CTK_RETRY_AT
     if _CTK_LOADER is None:
+        if time.monotonic() < _CTK_RETRY_AT:
+            return None
         try:
             _CTK_LOADER = RegistryLoader(validate_paths=False)
-        except Exception:
+        except Exception as exc:
+            _CTK_RETRY_AT = time.monotonic() + _CTK_RETRY_AFTER_S
+            logger.warning(
+                "registry load failed; per-role chat_template_kwargs are dropped "
+                "(retry in %.0f s): %s", _CTK_RETRY_AFTER_S, exc,
+            )
             return None
     try:
         return _CTK_LOADER.get_role_chat_template_kwargs(role_name)
