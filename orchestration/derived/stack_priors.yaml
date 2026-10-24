@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-10-21T10:38:36Z'
+compiled_at: '2026-10-24T08:23:52Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: orchestration/model_registry.yaml
-    sha256: a7b705ba8cc5df2ea5dac0bb758181f148dab98d74367a976c8c93ac4e6550db
-    repo_commit: a66e4f83
+    sha256: 860812be5a7826141d9d1ae70b48861c3add00ef1bbed19788e40f7a714c2aeb
+    repo_commit: dcaa0774
   descriptors:
     path: orchestration/model_descriptors.yaml
-    sha256: 2f34c4e1dffd250b08189e1886ba14fbf5ec9375cf9b1547d602554d3996b149
-    repo_commit: a66e4f83
+    sha256: 3cf96a1be555f04e948989fd51102149f265cf617c4cc03a2d6d7585d71baa1a
+    repo_commit: dcaa0774
   stack_manifest:
     path: scripts/server/stack_manifest.py
     sha256: 5f7acb6d067e4420edfc2bcc662148cd8fc7aff6c90682c51ece207666171610
-    repo_commit: a66e4f83
+    repo_commit: dcaa0774
   stack_numa:
     path: scripts/server/stack_numa.py
     sha256: edfdb41035ec638d3eab60631024ebece56a5e2d9b577851bf02e05a446e0c32
-    repo_commit: a66e4f83
+    repo_commit: dcaa0774
   launch_manifest:
     path: orchestration/launch_manifest.yaml
-    sha256: 9fbb6b6c899b9812f71ae5f1d4faaccd1db7d9fe44e63194da9c538faf5e0e83
-    repo_commit: a66e4f83
+    sha256: f6fbad08d57ea03246b3ce91fe9e48e9dfd95ef15eb4a5aa87208975fde831bc
+    repo_commit: dcaa0774
   stack_topology:
     path: orchestration/stack_topology.yaml
     sha256: 15d7cfa5a2ca4abc373f44d41313b1abb9468b35f1d85c87ac244d9dad1b8de1
-    repo_commit: a66e4f83
+    repo_commit: dcaa0774
   orchestrator_stack:
     path: scripts/server/orchestrator_stack.py
-    sha256: 645cef6e3ec5196734c3bf27a84fe1f1670302e5ac958431a54625b19104d833
-    repo_commit: a66e4f83
+    sha256: 446b66122fbb466b07ba029f5cabeed52bfc942c123cec9b3f383a94f4ab52d3
+    repo_commit: dcaa0774
   stack_paths:
     path: scripts/server/stack_paths.py
     sha256: 85291c79110d3ab7683b0acbffb9158f320c138ad61f8acbdde269ee7a47abd5
-    repo_commit: a66e4f83
+    repo_commit: dcaa0774
   stack_runtime:
     path: scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: a66e4f83
+    repo_commit: dcaa0774
 roles:
   architect_critic:
     role: architect_critic
@@ -158,7 +158,8 @@ roles:
             image_min_tokens: null
             cache_ram: 65536
             cache_idle_slots: false
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: null
             override_kv: []
             spec:
@@ -384,6 +385,7 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             chat_template_file: null
+            served_template_sha256: 12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce
             reasoning: 'off'
             override_kv: []
             spec:
@@ -570,7 +572,8 @@ roles:
             image_min_tokens: null
             cache_ram: 65536
             cache_idle_slots: false
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: null
             override_kv: []
             spec:
@@ -814,7 +817,8 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: 32768
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
             override_kv: []
             spec:
@@ -1016,7 +1020,8 @@ roles:
             image_min_tokens: null
             cache_ram: 65536
             cache_idle_slots: false
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: null
             override_kv: []
             spec:
@@ -1686,7 +1691,8 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: 32768
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
             override_kv: []
             spec:
@@ -1886,6 +1892,7 @@ roles:
             image_min_tokens: null
             cache_ram: null
             chat_template_file: null
+            served_template_sha256: 3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4
             reasoning: null
             override_kv: []
             spec:
@@ -2292,7 +2299,8 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: 32768
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2495,7 +2503,8 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: 32768
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2698,7 +2707,8 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: 32768
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
             override_kv: []
             spec:
@@ -2901,7 +2911,8 @@ roles:
             n_gpu_layers: null
             image_min_tokens: null
             cache_ram: 32768
-            chat_template_file: /mnt/raid0/llm/models/chat-templates/epyc-qwen3x-v1-terse.jinja
+            chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
+            served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
             override_kv: []
             spec:
@@ -3101,6 +3112,7 @@ roles:
             image_min_tokens: 1024
             cache_ram: 0
             chat_template_file: null
+            served_template_sha256: 3636d0f0bd6bef02654cdffdc447b79cb2cef8ab02cc75267345946291a489e4
             reasoning: null
             override_kv: []
             spec:

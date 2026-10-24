@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-10-21T10:38:35Z'
+compiled_at: '2026-10-24T08:23:51Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: orchestration/model_registry.yaml
-    repo_commit: a66e4f83
-    sha256: a7b705ba8cc5df2ea5dac0bb758181f148dab98d74367a976c8c93ac4e6550db
+    repo_commit: dcaa0774
+    sha256: 860812be5a7826141d9d1ae70b48861c3add00ef1bbed19788e40f7a714c2aeb
   research:
-    path: /mnt/raid0/llm/worktrees/corpus-flagoff-research-20261021/orchestration/model_registry.yaml
-    repo_commit: f75d8fa78
-    sha256: 0e6a63bb72234290af01ee809563b3c6fb149eb9abc87c8b6a1771c510ae3d2d
+    path: /mnt/raid0/llm/worktrees/ratify-ctxckpt-research-base-20261024/orchestration/model_registry.yaml
+    repo_commit: d3db98e28
+    sha256: b7813719bedba8d02b0f80c555a326118a20cab90fd88132514354b053cd6b21
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
