@@ -39,13 +39,13 @@ from orchestration.repl_memory.q_scorer import QScorer, ScoringConfig
 class _FakeEmbedder:
     """Deterministic embeddings keyed by objective text."""
 
-    def embed_task_ir(self, context):
+    def embed_task_ir(self, context, *, side):
         obj = (context or {}).get("objective") or ""
         seed = int.from_bytes(hashlib.sha256(obj.encode()).digest()[:8], "little")
         rng = np.random.default_rng(seed)
         return rng.standard_normal(1024).astype(np.float32)
 
-    def embed_failure_context(self, context):
+    def embed_failure_context(self, context, *, side):
         obj = (context or {}).get("reason") or ""
         seed = int.from_bytes(hashlib.sha256(obj.encode()).digest()[:8], "little")
         rng = np.random.default_rng(seed)

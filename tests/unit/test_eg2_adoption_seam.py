@@ -317,6 +317,48 @@ def test_task_embedder_flag_on_truncates_prefixes_and_demands_a_side(monkeypatch
     assert emb.embed_batch(["a", "b"], side="document").shape == (2, 256)
 
 
+def test_retriever_callsite_uses_the_real_query_prefix(monkeypatch):
+    from orchestration.repl_memory.retriever import TwoPhaseRetriever
+
+    raw = np.random.default_rng(12).standard_normal(768).astype(np.float32)
+    emb, http = _task_embedder(monkeypatch, raw, truncate_dim=256)
+    retriever = TwoPhaseRetriever.__new__(TwoPhaseRetriever)
+    retriever.embedder = emb
+    retriever._retrieve = lambda vector, **_kwargs: [vector]
+
+    result = retriever.retrieve_for_routing({"objective": "find a file"})
+
+    assert len(result) == 1 and result[0].shape == (256,)
+    assert len(http.posted) == 1
+    assert http.posted[0].startswith("task: search result | query: ")
+
+
+def test_generic_llm_embedding_tool_forwards_optional_side_and_search_roles(monkeypatch):
+    from orchestration.repl_memory import embedder as embedder_mod
+    from orchestration.tools import llm
+
+    calls = []
+
+    class FakeTaskEmbedder:
+        def embed_text(self, text, *, side=None):
+            calls.append((text, side))
+            return np.array([1.0, 0.0], dtype=np.float32)
+
+    monkeypatch.setattr(embedder_mod, "TaskEmbedder", FakeTaskEmbedder)
+
+    assert llm.embed_text("generic") == [1.0, 0.0]
+    assert llm.embed_text("stored", side="document") == [1.0, 0.0]
+    results = llm.similarity_search("lookup", ["candidate"], top_k=1)
+
+    assert calls == [
+        ("generic", None),
+        ("stored", "document"),
+        ("lookup", "query"),
+        ("candidate", "document"),
+    ]
+    assert results[0]["item"] == "candidate"
+
+
 def test_env_flag_makes_the_config_and_parallel_client_follow(monkeypatch):
     from orchestration.repl_memory.embedder import EmbeddingConfig
     from orchestration.repl_memory.parallel_embedder import EmbedderPoolConfig

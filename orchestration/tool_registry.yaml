@@ -727,6 +727,11 @@ tools:
     description: "Generate embedding for text"
     parameters:
       text: {type: string, required: true}
+      side:
+        type: string
+        required: false
+        enum: [query, document]
+        description: "Embedding role; required when the EG2 seam is enabled"
     returns: {type: array, description: "Embedding vector"}
     implementation:
       type: python

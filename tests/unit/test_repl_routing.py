@@ -208,7 +208,8 @@ class TestRecall:
             def __init__(self, *a, **k):
                 pass
 
-            def embed_exploration(self, query, context_preview):
+            def embed_exploration(self, query, context_preview, *, side):
+                assert side == "query"
                 return np.zeros(4, dtype=np.float32)
 
             def close(self):

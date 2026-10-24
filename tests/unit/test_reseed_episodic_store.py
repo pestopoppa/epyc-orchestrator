@@ -15,7 +15,7 @@ class _Embedder:
     def __init__(self, values: np.ndarray):
         self.values = values
 
-    def embed_batch(self, _texts: list[str]) -> np.ndarray:
+    def embed_batch(self, _texts: list[str], *, side: str) -> np.ndarray:
         return self.values
 
 
@@ -23,7 +23,9 @@ def test_checked_batch_prefers_parallel_pool() -> None:
     values = np.ones((2, 1024), dtype=np.float32)
 
     class Parallel:
-        def embed_batch_sync(self, texts: list[str]) -> np.ndarray:
+        def embed_batch_sync(
+            self, texts: list[str], *, side: str
+        ) -> np.ndarray:
             assert texts == ["a", "b"]
             return values
 
@@ -39,7 +41,14 @@ def test_balanced_batch_round_robins_servers() -> None:
     calls: list[tuple[str, str]] = []
 
     class Parallel:
-        config = type("Config", (), {"server_urls": ["a", "b", "c"]})()
+        config = type(
+            "Config", (), {"server_urls": ["a", "b", "c"], "truncate_dim": None}
+        )()
+
+        @staticmethod
+        def _with_side(text: str, side: str) -> str:
+            assert side == "document"
+            return text
 
         async def _get_client(self):
             return object()
@@ -51,7 +60,9 @@ def test_balanced_batch_round_robins_servers() -> None:
         async def close(self) -> None:
             await asyncio.sleep(0)
 
-    result = reseed._balanced_parallel_batch(Parallel(), ["x", "y", "z", "w"])
+    result = reseed._balanced_parallel_batch(
+        Parallel(), ["x", "y", "z", "w"], side="document"
+    )
 
     assert result.shape == (4, 1024)
     assert calls == [("a", "x"), ("b", "y"), ("c", "z"), ("a", "w")]
@@ -130,7 +141,7 @@ def test_strict_embedder_fails_when_every_server_path_fails(monkeypatch) -> None
     monkeypatch.setattr(
         embedder._parallel_client,
         "embed_sync",
-        lambda _text: (_ for _ in ()).throw(RuntimeError("down")),
+        lambda _text, *, side: (_ for _ in ()).throw(RuntimeError("down")),
     )
     monkeypatch.setattr(embedder, "_check_server", lambda: False)
     try:

@@ -31,7 +31,10 @@ class _FixtureEmbedder:
     def __init__(self, *args, **kwargs):
         pass
 
-    def embed_exploration(self, query: str, context_preview: str) -> np.ndarray:
+    def embed_exploration(
+        self, query: str, context_preview: str, *, side: str
+    ) -> np.ndarray:
+        assert side == "query"
         vec = np.zeros(DIM, dtype=np.float32)
         vec[0] = 1.0
         return vec

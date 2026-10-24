@@ -73,7 +73,7 @@ class _MockEmbedder:
     def __init__(self, dim: int = 1024):
         self.dim = dim
 
-    def embed_text(self, text: str) -> np.ndarray:
+    def embed_text(self, text: str, *, side: str) -> np.ndarray:
         h = hashlib.sha256(text.encode()).digest()
         rng = np.random.RandomState(int.from_bytes(h[:4], "big"))
         vec = rng.randn(self.dim).astype(np.float32)

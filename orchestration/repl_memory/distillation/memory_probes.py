@@ -267,7 +267,7 @@ def live_recall_composition(k: int = 10) -> dict:  # pragma: no cover - needs th
     emb, store = TaskEmbedder(), EpisodicStore()
 
     def retrieve(q: str, kk: int):
-        hits = store.retrieve_by_similarity(emb.embed_text(q), k=kk)
+        hits = store.retrieve_by_similarity(emb.embed_text(q, side="query"), k=kk)
         return [(m.context or {}).get("source") for m in hits]
 
     return recall_composition(retrieve, k=k)

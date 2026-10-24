@@ -46,7 +46,8 @@ class MockEpisodicStore:
 class MockEmbedder:
     """Mock embedder that returns deterministic embeddings."""
 
-    def embed_text(self, text: str) -> np.ndarray:
+    def embed_text(self, text: str, *, side: str) -> np.ndarray:
+        assert side == "document"
         rng = np.random.default_rng(hash(text) % (2**31))
         emb = rng.normal(size=1024).astype(np.float64)
         return emb / (np.linalg.norm(emb) + 1e-8)
@@ -144,7 +145,10 @@ class TestBipartiteRoutingGraphSync:
 
         # Add LLM roles first
         for role in ["frontdoor", "coder_escalation", "architect_general"]:
-            graph.add_llm_role(role, f"{role} desc", embedder.embed_text(role), 8080, 50.0, "HOT", 20.0)
+            graph.add_llm_role(
+                role, f"{role} desc", embedder.embed_text(role, side="document"),
+                8080, 50.0, "HOT", 20.0,
+            )
 
         result = graph.sync_from_episodic_store(store, embedder)
         assert result["task_types"] == 3
@@ -175,7 +179,10 @@ class TestBipartiteRoutingGraphSync:
         embedder = MockEmbedder()
 
         for role in ["frontdoor", "coder_escalation", "architect_general"]:
-            graph.add_llm_role(role, f"{role} desc", embedder.embed_text(role), 8080, 50.0, "HOT", 20.0)
+            graph.add_llm_role(
+                role, f"{role} desc", embedder.embed_text(role, side="document"),
+                8080, 50.0, "HOT", 20.0,
+            )
 
         graph.sync_from_episodic_store(store, embedder)
         edges = graph.get_edge_index()

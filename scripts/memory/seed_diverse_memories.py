@@ -397,7 +397,7 @@ def seed_diverse_memories(store: EpisodicStore, embedder: TaskEmbedder,
                 initial_q = 1.0
 
             try:
-                embedding = embedder.embed_task_ir(task_ir)
+                embedding = embedder.embed_task_ir(task_ir, side="document")
                 store.store(
                     embedding=embedding,
                     action=routing,

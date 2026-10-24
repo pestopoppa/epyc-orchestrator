@@ -158,14 +158,14 @@ class ResearchContext:
             self._embedder_failed = True
             return None
 
-    def _get_embedding(self, text: str) -> Optional[np.ndarray]:
+    def _get_embedding(self, text: str, *, side: str = "query") -> Optional[np.ndarray]:
         """Get embedding for text, returning None on failure."""
         embedder = self._get_embedder()
         if embedder is None:
             return None
 
         try:
-            return embedder.embed_sync(text)
+            return embedder.embed_sync(text, side=side)
         except Exception as e:
             logger.debug("Embedding failed: %s", e)
             return None
@@ -218,6 +218,16 @@ class ResearchContext:
             embed_text = f"{query} {content[:1000]}"
             embedding = self._get_embedding(embed_text)
 
+        # The incoming node is a lookup query and also becomes a stored node.
+        # With EG2, persist its document-side vector separately; with the seam
+        # off, preserve the legacy single embedding request and vector.
+        stored_embedding = embedding
+        embedder = self._get_embedder() if embedding is not None else None
+        if embedding is not None and getattr(
+            getattr(embedder, "config", None), "truncate_dim", None
+        ):
+            stored_embedding = self._get_embedding(embed_text, side="document")
+
         # Find cross-references
         refs = self._find_string_refs(content)
 
@@ -237,7 +247,7 @@ class ResearchContext:
             size=len(content),
             parent_id=parent_id,
             refs=refs,
-            embedding=embedding,
+            embedding=stored_embedding,
         )
 
         self.nodes[node_id] = node

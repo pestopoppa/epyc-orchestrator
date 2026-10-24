@@ -215,7 +215,7 @@ class KnowledgeDistiller:
         vectors: list[np.ndarray] = []
         for e in entries:
             text = f"{e['description']} {e['insight']}"
-            vectors.append(self.store._embed(text))
+            vectors.append(self.store._embed(text, side="document"))
         return np.stack(vectors)
 
     @staticmethod

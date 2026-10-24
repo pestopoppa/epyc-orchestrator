@@ -103,7 +103,8 @@ def test_cli_write_missing_syncs_projection(tmp_path: Path, capsys, monkeypatch)
     )
     embed_calls: list[str] = []
 
-    def mock_owned_embedder_call(self, text: str):
+    def mock_owned_embedder_call(self, text: str, *, side: str):
+        assert side == "document"
         assert os.environ.get("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS") == "1"
         embed_calls.append(text)
         return np.ones(1024, dtype=np.float32)
@@ -150,7 +151,8 @@ def test_cli_write_missing_emits_degraded_policy_warning_in_markdown(
     )
     embed_calls: list[str] = []
 
-    def mock_owned_embedder_call(self, text: str):
+    def mock_owned_embedder_call(self, text: str, *, side: str):
+        assert side == "document"
         assert os.environ.get("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS") == "1"
         embed_calls.append(text)
         return np.ones(1024, dtype=np.float32)
@@ -193,7 +195,8 @@ def test_cli_write_missing_requires_embedding_without_hash_override(
         def __init__(self, config):
             self.config = config
 
-        def embed_text(self, text: str):
+        def embed_text(self, text: str, *, side: str):
+            assert side == "document"
             embed_calls.append(text)
             raise RuntimeError("semantic embeddings unavailable")
 

@@ -310,7 +310,7 @@ class DistillationPipeline:
             )
 
             text = skill_embedding_text(skill.title, skill.when_to_apply, skill.task_types)
-            vec = self.embedder.embed_text(text)
+            vec = self.embedder.embed_text(text, side="document")
             if is_degenerate_embedding(vec) or is_hash_fallback_embedding(text, vec):
                 logger.warning(
                     "Embedder returned a fallback/degenerate vector for skill %s "

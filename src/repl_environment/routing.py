@@ -189,7 +189,9 @@ class _RoutingMixin:
             embedder = TaskEmbedder()
 
             context_preview = self.context[:500] if self.context else ""
-            query_embedding = embedder.embed_exploration(query, context_preview)
+            query_embedding = embedder.embed_exploration(
+                query, context_preview, side="query"
+            )
             memories = store.retrieve_by_similarity(
                 query_embedding,
                 k=limit,

@@ -449,3 +449,26 @@ class TestParallelEmbedderAsyncContextManager:
         np.testing.assert_allclose(np.linalg.norm(vec), 1.0, rtol=1e-6)
         np.testing.assert_allclose(vec[:2], [0.6, 0.8], rtol=1e-6)
         assert any(m == "POST" and u.endswith("/embedding") for m, u in calls)
+
+    @pytest.mark.asyncio
+    async def test_embed_text_async_forwards_explicit_side(self, monkeypatch):
+        import orchestration.repl_memory.parallel_embedder as module
+
+        seen = []
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return None
+
+            async def embed_async(self, text, *, side=None):
+                seen.append((text, side))
+                return np.ones(4, dtype=np.float32)
+
+        monkeypatch.setattr(module, "ParallelEmbedderClient", FakeClient)
+
+        await module.embed_text_async("lookup", side="query")
+
+        assert seen == [("lookup", "query")]

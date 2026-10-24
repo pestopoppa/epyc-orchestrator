@@ -260,9 +260,11 @@ class _RecordingEmbedder:
 
     def __init__(self, *args, **kwargs):
         self.texts: list[str] = []
+        self.sides: list[str | None] = []
 
-    def embed_text(self, text: str):
+    def embed_text(self, text: str, *, side: str):
         self.texts.append(text)
+        self.sides.append(side)
         return np.ones(4, dtype=np.float32)
 
 
@@ -322,6 +324,7 @@ class TestSeedLoaderWriter:
         assert stats["failed"] == 0, "the write loop swallows exceptions — guard it"
         assert stats["loaded"] == 2
         assert embedder.texts == [GOLDEN_SEED_TEXT, GOLDEN_SEED_TYPED_TEXT]
+        assert embedder.sides == ["document", "document"]
         # The defect this replaces: the raw task string with no prefix.
         assert "List files in a directory" not in embedder.texts
 
@@ -335,6 +338,7 @@ class TestSeedLoaderWriter:
         # keeps the test non-vacuous without pinning the seed count.
         assert stats["loaded"] > 50, "seed set unexpectedly small — test is vacuous"
         assert len(embedder.texts) == len(store.stored) == stats["loaded"]
+        assert embedder.sides == ["document"] * len(embedder.texts)
         for text, context in zip(embedder.texts, store.stored):
             assert text == record_from_legacy_context(context).embedding_text()
             assert text.startswith("type:") or text.startswith("objective:")
@@ -425,6 +429,7 @@ class TestWritersDelegateToTheCanonicalBuilder:
         assert stats["failed"] == 0 and stats["loaded"] == 1
         assert calls, "seed_loader did not call MemoryRecord.embedding_text()"
         assert embedder.texts == calls
+        assert embedder.sides == ["document"]
 
     def test_no_live_writer_hand_builds_the_convention(self):
         """No `objective:` f-string may survive outside the canonical builder."""

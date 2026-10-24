@@ -554,7 +554,7 @@ def seed_diverse_failures(store: EpisodicStore, embedder: TaskEmbedder,
             }
 
             try:
-                embedding = embedder.embed_task_ir(task_ir)
+                embedding = embedder.embed_task_ir(task_ir, side="document")
                 store.store(
                     embedding=embedding,
                     action=wrong_action,

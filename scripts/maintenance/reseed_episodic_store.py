@@ -207,11 +207,11 @@ def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
     # async batch fan-out directly; retain the generic method for test doubles.
     parallel = getattr(embedder, "_parallel_client", None)
     if parallel is not None and hasattr(parallel, "_embed_single_server"):
-        raw = _balanced_parallel_batch(parallel, texts)
+        raw = _balanced_parallel_batch(parallel, texts, side="document")
     elif parallel is not None and hasattr(parallel, "embed_batch_sync"):
-        raw = parallel.embed_batch_sync(texts)
+        raw = parallel.embed_batch_sync(texts, side="document")
     else:
-        raw = embedder.embed_batch(texts)
+        raw = embedder.embed_batch(texts, side="document")
     vecs = np.asarray(raw, dtype=np.float32)
     if vecs.shape != (len(texts), 1024):
         raise ReseedVerificationError(
@@ -225,7 +225,9 @@ def _checked_batch(embedder, texts: list[str]) -> np.ndarray:
     return vecs / norms[:, None]
 
 
-def _balanced_parallel_batch(parallel, texts: list[str]) -> np.ndarray:
+def _balanced_parallel_batch(
+    parallel, texts: list[str], *, side: str
+) -> np.ndarray:
     """Fan a maintenance batch evenly across every configured BGE server."""
 
     async def run() -> np.ndarray:
@@ -235,6 +237,7 @@ def _balanced_parallel_batch(parallel, texts: list[str]) -> np.ndarray:
         client = await parallel._get_client()
 
         async def embed_one(index: int, text: str) -> np.ndarray:
+            text = parallel._with_side(text, side)
             for offset in range(len(urls)):
                 url = urls[(index + offset) % len(urls)]
                 embedding = await parallel._embed_single_server(client, url, text)

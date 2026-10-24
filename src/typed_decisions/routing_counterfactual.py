@@ -694,7 +694,7 @@ class EmbeddedVectorSource:
         started = time.perf_counter()
         for text in unique_texts:
             try:
-                vector = embedder.embed_text(text)
+                vector = embedder.embed_text(text, side="document")
             except Exception as exc:  # noqa: BLE001 - any failure is no embedding
                 raise VectorsUnavailable(
                     f"live embedding failed at {self.server_url} (fallback disabled): {exc}"

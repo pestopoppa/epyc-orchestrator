@@ -15,12 +15,16 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
-def embed_text(text: str) -> list[float]:
-    """Generate embedding for text using TaskEmbedder."""
+def embed_text(text: str, side: str | None = None) -> list[float]:
+    """Generate an embedding using TaskEmbedder.
+
+    With the EG2 seam enabled, callers must identify whether the text is a
+    query or a stored document. ``None`` deliberately keeps the seam fail-closed.
+    """
     try:
         from orchestration.repl_memory.embedder import TaskEmbedder
         embedder = TaskEmbedder()
-        embedding = embedder.embed_text(text)
+        embedding = embedder.embed_text(text, side=side)
         return embedding.tolist()
     except Exception as e:
         return {"error": str(e)}
@@ -33,13 +37,13 @@ def similarity_search(query: str, items: list[str], top_k: int = 5) -> list[dict
         embedder = TaskEmbedder()
 
         # Embed query
-        query_emb = embedder.embed_text(query)
+        query_emb = embedder.embed_text(query, side="query")
         query_norm = query_emb / (np.linalg.norm(query_emb) + 1e-8)
 
         # Embed and score all items
         results = []
         for i, item in enumerate(items):
-            item_emb = embedder.embed_text(item)
+            item_emb = embedder.embed_text(item, side="document")
             item_norm = item_emb / (np.linalg.norm(item_emb) + 1e-8)
             score = float(np.dot(query_norm, item_norm))
             results.append({

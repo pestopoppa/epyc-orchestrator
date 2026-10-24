@@ -264,7 +264,7 @@ def populate_llm_roles(graph, embedder, model_fleet: list[dict] | None = None):
     """Populate LLMRole nodes from model fleet definition."""
     fleet = model_fleet if model_fleet is not None else load_model_fleet()
     for model in fleet:
-        emb = embedder.embed_text(model["description"])
+        emb = embedder.embed_text(model["description"], side="document")
         graph.add_llm_role(
             role_id=model["role_id"],
             description=model["description"],

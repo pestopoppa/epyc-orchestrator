@@ -541,7 +541,7 @@ class ParallelEmbedderClient:
 
 
 # Convenience function for one-off embeddings
-async def embed_text_async(text: str) -> np.ndarray:
+async def embed_text_async(text: str, side: Optional[str] = None) -> np.ndarray:
     """Generate embedding for text using default parallel client.
 
     This is a convenience function for one-off embeddings. For multiple
@@ -550,10 +550,12 @@ async def embed_text_async(text: str) -> np.ndarray:
 
     Args:
         text: Text to embed
+        side: ``'document'`` or ``'query'`` for the EG2 seam; omitted values
+            remain fail-closed when the seam is enabled.
 
     Returns:
         Embedding vector (normalized)
     """
     async with ParallelEmbedderClient() as client:
-        return await client.embed_async(text)
+        return await client.embed_async(text, side=side)
 

@@ -186,7 +186,7 @@ class _RecordingStore:
 
 
 class _StubEmbedder:
-    def embed_task_ir(self, task_context):
+    def embed_task_ir(self, task_context, *, side):
         return [0.0] * 8
 
 

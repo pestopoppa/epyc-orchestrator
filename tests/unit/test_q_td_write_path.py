@@ -13,6 +13,7 @@ pin:
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -26,13 +27,18 @@ class _FakeEmbedder:
     """Deterministic embeddings keyed by objective text: identical objective ->
     identical vector, so the FAISS similarity lookup finds the prior row."""
 
-    def embed_task_ir(self, context):
+    def __init__(self):
+        self.sides = []
+
+    def embed_task_ir(self, context, *, side):
+        self.sides.append(side)
         obj = (context or {}).get("objective") or ""
         seed = int.from_bytes(hashlib.sha256(obj.encode()).digest()[:8], "little")
         rng = np.random.default_rng(seed)
         return rng.standard_normal(1024).astype(np.float32)
 
-    def embed_failure_context(self, context):
+    def embed_failure_context(self, context, *, side):
+        self.sides.append(side)
         # Escalation identity is the failure `reason` (what build_memory_record
         # stores as `objective`), so key the vector on it — otherwise every
         # escalation would embed identically and the similarity lookup would be
@@ -53,6 +59,78 @@ class _FakeLogger:
 
     def log(self, entry):
         self.logged.append(entry)
+
+
+@pytest.mark.parametrize("truncate_dim", [None, 256])
+@pytest.mark.parametrize("precomputed", [False, True])
+def test_external_q_score_preserves_precomputed_and_splits_new_row_sides(
+    truncate_dim, precomputed
+):
+    class SideAwareEmbedder:
+        config = SimpleNamespace(truncate_dim=truncate_dim)
+
+        def __init__(self):
+            self.calls: list[str | None] = []
+            self.vectors: dict[str | None, np.ndarray] = {}
+
+        def embed_task_ir(self, _task_ir, *, side):
+            self.calls.append(side)
+            seed = 11 if side == "query" else 29
+            rng = np.random.default_rng(seed)
+            vector = rng.standard_normal(1024).astype(np.float32)
+            vector /= np.linalg.norm(vector)
+            self.vectors[side] = vector
+            return vector
+
+    class CapturingStore:
+        def __init__(self):
+            self.lookups = []
+            self.stored = []
+
+        def retrieve_by_similarity(self, *, query_embedding, **_kwargs):
+            self.lookups.append(np.asarray(query_embedding).copy())
+            return []
+
+        def store(self, **kwargs):
+            self.stored.append(kwargs)
+            return "new-memory"
+
+    embedder = SideAwareEmbedder()
+    store = CapturingStore()
+    scorer = QScorer(
+        store=store,
+        embedder=embedder,
+        logger=_FakeLogger(),
+        reader=None,
+    )
+
+    provided = None
+    if precomputed:
+        provided = np.random.default_rng(41).standard_normal(1024).astype(np.float32)
+        provided /= np.linalg.norm(provided)
+    result = scorer.score_external_result(
+        task_description="objective",
+        action="frontdoor",
+        reward=0.5,
+        context={"task_type": "chat"},
+        embedding=provided,
+        action_type="routing",
+    )
+
+    assert result["memories_created"] == 1
+    expected_query = provided if provided is not None else embedder.vectors["query"]
+    assert np.array_equal(store.lookups[0], expected_query)
+    expected_calls = (
+        [] if precomputed else ["query", "document"] if truncate_dim else ["query"]
+    )
+    assert embedder.calls == expected_calls
+    if provided is not None:
+        expected_stored = provided
+    elif truncate_dim:
+        expected_stored = embedder.vectors["document"]
+    else:
+        expected_stored = embedder.vectors["query"]
+    assert np.array_equal(store.stored[0]["embedding"], expected_stored)
 
 
 @pytest.fixture
@@ -123,6 +201,7 @@ def test_flag_off_appends_a_fresh_row_per_observation(scorer):
     mems = scorer.store.get_all_memories(action_type="routing")
     assert len(mems) == 2  # append-only: two rows for the same (objective, action)
     assert all(m.update_count == 0 for m in mems)
+    assert scorer.embedder.sides == ["document", "document"]
 
 
 def test_flag_on_updates_in_place(scorer_write_enabled):
@@ -134,6 +213,7 @@ def test_flag_on_updates_in_place(scorer_write_enabled):
     mems = scorer.store.get_all_memories(action_type="routing")
     assert len(mems) == 1  # single consolidated row
     assert mems[0].update_count == 1
+    assert scorer.embedder.sides == ["query", "query"]
 
 
 def test_flag_on_matches_apply_td_update_math(scorer_write_enabled):
@@ -208,6 +288,7 @@ def test_escalation_flag_off_appends_a_fresh_row_per_observation(scorer):
     mems = scorer.store.get_all_memories(action_type="escalation")
     assert len(mems) == 2  # append-only legacy behaviour preserved byte-for-byte
     assert all(m.update_count == 0 for m in mems)
+    assert scorer.embedder.sides == ["document", "document"]
 
 
 def test_escalation_flag_on_updates_in_place(scorer_write_enabled):
@@ -219,6 +300,7 @@ def test_escalation_flag_on_updates_in_place(scorer_write_enabled):
     mems = scorer.store.get_all_memories(action_type="escalation")
     assert len(mems) == 1
     assert mems[0].update_count == 1
+    assert scorer.embedder.sides == ["query", "query"]
 
 
 def test_escalation_flag_on_matches_apply_td_update_math(scorer_write_enabled):

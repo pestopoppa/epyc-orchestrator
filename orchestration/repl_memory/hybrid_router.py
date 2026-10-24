@@ -279,7 +279,7 @@ class HybridRouter:
 
         # Get query embedding (reuse from retriever)
         try:
-            embedding = self.retriever.embedder.embed_task_ir(task_ir)
+            embedding = self.retriever.embedder.embed_task_ir(task_ir, side="query")
         except Exception:
             return
 
@@ -360,7 +360,7 @@ class HybridRouter:
         Returns None if embedding fails.
         """
         try:
-            embedding = self.retriever.embedder.embed_task_ir(task_ir)
+            embedding = self.retriever.embedder.embed_task_ir(task_ir, side="query")
         except Exception:
             return None
 

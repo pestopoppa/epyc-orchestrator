@@ -170,7 +170,7 @@ class TwoPhaseRetriever:
         Returns:
             List of RetrievalResult sorted by combined score
         """
-        embedding = self.embedder.embed_task_ir(task_ir)
+        embedding = self.embedder.embed_task_ir(task_ir, side="query")
         return self._retrieve(
             embedding,
             action_type="routing",
@@ -190,7 +190,7 @@ class TwoPhaseRetriever:
         Returns:
             List of RetrievalResult sorted by combined score
         """
-        embedding = self.embedder.embed_failure_context(failure_context)
+        embedding = self.embedder.embed_failure_context(failure_context, side="query")
         return self._retrieve(embedding, action_type="escalation")
 
     def retrieve_for_exploration(
@@ -208,7 +208,7 @@ class TwoPhaseRetriever:
         Returns:
             List of RetrievalResult sorted by combined score
         """
-        embedding = self.embedder.embed_exploration(query, context_preview)
+        embedding = self.embedder.embed_exploration(query, context_preview, side="query")
         return self._retrieve(embedding, action_type="exploration")
 
     def retrieve_for_classification(
@@ -229,7 +229,9 @@ class TwoPhaseRetriever:
         Returns:
             List of RetrievalResult sorted by combined score.
         """
-        embedding = self.embedder.embed_classification_prompt(prompt, classification_type)
+        embedding = self.embedder.embed_classification_prompt(
+            prompt, classification_type, side="query"
+        )
         return self._retrieve(embedding, action_type="classification")
 
     def _retrieve(
@@ -828,7 +830,7 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
         task_ir: Dict[str, Any],
     ) -> List[RetrievalResult]:
         """Retrieve with graph enhancement for routing."""
-        embedding = self.embedder.embed_task_ir(task_ir)
+        embedding = self.embedder.embed_task_ir(task_ir, side="query")
         task_type = task_ir.get("task_type", "general")
         return self._retrieve(
             embedding,
@@ -842,7 +844,7 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
         failure_context: Dict[str, Any],
     ) -> List[RetrievalResult]:
         """Retrieve with graph enhancement for escalation."""
-        embedding = self.embedder.embed_failure_context(failure_context)
+        embedding = self.embedder.embed_failure_context(failure_context, side="query")
         task_type = failure_context.get("task_type", "escalation")
         return self._retrieve(embedding, action_type="escalation", task_type=task_type)
 
@@ -853,7 +855,7 @@ class GraphEnhancedRetriever(TwoPhaseRetriever):
         task_type: str = "exploration",
     ) -> List[RetrievalResult]:
         """Retrieve with graph enhancement for exploration."""
-        embedding = self.embedder.embed_exploration(query, context_preview)
+        embedding = self.embedder.embed_exploration(query, context_preview, side="query")
         return self._retrieve(embedding, action_type="exploration", task_type=task_type)
 
     def get_best_action(
@@ -924,7 +926,7 @@ class SkillAugmentedRouter:
         # Retrieve skills for prompt augmentation
         skill_context = ""
         try:
-            embedding = self.embedder.embed_task_ir(task_ir)
+            embedding = self.embedder.embed_task_ir(task_ir, side="query")
             task_type = task_ir.get("task_type", "general")
             results = self.skill_retriever.retrieve_for_task(embedding, task_type)
             if results:

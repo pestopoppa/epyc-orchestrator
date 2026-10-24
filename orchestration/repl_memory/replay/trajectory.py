@@ -208,12 +208,12 @@ class TrajectoryExtractor:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         if hasattr(self.embedder, "embed_batch"):
-            embeddings = self.embedder.embed_batch(texts)
+            embeddings = self.embedder.embed_batch(texts, side="query")
             for i, t in enumerate(trajectories):
                 t.embedding = embeddings[i]
         else:
             for i, t in enumerate(trajectories):
-                t.embedding = self.embedder.embed_text(texts[i])
+                t.embedding = self.embedder.embed_text(texts[i], side="query")
 
         # Save cache
         self._save_embedding_cache(cache_path, trajectories)

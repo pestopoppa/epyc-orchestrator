@@ -206,7 +206,7 @@ class _FlakyEmbedder:
         self.fail_on = fail_on
         self.n = 0
 
-    def embed_text(self, text):
+    def embed_text(self, text, *, side):
         self.n += 1
         if self.fail_on is None or self.n in self.fail_on:
             raise ConnectionError("embedder down")

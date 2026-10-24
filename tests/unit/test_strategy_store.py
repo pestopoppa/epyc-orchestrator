@@ -20,8 +20,10 @@ class MockEmbedder:
 
     def __init__(self, dim: int = 1024):
         self.dim = dim
+        self.sides: list[str | None] = []
 
-    def embed_text(self, text: str) -> np.ndarray:
+    def embed_text(self, text: str, *, side: str) -> np.ndarray:
+        self.sides.append(side)
         h = hashlib.sha256(text.encode()).digest()
         rng = np.random.RandomState(int.from_bytes(h[:4], "big"))
         vec = rng.randn(self.dim).astype(np.float32)
@@ -68,6 +70,22 @@ class TestStrategyStore:
         results = store.retrieve("caching performance", k=5)
         assert len(results) >= 1
         assert results[0].similarity_score > 0
+
+    def test_store_and_retrieve_use_document_then_query_sides(self, tmp_path):
+        embedder = MockEmbedder()
+        from orchestration.repl_memory.strategy_store import StrategyStore
+
+        store = StrategyStore(
+            path=tmp_path / "strategies",
+            embedding_dim=1024,
+            embedder=embedder,
+        )
+        try:
+            store.store("strategy", "insight", source_trial_id=1, species="test")
+            store.retrieve("lookup", k=1)
+            assert embedder.sides == ["document", "query"]
+        finally:
+            store.close()
 
     def test_retrieve_empty_store(self, store):
         results = store.retrieve("anything", k=5)

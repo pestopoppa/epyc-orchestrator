@@ -503,7 +503,7 @@ def seed_memory(force: bool = False, init: bool = False) -> dict:
             # post-reseed `seed` rows carried a convention no other writer and
             # no query path produces (EPD-3-R3) — they were unreachable by
             # similarity search from the live path by construction.
-            embedding = embedder.embed_text(record.embedding_text())
+            embedding = embedder.embed_text(record.embedding_text(), side="document")
             store.store(
                 embedding=embedding,
                 action=action,

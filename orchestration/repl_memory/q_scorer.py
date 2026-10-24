@@ -1603,7 +1603,7 @@ class QScorer:
 
         # Generate embedding for this task
         try:
-            embedding = self.embedder.embed_task_ir(task_context)
+            embedding = self.embedder.embed_task_ir(task_context, side="query")
         except Exception:
             return 0.0
 
@@ -1687,7 +1687,7 @@ class QScorer:
             return 0.0
 
         try:
-            embedding = self.embedder.embed_task_ir(task_context)
+            embedding = self.embedder.embed_task_ir(task_context, side="query")
         except Exception:
             return 0.0
 
@@ -1792,8 +1792,12 @@ class QScorer:
                     "priority": task_started.data.get("priority"),
                 }
 
-                # Generate embedding for task context
-                embedding = self.embedder.embed_task_ir(task_context)
+                # Without find-or-update this branch writes directly, so its
+                # only embedding is document-side. The lookup path starts query-side.
+                embedding_side = "query" if self._q_td_write_enabled else "document"
+                embedding = self.embedder.embed_task_ir(
+                    task_context, side=embedding_side
+                )
 
                 # Store new memory
                 routing = routing_decision.data.get("routing", [])
@@ -1847,8 +1851,19 @@ class QScorer:
                     repl_steps=work.get("repl_steps"),
                     reasoning=work.get("reasoning"),
                 )
+                # The lookup vector is query-prefixed. Only the actual new-row
+                # path needs a document vector; with the seam off, preserve the
+                # legacy single embedding call and its exact vector.
+                stored_embedding = embedding
+                seam_enabled = bool(
+                    getattr(getattr(self.embedder, "config", None), "truncate_dim", None)
+                )
+                if seam_enabled and self._q_td_write_enabled:
+                    stored_embedding = self.embedder.embed_task_ir(
+                        task_context, side="document"
+                    )
                 memory_id = self.store.store(
-                    embedding=embedding,
+                    embedding=stored_embedding,
                     action=action,
                     action_type="routing",
                     model_id=_model_id_for_action(action),
@@ -1996,7 +2011,12 @@ class QScorer:
                 "reason": escalation.data.get("reason"),
             }
 
-            embedding = self.embedder.embed_failure_context(failure_context)
+            # Without find-or-update this branch writes directly, so its only
+            # embedding is document-side. The lookup path starts query-side.
+            embedding_side = "query" if self._q_td_write_enabled else "document"
+            embedding = self.embedder.embed_failure_context(
+                failure_context, side=embedding_side
+            )
             action = f"escalate:{escalation.data.get('from_tier')}->{escalation.data.get('to_tier')}"
 
             # Same append-only defect the routing path had: the sole production
@@ -2042,8 +2062,18 @@ class QScorer:
                     "to_tier": escalation.data.get("to_tier"),
                 },
             )
+            # If no existing row matched, store the same failure text with the
+            # document prompt. Keep the single legacy request when EG2 is off.
+            stored_embedding = embedding
+            seam_enabled = bool(
+                getattr(getattr(self.embedder, "config", None), "truncate_dim", None)
+            )
+            if seam_enabled and self._q_td_write_enabled:
+                stored_embedding = self.embedder.embed_failure_context(
+                    failure_context, side="document"
+                )
             memory_id = self.store.store(
-                embedding=embedding,
+                embedding=stored_embedding,
                 action=action,
                 action_type="escalation",
                 model_id=_model_id_for_action(action),
@@ -2099,7 +2129,10 @@ class QScorer:
         # Clamp reward to valid range
         reward = max(-1.0, min(1.0, reward))
 
-        # Use precomputed embedding or compute it
+        # Use precomputed embedding or compute it. A supplied vector remains
+        # caller-owned; only an internally generated query can be re-embedded
+        # as a document if this call creates a new row.
+        generated_embedding = embedding is None
         if embedding is not None:
             emb_array = np.array(embedding, dtype=np.float32)
         else:
@@ -2109,7 +2142,7 @@ class QScorer:
                 # memory_record.embedding_text() bounds the EMBEDDER input only.
                 "objective": task_description,
             }
-            emb_array = self.embedder.embed_task_ir(task_ir)
+            emb_array = self.embedder.embed_task_ir(task_ir, side="query")
 
         # A hash pseudo-vector can only establish text identity, never semantic
         # similarity. It must not update an existing memory selected by FAISS.
@@ -2207,9 +2240,18 @@ class QScorer:
                     if k not in metrics_excluded
                 },
             )
+            # This branch only runs for a new record. Re-embed as a document
+            # under EG2; otherwise retain the legacy one-call vector.
+            stored_embedding = emb_array
+            if generated_embedding and getattr(
+                getattr(self.embedder, "config", None), "truncate_dim", None
+            ):
+                stored_embedding = self.embedder.embed_task_ir(
+                    task_ir, side="document"
+                )
 
             memory_id = self.store.store(
-                embedding=emb_array,
+                embedding=stored_embedding,
                 action=action,
                 action_type=action_type,
                 model_id=_model_id_for_action(action),

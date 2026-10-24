@@ -26,12 +26,14 @@ class ClusterableEmbedder:
 
     def __init__(self, dim: int = 32, tags: tuple[str, ...] = ("alpha", "beta", "gamma", "delta")):
         self.dim = dim
+        self.sides: list[str] = []
         rng = np.random.RandomState(0)
         self._base = {t: rng.randn(dim).astype(np.float32) for t in tags}
         for k, v in self._base.items():
             self._base[k] = v / (np.linalg.norm(v) + 1e-9)
 
-    def embed_text(self, text: str) -> np.ndarray:
+    def embed_text(self, text: str, *, side: str) -> np.ndarray:
+        self.sides.append(side)
         # Pick the first registered tag that appears in the text.
         for tag, base in self._base.items():
             if tag in text:
@@ -264,6 +266,8 @@ class TestKnowledgeDistiller:
         stats = distiller.distill(trial_id=30)
         assert stats.patterns_created == 0
         assert stats.skipped_below_mdl >= 1
+        assert store._embedder.sides
+        assert set(store._embedder.sides) == {"document"}
 
     def test_l2_to_l3_convention_cross_species(self, store, distiller):
         # Three species each with three+ similar raw entries → three patterns

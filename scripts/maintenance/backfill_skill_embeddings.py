@@ -109,7 +109,7 @@ def main() -> int:
         done = 0
         for sid, title, _st, when, types, _ei, _rc in missing:
             text = skill_embedding_text(title, when, types)
-            vec = embedder.embed_text(text)
+            vec = embedder.embed_text(text, side="document")
             idx = store.add(sid, vec)
             con.execute("UPDATE skills SET embedding_idx = ? WHERE id = ?", (idx, sid))
             done += 1

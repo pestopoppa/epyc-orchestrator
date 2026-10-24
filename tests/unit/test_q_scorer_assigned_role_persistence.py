@@ -40,10 +40,12 @@ class _StubEmbedder:
         vec = rng.standard_normal(self.dim).astype(np.float32)
         return vec / np.linalg.norm(vec)
 
-    def embed_task_ir(self, task_ir: dict) -> np.ndarray:
+    def embed_task_ir(self, task_ir: dict, *, side: str) -> np.ndarray:
         return self._vec(str(task_ir.get("objective", "")))
 
-    def embed_failure_context(self, failure_context: dict) -> np.ndarray:
+    def embed_failure_context(
+        self, failure_context: dict, *, side: str
+    ) -> np.ndarray:
         return self._vec(str(failure_context.get("reason", "")))
 
 

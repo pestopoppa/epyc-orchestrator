@@ -561,7 +561,7 @@ class ProcedureRegistry:
         try:
             # Create embedding from procedure + context
             text = f"procedure:{procedure.id} | category:{procedure.category} | inputs:{list(inputs.keys())}"
-            embedding = self._embedder.embed_text(text)
+            embedding = self._embedder.embed_text(text, side="document")
 
             # Determine outcome and Q-value
             outcome = "success" if result.success else "failure"

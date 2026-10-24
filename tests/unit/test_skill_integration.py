@@ -61,7 +61,7 @@ class TestSkillAugmentedRouter:
         """Create a mock TaskEmbedder."""
 
         class MockEmbedder:
-            def embed_task_ir(self, task_ir):
+            def embed_task_ir(self, task_ir, *, side):
                 return np.random.randn(dim).astype(np.float32)
 
         return MockEmbedder()
@@ -125,7 +125,7 @@ class TestSkillAugmentedRouter:
         from orchestration.repl_memory.retriever import SkillAugmentedRouter
 
         class FailingEmbedder:
-            def embed_task_ir(self, task_ir):
+            def embed_task_ir(self, task_ir, *, side):
                 raise RuntimeError("Embedder unavailable")
 
         hybrid = self._make_mock_hybrid_router()

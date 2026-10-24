@@ -207,7 +207,7 @@ server_mode: {}
 
 def test_populate_llm_roles_accepts_explicit_fleet() -> None:
     class _Embedder:
-        def embed_text(self, text: str) -> np.ndarray:
+        def embed_text(self, text: str, *, side: str) -> np.ndarray:
             assert "unit model" in text
             return np.ones(4)
 

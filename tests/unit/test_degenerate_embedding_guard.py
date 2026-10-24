@@ -255,7 +255,7 @@ class TestStrategyStoreFailsClosed:
         s = StrategyStore(path=tmp_path / "strat", embedding_dim=64, embedder=None)
         s._embedder = None  # simulate TaskEmbedder construction failure
         with pytest.raises(RuntimeError, match="hash pseudo-embeddings are refused"):
-            s._embed("some strategy text")
+            s._embed("some strategy text", side="document")
 
     def test_owned_embedder_hash_fallback_output_is_refused(self, tmp_path, monkeypatch):
         from orchestration.repl_memory.strategy_store import StrategyStore
@@ -263,7 +263,7 @@ class TestStrategyStoreFailsClosed:
         monkeypatch.delenv("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS", raising=False)
 
         class FallbackOnlyEmbedder:
-            def embed_text(self, text):
+            def embed_text(self, text, *, side):
                 return hash_fallback_embedding(text)
 
         s = StrategyStore(path=tmp_path / "strat", embedding_dim=1024,
@@ -273,18 +273,18 @@ class TestStrategyStoreFailsClosed:
         text = next(t for t in (f"strategy {i}" for i in range(4000))
                     if is_degenerate_embedding(hash_fallback_embedding(t)) is None)
         with pytest.raises(RuntimeError, match="hash fallback"):
-            s._embed(text)
+            s._embed(text, side="document")
 
     def test_injected_test_embedder_is_untouched(self, tmp_path):
         from orchestration.repl_memory.strategy_store import StrategyStore
 
         class MockEmbedder:
-            def embed_text(self, text):
+            def embed_text(self, text, *, side):
                 v = np.random.default_rng(abs(hash(text)) % 2**32).standard_normal(64)
                 return (v / np.linalg.norm(v)).astype(np.float32)
 
         s = StrategyStore(path=tmp_path / "strat", embedding_dim=64, embedder=MockEmbedder())
-        assert s._embed("anything").shape == (64,)
+        assert s._embed("anything", side="document").shape == (64,)
 
 
 class TestSkillEmbeddingConvention:
@@ -318,13 +318,14 @@ class TestSkillEmbeddingConvention:
         seen = {}
 
         class Recorder:
-            def embed_text(self, text):
+            def embed_text(self, text, *, side):
                 seen["text"] = text
+                seen["side"] = side
                 v = np.random.default_rng(0).standard_normal(1024)
                 return (v / np.linalg.norm(v)).astype(np.float32)
 
         class FallbackEmbedder:
-            def embed_text(self, text):
+            def embed_text(self, text, *, side):
                 return np.zeros(1024, dtype=np.float32)
 
         skill = Skill(id="gen_001", title="Use grep first", skill_type="general",
@@ -334,6 +335,7 @@ class TestSkillEmbeddingConvention:
         vec = pipe._embed_skill(skill)
         assert vec is not None
         assert seen["text"] == skill_embedding_text("Use grep first", "searching code", ["coder"])
+        assert seen["side"] == "document"
 
         pipe_bad = DistillationPipeline(teacher=None, skill_bank=None, embedder=FallbackEmbedder())
         assert pipe_bad._embed_skill(skill) is None, "fallback vectors must not be indexed"

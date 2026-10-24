@@ -816,7 +816,7 @@ class StrategyStore:
                 format_meta = {}
             title = _compact_text(format_meta.get("title")) or _derive_title(row["description"])
             embed_text = f"{title} {row['description']} {row['insight']}"
-            prepared_rows.append((row, self._embed(embed_text)))
+            prepared_rows.append((row, self._embed(embed_text, side="document")))
 
         old_index = self._faiss.index
         old_id_map = list(self._faiss.id_map)
@@ -923,7 +923,7 @@ class StrategyStore:
             "indexes": indexes,
         }
 
-    def _embed(self, text: str) -> np.ndarray:
+    def _embed(self, text: str, *, side: str) -> np.ndarray:
         """Generate embedding for text. FAILS CLOSED on fallback vectors.
 
         Two poisoning paths existed here (audited 2026-07-28):
@@ -947,7 +947,7 @@ class StrategyStore:
         """
         allow_degraded = os.environ.get("EPISODIC_ALLOW_DEGRADED_EMBEDDINGS") == "1"
         if self._embedder is not None and hasattr(self._embedder, "embed_text"):
-            vec = self._embedder.embed_text(text)
+            vec = self._embedder.embed_text(text, side=side)
             if self._owns_embedder and not allow_degraded:
                 from orchestration.repl_memory.embedder import is_hash_fallback_embedding
 
@@ -1100,7 +1100,7 @@ class StrategyStore:
 
         # Embed description + insight for retrieval
         embed_text = f"{format_meta['title']} {description} {insight}"
-        embedding = self._embed(embed_text)
+        embedding = self._embed(embed_text, side="document")
 
         # FAISS retrieval mirror. This is written before SQLite so a stale
         # FAISS-save guard cannot leave an authoritative row without a vector.
@@ -1774,7 +1774,7 @@ class StrategyStore:
         fetch_k = max(k * 3, k + 5) if species or not include_quarantined else k * 2
 
         # FAISS (vector similarity)
-        embedding = self._embed(query_text)
+        embedding = self._embed(query_text, side="query")
         faiss_results = self._faiss.search(embedding, k=fetch_k) if self._faiss.count else []
         faiss_ranking: dict[str, int] = {}
         faiss_scores: dict[str, float] = {}

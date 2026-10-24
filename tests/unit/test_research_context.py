@@ -1,5 +1,7 @@
 """Tests for ResearchContext tracker."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -142,7 +144,7 @@ class TestSemanticCrossReferences:
         """Test graceful fallback when embedder fails."""
 
         class FailingEmbedder:
-            def embed_sync(self, text):
+            def embed_sync(self, text, *, side):
                 raise RuntimeError("Embedding failed")
 
         ctx = ResearchContext(use_semantic=True, embedder=FailingEmbedder())
@@ -158,9 +160,11 @@ class MockEmbedder:
 
     def __init__(self):
         self.call_count = 0
+        self.sides: list[str | None] = []
 
-    def embed_sync(self, text: str) -> np.ndarray:
+    def embed_sync(self, text: str, *, side: str) -> np.ndarray:
         self.call_count += 1
+        self.sides.append(side)
         # Return embeddings based on text content
         # Similar texts get similar embeddings
         if "database" in text.lower() or "connection" in text.lower():
@@ -179,13 +183,42 @@ class TestSemanticRefsWithMock:
 
     def test_semantic_ref_detected(self):
         """Test that semantic refs are detected with high similarity."""
-        ctx = ResearchContext(use_semantic=True, embedder=MockEmbedder())
+        embedder = MockEmbedder()
+        ctx = ResearchContext(use_semantic=True, embedder=embedder)
 
         ctx.add(tool="grep", query="db", content="database connection failed")  # G1
         node_id = ctx.add(tool="llm_call", query="analyze", content="connection error")
 
         # L1 should reference G1 due to semantic similarity
         assert "G1" in ctx.nodes[node_id].refs
+        assert embedder.sides == ["query", "query"]
+
+    def test_eg2_uses_query_for_lookup_and_document_for_stored_nodes(self):
+        class SideAwareEmbedder:
+            config = SimpleNamespace(truncate_dim=256)
+
+            def __init__(self):
+                self.calls = []
+
+            def embed_sync(self, _text: str, *, side: str) -> np.ndarray:
+                self.calls.append(side)
+                vector = np.zeros(4, dtype=np.float32)
+                document_calls = self.calls.count("document")
+                if side == "query" or document_calls == 1:
+                    vector[1] = 1.0
+                else:
+                    vector[0] = 1.0
+                return vector
+
+        embedder = SideAwareEmbedder()
+        ctx = ResearchContext(use_semantic=True, embedder=embedder)
+        first = ctx.add(tool="grep", query="first", content="first result")
+        second = ctx.add(tool="peek", query="second", content="second result")
+
+        assert embedder.calls == ["query", "document", "query", "document"]
+        np.testing.assert_array_equal(ctx.nodes[first].embedding, [0, 1, 0, 0])
+        np.testing.assert_array_equal(ctx.nodes[second].embedding, [1, 0, 0, 0])
+        assert first in ctx.nodes[second].refs
 
     def test_semantic_threshold(self):
         """Test that low similarity doesn't create refs."""

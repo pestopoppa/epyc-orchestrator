@@ -353,6 +353,7 @@ class TestEmbeddingPrecomputation:
         assert result[0].embedding is not None
         assert result[0].embedding.shape == (1024,)
         mock_embedder.embed_batch.assert_called_once()
+        assert mock_embedder.embed_batch.call_args.kwargs["side"] == "query"
 
     def test_precompute_without_embedder(self):
         entries = _complete_task_entries()
@@ -378,3 +379,4 @@ class TestEmbeddingPrecomputation:
 
         assert result[0].embedding is not None
         mock_embedder.embed_text.assert_called_once()
+        assert mock_embedder.embed_text.call_args.kwargs["side"] == "query"

@@ -152,7 +152,7 @@ class BipartiteRoutingGraph:
         for task_type in by_type:
             desc = f"Task type: {task_type}"
             try:
-                emb = embedder.embed_text(desc)
+                emb = embedder.embed_text(desc, side="document")
             except Exception:
                 emb = np.zeros(1024, dtype=np.float64)
             self._create_task_type(task_type, desc, emb)
@@ -201,7 +201,7 @@ class BipartiteRoutingGraph:
                 cluster_id = str(uuid.uuid4())
                 desc = f"Task type: {task_type}"
                 try:
-                    centroid = embedder.embed_text(desc)
+                    centroid = embedder.embed_text(desc, side="document")
                 except Exception:
                     centroid = np.zeros(1024, dtype=np.float64)
                 self._create_query_cluster(

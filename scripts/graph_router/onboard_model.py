@@ -73,7 +73,7 @@ def onboard(
         logger.warning("No GAT weights found at %s — predictions will be random", weights_path)
 
     # 2. Embed capability description
-    role_embedding = embedder.embed_text(description)
+    role_embedding = embedder.embed_text(description, side="document")
     logger.info("Embedded description: %d-dim vector", len(role_embedding))
 
     # 3. Add LLMRole node
@@ -111,7 +111,7 @@ def onboard(
 
     logger.info("\n--- Predicted Routing Distribution ---")
     for task_type, query in sample_queries.items():
-        query_emb = embedder.embed_text(query)
+        query_emb = embedder.embed_text(query, side="query")
         scores = predictor.predict(query_emb, task_type)
         if scores:
             sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)

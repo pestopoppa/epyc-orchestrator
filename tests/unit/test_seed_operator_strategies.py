@@ -15,7 +15,7 @@ from scripts.autopilot import seed_operator_strategies as seeds
 class _DeterministicEmbedder:
     """Fixed local vector fixture; it makes no semantic-quality claim."""
 
-    def embed_text(self, _text: str) -> np.ndarray:
+    def embed_text(self, _text: str, *, side: str) -> np.ndarray:
         return np.full(1024, 1.0 / np.sqrt(1024), dtype=np.float32)
 
 

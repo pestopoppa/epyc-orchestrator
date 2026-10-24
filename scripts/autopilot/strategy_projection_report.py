@@ -38,7 +38,7 @@ def build_strategy_projection_report(
         embedder = TaskEmbedder(EmbeddingConfig(use_fallback=False))
         # Fail before opening/writing the store if no semantic embedding path
         # is currently available.
-        embedder.embed_text("strategy projection write preflight")
+        embedder.embed_text("strategy projection write preflight", side="document")
     degraded_write = write_missing and allow_hash_fallback
     with _degraded_embedding_opt_in(degraded_write):
         store = StrategyStore(path=strategy_path, embedder=embedder)

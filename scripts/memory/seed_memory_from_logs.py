@@ -101,7 +101,7 @@ def seed_memory(store: EpisodicStore, embedder: TaskEmbedder,
 
         # Generate embedding
         try:
-            embedding = embedder.embed_task_ir(task_ir)
+            embedding = embedder.embed_task_ir(task_ir, side="document")
         except Exception as e:
             print(f"Embedding error: {e}")
             skipped += 1
