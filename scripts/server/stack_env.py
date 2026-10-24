@@ -113,7 +113,17 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # moved with the process from "architect_critic" to "architect_general". The
     # MI210 27B on :8083 (now architect_critic) has no block, as it had none while it
     # was architect_general. BINDING follows the PROCESS.
-    "architect_general": {},
+    # 2026-10-24 RATIFY-FUSED-OFF-ARCHGEN-20261024 (operator-signed): the qwen4exp fused
+    # decode is default-ON in v10 code, and until now nothing declared it OFF for this
+    # process. The only GGML_FUSED_DECODE_OFF: '1' was in the registry's descriptive
+    # `optimal_cpu_serving` recipe block, which no code reads, so :8074 ran the fused
+    # path. Every measured Q38FN number (research recipe, AK q38fn campaigns, the
+    # 43.28 t/s optimal_cpu_serving decode) ran with OFF=1. The fused MoE path has an
+    # open defect at synthetic weight scales (FD-DIV-1b), and v10's fused path writes
+    # per-token debug files under /tmp/qwen4exp-builds (CH-24). Declaring OFF=1 serves
+    # the measured graph path. Lift it only once fused ON vs OFF is measured on Q38FN
+    # after the FD-DIV-1b fix.
+    "architect_general": {"GGML_FUSED_DECODE_OFF": "1"},
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
     # Activate when a hybrid_ssm_dense model is rostered.
     # 2026-06-26 v6 cutover: removed GGML_CCD_POOLS / GGML_CCD_WORK_DIST /

@@ -348,13 +348,21 @@ def _source_role(entry: Mapping[str, Any]) -> str:
 
 
 def _apply_declared_runtime_env(env: dict[str, str], *, binary_override: str | None,
-                                ld_paths: list[str] | None) -> None:
-    """Side-effect-free equivalent of the launcher's environment-only transform."""
-    from scripts.server.stack_env import compose_ld_library_path
+                                ld_paths: list[str] | None, env_role: str) -> None:
+    """Side-effect-free equivalent of the launcher's environment-only transform.
+
+    Mirrors orchestrator_stack._apply_runtime_requirements_env (and the embedding /
+    eval-batch strips): ambient GGML_* is dropped on EVERY launch, and the GGML_* keys
+    the role DECLARES (stack_env._role_env_overrides) plus GGML_IQK are kept. Until
+    2026-10-24 this copy still carried the pre-5fd6bbdb rule (strip every GGML_* but
+    GGML_IQK when a binary override is set), which drops declared keys. No role
+    declared one before RATIFY-FUSED-OFF-ARCHGEN-20261024, so the export was right only
+    by coincidence. tests/unit/test_ratify_fused_off_architect_general.py recomputes the
+    launcher's own transform and diffs it against this one for every launch target.
+    """
+    from scripts.server.stack_env import _role_env_overrides, compose_ld_library_path, strip_ambient_ggml
+    strip_ambient_ggml(env, _role_env_overrides(env_role))
     if binary_override:
-        for key in tuple(env):
-            if key.startswith("GGML_") and key != "GGML_IQK":
-                del env[key]
         env["KMP_BLOCKTIME"] = "10"
     if ld_paths:
         env["LD_LIBRARY_PATH"] = compose_ld_library_path(
@@ -633,7 +641,8 @@ def export_production_enrollment(context: ExportContext | Mapping[str, Any], *,
             env = launcher.build_launch_env(env_role, dict(context.base_environment))
             _apply_declared_runtime_env(
                 env, binary_override=(str(Path(binary_dir) / "llama-server")
-                                      if binary_dir else None), ld_paths=ld_paths)
+                                      if binary_dir else None), ld_paths=ld_paths,
+                env_role=env_role)
             artifacts, missing = _artifact_rows(argv, env, context.artifacts) if argv else ([], [])
             selected_failures = [f"artifact_verification:{item['use']}:{reason}"
                                  for item in artifacts

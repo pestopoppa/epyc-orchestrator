@@ -58,12 +58,21 @@ def _launch_role_names() -> set[str]:
     return names
 
 
+# GGML_* knobs a role DECLARES by operator ratification. Every entry is a deliberate env
+# change at its own landing, so it is listed here by name instead of breaking neutrality.
+#   architect_general  RATIFY-FUSED-OFF-ARCHGEN-20261024 (the :8074 Flash-Next process
+#                      serves the measured graph path, not the default-ON fused decode)
+RATIFIED_GGML = {"architect_general": {"GGML_FUSED_DECODE_OFF"}}
+
+
 @pytest.mark.parametrize("role", sorted(_launch_role_names()))
 def test_neutral_today_every_role_resolves_no_ggml_beyond_iqk(role: str) -> None:
     """The QUIET-correction proof: `preserve` is empty for every role a launch branch can
-    name, so the strip removes exactly what it removed before this change."""
+    name, apart from ratified declarations, so the strip removes exactly what it removed
+    before this change."""
     declared = {k for k in _role_env_overrides(role) if k.startswith("GGML_")}
-    assert declared <= {"GGML_IQK"}, f"{role} now declares {declared}; this landing is no longer neutral"
+    allowed = {"GGML_IQK"} | RATIFIED_GGML.get(str(Role.from_string(role) or role), set())
+    assert declared <= allowed, f"{role} now declares {declared}; this landing is no longer neutral"
 
 
 @pytest.mark.parametrize("role", sorted(_launch_role_names()))
@@ -75,7 +84,9 @@ def test_neutral_today_launch_env_is_identical_with_and_without_preserve(role: s
     launcher._apply_runtime_requirements_env(
         after, binary_override="/k/llama-server", ld_paths=None, preserve=_role_env_overrides(role)
     )
-    assert before == after
+    ratified = RATIFIED_GGML.get(str(Role.from_string(role) or role), set())
+    assert {k: v for k, v in after.items() if k not in ratified} == before
+    assert set(after) - set(before) == ratified & set(_role_env_overrides(role))
 
 
 def test_embedding_env_with_the_live_ambient_is_unchanged_by_the_strip() -> None:
