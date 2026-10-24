@@ -415,7 +415,6 @@ class TestMaybeCompactContext:
     async def test_compacts_when_context_exceeds_threshold(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
 
         ctx = MagicMock()
@@ -436,6 +435,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = False
             with patch("src.config.get_config") as mock_cfg:
+                mock_cfg.return_value.paths.tmp_dir = str(tmp_path)
                 mock_cfg.return_value.chat.session_compaction_keep_recent_ratio = 0.20
                 mock_cfg.return_value.chat.session_compaction_recompaction_interval = 0
                 mock_cfg.return_value.chat.session_compaction_min_turns = 5
@@ -453,7 +453,6 @@ class TestMaybeCompactContext:
     async def test_compacts_when_recompaction_interval_reaches_threshold(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
 
         ctx = MagicMock()
@@ -475,6 +474,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = False
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 0.2
             cfg.chat.session_compaction_recompaction_interval = 4
             cfg.chat.session_compaction_min_turns = 5
@@ -490,7 +490,6 @@ class TestMaybeCompactContext:
     async def test_compacts_when_session_token_budget_requests_compaction(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
 
         ctx = MagicMock()
@@ -518,6 +517,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = True
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 0.2
             cfg.chat.session_compaction_recompaction_interval = 0
             cfg.chat.session_compaction_min_turns = 5
@@ -534,7 +534,6 @@ class TestMaybeCompactContext:
     async def test_skips_when_to_externalize_section_is_empty(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
         monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
 
         ctx = MagicMock()
@@ -555,6 +554,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = False
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 1.0
             cfg.chat.session_compaction_recompaction_interval = 0
             cfg.chat.session_compaction_min_turns = 5
@@ -601,7 +601,6 @@ class TestMaybeCompactContext:
     async def test_session_token_budget_errors_dont_force_compaction(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
 
         ctx = MagicMock()
         ctx.deps.primitives._count_tokens.return_value = 4
@@ -621,6 +620,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = True
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 0.2
             cfg.chat.session_compaction_recompaction_interval = 0
             cfg.chat.session_compaction_min_turns = 5
@@ -639,7 +639,6 @@ class TestMaybeCompactContext:
     async def test_write_failure_aborts_compaction(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
 
         ctx = MagicMock()
         ctx.deps.primitives._count_tokens.return_value = 50000
@@ -659,6 +658,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = False
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 0.2
             cfg.chat.session_compaction_recompaction_interval = 0
             cfg.chat.session_compaction_min_turns = 5
@@ -678,7 +678,6 @@ class TestMaybeCompactContext:
         from src.graph.compaction import _maybe_compact_context
 
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
 
         ctx = MagicMock()
         ctx.deps.primitives._count_tokens.side_effect = [50000, RuntimeError("token accounting failed")]
@@ -698,6 +697,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = False
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 0.2
             cfg.chat.session_compaction_recompaction_interval = 0
             cfg.chat.session_compaction_min_turns = 5
@@ -713,7 +713,6 @@ class TestMaybeCompactContext:
         from src.graph.compaction import _maybe_compact_context
 
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
 
         ctx = MagicMock()
         ctx.deps.primitives._count_tokens.return_value = 50000
@@ -733,6 +732,7 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             mock_feat.return_value.session_token_budget = False
             cfg = MagicMock()
+            cfg.paths.tmp_dir = str(tmp_path)
             cfg.chat.session_compaction_keep_recent_ratio = 0.2
             cfg.chat.session_compaction_recompaction_interval = 0
             cfg.chat.session_compaction_min_turns = 5
