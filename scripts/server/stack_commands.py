@@ -602,6 +602,12 @@ _RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
     # A BOOLEAN with two spellings whose live truth also depends on --cache-ram
     # (the server turns it off when the cache is 0) -- see the dedicated block.
     "runtime.flags.cache_idle_slots": ("dedicated", (), ""),
+    # Context checkpoints per slot: compared against what the server RESOLVED (last of
+    # its three spellings, else the v10 default 32) -- see the dedicated block. So a
+    # server still running on the default is NOT drift when 32 is declared: same
+    # behaviour, and the flag appears at that role's next ordinary reload.
+    # RATIFY-CTXCKPT-HYBRID-20261024.
+    "runtime.flags.ctx_checkpoints": ("dedicated", (), ""),
     # Per-role chat template file: a string token on the cmdline, same emission
     # rule as `-ngl all` (the launcher additionally refuses at build time when the
     # declared path is missing, so a live server always matches its declaration).
@@ -926,6 +932,29 @@ def _live_cache_idle_slots(cmdline: list[str]) -> bool:
     return resolved
 
 
+# llama-server's built-in `n_ctx_checkpoints` on the production v10 kernel
+# (common/common.h:633 at ffc1bac82). Re-read it at every kernel promotion.
+SERVER_DEFAULT_CTX_CHECKPOINTS = 32
+_CTX_CHECKPOINTS_FLAGS: tuple[str, ...] = ("-ctxcp", "--ctx-checkpoints", "--swa-checkpoints")
+
+
+def _live_ctx_checkpoints(cmdline: list[str]) -> int | None:
+    """What llama-server resolved ``--ctx-checkpoints`` to for this cmdline.
+
+    Last of the three spellings (common/arg.cpp:1520) wins; with none, the server
+    default. ``None`` when the token is not an integer (reported as drift). The
+    launcher never sets LLAMA_ARG_CTX_CHECKPOINTS (closed env allowlist), so the
+    environment is not consulted.
+    """
+    value = _last_cmdline_flag_value(cmdline, *_CTX_CHECKPOINTS_FLAGS)
+    if value is None:
+        return SERVER_DEFAULT_CTX_CHECKPOINTS
+    try:
+        return int(value.strip())
+    except ValueError:
+        return None
+
+
 def _runtime_attestation_warnings(
     name: str,
     info: ProcessInfo,
@@ -1061,6 +1090,18 @@ def _runtime_attestation_warnings(
         if actual_cis != expected_cis:
             warnings.append(_runtime_value_warning(
                 name, info, "cache_idle_slots", expected_cis, actual_cis
+            ))
+
+    # ctx_checkpoints: compared against what the server RESOLVED (last flag, else the
+    # kernel default), so a pre-reload server on the default 32 is clean when 32 is
+    # declared, and a live `--ctx-checkpoints 0` on a role declaring 32 is drift.
+    # RATIFY-CTXCKPT-HYBRID-20261024.
+    expected_ckpt = flags.get("ctx_checkpoints")
+    if isinstance(expected_ckpt, int) and not isinstance(expected_ckpt, bool):
+        actual_ckpt = _live_ctx_checkpoints(cmdline)
+        if actual_ckpt != expected_ckpt:
+            warnings.append(_runtime_value_warning(
+                name, info, "ctx_checkpoints", expected_ckpt, actual_ckpt
             ))
 
     slot_save_path = cache.get("slot_save_path")

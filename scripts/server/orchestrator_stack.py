@@ -519,6 +519,9 @@ _RUNTIME_SERVING_FLAG_ARGS: tuple[tuple[str, str, bool, bool], ...] = (
     ("n_gpu_layers", "-ngl", True, False),
     ("image_min_tokens", "--image-min-tokens", False, False),
     ("cache_ram", "--cache-ram", False, False),
+    # Context checkpoints per slot. Declared on every HYBRID server (KPF-64.4): the
+    # partial-restore points of a recurrent/SSM model. RATIFY-CTXCKPT-HYBRID-20261024.
+    ("ctx_checkpoints", "--ctx-checkpoints", False, False),
     ("chat_template_file", "--chat-template-file", True, True),
 )
 

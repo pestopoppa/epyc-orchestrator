@@ -2429,6 +2429,15 @@ def _launch_runtime_record(
     # cache_ram; compiled ONLY when declared (None -> the launcher emits nothing), so
     # every other role's compiled record is byte-identical. STACKCHG-8083BATCH-20261004.
     cache_idle_slots = _runtime_flag_bool_prior(server_cfg, role_cfg, key="cache_idle_slots")
+    # `--ctx-checkpoints N` (llama-server: max context checkpoints per slot, v10 default
+    # 32, common/common.h:633). On a hybrid model (gated-delta-net / SSM layers) the
+    # checkpoints are the ONLY partial-restore point for a diverging prefix, so it is
+    # declared rather than inherited: a kernel-default change must not silently change
+    # production (KPF-64.4; ufh14-b4 policy §3.7). Declared as
+    # `server_mode.<role>.ctx_checkpoints`; `0` is a declared value (checkpoints off), so
+    # minimum=0. Compiled ONLY when declared, so every other role's record is
+    # byte-identical. RATIFY-CTXCKPT-HYBRID-20261024.
+    ctx_checkpoints = _runtime_flag_int_prior(server_cfg, role_cfg, key="ctx_checkpoints")
     # A default-mode server may DECLARE its -ub/-b (serving_shape.ubatch / .batch).
     # Undeclared -> DEFAULT_UBATCH_TOKENS and no -b, exactly as before; the declared
     # batch is compiled ONLY when declared. STACKCHG-8083BATCH-20261004 part B.
@@ -2551,6 +2560,9 @@ def _launch_runtime_record(
             # (and, on a unified pool, cleared from it) when a new task starts. Present
             # only when declared. STACKCHG-8083BATCH-20261004.
             **({"cache_idle_slots": cache_idle_slots} if cache_idle_slots is not None else {}),
+            # Context checkpoints per slot (`--ctx-checkpoints`). Present only when
+            # declared. RATIFY-CTXCKPT-HYBRID-20261024.
+            **({"ctx_checkpoints": ctx_checkpoints} if ctx_checkpoints is not None else {}),
             # Per-role chat template FILE (llama-server --chat-template-file).
             # Declared as `server_mode.<role>.chat_template_file` (absolute path
             # string); role-local server/serving/launch sub-mappings work too via
