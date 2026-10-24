@@ -151,11 +151,7 @@ async def _stream_repl(
     if request.context:
         combined_context += f"\n\nContext:\n{request.context}"
 
-    # Derive tool context for cascading policy (WS-3: deny web for reasoning domains)
-    from src.tool_policy import NO_WEB_TASK_TYPES
-
-    _task_type = str(routing.task_ir.get("task_type", "chat"))
-    _tool_context = {"no_web": True} if _task_type in NO_WEB_TASK_TYPES else {}
+    from src.tool_policy import tool_context_for
 
     repl = REPLEnvironment(
         context=combined_context,
@@ -165,7 +161,7 @@ async def _stream_repl(
         role=request.role or Role.FRONTDOOR,
         retriever=state.hybrid_router.retriever if state.hybrid_router else None,
         hybrid_router=state.hybrid_router,
-        tool_context=_tool_context,
+        tool_context=tool_context_for(routing.task_ir.get("task_type")),
     )
 
     last_output = ""

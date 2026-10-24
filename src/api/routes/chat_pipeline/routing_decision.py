@@ -726,15 +726,21 @@ def extract_skill_ids(skill_context: str, state) -> list[str]:
     return []
 
 
+_ROLE_TASK_TYPES = {
+    "worker_math": "math",
+    "coder_escalation": "coder",
+    "coder_primary": "coder",
+}
+
+
+def task_type_for_role(role: object) -> str | None:
+    """Task type implied by a routed role (tool-policy checks), if any."""
+    return _ROLE_TASK_TYPES.get(str(role))
+
+
 def derive_task_type_from_route(task_ir: dict, routing_decision: list) -> None:
     """Mutate task_ir task_type from routed role for tool-policy checks."""
-    role_to_task_type = {
-        "worker_math": "math",
-        "coder_escalation": "coder",
-        "coder_primary": "coder",
-    }
-    routed_role = str(routing_decision[0]) if routing_decision else ""
-    derived_task_type = role_to_task_type.get(routed_role)
+    derived_task_type = task_type_for_role(routing_decision[0]) if routing_decision else None
     if derived_task_type:
         task_ir["task_type"] = derived_task_type
 

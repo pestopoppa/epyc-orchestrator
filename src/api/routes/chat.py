@@ -133,6 +133,8 @@ from src.api.routes.chat_pipeline import (
 from src.api.routes.chat_pipeline.vision_stage import _vision_roles
 from src.api.routes.chat_pipeline.script_interceptor import try_intercept
 from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+from src.api.routes.chat_pipeline.routing_decision import task_type_for_role
+from src.tool_policy import tool_context_for
 
 
 _PROMPT_OVERRIDE_BASE = (
@@ -1506,6 +1508,7 @@ async def chat_stream(
             # MemRL components for model self-routing
             retriever=state.hybrid_router.retriever if state.hybrid_router else None,
             hybrid_router=state.hybrid_router,
+            tool_context=tool_context_for(task_type_for_role(request.role)),
         )
 
         # Root LM loop with streaming + escalation support

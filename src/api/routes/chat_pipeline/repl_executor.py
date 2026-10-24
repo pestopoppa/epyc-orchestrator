@@ -398,11 +398,10 @@ async def _execute_repl_body(
             f"{neutralise_control_tokens(routing.skill_context)}\n\n{combined_context}"
         )
 
-    # Derive tool context for cascading policy (WS-3: deny web for reasoning domains)
-    from src.tool_policy import NO_WEB_TASK_TYPES
+    # Cascading tool policy (WS-3: deny web for reasoning domains)
+    from src.tool_policy import tool_context_for
 
-    _task_type = str(routing.task_ir.get("task_type", "chat"))
-    _tool_context = {"no_web": True} if _task_type in NO_WEB_TASK_TYPES else {}
+    _tool_context = tool_context_for(routing.task_ir.get("task_type"))
 
     if routing.document_result and routing.document_result.document_result:
         from src.repl_document import DocumentREPLEnvironment, DocumentContext

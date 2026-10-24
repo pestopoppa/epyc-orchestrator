@@ -19,6 +19,7 @@ from src.api.routes.chat_pipeline.telemetry import (
 from src.api.routes.chat_utils import RoutingResult, _truncate_looped_answer
 from src.api.services.memrl import failure_disposition_meta, score_completed_task
 from src.api.structured_logging import task_extra
+from src.tool_policy import tool_context_for
 from src.features import features
 from src.llm_primitives import LLMPrimitives
 
@@ -129,6 +130,7 @@ def _execute_delegated(
             architect_role=str(initial_role) if is_architect else "architect_general",
             max_loops=3,
             force_response_on_cap=True,
+            tool_context=tool_context_for(routing.task_ir.get("task_type")),
         )
         answer = answer.strip() if answer else ""
     except Exception as e:

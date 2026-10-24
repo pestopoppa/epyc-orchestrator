@@ -33,7 +33,10 @@ from src.api.models import (
     OpenAIModelsResponse,
     OpenAIUsage,
 )
-from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role
+from src.api.routes.chat_pipeline.routing_decision import (
+    normalize_ingress_role,
+    task_type_for_role,
+)
 from src.api.routes.chat_utils import watch_disconnect
 from src.api.routes.v1_escalation import (
     STAGE_DIRECT,
@@ -66,6 +69,7 @@ from src.repl_environment import REPLEnvironment
 from src.exceptions import AdmissionDenied, AdmissionDeniedText, ContextOverflowError
 from src.scheduling.contention_gate import ContentionDenied
 from src.roles import Role
+from src.tool_policy import tool_context_for
 
 logger = logging.getLogger(__name__)
 
@@ -1785,6 +1789,7 @@ async def openai_chat_completions(
                             tool_registry=state.tool_registry,
                             script_registry=state.script_registry,
                             role=role,
+                            tool_context=tool_context_for(task_type_for_role(role)),
                             **_repl_memrl_kwargs(state),
                         )
                         repl_for_metadata = repl
@@ -2163,6 +2168,7 @@ async def openai_chat_completions(
                         tool_registry=state.tool_registry,
                         script_registry=state.script_registry,
                         role=role,
+                        tool_context=tool_context_for(task_type_for_role(role)),
                         **_repl_memrl_kwargs(state),
                     )
                     repl_for_metadata = repl
