@@ -13,8 +13,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-24T08:18:15+00:00
-# Cache key:   9f34f5fce7548f08...
+# Compiled at: 2026-10-24T08:24:23+00:00
+# Cache key:   83ca1dffd1a062c9...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1791,6 +1791,7 @@ server_mode:
     port: 8070
     slots: 4
     cache_ram: 32768
+    ctx_checkpoints: 32
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
@@ -1957,6 +1958,7 @@ server_mode:
     slots: 4
     cache_ram: 65536
     cache_idle_slots: false
+    ctx_checkpoints: 32
     serving_shape:
       n_ctx: 393216
       batch: 512
@@ -2026,6 +2028,7 @@ server_mode:
     port: 8074
     slots: 1
     cache_ram: 32768
+    ctx_checkpoints: 32
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
