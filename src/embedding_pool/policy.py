@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM
+
 POLICY_PATH = Path(__file__).resolve().parents[2] / "orchestration" / "embedding_pool_policy.yaml"
 
 BUSY_SOURCES = frozenset({"ledger", "slots"})
@@ -26,7 +28,17 @@ class ClientPolicy:
     admission_wait_s: float = 0.0
     failure_backoff_s: float = 2.0
     min_norm: float = 1e-6
-    embedding_dim: int | None = 1024
+    embedding_dim: int | None = LEGACY_EMBEDDING_DIM
+    # REPL-EMB-2.9 EG2 seam. null (OFF) = use the server vector as is (BGE, byte-identical).
+    # N = slice a larger reply (EG2: 768) to its leading N columns, then L2 re-normalise;
+    # `embedding_dim` is then the dimension expected AFTER the cut.
+    truncate_dim: int | None = None
+    # OFF: an oversize (HTTP 400 exceed_context_size) reply fails the request and puts the
+    # instance into failure backoff (legacy). ON: it becomes a per-text `input_too_long`, each
+    # offending text is retried clipped to half (up to `oversize_max_halvings`), and the
+    # instance is never penalised.
+    oversize_retry_clipped: bool = False
+    oversize_max_halvings: int = 3
     cache_max_entries: int = 20000
     poll_interval_s: float = 0.02
 
@@ -85,12 +97,12 @@ def _section(cls: type, raw: Any, name: str) -> Any:
         elif isinstance(default, bool):
             if not isinstance(value, bool):
                 raise ValueError(f"embedding_pool_policy: `{name}.{key}` must be a boolean")
-        elif key == "embedding_dim":
+        elif key in ("embedding_dim", "truncate_dim"):
             if value is not None and (
                 not isinstance(value, int) or isinstance(value, bool) or value <= 0
             ):
                 raise ValueError(
-                    "embedding_pool_policy: `client.embedding_dim` must be a positive int or null"
+                    f"embedding_pool_policy: `client.{key}` must be a positive int or null"
                 )
         elif isinstance(default, int):
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -125,6 +137,13 @@ def parse_policy(document: Any) -> EmbeddingPoolPolicy:
         )
     if client.request_timeout_s <= 0 or client.call_timeout_s <= 0 or client.connect_timeout_s <= 0:
         raise ValueError("embedding_pool_policy: timeouts must be > 0")
+    if client.truncate_dim is not None and client.embedding_dim not in (None, client.truncate_dim):
+        raise ValueError(
+            "embedding_pool_policy: `client.truncate_dim` set requires `client.embedding_dim` "
+            "to equal it (or null): the dimension is checked AFTER the cut"
+        )
+    if client.oversize_max_halvings < 1:
+        raise ValueError("embedding_pool_policy: oversize_max_halvings must be >= 1")
     if client.cache_max_entries < 0:
         raise ValueError("embedding_pool_policy: cache_max_entries must be >= 0")
     if client.poll_interval_s <= 0:

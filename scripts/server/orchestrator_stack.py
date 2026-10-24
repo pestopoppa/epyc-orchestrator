@@ -1024,6 +1024,14 @@ def _build_embedding_command(port: int) -> list[str]:
     ]
     if recipe.get("flash_attn"):
         cmd.extend(["--flash-attn", "on"])
+    # REPL-EMB-2.9: optional recipe keys (absent from the live BGE recipe, so no argv change).
+    # -b/-ub: a full 2048-token slot must not be rejected or split (EG2 pool_recipe).
+    if recipe.get("batch_tokens"):
+        cmd.extend(["-b", str(recipe["batch_tokens"])])
+    if recipe.get("ubatch_tokens"):
+        cmd.extend(["-ub", str(recipe["ubatch_tokens"])])
+    if recipe.get("embd_normalize") is not None:
+        cmd.extend(["--embd-normalize", str(recipe["embd_normalize"])])
     # UFH-12 Phase 0: private weights, so the placement's membind is real
     # (a membind over shared-mmap pages is accepted and does nothing).
     if recipe.get("no_mmap"):

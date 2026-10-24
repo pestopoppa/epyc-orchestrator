@@ -27,6 +27,13 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+from src.embedding_dims import (
+    LEGACY_EMBEDDING_DIM,
+    SideRequiredError,
+    apply_side as _apply_side,
+    default_truncate_dim,
+    normalise_embedding,
+)
 from src.inference_lock import inference_lock
 
 from .memory_record import embedding_text_for, join_embedding_segments
@@ -34,7 +41,22 @@ from .memory_record import embedding_text_for, join_embedding_segments
 # Default model path (BGE-large-en-v1.5 for embeddings)
 # BGE-large produces 1024-dim embeddings, purpose-built for similarity search
 DEFAULT_MODEL_PATH = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
-DEFAULT_EMBEDDING_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedding")
+# REPL-EMB-2.9: llama-embedding is resolved through the production KERNEL STORE, not the frozen
+# tree's in-tree build/bin (which still holds the v9 binaries and has no gemma-embedding2). The
+# legacy in-tree path is only the fallback when the store binary is absent.
+KERNEL_STORE_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
+LEGACY_EMBEDDING_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedding")
+
+
+def resolve_embedding_binary(
+    store: Path = KERNEL_STORE_CPU, legacy: Path = LEGACY_EMBEDDING_BINARY
+) -> Path:
+    """``<kernel store>/llama-embedding`` when it exists, else the legacy in-tree path."""
+    candidate = store / "llama-embedding"
+    return candidate if candidate.exists() else legacy
+
+
+DEFAULT_EMBEDDING_BINARY = resolve_embedding_binary()
 DEFAULT_SERVER_URL = "http://127.0.0.1:8090"
 
 # Per-field truncation for the non-task embedding conventions (EPD-3-R8). These
@@ -74,7 +96,7 @@ def _head(value: Any, n: int) -> Any:
 # the fallback is a pure function of the text.
 
 
-def hash_fallback_embedding(text: str, embedding_dim: int = 1024) -> np.ndarray:
+def hash_fallback_embedding(text: str, embedding_dim: int = LEGACY_EMBEDDING_DIM) -> np.ndarray:
     """Reproduce the hash pseudo-embedding for ``text``, bug-for-bug.
 
     Deliberately mirrors ``TaskEmbedder._generate_embedding_fallback`` including
@@ -143,7 +165,7 @@ class EmbeddingConfig:
 
     model_path: Path = DEFAULT_MODEL_PATH
     embedding_binary: Path = DEFAULT_EMBEDDING_BINARY
-    embedding_dim: int = 1024  # BGE-large embedding dimension
+    embedding_dim: int = LEGACY_EMBEDDING_DIM  # BGE-large; EG2 flag: the truncate_dim
     threads: int = 8  # Use fewer threads for embedding (fast operation)
     timeout: int = 30  # Seconds
     use_fallback: bool = True  # Fall back to hash-based if model unavailable
@@ -151,6 +173,17 @@ class EmbeddingConfig:
     use_server: bool = True  # Try HTTP server first (40x faster)
     use_parallel: bool = True  # Use parallel embedder client (probe-first to 6 servers)
     allow_subprocess: bool = True  # Maintenance jobs can require server-only embeddings
+    # REPL-EMB-2.9 EG2 seam. None (OFF) = legacy BGE behaviour, byte-identical. When set (e.g.
+    # 256, or via EPYC_EMBEDDING_TRUNCATE_DIM) every raw server vector is sliced to its leading
+    # columns and L2 re-normalised, `embedding_dim` follows it, and the EG2 document/query
+    # prefixes become mandatory (`side=` on the embed_* helpers).
+    truncate_dim: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.truncate_dim is None:
+            self.truncate_dim = default_truncate_dim()
+        if self.truncate_dim and self.embedding_dim == LEGACY_EMBEDDING_DIM:
+            self.embedding_dim = int(self.truncate_dim)
 
 
 class TaskEmbedder:
@@ -249,12 +282,8 @@ class TaskEmbedder:
                 f"{list(data.keys()) if hasattr(data, 'keys') else type(data)}"
             )
 
-        # Normalize to unit vector
-        norm = np.linalg.norm(embedding)
-        if norm > 0:
-            embedding = embedding / norm
-
-        return embedding
+        # Normalize to unit vector (REPL-EMB-2.9: shared helper; truncates first when EG2 is on)
+        return normalise_embedding(embedding, self.config.truncate_dim)
 
     def _serialize_task_ir(self, task_ir: Dict[str, Any]) -> str:
         """Serialize a TaskIR into the ONE canonical embedding convention.
@@ -326,6 +355,7 @@ class TaskEmbedder:
         self,
         prompt: str,
         classification_type: str = "routing",
+        side: Optional[str] = None,
     ) -> np.ndarray:
         """Generate embedding for a classification prompt.
 
@@ -339,26 +369,38 @@ class TaskEmbedder:
             Embedding vector (1024-dim for BGE-large).
         """
         text = self._serialize_classification_prompt(prompt, classification_type)
-        return self._generate_embedding(text)
+        return self._generate_embedding(text, side)
 
     def _generate_embedding_llama(self, text: str) -> np.ndarray:
         """Generate embedding using llama-embedding binary."""
+        cmd = [
+            str(self.config.embedding_binary),
+            "-m",
+            str(self.config.model_path),
+            "-p",
+            text,
+            "-t",
+            str(self.config.threads),
+            "--embd-output-format",
+            "json",
+        ]
+        if self.config.truncate_dim:
+            # EG2 is mean-pooled; the legacy BGE command (CLS from the GGUF header) is untouched.
+            cmd.extend(["--pooling", "mean"])
+        run_kwargs: Dict[str, Any] = {}
+        binary_dir = Path(self.config.embedding_binary).parent
+        if binary_dir == KERNEL_STORE_CPU:
+            # The three trees run three ggml generations: a store binary must load ITS libs.
+            import os
+
+            run_kwargs["env"] = {**os.environ, "LD_LIBRARY_PATH": str(binary_dir)}
         try:
             result = subprocess.run(
-                [
-                    str(self.config.embedding_binary),
-                    "-m",
-                    str(self.config.model_path),
-                    "-p",
-                    text,
-                    "-t",
-                    str(self.config.threads),
-                    "--embd-output-format",
-                    "json",
-                ],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=self.config.timeout,
+                **run_kwargs,
             )
 
             if result.returncode != 0:
@@ -383,12 +425,8 @@ class TaskEmbedder:
             else:
                 raise ValueError(f"Unexpected output format: {output}")
 
-            # Normalize to unit vector
-            norm = np.linalg.norm(embedding)
-            if norm > 0:
-                embedding = embedding / norm
-
-            return embedding
+            # Normalize to unit vector (REPL-EMB-2.9: shared helper; truncates first when EG2 is on)
+            return normalise_embedding(embedding, self.config.truncate_dim)
 
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"llama-embedding timed out after {self.config.timeout}s")
@@ -421,7 +459,7 @@ class TaskEmbedder:
 
         return embedding
 
-    def embed_task_ir(self, task_ir: Dict[str, Any]) -> np.ndarray:
+    def embed_task_ir(self, task_ir: Dict[str, Any], side: Optional[str] = None) -> np.ndarray:
         """
         Generate embedding for a TaskIR.
 
@@ -432,9 +470,11 @@ class TaskEmbedder:
             Embedding vector (normalized)
         """
         text = self._serialize_task_ir(task_ir)
-        return self._generate_embedding(text)
+        return self._generate_embedding(text, side)
 
-    def embed_failure_context(self, failure_context: Dict[str, Any]) -> np.ndarray:
+    def embed_failure_context(
+        self, failure_context: Dict[str, Any], side: Optional[str] = None
+    ) -> np.ndarray:
         """
         Generate embedding for failure context (escalation memory).
 
@@ -445,9 +485,11 @@ class TaskEmbedder:
             Embedding vector (normalized)
         """
         text = self._serialize_failure_context(failure_context)
-        return self._generate_embedding(text)
+        return self._generate_embedding(text, side)
 
-    def embed_exploration(self, query: str, context_preview: str) -> np.ndarray:
+    def embed_exploration(
+        self, query: str, context_preview: str, side: Optional[str] = None
+    ) -> np.ndarray:
         """
         Generate embedding for exploration context (REPL memory).
 
@@ -459,9 +501,9 @@ class TaskEmbedder:
             Embedding vector (normalized)
         """
         text = self._serialize_exploration(query, context_preview)
-        return self._generate_embedding(text)
+        return self._generate_embedding(text, side)
 
-    def embed_text(self, text: str) -> np.ndarray:
+    def embed_text(self, text: str, side: Optional[str] = None) -> np.ndarray:
         """
         Generate embedding for arbitrary text.
 
@@ -471,24 +513,39 @@ class TaskEmbedder:
         Returns:
             Embedding vector (normalized)
         """
-        return self._generate_embedding(text)
+        return self._generate_embedding(text, side)
 
     def _get_parallel_client(self):
         """Get or create parallel embedder client (lazy initialization)."""
         if self._parallel_client is None:
             from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
 
-            self._parallel_client = ParallelEmbedderClient()
+            if self.config.truncate_dim:
+                from orchestration.repl_memory.parallel_embedder import EmbedderPoolConfig
+
+                self._parallel_client = ParallelEmbedderClient(
+                    EmbedderPoolConfig(truncate_dim=self.config.truncate_dim)
+                )
+            else:
+                self._parallel_client = ParallelEmbedderClient()
         return self._parallel_client
 
-    def _generate_embedding(self, text: str) -> np.ndarray:
-        """Generate embedding using available method (parallel > single HTTP > subprocess > hash)."""
+    def _generate_embedding(self, text: str, side: Optional[str] = None) -> np.ndarray:
+        """Generate embedding using available method (parallel > single HTTP > subprocess > hash).
+
+        ``side`` ('document' | 'query' | None) only matters with the EG2 seam on, where it selects
+        the prompt prefix and is mandatory; with the seam off it is validated and ignored.
+        """
+        raw_text = text
+        text = _apply_side(text, side, bool(self.config.truncate_dim))
         with inference_lock("embedder", shared=True):
             # Try parallel embedder first (probe-first to 6 servers)
             if self.config.use_parallel and self.config.use_server:
                 try:
                     client = self._get_parallel_client()
-                    return client.embed_sync(text)
+                    if side is None:
+                        return client.embed_sync(raw_text)
+                    return client.embed_sync(raw_text, side=side)
                 except Exception as e:
                     logger.warning(
                         "Parallel embedder failed (%s), falling back to single server", e
@@ -518,7 +575,7 @@ class TaskEmbedder:
             else:
                 raise RuntimeError("Embedding model not available and fallback disabled")
 
-    def embed_batch(self, texts: List[str]) -> np.ndarray:
+    def embed_batch(self, texts: List[str], side: Optional[str] = None) -> np.ndarray:
         """
         Generate embeddings for multiple texts.
 
@@ -530,7 +587,7 @@ class TaskEmbedder:
         """
         embeddings = []
         for text in texts:
-            embeddings.append(self._generate_embedding(text))
+            embeddings.append(self._generate_embedding(text, side))
         return np.array(embeddings, dtype=np.float32)
 
     @property

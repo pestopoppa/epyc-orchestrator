@@ -8,6 +8,7 @@ This module handles:
 
 from __future__ import annotations
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM
 import asyncio
 import logging
 import os
@@ -638,7 +639,7 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
                 state.skill_bank = SkillBank(
                     db_path=skill_db_path,
                     faiss_path=faiss_dir,
-                    embedding_dim=1024,  # BGE-large dimension
+                    embedding_dim=LEGACY_EMBEDDING_DIM,  # BGE-large dimension
                 )
                 state.skill_retriever = SkillRetriever(skill_bank=state.skill_bank)
 

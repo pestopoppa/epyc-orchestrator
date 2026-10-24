@@ -30,6 +30,13 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
+from src.embedding_dims import (
+    LEGACY_EMBEDDING_DIM,
+    apply_side,
+    default_truncate_dim,
+    normalise_embedding,
+)
+
 if TYPE_CHECKING:
     import concurrent.futures
 
@@ -42,7 +49,7 @@ DEFAULT_EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
 
 
 def parallel_hash_fallback_embedding(
-    text: str, embedding_dim: int = 1024
+    text: str, embedding_dim: int = LEGACY_EMBEDDING_DIM
 ) -> np.ndarray:
     """Reproduce the legacy parallel-pool pseudo-vector exactly."""
     hash_bytes = hashlib.sha256(text.encode()).digest()
@@ -77,7 +84,7 @@ class EmbedderPoolConfig:
     )
     request_timeout: float = 2.0  # Timeout for each embedding request
     connect_timeout: float = 1.0  # Connection timeout
-    embedding_dim: int = 1024  # BGE-large embedding dimension
+    embedding_dim: int = LEGACY_EMBEDDING_DIM  # BGE-large; EG2 flag: the truncate_dim
     max_retries: int = 2  # Max retries per server on transient errors
     backoff_base: float = 0.5  # Base backoff time in seconds
     # A random unit vector is structurally valid but semantically meaningless.
@@ -86,6 +93,15 @@ class EmbedderPoolConfig:
     # the owning TaskEmbedder instead; it can try the single-server and strict
     # subprocess paths before its own (detectable and write-refused) fallback.
     use_fallback: bool = False
+    # REPL-EMB-2.9 EG2 seam (see TaskEmbedder's EmbeddingConfig.truncate_dim): None = OFF,
+    # byte-identical legacy behaviour.
+    truncate_dim: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.truncate_dim is None:
+            self.truncate_dim = default_truncate_dim()
+        if self.truncate_dim and self.embedding_dim == LEGACY_EMBEDDING_DIM:
+            self.embedding_dim = int(self.truncate_dim)
 
 
 class ParallelEmbedderClient:
@@ -245,10 +261,8 @@ class ParallelEmbedderClient:
                 logger.warning("Unexpected response format from %s: %s", url, list(data.keys()))
                 return None
 
-            # Normalize to unit vector
-            norm = np.linalg.norm(embedding)
-            if norm > 0:
-                embedding = embedding / norm
+            # Normalize to unit vector (REPL-EMB-2.9: shared helper; truncates first when EG2 is on)
+            embedding = normalise_embedding(embedding, self.config.truncate_dim)
 
             self._mark_server_healthy(url)
             return embedding
@@ -258,7 +272,10 @@ class ParallelEmbedderClient:
             self._mark_server_failed(url)
             return None
 
-    async def embed_async(self, text: str) -> np.ndarray:
+    def _with_side(self, text: str, side: Optional[str]) -> str:
+        return apply_side(text, side, bool(self.config.truncate_dim))
+
+    async def embed_async(self, text: str, side: Optional[str] = None) -> np.ndarray:
         """Generate embedding using probe-first approach.
 
         Phase 1: Probe all healthy servers for availability (lightweight)
@@ -268,13 +285,16 @@ class ParallelEmbedderClient:
 
         Args:
             text: Text to embed
+            side: 'document' | 'query' (EG2 seam only: selects the prompt prefix and is
+                mandatory when ``truncate_dim`` is set; validated and ignored otherwise)
 
         Returns:
-            Embedding vector (normalized, 1024 dimensions)
+            Embedding vector (normalized, ``embedding_dim`` dimensions)
 
         Raises:
             RuntimeError: If all servers fail and fallback is disabled
         """
+        text = self._with_side(text, side)
         client = await self._get_client()
 
         # Get healthy servers (not in backoff period)
@@ -329,7 +349,7 @@ class ParallelEmbedderClient:
 
         raise RuntimeError("All embedding servers failed")
 
-    async def embed_batch_async(self, texts: list[str]) -> np.ndarray:
+    async def embed_batch_async(self, texts: list[str], side: Optional[str] = None) -> np.ndarray:
         """Generate embeddings for multiple texts.
 
         Args:
@@ -338,7 +358,10 @@ class ParallelEmbedderClient:
         Returns:
             Array of embedding vectors (N x embedding_dim)
         """
-        tasks = [self.embed_async(text) for text in texts]
+        tasks = [
+            self.embed_async(text) if side is None else self.embed_async(text, side)
+            for text in texts
+        ]
         results = await asyncio.gather(*tasks)
         return np.array(results, dtype=np.float32)
 
@@ -350,17 +373,23 @@ class ParallelEmbedderClient:
             self._sync_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         return self._sync_pool
 
-    async def _embed_and_close(self, text: str) -> np.ndarray:
+    async def _embed_and_close(self, text: str, side: Optional[str] = None) -> np.ndarray:
         """Run one embed request and always close async HTTP resources."""
         try:
-            return await self.embed_async(text)
+            if side is None:
+                return await self.embed_async(text)
+            return await self.embed_async(text, side)
         finally:
             await self.close()
 
-    async def _embed_batch_and_close(self, texts: list[str]) -> np.ndarray:
+    async def _embed_batch_and_close(
+        self, texts: list[str], side: Optional[str] = None
+    ) -> np.ndarray:
         """Run one batch request and always close async HTTP resources."""
         try:
-            return await self.embed_batch_async(texts)
+            if side is None:
+                return await self.embed_batch_async(texts)
+            return await self.embed_batch_async(texts, side)
         finally:
             await self.close()
 
@@ -371,11 +400,12 @@ class ParallelEmbedderClient:
         finally:
             await self.close()
 
-    def embed_sync(self, text: str) -> np.ndarray:
+    def embed_sync(self, text: str, side: Optional[str] = None) -> np.ndarray:
         """Synchronous wrapper for embed_async.
 
         Args:
             text: Text to embed
+            side: 'document' | 'query' (see :meth:`embed_async`)
 
         Returns:
             Embedding vector (normalized)
@@ -388,13 +418,13 @@ class ParallelEmbedderClient:
         if loop is not None:
             # Already in an event loop - use reusable thread pool
             pool = self._get_sync_pool()
-            future = pool.submit(asyncio.run, self._embed_and_close(text))
+            future = pool.submit(asyncio.run, self._embed_and_close(text, side))
             return future.result()
         else:
             # No event loop - create one
-            return asyncio.run(self._embed_and_close(text))
+            return asyncio.run(self._embed_and_close(text, side))
 
-    def embed_batch_sync(self, texts: list[str]) -> np.ndarray:
+    def embed_batch_sync(self, texts: list[str], side: Optional[str] = None) -> np.ndarray:
         """Synchronous wrapper for embed_batch_async.
 
         Args:
@@ -410,10 +440,10 @@ class ParallelEmbedderClient:
 
         if loop is not None:
             pool = self._get_sync_pool()
-            future = pool.submit(asyncio.run, self._embed_batch_and_close(texts))
+            future = pool.submit(asyncio.run, self._embed_batch_and_close(texts, side))
             return future.result()
         else:
-            return asyncio.run(self._embed_batch_and_close(texts))
+            return asyncio.run(self._embed_batch_and_close(texts, side))
 
     def _generate_fallback(self, text: str) -> np.ndarray:
         """Generate hash-based pseudo-embedding as fallback.

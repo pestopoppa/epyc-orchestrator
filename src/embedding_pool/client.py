@@ -36,6 +36,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
+from src.embedding_dims import truncate_renormalise
 from src.embedding_pool.cache import EmbeddingLRUCache, chunk_key
 from src.embedding_pool.policy import EmbeddingPoolPolicy
 from src.embedding_pool.scheduler import EmbeddingScheduler, Grant
@@ -46,7 +47,16 @@ MODE_DENSE = "dense"
 MODE_LEXICAL = "lexical"
 
 REASONS = frozenset(
-    {"no_instances", "saturated", "all_failed", "degenerate", "timeout", "cancelled", "disabled"}
+    {
+        "no_instances",
+        "saturated",
+        "all_failed",
+        "degenerate",
+        "timeout",
+        "cancelled",
+        "disabled",
+        "input_too_long",
+    }
 )
 
 
@@ -83,11 +93,39 @@ class _DegenerateVector(Exception):
     pass
 
 
-def normalise_vector(raw: Any, *, dim: int | None, min_norm: float) -> np.ndarray:
-    """L2-normalise one vector; raise ``_DegenerateVector`` for a vector no index should hold."""
+class _InputTooLong(Exception):
+    """One text stayed over the slot's per-slot token limit after every allowed clip. Not an
+    instance fault: the instance is never put into failure backoff for it."""
+
+
+def _is_oversize_reply(resp: Any) -> bool:
+    """llama-server's HTTP 400 for an input over the per-slot context (``exceed_context_size``)."""
+    if resp.status_code != 400:
+        return False
+    try:
+        body = resp.text.lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return "exceed_context_size" in body or "too large" in body or "too long" in body
+
+
+def normalise_vector(
+    raw: Any, *, dim: int | None, min_norm: float, truncate_dim: int | None = None
+) -> np.ndarray:
+    """L2-normalise one vector; raise ``_DegenerateVector`` for a vector no index should hold.
+
+    ``truncate_dim`` (REPL-EMB-2.9, default None = OFF and byte-identical): slice a larger reply
+    to its leading columns and L2 re-normalise (the harness-frozen Matryoshka cut) BEFORE the
+    dimension check, so ``dim`` is the dimension after the cut."""
     vec = np.asarray(raw, dtype=np.float32).ravel()
     if vec.size == 0:
         raise _DegenerateVector("empty vector")
+    if truncate_dim:
+        if vec.size < truncate_dim:
+            raise _DegenerateVector(f"dimension {vec.size} < truncate_dim {truncate_dim}")
+        if not np.all(np.isfinite(vec)):
+            raise _DegenerateVector("non-finite component")
+        vec = truncate_renormalise(vec, int(truncate_dim)).ravel()
     if dim is not None and vec.size != dim:
         raise _DegenerateVector(f"dimension {vec.size} != expected {dim}")
     if not np.all(np.isfinite(vec)):
@@ -210,20 +248,65 @@ class PooledEmbeddingClient:
                 resp = await http.post(f"{grant.url}/embedding", json={"content": texts})
             except Exception as exc:  # noqa: BLE001 — httpx transport/timeout errors (not CancelledError)
                 raise _InstanceError(f"{type(exc).__name__}: {exc}") from exc
+            c = self.policy.client
             if resp.status_code != 200:
+                if c.oversize_retry_clipped and _is_oversize_reply(resp):
+                    return await self._run_clipped(http, grant, texts)
                 raise _InstanceError(f"HTTP {resp.status_code}")
             try:
                 payload = resp.json()
             except ValueError as exc:
                 raise _InstanceError("reply is not JSON") from exc
             raws = parse_embedding_response(payload, len(texts))
-            c = self.policy.client
-            vecs = [normalise_vector(r, dim=self._dim, min_norm=c.min_norm) for r in raws]
+            vecs = [
+                normalise_vector(r, dim=self._dim, min_norm=c.min_norm, truncate_dim=c.truncate_dim)
+                for r in raws
+            ]
             if self._dim is None and vecs:
                 self._dim = int(vecs[0].size)
             return vecs
         finally:
             self.scheduler.release(grant)
+
+    async def _run_clipped(self, http: Any, grant: Grant, texts: list[str]) -> list[np.ndarray]:
+        """Oversize policy (``oversize_retry_clipped``): a 400 ``exceed_context_size`` poisons the
+        whole list request but names no text, so each text is re-sent alone; one still over the
+        slot is clipped to half and retried (at most ``oversize_max_halvings`` times). The
+        instance is healthy throughout: nothing here is an ``_InstanceError`` for the oversize
+        itself, and a text that never fits raises ``_InputTooLong`` (no failure backoff)."""
+        c = self.policy.client
+        out: list[np.ndarray] = []
+        for text in texts:
+            cur = text
+            for attempt in range(c.oversize_max_halvings + 1):
+                try:
+                    resp = await http.post(f"{grant.url}/embedding", json={"content": [cur]})
+                except Exception as exc:  # noqa: BLE001
+                    raise _InstanceError(f"{type(exc).__name__}: {exc}") from exc
+                if resp.status_code == 200:
+                    try:
+                        payload = resp.json()
+                    except ValueError as exc:
+                        raise _InstanceError("reply is not JSON") from exc
+                    (raw,) = parse_embedding_response(payload, 1)
+                    out.append(
+                        normalise_vector(
+                            raw, dim=self._dim, min_norm=c.min_norm, truncate_dim=c.truncate_dim
+                        )
+                    )
+                    break
+                if not _is_oversize_reply(resp):
+                    raise _InstanceError(f"HTTP {resp.status_code}")
+                if attempt == c.oversize_max_halvings or len(cur) <= 1:
+                    self.scheduler.note("input_too_long")
+                    raise _InputTooLong(
+                        f"{len(text)}-char text still over the slot after {attempt} clip(s)"
+                    )
+                self.scheduler.note("oversize_clipped")
+                cur = cur[: max(1, len(cur) // 2)]
+        if self._dim is None and out:
+            self._dim = int(out[0].size)
+        return out
 
     # -- public API -------------------------------------------------------------------------
     async def embed(self, text: str, **kwargs: Any) -> np.ndarray:
@@ -369,6 +452,8 @@ class PooledEmbeddingClient:
                             pending.append(
                                 _Chunk(sub.indices, sub.tried | {g.port}, sub.degenerate_hits + 1)
                             )
+                        elif isinstance(exc, _InputTooLong):
+                            raise EmbeddingUnavailable("input_too_long", str(exc))
                         elif isinstance(exc, _InstanceError):
                             sched.mark_failure(g.port)
                             sched.note("retries")

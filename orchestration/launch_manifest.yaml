@@ -385,6 +385,14 @@ embedding:
     # silently does nothing (stack_topology.yaml, the cross-role mmap note).
     # Cost: 6 x 0.62 GiB = 3.7 GiB private RAM, inside capacity.host_os_reserve_gib.
     no_mmap: true
+    # REPL-EMB-2.9 (EG2 adoption, package section 3): OPTIONAL recipe keys, absent while BGE
+    # serves, so the argv is unchanged. _build_embedding_command emits them only when present and
+    # embedder_affinity_check verifies them. The v11 stack change sets, for
+    # embeddinggemma-2-BF16.gguf: context_tokens 8192, pooling mean, flash_attn false,
+    # batch_tokens 2048, ubatch_tokens 2048, embd_normalize 2 (-c 8192 -b 2048 -ub 2048).
+    # batch_tokens: 2048
+    # ubatch_tokens: 2048
+    # embd_normalize: 2
   # ── 2026-09-26 UFH-12 Phase 0 — DECLARED PLACEMENT (REPL-EMB-0.1) ─────────
   # Until this block existed the pool had NO placement: `no_numa: true` plus an
   # empty spawn prefix, and the canonical OMP env (OMP_PROC_BIND=spread,

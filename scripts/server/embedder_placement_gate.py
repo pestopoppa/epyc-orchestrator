@@ -98,6 +98,16 @@ EMB_TEXT = (
 )
 
 
+def make_emb_text(chars: int | None) -> str:
+    """REPL-EMB-2.9: the load text at a requested size. None = the Phase-0 ``EMB_TEXT`` unchanged
+    (byte-identical default); N = EMB_TEXT repeated and cut to N chars (G-1 asks for 3 sizes)."""
+    if chars is None:
+        return EMB_TEXT
+    if chars < 1:
+        raise ValueError("--emb-text-chars must be >= 1")
+    return (EMB_TEXT * (chars // len(EMB_TEXT) + 1))[:chars]
+
+
 def _post(url: str, body: dict, timeout: float = 600.0) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}
@@ -127,9 +137,11 @@ class _Load:
     """`per_port` embedding requests in flight on each port until stopped. With `pace_s` > 0 each
     caller waits that long after every request (a low-duty point)."""
 
-    def __init__(self, ports: list[int], per_port: int, *, pace_s: float = 0.0) -> None:
+    def __init__(self, ports: list[int], per_port: int, *, pace_s: float = 0.0,
+                 text: str | None = None) -> None:
         self.ports, self.per_port = ports, per_port
         self.pace_s = pace_s
+        self.text = EMB_TEXT if text is None else text
         self.stop = threading.Event()
         self.done = 0
         self.errors = 0
@@ -139,7 +151,7 @@ class _Load:
     def _worker(self, port: int) -> None:
         while not self.stop.is_set():
             try:
-                _post(f"http://127.0.0.1:{port}/v1/embeddings", {"input": [EMB_TEXT]}, timeout=120)
+                _post(f"http://127.0.0.1:{port}/v1/embeddings", {"input": [self.text]}, timeout=120)
                 with self._lock:
                     self.done += 1
             except Exception:  # noqa: BLE001 — counted, reported, never swallowed silently
@@ -218,9 +230,10 @@ class _SchedulerLoad:
     def __init__(self, ports: list[int], per_port: int, *,
                  client_factory: Callable[[list[int]], Any] | None = None,
                  admission_wait_s: float = 30.0, warmup_s: float = LOAD_WARMUP_S,
-                 pace_s: float = 0.0) -> None:
+                 pace_s: float = 0.0, text: str | None = None) -> None:
         self.ports, self.per_port = ports, per_port
         self.pace_s = pace_s
+        self.text = EMB_TEXT if text is None else text
         self.client_factory = client_factory or _default_pool_client
         self.admission_wait_s = admission_wait_s
         self.warmup_s = warmup_s
@@ -248,7 +261,7 @@ class _SchedulerLoad:
 
         while not self.stop.is_set():
             try:
-                await self._client.embed_many([EMB_TEXT], use_cache=False, cancel_event=self.stop,
+                await self._client.embed_many([self.text], use_cache=False, cancel_event=self.stop,
                                               admission_wait_s=self.admission_wait_s, timeout_s=120.0)
                 with self._lock:
                     self.done += 1
@@ -341,14 +354,16 @@ class _SchedulerLoad:
         }
 
 
-def _load_for(mode: str, *, pace_s: float = 0.0, policy: Any = None,
+def _load_for(mode: str, *, pace_s: float = 0.0, policy: Any = None, text: str | None = None,
               **scheduler_kwargs: Any) -> Callable[[list[int], int], Any]:
+    if text is not None:
+        scheduler_kwargs = {**scheduler_kwargs, "text": text}
     if mode == "raw":
         if policy is not None:
             raise ValueError("a policy override needs --load-mode scheduler (raw load has no scheduler)")
-        if not pace_s:
+        if not pace_s and text is None:
             return _Load
-        return lambda ports, per_port: _Load(ports, per_port, pace_s=pace_s)
+        return lambda ports, per_port: _Load(ports, per_port, pace_s=pace_s, text=text)
     if mode == "scheduler":
         if policy is not None:
             scheduler_kwargs = {**scheduler_kwargs,
@@ -462,6 +477,12 @@ def main() -> int:
                          ">0 = a low-duty point)")
     ap.add_argument("--expect-embedder-env", action="append", default=[], metavar="KEY=VALUE",
                     help="refuse to start unless every pool embedder's live env has KEY=VALUE")
+    ap.add_argument("--emb-text-chars", type=int, default=None,
+                    help="REPL-EMB-2.9: size of the embedding load text in chars (default: the "
+                         "Phase-0 EMB_TEXT, unchanged); G-1 runs it at 3 sizes")
+    ap.add_argument("--embedder-ports", default=None,
+                    help="REPL-EMB-2.9: comma-separated pool ports to drive instead of "
+                         "8090-8095 (harness-owned EG2 servers on non-production ports)")
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--fd-ports", default="8070,8080,8180")
     ap.add_argument("--pairs", type=int, default=6)
@@ -479,6 +500,12 @@ def main() -> int:
     if args.per_port_in_flight < 1 or args.load_pace_s < 0:
         raise SystemExit("refusing: --per-port-in-flight >= 1 and --load-pace-s >= 0")
     fd_ports = [int(p) for p in args.fd_ports.split(",")]
+    if args.embedder_ports:
+        POOL_PORTS[:] = [int(p) for p in args.embedder_ports.split(",")]
+    try:
+        emb_text = make_emb_text(args.emb_text_chars)
+    except ValueError as exc:
+        raise SystemExit(f"refusing: {exc}") from exc
     down = [p for p in POOL_PORTS + fd_ports if not _healthy(p)]
     if down:
         raise SystemExit(f"refusing: ports not healthy: {down}")
@@ -506,6 +533,7 @@ def main() -> int:
         except ValueError as exc:
             raise SystemExit(f"refusing: {exc}") from exc
     load_factory = _load_for(args.load_mode, pace_s=args.load_pace_s, policy=effective_policy,
+                             text=None if args.emb_text_chars is None else emb_text,
                              admission_wait_s=args.sched_admission_wait_s)
     if args.per_port_in_flight != PER_PORT_IN_FLIGHT:
         # g1/g2 always ask for PER_PORT_IN_FLIGHT; a low-duty point substitutes its own width here,
@@ -531,7 +559,8 @@ def main() -> int:
             "embedder_env": env_before,
             "embedder_env_override_record": override_record,
             "fd_prompt_sha256": hashlib.sha256(FD_PROMPT.encode()).hexdigest(),
-            "emb_text_sha256": hashlib.sha256(EMB_TEXT.encode()).hexdigest(),
+            "emb_text_sha256": hashlib.sha256(emb_text.encode()).hexdigest(),
+            "emb_text_chars": len(emb_text),
         },
     }
     if args.load_mode == "scheduler":

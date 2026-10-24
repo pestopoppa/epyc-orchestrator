@@ -26,6 +26,9 @@
 #
 # Embedding roles (embedder, embedder_1..5):
 #   6×BGE single-port embedding servers, no NUMA pinning, optional at launch
+#   REPL-EMB-2.9: the v11 stack change (EG2 adoption package) re-points these six entries at
+#   embeddinggemma-2-BF16 and sets ram_gb from gate G-M's measurement (estimate 0.8-0.95 GiB, NOT
+#   adopted here); until then they stay BGE and nothing below is changed.
 #
 # Aliases are represented with tier=ALIAS + alias_to; they do not launch separate servers.
 # Single-instance roles: 1×96t full-machine, 1×8t GPU host lane, or embedding-mode dedicated

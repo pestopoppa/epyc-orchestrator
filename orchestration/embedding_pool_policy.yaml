@@ -39,6 +39,14 @@ client:
   min_norm: 1.0e-6
   # Expected embedding dimension. null = lock to the first valid reply.
   embedding_dim: 1024
+  # REPL-EMB-2.9 EG2 seam, OFF here (BGE serves today). null = use the server vector as is.
+  # The EG2 values (embedding_dim 256, truncate_dim 256, oversize_retry_clipped true) live in
+  # embedding_pool_policy.eg2.yaml and ship with the v11 stack change, not before.
+  truncate_dim: null
+  # OFF: an oversize reply (HTTP 400 exceed_context_size) fails the request and backs the
+  # instance off (legacy). ON: per-text `input_too_long`, retried clipped to half, no backoff.
+  oversize_retry_clipped: false
+  oversize_max_halvings: 3
   # sha256 LRU cache (key = model id + text), entries.
   cache_max_entries: 20000
   # Poll interval while waiting for headroom or a busy-state change (s).

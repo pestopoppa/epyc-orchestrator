@@ -7,6 +7,7 @@ Provides ~70x faster retrieval at scale (500K entries: 70ms -> ~1ms).
 
 from __future__ import annotations
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM, check_store_marker
 import logging
 import os
 import time
@@ -95,7 +96,7 @@ class FAISSEmbeddingStore:
     def __init__(
         self,
         path: Path = DEFAULT_FAISS_PATH,
-        dim: int = 1024,  # BGE-large embedding dimension
+        dim: int = LEGACY_EMBEDDING_DIM,  # BGE-large; migrated stores carry embedding_model.json
         index_filename: str = "embeddings.faiss",
         id_map_filename: str = "id_map.npy",
     ):
@@ -119,6 +120,8 @@ class FAISSEmbeddingStore:
         self._faiss = faiss
         self.path = Path(path)
         self.dim = dim
+        # REPL-EMB-2.10 B-4: a migrated directory pins its dimension in embedding_model.json.
+        check_store_marker(self.path, dim, consumer="FAISSEmbeddingStore")
         self.index_path = self.path / index_filename
         self.id_map_path = self.path / id_map_filename
         self._dirty = False
@@ -550,10 +553,11 @@ class NumpyEmbeddingStore:
     def __init__(
         self,
         path: Path = DEFAULT_FAISS_PATH,
-        dim: int = 1024,  # BGE-large embedding dimension
+        dim: int = LEGACY_EMBEDDING_DIM,  # BGE-large; migrated stores carry embedding_model.json
     ):
         self.path = Path(path)
         self.dim = dim
+        check_store_marker(self.path, dim, consumer="NumpyEmbeddingStore")
         self.embeddings_path = self.path / "embeddings.npy"
         self.id_map_path = self.path / "id_map.npy"
 
