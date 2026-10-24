@@ -282,14 +282,26 @@ def test_missing_reader_falls_back_to_the_root_alarm_channel(tmp_path: Path) -> 
     assert outcome.consumer_alarm["fallback"]["invoked"] is True
 
 
-def test_loop_prepares_before_planning_and_backs_off_without_planner() -> None:
-    body = inspect.getsource(autopilot._run_loop_inner)
-    prepare_at = body.index("_loop_beliefs.prepare(")
-    plan_at = body.index("planner_decision = plan_with_providers(")
-    backoff_at = body.index("time.sleep(_loop_beliefs.DEGRADED_BACKOFF_S)")
-    assert prepare_at < backoff_at < plan_at
-    assert "belief_context=belief_ready" in body
-    assert body.index("continue", backoff_at) < plan_at
+def _controller_turn(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> Any:
+    from tests.unit.autopilot_loop_harness import fresh_state, planner_decision, run_loop_inner
+
+    kwargs.setdefault("planner_decisions", [planner_decision({"type": "seed_batch"})])
+    return run_loop_inner(
+        monkeypatch, state=fresh_state(), use_controller=True, higher_tier_probe=False, **kwargs
+    )
+
+
+def test_loop_prepares_before_planning_and_backs_off_without_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ready = _controller_turn(monkeypatch)
+    assert ready.index("belief_prepare") < ready.index("plan")
+    assert ready.of("plan")[0]["belief_context"] is not None
+    # Refused with nothing admissible: back off and retry, never plan or dispatch.
+    refused = _controller_turn(monkeypatch, belief_refused="reader_missing", stop_after_sleeps=1)
+    assert [p["seconds"] for p in refused.of("sleep")] == [lb.DEGRADED_BACKOFF_S]
+    assert "plan" not in refused.names and refused.dispatched == []
+    assert "belief_degraded_backoff" in refused.phases
 
 
 # ------------------------------------------------------------------------------ (iii) degraded
@@ -819,9 +831,15 @@ def test_unreadable_stack_or_hypotheses_never_crash_target_derivation(
     assert "live stack unreadable" in caplog.text and "hypotheses unreadable" in caplog.text
 
 
-def test_run_loop_asks_prepare_for_derived_targets_not_an_empty_list() -> None:
-    source = inspect.getsource(autopilot._run_loop_inner)
-    assert "derive_targets(" in source and "targets=[]" not in source
+def test_run_loop_asks_prepare_for_derived_targets_not_an_empty_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.autopilot_loop_harness import HARNESS_TARGETS
+
+    run = _controller_turn(monkeypatch)
+    [derive] = run.of("derive_targets")
+    assert {"hypotheses_loader", "stack_regime_loader"} <= set(derive["kwargs"])
+    assert run.of("belief_prepare")[0]["targets"] == HARNESS_TARGETS
 
 
 # ------------------------------------------------------------------------------ Phase 1 P1-G
@@ -1031,11 +1049,15 @@ def test_journal_entry_round_trips_belief_scope_and_old_rows_stay_empty() -> Non
     assert ej.JournalEntry.__dataclass_fields__["belief_scope"].default_factory() == {}
 
 
-def test_the_post_trial_hook_records_belief_scope_before_journal_record() -> None:
-    source = inspect.getsource(autopilot._run_loop_inner)
-    hook = source.index("trial_belief_scope(")
-    assert hook < source.index("journal.record(journal_entry)", hook)
-    assert "stack_regime_loader" in source
+def test_the_post_trial_hook_records_belief_scope_before_journal_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.autopilot_loop_harness import fresh_state, run_loop_inner
+
+    monkeypatch.setattr(lb, "trial_belief_scope", lambda fp, action: {"for": action["type"]})
+    run = run_loop_inner(monkeypatch, state=fresh_state())
+    # the recorder snapshots the row at journal.record time
+    assert [r["belief_scope"] for r in run.of("record")] == [{"for": run.dispatched[0]["type"]}]
 
 
 # ------------------------------------------------------------------------------ P1-N (DP-4 = A)
@@ -1174,13 +1196,25 @@ def test_plan_with_providers_archives_the_counterfactual_without_dispatching(
     assert receipt["accepted_reliance_claims"][0]["knob_family"] == "orchestrator"
 
 
-def test_premise_skip_is_recorded_as_one_confirmed_reliance() -> None:
+def test_premise_skip_is_recorded_as_one_confirmed_reliance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.autopilot_loop_harness import fresh_state, run_loop_inner
+
     rows: list[dict[str, Any]] = []
     row = lb.record_premise_skip(7, "vidya premise withdrawn: claim_id=c1", NUMERIC, ["c1"],
                                  sink=rows.append)
     assert rows == [row] and row["reliance_confirmed"] is True and row["trial_id"] == 7
     assert row["type"] == "belief_premise_skip"
-    assert "record_premise_skip(" in inspect.getsource(autopilot._run_loop_inner)
+    # The loop records the reliance when the premise check blocks a dispatch.
+    reason = "vidya premise withdrawn: claim_id=c1"
+    skip = autopilot.SkipOutcome("invalid", reason, "numeric_trial")
+    monkeypatch.setattr(autopilot, "_vidya_premise_skip", lambda *args: skip)
+    calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(lb, "record_premise_skip", lambda *args: calls.append(args))
+    run = run_loop_inner(monkeypatch, state=fresh_state(), auto_actions=[NUMERIC],
+                         higher_tier_probe=False)
+    assert run.dispatched == [] and [c[:3] for c in calls] == [(0, reason, NUMERIC)]
 
 
 def test_pass_checker_counts_confirmed_turns_and_skips() -> None:
