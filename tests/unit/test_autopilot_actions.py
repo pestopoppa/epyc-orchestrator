@@ -4093,3 +4093,141 @@ def test_distill_pool_composition_counts_outcomes() -> None:
         "by_outcome": {"success": 2, "failure": 1, "unknown": 1},
         "min_q_value": 0.7,
     }
+
+
+def test_memory_distillation_record_marks_only_native_escalations() -> None:
+    from scripts.autopilot.species.structural_lab import StructuralLab
+
+    escalation = StructuralLab._memory_distillation_record(
+        SimpleNamespace(
+            id="e1",
+            action="escalate:worker->architect",
+            action_type="escalation",
+            context={"task_type": "debugging", "extra": {"from_tier": "worker", "to_tier": "architect"}},
+            outcome="success",
+            assigned_role="worker",
+            sub_decision="delegate",
+        )
+    )
+    assert escalation["escalations"] == [
+        {
+            "memory_id": "e1",
+            "pattern_scope": "aggregated_memory_pattern",
+            "evidence_source": "MemoryEntry.action_type",
+            "action_type": "escalation",
+            "from_tier": "worker",
+            "to_tier": "architect",
+        }
+    ]
+
+    missing_metadata = StructuralLab._memory_distillation_record(
+        SimpleNamespace(
+            id="e2", action="escalate", action_type="escalation", context={}, outcome=None
+        )
+    )
+    assert missing_metadata["escalations"] == [
+        {
+            "memory_id": "e2",
+            "pattern_scope": "aggregated_memory_pattern",
+            "evidence_source": "MemoryEntry.action_type",
+            "action_type": "escalation",
+            "from_tier": None,
+            "to_tier": None,
+        }
+    ]
+
+    role_change_only = StructuralLab._memory_distillation_record(
+        SimpleNamespace(
+            id="r1",
+            action="route:worker",
+            action_type="routing",
+            context={},
+            outcome="success",
+            assigned_role="verifier",
+            sub_decision="delegate",
+        )
+    )
+    assert role_change_only["escalations"] == []
+
+
+def test_distill_skillbank_reports_episodic_pattern_counts_without_inference(
+    monkeypatch, tmp_path
+) -> None:
+    from orchestration.repl_memory import episodic_store, embedder, skill_bank
+    from orchestration.repl_memory.distillation import pipeline, teachers
+    from scripts.autopilot.species.structural_lab import StructuralLab
+
+    records = [
+        SimpleNamespace(
+            id="e1",
+            action="escalate:worker->architect",
+            action_type="escalation",
+            context={"extra": {"from_tier": "worker", "to_tier": "architect"}},
+            outcome="success",
+        ),
+        SimpleNamespace(
+            id="r1",
+            action="route:worker",
+            action_type="routing",
+            context={},
+            outcome="success",
+            assigned_role="verifier",
+            sub_decision="delegate",
+        ),
+    ]
+    captured = {}
+
+    class FakeStore:
+        def retrieve_by_similarity(self, *_args, **_kwargs):
+            return records
+
+    class FakeTeacher:
+        model_id = "mock"
+
+    class FakeSkillBank:
+        def __init__(self, **_kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    class FakePipeline:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, memory_patterns):
+            captured["patterns"] = memory_patterns
+            return SimpleNamespace(
+                total_trajectories=len(memory_patterns),
+                success_trajectories=sum(p["outcome"] == "success" for p in memory_patterns),
+                failure_trajectories=0,
+                escalation_trajectories=sum(bool(p["escalations"]) for p in memory_patterns),
+                skills_proposed=0,
+                skills_stored=0,
+                skills_merged=0,
+                skills_rejected=0,
+                duration_seconds=0.0,
+                teacher_calls=0,
+                prompt_chars=0,
+                response_chars=0,
+                errors=[],
+            )
+
+    monkeypatch.setattr(episodic_store, "EpisodicStore", FakeStore)
+    monkeypatch.setattr(teachers, "MockTeacher", FakeTeacher)
+    monkeypatch.setattr(skill_bank, "SkillBank", FakeSkillBank)
+    monkeypatch.setattr(pipeline, "DistillationPipeline", FakePipeline)
+    monkeypatch.setattr(embedder, "TaskEmbedder", lambda: object())
+
+    result = StructuralLab().distill_skillbank(
+        teacher="mock", skill_db_path=tmp_path / "unused-skills.db"
+    )
+
+    assert result["status"] == "ok"
+    assert result["report"]["input_unit"] == "episodic_memory_pattern"
+    assert result["report"]["total_trajectories"] == 2
+    assert result["report"]["success_trajectories"] == 2
+    assert result["report"]["escalation_trajectories"] == 1
+    assert result["pool"]["by_outcome"] == {"success": 2}
+    assert captured["patterns"][0]["escalations"][0]["memory_id"] == "e1"
+    assert captured["patterns"][1]["escalations"] == []

@@ -290,7 +290,16 @@ class TestDistillationPipeline:
                 "task_id": "t1",
                 "task_type": "debugging",
                 "outcome": "success",
-                "escalations": ["worker->coder"],
+                "escalations": [
+                    {
+                        "memory_id": "t1",
+                        "pattern_scope": "aggregated_memory_pattern",
+                        "evidence_source": "MemoryEntry.action_type",
+                        "action_type": "escalation",
+                        "from_tier": "worker",
+                        "to_tier": "coder",
+                    }
+                ],
             },
         ]
 

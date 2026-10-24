@@ -319,10 +319,12 @@ class StructuralLab:
         autopilot ``distill_skillbank`` action returned ``{"status": "error"}``
         and the surface never once distilled. Now mirrors the working reference
         flow in ``scripts/skillbank/seed_skills.py``: teacher resolution,
-        high-Q trajectory extraction from the episodic store, and
+        high-Q memory-record retrieval from the episodic store, and
         ``asyncio.run`` (the autopilot loop is synchronous). ``categories`` is
-        accepted for action-schema compatibility but the pipeline groups by
-        trajectory OUTCOME (success/failure/escalation), not by these labels.
+        accepted for action-schema compatibility but the pipeline groups these
+        aggregated records by OUTCOME (success/failure/escalation), not by labels.
+        The input rows do not reconstruct full task traces. ``max_trajectories``
+        is retained as the existing action-schema parameter name.
 
         Requires inference: the teacher LLM writes the skills. ``teacher`` is
         one of claude | codex | local | mock (mock = wiring test, stores
@@ -388,28 +390,16 @@ class StructuralLab:
             )
             trajectories = []
             for mem in memories:
-                ctx_d = mem.context if isinstance(mem.context, dict) else {}
-                trajectories.append(
-                    {
-                        "task_id": mem.id,
-                        "task_type": ctx_d.get("task_type", "general"),
-                        # contract key first, legacy key second (seed_skills.py
-                        # still reads only the legacy one and silently falls
-                        # back to the routing label for contract rows)
-                        "objective": ctx_d.get("objective")
-                        or ctx_d.get("task_description")
-                        or mem.action,
-                        "routing_decision": mem.action,
-                        "outcome": mem.outcome or "unknown",
-                        "escalations": [],
-                        "cost_metrics": {},
-                    }
-                )
+                trajectories.append(self._memory_distillation_record(mem))
             pool = self._distill_pool_composition(trajectories, min_q_value)
             if not trajectories:
                 return {
                     "status": "ok",
-                    "report": {"total_trajectories": 0, "skills_stored": 0},
+                    "report": {
+                        "total_trajectories": 0,
+                        "skills_stored": 0,
+                        "input_unit": "episodic_memory_pattern",
+                    },
                     "pool": pool,
                     "note": f"no memories with Q >= {min_q_value}; nothing to distill",
                 }
@@ -434,6 +424,8 @@ class StructuralLab:
                 "status": "ok",
                 "report": {
                     "teacher": teacher_obj.model_id,
+                    # Preserve the M-25 report keys for operator/checkpoint
+                    # consumers; input_unit qualifies their legacy meaning here.
                     "total_trajectories": report.total_trajectories,
                     "skills_proposed": report.skills_proposed,
                     "skills_stored": report.skills_stored,
@@ -444,6 +436,7 @@ class StructuralLab:
                     "success_trajectories": report.success_trajectories,
                     "failure_trajectories": report.failure_trajectories,
                     "escalation_trajectories": report.escalation_trajectories,
+                    "input_unit": "episodic_memory_pattern",
                     "duration_seconds": round(report.duration_seconds, 1),
                     "teacher_calls": report.teacher_calls,
                     "approx_prompt_tokens": report.prompt_chars // 4,
@@ -454,6 +447,44 @@ class StructuralLab:
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    @staticmethod
+    def _memory_distillation_record(mem: Any) -> dict[str, Any]:
+        """Project one aggregated episodic memory into the distiller's record shape.
+
+        These are aggregated memory patterns, not full task traces. Only the
+        native ``MemoryEntry.action_type`` identifies an escalation; role metadata
+        is not evidence that one occurred. Tier endpoints are passed through when
+        present and otherwise remain null.
+        """
+        ctx_d = mem.context if isinstance(mem.context, dict) else {}
+        escalations: list[dict[str, Any]] = []
+        if mem.action_type == "escalation":
+            extra = ctx_d.get("extra")
+            extra = extra if isinstance(extra, dict) else {}
+            escalations.append(
+                {
+                    "memory_id": mem.id,
+                    "pattern_scope": "aggregated_memory_pattern",
+                    "evidence_source": "MemoryEntry.action_type",
+                    "action_type": mem.action_type,
+                    "from_tier": extra.get("from_tier"),
+                    "to_tier": extra.get("to_tier"),
+                }
+            )
+        return {
+            "task_id": mem.id,
+            "task_type": ctx_d.get("task_type", "general"),
+            # contract key first, legacy key second (seed_skills.py still reads
+            # only the legacy one and silently falls back to the routing label).
+            "objective": ctx_d.get("objective")
+            or ctx_d.get("task_description")
+            or mem.action,
+            "routing_decision": mem.action,
+            "outcome": mem.outcome or "unknown",
+            "escalations": escalations,
+            "cost_metrics": {},
+        }
 
     @staticmethod
     def _distill_pool_composition(
