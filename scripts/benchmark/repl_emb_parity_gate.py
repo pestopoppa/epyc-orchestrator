@@ -343,6 +343,58 @@ def render_table(res: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
+# ───────────────────────────────────────────────────────────────────────────── belief capture
+
+EXIT_CAPTURE_FAILED = 4
+ADAPTER_REL = "scripts/vidya/adapters/repl_embedder_parity.py"
+BELIEF_ROOTS = ("/workspace", "/mnt/raid0/llm/worktrees/root-pbe-3c4ca599")
+
+
+def load_belief_adapter(epyc_root: str | None) -> Any:
+    """Import the epyc-root adapter (the write side lives with its strict reader). Search order:
+    ``--epyc-root``, ``$EPYC_ROOT``, then the pinned roots; same pattern as ``run_repl_preview.py``."""
+    root = next(
+        (
+            r
+            for r in ([epyc_root, os.environ.get("EPYC_ROOT")] + list(BELIEF_ROOTS))
+            if r and (Path(r) / ADAPTER_REL).is_file()
+        ),
+        None,
+    )
+    if root is None:
+        raise RuntimeError(
+            "repl_embedder_parity adapter not found (--epyc-root, EPYC_ROOT, /workspace, pinned root worktree)"
+        )
+    vidya = str(Path(root) / "scripts" / "vidya")
+    if vidya not in sys.path:
+        sys.path.insert(0, vidya)
+    from adapters import repl_embedder_parity as rp  # type: ignore  # noqa: PLC0415
+
+    return rp
+
+
+def belief_capture(
+    out: Path,
+    belief_out: Path,
+    runtime_meta: Path,
+    *,
+    run_id: str | None,
+    epyc_root: str | None,
+) -> Path:
+    """Opt-in G-P1 / G-P2 write side: project the just-written ``parity.json`` through the root adapter.
+    Raises on any refusal (the caller turns it into ``EXIT_CAPTURE_FAILED``); the gate record stays."""
+    rp = load_belief_adapter(epyc_root)
+    belief_out.mkdir(parents=True, exist_ok=True)
+    return rp.write_belief_measurements(
+        belief_out,
+        run_id=run_id or f"repl-emb-parity-{out.resolve().name}",
+        producer="repl_emb_parity_gate.py",
+        parity_path=out / "parity.json",
+        items_path=out / "items.json",
+        runtime_meta=runtime_meta,
+    )
+
+
 # ───────────────────────────────────────────────────────────────────────────── CLI
 
 
@@ -383,6 +435,23 @@ def main(argv: list[str] | None = None) -> int:
                 choices=["st-fp32-full", "st-fp32-textonly", "st-bf16", "gguf-bf16", "gguf-q8_0"],
             )
             p.add_argument("--url", default=None)
+        if name in ("compare", "all"):
+            p.add_argument(
+                "--belief-out",
+                type=Path,
+                default=None,
+                help="opt-in: write the belief-kernel sidecar repl_embedder_parity.beliefs.jsonl here "
+                "(needs --runtime-meta; exit 4 if the capture is refused, parity.json is kept)",
+            )
+            p.add_argument(
+                "--runtime-meta",
+                type=Path,
+                default=None,
+                help="JSON {lane: {runtime, argv, versions | binary_sha256, flash_attn_requested, flash_attn_resolved}} "
+                "for the reference lane and every gated lane; never defaulted",
+            )
+            p.add_argument("--belief-run-id", default=None)
+            p.add_argument("--epyc-root", default=None, help="epyc-root checkout holding the adapter (else $EPYC_ROOT)")
         if name == "all":
             p.add_argument(
                 "--gguf",
@@ -453,7 +522,20 @@ def main(argv: list[str] | None = None) -> int:
     (a.out / "parity.md").write_text(table + "\n\n" + res["scope_note"] + "\n")
     print(table)
     print(res["scope_note"])
-    return 0 if all(r["verdict"] in ("PASS", None) for r in res["lanes"].values()) else 3
+    rc = 0 if all(r["verdict"] in ("PASS", None) for r in res["lanes"].values()) else 3
+    if a.belief_out is not None:
+        if a.runtime_meta is None:
+            print("belief capture NOT written: --belief-out needs --runtime-meta", file=sys.stderr)
+            return EXIT_CAPTURE_FAILED
+        try:
+            side = belief_capture(
+                a.out, a.belief_out, a.runtime_meta, run_id=a.belief_run_id, epyc_root=a.epyc_root
+            )
+            print(f"belief sidecar: {side}")
+        except Exception as exc:  # noqa: BLE001 - any refusal is loud; the gate record is already on disk
+            print(f"belief capture NOT written: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return EXIT_CAPTURE_FAILED
+    return rc
 
 
 if __name__ == "__main__":
