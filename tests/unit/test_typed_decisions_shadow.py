@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 import threading
+import time
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -440,28 +443,34 @@ def test_excess_submissions_are_dropped_and_counted(tmp_path, monkeypatch):
     assert len(_records(log_path)) == MAX_PENDING
 
 
-def test_background_worker_thread_is_a_daemon(tmp_path, monkeypatch):
-    log_path = tmp_path / "shadow.jsonl"
-    _enable(monkeypatch, log_path)
-    gate = threading.Event()
-    primitives = _GatedPrimitives(_valid_response(_questions()), gate)
-
-    assert submit_shadow(
-        primitives,
-        surface="unit.daemon",
-        state=STATE,
-        questions=_questions(),
-        incumbent={"roles": list(ROLES), "strategy": "rules"},
-        role=ROLE,
+def test_in_flight_shadow_call_does_not_hold_interpreter_exit(tmp_path):
+    """A3-09: the old 'daemon' pool worker was still joined by concurrent.futures' atexit."""
+    script = (
+        "import time\n"
+        "from src.features import Features, set_features\n"
+        "from src.typed_decisions import Question, QuestionKind, shadow\n"
+        "class Slow:\n"
+        "    def llm_call(self, prompt, **kwargs):\n"
+        "        time.sleep(3)\n"
+        "        return '{}'\n"
+        "set_features(Features(typed_decisions_shadow=True))\n"
+        "q = (Question(id='e', kind=QuestionKind.NOUL, text='Escalate?'),)\n"
+        f"assert shadow.submit_shadow(Slow(), surface='exit', state='s', questions=q, "
+        f"incumbent={{}}, role='worker_general', log_path={str(tmp_path / 'shadow.jsonl')!r})\n"
+        "time.sleep(0.2)\n"
+        "print('t0', time.monotonic(), flush=True)\n"
     )
-    assert shadow._executor is not None
-    threads = list(shadow._executor._threads)
-    assert threads, "expected the first submit to start the worker"
-
-    gate.set()
-    drain_shadow()
-
-    assert all(thread.daemon for thread in threads)
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    end = time.monotonic()
+    assert proc.returncode == 0, proc.stderr
+    exit_s = end - float(proc.stdout.split()[-1])
+    assert exit_s < 1.5, f"interpreter exit blocked {exit_s:.2f}s on the in-flight shadow call"
 
 
 # ── 6. Routing-plane helper ────────────────────────────────────────────────
