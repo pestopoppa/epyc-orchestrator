@@ -12,9 +12,11 @@ import copy
 import hashlib
 import logging
 import os
+import pickle
 import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -260,18 +262,36 @@ def validate_stack_priors_contract(priors: dict[str, Any]) -> list[str]:
     return errors
 
 
+_ARTIFACT_CACHE: dict[Path, tuple[tuple[int, int, int], bytes]] = {}
+_ARTIFACT_CACHE_LOCK = threading.Lock()
+_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def load_stack_priors_artifact(path: Path = DEFAULT_OUTPUT) -> dict[str, Any] | None:
     """Load a generated stack-priors artifact for runtime consumers.
 
     Compilation and validation paths should use the stricter helpers in this
     module. Runtime consumers use this fail-closed loader so a missing or
     malformed generated artifact falls back to their explicit degraded modes.
+
+    The parse is cached on (inode, mtime_ns, size): the readers run per request
+    and a cold parse costs ~0.3 s. Each call returns a fresh copy (a pickle
+    round-trip, ~3x cheaper than copy.deepcopy), so callers may mutate it.
     """
     try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        key_path = Path(path).resolve()
+        st = key_path.stat()
+        key = (st.st_ino, st.st_mtime_ns, st.st_size)
+        with _ARTIFACT_CACHE_LOCK:
+            cached = _ARTIFACT_CACHE.get(key_path)
+            if cached is None or cached[0] != key:
+                loaded = yaml.load(key_path.read_text(encoding="utf-8"), Loader=_YAML_LOADER) or {}
+                if not isinstance(loaded, dict):
+                    return None
+                cached = _ARTIFACT_CACHE[key_path] = (key, pickle.dumps(loaded))
     except (OSError, yaml.YAMLError):
         return None
-    return loaded if isinstance(loaded, dict) else None
+    return pickle.loads(cached[1])
 
 
 def live_stack_role_records(path: Path = DEFAULT_OUTPUT) -> dict[str, dict[str, Any]]:

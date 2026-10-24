@@ -30,7 +30,6 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import os
-from pathlib import Path
 from typing import Any, Iterator
 
 from src.registry.stack_priors import live_stack_role_records
@@ -147,8 +146,6 @@ def chat_completions_roles() -> set[str]:
 
 THINKING_OFF_KWARGS: dict[str, Any] = {"enable_thinking": False}
 
-_thinking_roles_cache: tuple[tuple[str, float | None], frozenset[str]] | None = None
-
 
 def thinking_roles_chat_lane_enabled() -> bool:
     """Live read of the ``thinking_roles_chat_lane`` feature flag (fail-closed: off)."""
@@ -160,24 +157,17 @@ def thinking_roles_chat_lane_enabled() -> bool:
         return False
 
 
-def _priors_cache_key() -> tuple[str, float | None]:
-    try:
-        from src.registry.stack_priors import DEFAULT_OUTPUT
+def thinking_chat_lane_roles() -> set[str]:
+    """Live thinking-on roles: ``--jinja`` AND ``acceleration.enable_thinking is True``.
 
-        path = Path(DEFAULT_OUTPUT)
-        try:
-            return str(path), path.stat().st_mtime
-        except OSError:
-            return str(path), None
-    except Exception:
-        return "", None
-
-
-def _derive_thinking_chat_lane_roles() -> frozenset[str]:
+    Independent of the flag (callers gate). A role without ``--jinja`` (worker_vision:
+    Qwen3-VL Instruct, no thinking toggle) never qualifies — chat_template_kwargs would be
+    inert on it. Runs per request; the priors loader caches the parse.
+    """
     try:
         records = live_stack_role_records()
     except Exception:
-        return frozenset()
+        return set()
 
     roles: set[str] = set()
     for role, record in records.items():
@@ -192,24 +182,7 @@ def _derive_thinking_chat_lane_roles() -> frozenset[str]:
             and acceleration.get("enable_thinking") is True
         ):
             roles.add(role)
-    return frozenset(roles)
-
-
-def thinking_chat_lane_roles() -> set[str]:
-    """Live thinking-on roles: ``--jinja`` AND ``acceleration.enable_thinking is True``.
-
-    Independent of the flag (callers gate). A role without ``--jinja`` (worker_vision:
-    Qwen3-VL Instruct, no thinking toggle) never qualifies — chat_template_kwargs would be
-    inert on it. Cached on the priors artifact's mtime: this runs per request.
-    """
-    global _thinking_roles_cache
-    key = _priors_cache_key()
-    cached = _thinking_roles_cache
-    if cached is not None and cached[0] == key and key[1] is not None:
-        return set(cached[1])
-    roles = _derive_thinking_chat_lane_roles()
-    _thinking_roles_cache = (key, roles)
-    return set(roles)
+    return roles
 
 
 def thinking_chat_lane_role(role: str | None) -> bool:
