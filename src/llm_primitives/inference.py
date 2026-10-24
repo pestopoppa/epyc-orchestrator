@@ -1112,11 +1112,13 @@ class InferenceMixin:
                 result.http_overhead_ms,
             )
 
-        self.total_tokens_generated += result.tokens_generated
-        self.total_prompt_eval_ms += result.prompt_eval_ms
-        self.total_generation_ms += result.generation_ms
-        if result.predicted_per_second > 0:
-            self._last_predicted_tps = result.predicted_per_second
+        scope = self._request_scope()
+        with scope.lock:
+            scope.total_tokens_generated += result.tokens_generated
+            scope.total_prompt_eval_ms += result.prompt_eval_ms
+            scope.total_generation_ms += result.generation_ms
+            if result.predicted_per_second > 0:
+                scope.last_predicted_tps = result.predicted_per_second
         return result.output
 
     def _call_caching_backend(
@@ -1850,20 +1852,20 @@ class InferenceMixin:
             # Pareto/HV speed objective is derived from this count, so it must equal
             # MODEL-decoded tokens counted exactly once — tool output is never included
             # here (effective tool-output throughput is log-only, eval_log_format.py).
-            self.total_tokens_generated += result.tokens_generated
-            self.total_prompt_eval_ms += result.prompt_eval_ms
-            self.total_generation_ms += result.generation_ms
-            self.total_http_overhead_ms += result.http_overhead_ms
             # Server-reported prompt tokens (same provenance as the tap's
             # server_terminal count) — summed so /v1 can report measured usage
             # instead of a chars/4 estimate. Calls that reported none add 0.
             _reported_prompt = getattr(result, "prompt_tokens", None)
-            if isinstance(_reported_prompt, int) and _reported_prompt > 0:
-                self.total_prompt_tokens_reported = (
-                    getattr(self, "total_prompt_tokens_reported", 0) + _reported_prompt
-                )
-            if result.predicted_per_second > 0:
-                self._last_predicted_tps = result.predicted_per_second
+            scope = self._request_scope()
+            with scope.lock:
+                scope.total_tokens_generated += result.tokens_generated
+                scope.total_prompt_eval_ms += result.prompt_eval_ms
+                scope.total_generation_ms += result.generation_ms
+                scope.total_http_overhead_ms += result.http_overhead_ms
+                if isinstance(_reported_prompt, int) and _reported_prompt > 0:
+                    scope.total_prompt_tokens_reported += _reported_prompt
+                if result.predicted_per_second > 0:
+                    scope.last_predicted_tps = result.predicted_per_second
             return result.output
         finally:
             reset_lifecycle_context(lifecycle_token)

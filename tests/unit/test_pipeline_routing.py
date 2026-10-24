@@ -1015,7 +1015,7 @@ class TestInitPrimitives:
         result = _init_primitives(request, state)
 
         assert result is cached_primitives
-        cached_primitives.reset_counters.assert_called_once()
+        cached_primitives.begin_request.assert_called_once_with(cache_prompt=None)
 
     def test_real_mode_no_cache_with_custom_urls(self):
         """Custom server_urls bypass cache."""
@@ -1198,7 +1198,7 @@ class TestInitPrimitives:
 
             _init_primitives(request, state)
 
-        assert mock_primitives.cache_prompt is True
+        mock_primitives.begin_request.assert_called_once_with(cache_prompt=True)
 
 
 class TestPlanReviewGate:

@@ -527,13 +527,9 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
         )
         request_specific_urls = bool(request.server_urls) or eval_batch_urls
 
-        if (
-            hasattr(state, "_real_primitives")
-            and state._real_primitives is not None
-            and not request_specific_urls
-        ):
-            primitives = state._real_primitives
-            primitives.reset_counters()
+        shared = getattr(state, "_real_primitives", None)
+        if shared is not None and not request_specific_urls:
+            primitives = shared
         else:
             try:
                 primitives = LLMPrimitives(
@@ -553,7 +549,9 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     detail=f"Failed to initialize real mode backends: {e}",
                 )
 
-        primitives.cache_prompt = request.cache_prompt
+        # Per-request counters and cache_prompt live on a fresh RequestScope in this
+        # request's context, never on the shared instance (A1-02/A2-01).
+        primitives.begin_request(cache_prompt=request.cache_prompt)
 
         if not primitives._backends:
             raise HTTPException(

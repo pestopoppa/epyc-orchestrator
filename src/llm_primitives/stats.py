@@ -72,23 +72,3 @@ class StatsMixin:
         self.call_log.clear()
         self._max_recursion_depth_reached = 0
         # Note: _recursion_depth is not reset as it tracks current call stack
-
-    def reset_counters(self) -> None:
-        """Reset per-request counters for reuse across requests.
-
-        Call this when reusing a shared LLMPrimitives instance across
-        multiple API requests to get accurate per-request metrics.
-        """
-        self.call_log.clear()
-        self.total_calls = 0
-        self.total_batch_calls = 0
-        self.total_tokens_generated = 0
-        self.total_prompt_tokens_reported = 0
-        self.total_prompt_eval_ms = 0.0
-        self.total_generation_ms = 0.0
-        self.total_http_overhead_ms = 0.0
-        self._last_predicted_tps = 0.0
-        self._recursion_depth = 0
-        self._max_recursion_depth_reached = 0
-        self._current_query = None
-        self._completed_queries.clear()
