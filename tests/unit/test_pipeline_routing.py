@@ -877,6 +877,7 @@ class TestPreprocess:
 
         # No formalization applied (attribute should not be set)
         assert not getattr(routing, "formalization_applied", False)
+        assert routing.formalization_attempted is False
 
     def test_formalization_skipped_for_mock_mode(self):
         """Formalization skipped for mock mode."""
@@ -929,8 +930,34 @@ class TestPreprocess:
                         _preprocess(request, state, routing)
 
         assert routing.formalization_applied is True
+        assert routing.formalization_attempted is True
         mock_fml.assert_called_once()
         mock_inject.assert_called_once()
+
+    def test_formalization_failure_still_records_generation_attempt(self):
+        request = ChatRequest(prompt="prove the invariant", real_mode=True, context="")
+        routing = RoutingResult(
+            task_id="test-failure",
+            task_ir={},
+            use_mock=False,
+            routing_decision=[str(Role.FRONTDOOR)],
+            routing_strategy="rules",
+        )
+        state = MagicMock()
+        state.registry = MagicMock()
+        failed_result = MagicMock(success=False)
+
+        with (
+            patch("src.api.routes.chat_pipeline.routing.features") as mock_features,
+            patch("src.formalizer.should_formalize_input", return_value=(True, "proof")),
+            patch("src.formalizer.formalize_prompt", return_value=failed_result) as mock_fml,
+        ):
+            mock_features.return_value.input_formalizer = True
+            _preprocess(request, state, routing)
+
+        mock_fml.assert_called_once()
+        assert routing.formalization_attempted is True
+        assert routing.formalization_applied is False
 
     def test_formalization_skipped_when_not_needed(self):
         """Formalization skipped when should_formalize returns False."""
@@ -953,6 +980,7 @@ class TestPreprocess:
 
         # formalization_applied should not be set
         assert not getattr(routing, "formalization_applied", False)
+        assert routing.formalization_attempted is False
 
 
 class TestInitPrimitives:

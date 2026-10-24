@@ -487,6 +487,10 @@ def _preprocess(request: ChatRequest, state, routing: RoutingResult) -> None:
 
         should_fml, problem_hint = should_formalize_input(request.prompt)
         if should_fml:
+            # formalize_prompt runs generation outside LLMPrimitives and exposes
+            # no exact prompt-token usage. Record attempts (including failures)
+            # so the later request aggregate cannot present a partial total.
+            routing.formalization_attempted = True
             fml_result = formalize_prompt(request.prompt, problem_hint, state.registry)
             if fml_result.success:
                 request.context = inject_formalization(

@@ -844,6 +844,9 @@ async def _handle_chat(
         batch_placement_mode=request.batch_placement_mode,
         max_queue_wait_ms=request.max_queue_wait_ms,  # Phase B: cross-role gate budget
     ):
+        if routing.formalization_attempted:
+            primitives.mark_request_prompt_usage_unknown()
+
         def _attach_routing_telemetry(resp: ChatResponse) -> ChatResponse:
             """NIB2-35: stamp shadow routing signals onto the response so
             seeding_diagnostics.jsonl can persist them for offline analysis."""
@@ -868,6 +871,36 @@ async def _handle_chat(
         def _finalize(resp: ChatResponse) -> ChatResponse:
             if scout_holder.get("report") is not None:
                 resp.scouts = scout_holder["report"]
+            get_request_prompt_tokens = getattr(
+                primitives, "get_request_prompt_tokens", None
+            )
+            if request.real_mode and not callable(get_request_prompt_tokens):
+                log.warning(
+                    "Request prompt-token usage unavailable for request_id=%s: "
+                    "primitives getter missing; returning null",
+                    request.request_id,
+                )
+            try:
+                prompt_tokens = (
+                    get_request_prompt_tokens()
+                    if request.real_mode and callable(get_request_prompt_tokens)
+                    else None
+                )
+                resp.prompt_tokens = (
+                    prompt_tokens
+                    if isinstance(prompt_tokens, int)
+                    and not isinstance(prompt_tokens, bool)
+                    and prompt_tokens >= 0
+                    else None
+                )
+            except Exception:
+                # Prompt usage is additive telemetry and must not affect serving.
+                log.warning(
+                    "Could not read request prompt-token usage for request_id=%s; returning null",
+                    request.request_id,
+                    exc_info=True,
+                )
+                resp.prompt_tokens = None
             return _annotate_error(
                 _attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives))
             )

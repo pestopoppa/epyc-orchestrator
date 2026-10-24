@@ -1005,6 +1005,7 @@ class InferenceMixin:
             (self.server_urls or {}).get(role, "") if hasattr(self, "server_urls") else "",
             _ms_port,
         )
+        prompt_usage_attempt = self._begin_request_prompt_tokens()
         try:
             with inference_lock(
                 role,
@@ -1025,6 +1026,7 @@ class InferenceMixin:
                 "completion_reason": "exception",
                 "error": str(exc),
             })
+            self._record_request_prompt_tokens(None, prompt_usage_attempt)
             if "lock timeout" in str(exc).lower() or "cancelled" in str(exc).lower():
                 log.warning(
                     "Inference aborted before model call (role=%s, transport=model_server, elapsed_ms=%.1f): %s",
@@ -1036,7 +1038,17 @@ class InferenceMixin:
 
         serving_calls.clear_staged()
         req_elapsed_ms = (time.perf_counter() - req_started) * 1000
-        _raise_if_context_overflow(result, role, (self.server_urls or {}).get(role, "") if hasattr(self, "server_urls") else "")
+        try:
+            _raise_if_context_overflow(
+                result,
+                role,
+                (self.server_urls or {}).get(role, "") if hasattr(self, "server_urls") else "",
+            )
+        except Exception:
+            # The backend answered, but this path does not expose a finalized per-call
+            # usage record when context validation raises. Keep the request total unknown.
+            self._record_request_prompt_tokens(None, prompt_usage_attempt)
+            raise
         call_meta: dict[str, Any] = {
             "role": role,
             "transport": "model_server",
@@ -1070,6 +1082,9 @@ class InferenceMixin:
                 }
             )
         self._set_last_inference_meta(call_meta)
+        self._record_request_prompt_tokens(
+            call_meta.get("prompt_tokens"), prompt_usage_attempt
+        )
         if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
             log.warning(
                 "Frontdoor inference telemetry: transport=model_server elapsed_ms=%.1f "
@@ -1387,6 +1402,7 @@ class InferenceMixin:
         }
         lifecycle_token = bind_lifecycle_context(**lifecycle_identity)
 
+        prompt_usage_attempt = None
         try:
             # Circuit breaker: fast-fail if backend is known to be down
             if backend_url and self.health_tracker:
@@ -1463,6 +1479,7 @@ class InferenceMixin:
                 serving_calls.annotate_staged(
                     kv_admission=pool_admission.admission_record(pool_ticket)
                 )
+            prompt_usage_attempt = self._begin_request_prompt_tokens()
             try:
                 with lock_ctx:
                     request.timeout = self._clamp_timeout_to_request_budget(request.timeout)
@@ -1670,6 +1687,7 @@ class InferenceMixin:
                     "completion_reason": "exception",
                     "error": str(exc),
                 })
+                self._record_request_prompt_tokens(None, prompt_usage_attempt)
                 if "lock timeout" in str(exc).lower() or "cancelled" in str(exc).lower():
                     log.warning(
                         "Inference aborted before backend response (role=%s, transport=%s, elapsed_ms=%.1f): %s",
@@ -1720,7 +1738,6 @@ class InferenceMixin:
                         "cached_prompt_tokens": cache_n,
                     }
                 )
-            self._set_last_inference_meta(call_meta)
             _reasoning = getattr(result, "reasoning_content", None)
             if isinstance(_reasoning, str) and _reasoning:
                 from src.chat_completions_roles import thinking_roles_chat_lane_enabled
@@ -1739,6 +1756,12 @@ class InferenceMixin:
                 call_meta["cached_prompt_tokens"] = getattr(
                     result, "cached_prompt_tokens", None
                 )
+            self._set_last_inference_meta(call_meta)
+            # The structured chat lane overwrites prompt_tokens from the terminal
+            # /v1 usage object above. Record only after that finalized value is known.
+            self._record_request_prompt_tokens(
+                call_meta.get("prompt_tokens"), prompt_usage_attempt
+            )
             if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
                 log.warning(
                     "Frontdoor inference telemetry: transport=%s elapsed_ms=%.1f "

@@ -89,9 +89,43 @@ def test_build_role_result_infrastructure_and_success_paths():
     assert rr_ok.tokens_generated == 7
     assert rr_ok.turns == 3
     assert asdict(rr_ok)["turns"] == 3
-    assert rr_ok.prompt_tokens == 12
+    assert rr_ok.tokens_used == 12
+    assert rr_ok.prompt_tokens is None
     assert rr_ok.web_research_results == [{"query": "q"}]
     assert rr_ok.scratchpad_insights == [{"insight": "i"}]
+
+
+@pytest.mark.parametrize(
+    ("response_prompt_tokens", "include_prompt_tokens", "expected_prompt_tokens"),
+    [
+        (23, True, 23),
+        (0, True, 0),
+        (None, True, None),
+        (None, False, None),
+    ],
+)
+def test_build_role_result_preserves_only_exact_prompt_usage(
+    response_prompt_tokens, include_prompt_tokens, expected_prompt_tokens
+):
+    resp = {"answer": "42", "tokens_used": 7, "tokens_generated": 3}
+    if include_prompt_tokens:
+        resp["prompt_tokens"] = response_prompt_tokens
+
+    with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
+        result, error_type = _MOD._build_role_result(
+            role="frontdoor",
+            mode="direct",
+            resp=resp,
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+        )
+
+    assert error_type == "none"
+    assert result.tokens_used == 7
+    assert result.tokens_generated == 3
+    assert result.prompt_tokens == expected_prompt_tokens
 
 
 def test_build_role_result_inband_error_answer_is_excluded_not_scored():

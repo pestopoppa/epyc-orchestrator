@@ -876,9 +876,11 @@ def test_primitives_chat_completion_call_binds_payload_and_returns_tool_calls():
     primitives = _real_primitives(backend)
     messages = [{"role": "user", "content": "read it"}]
 
-    out = primitives.chat_completion_call(
-        messages, role="frontdoor", tools=[READ_TOOL], tool_choice="auto", n_tokens=64, seed=3
-    )
+    with primitives.request_context(request_id="structured-usage"):
+        out = primitives.chat_completion_call(
+            messages, role="frontdoor", tools=[READ_TOOL], tool_choice="auto", n_tokens=64, seed=3
+        )
+        assert primitives.get_request_prompt_tokens() is None
 
     assert out == {
         "content": "",
@@ -1051,7 +1053,11 @@ def test_backend_parses_server_usage_including_cached_tokens(
 def test_primitives_chat_completion_call_returns_backend_usage():
     primitives = _real_primitives(_UsageBackend([MODEL_TOOL_CALL]))
 
-    out = primitives.chat_completion_call([{"role": "user", "content": "x"}], role="frontdoor")
+    with primitives.request_context(request_id="structured-exact-usage"):
+        out = primitives.chat_completion_call(
+            [{"role": "user", "content": "x"}], role="frontdoor"
+        )
+        assert primitives.get_request_prompt_tokens() == BACKEND_PROMPT
 
     assert out["usage"] == {
         "prompt_tokens": BACKEND_PROMPT,

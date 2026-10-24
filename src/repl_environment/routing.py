@@ -748,11 +748,13 @@ class _RoutingMixin:
         # Limit concurrent workers to prevent resource exhaustion
         max_workers = min(4, len(work_items))
 
+        from src.repl_environment.knowledge_fence import run_in_context
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all work items
             futures = {
                 executor.submit(
-                    self._delegate_single_item,
+                    run_in_context(self._delegate_single_item),
                     item,
                     target_role,
                     persona,

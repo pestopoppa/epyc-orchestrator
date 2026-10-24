@@ -47,6 +47,7 @@ def test_checkpoint_result_and_load_checkpoint_round_trip(tmp_path: Path, monkey
         answer="42",
         passed=True,
         elapsed_seconds=1.5,
+        prompt_tokens=23,
     )
     comp = _MOD.ComparativeResult(
         suite="math",
@@ -61,6 +62,7 @@ def test_checkpoint_result_and_load_checkpoint_round_trip(tmp_path: Path, monkey
     assert len(loaded) == 1
     assert loaded[0].question_id == "q1"
     assert loaded[0].role_results["frontdoor"].answer == "42"
+    assert loaded[0].role_results["frontdoor"].prompt_tokens == 23
 
 
 def test_load_checkpoint_skips_invalid_lines(tmp_path: Path, monkeypatch):
@@ -89,6 +91,9 @@ def test_load_checkpoint_skips_invalid_lines(tmp_path: Path, monkeypatch):
     loaded = _MOD.load_checkpoint("sess-b")
     assert len(loaded) == 1
     assert loaded[0].question_id == "q2"
+    # Checkpoints from before exact prompt usage was recorded have no value to
+    # backfill from decoded tokens or other historical fields.
+    assert loaded[0].role_results["frontdoor"].prompt_tokens is None
 
 
 def test_load_seen_questions_handles_seen_and_session_files(tmp_path: Path, monkeypatch):
