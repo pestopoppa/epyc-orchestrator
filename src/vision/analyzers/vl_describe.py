@@ -18,7 +18,7 @@ from typing import Any
 from PIL import Image
 
 from src.structured_output.repair import http_chat_completer, parse_with_repair
-from src.services.mtmd_probe import run_mtmd_probe
+from src.services.mtmd_probe import mtmd_subprocess_env, run_mtmd_probe
 from src.vision.analyzers.base import Analyzer, AnalyzerResult
 from src.vision.config import (
     LLAMA_MTMD_CLI,
@@ -291,6 +291,7 @@ class VLDescribeAnalyzer(Analyzer):
             capture_output=True,
             text=True,
             timeout=VL_INFERENCE_TIMEOUT,
+            env=mtmd_subprocess_env(cli_path, self.threads),
         )
 
         if result.returncode != 0:
@@ -323,30 +324,13 @@ class VLDescribeAnalyzer(Analyzer):
         return None
 
     def _resolve_mtmd_cli(self) -> Path | None:
-        """Resolve a RUNNABLE llama-mtmd-cli, preferring the production build."""
-        root = LLAMA_MTMD_CLI.parents[2]
-        candidates = [
-            LLAMA_MTMD_CLI,
-            # Production first. The previous order listed only legacy trees, so a
-            # missing configured path silently selected llama.cpp 8219 -- three
-            # release generations behind production -- against current models.
-            root / "build" / "bin" / "llama-mtmd-cli",
-            root / "build-hip" / "bin" / "llama-mtmd-cli",
-            root / "build-v2" / "bin" / "llama-mtmd-cli",
-            root / "build_libomp_pgo_bolt" / "bin" / "llama-mtmd-cli",
-            root / "build_libomp_pgo_use" / "bin" / "llama-mtmd-cli",
-        ]
-        for candidate in candidates:
-            version = self._mtmd_runs(candidate)
-            if version is None:
-                continue
-            if candidate != LLAMA_MTMD_CLI:
-                logger.warning(
-                    "configured llama-mtmd-cli %s is not runnable; using %s (%s)",
-                    LLAMA_MTMD_CLI, candidate, version,
-                )
-            return candidate
-        logger.error("no runnable llama-mtmd-cli found under %s", root)
+        """Return the configured (kernel-store) llama-mtmd-cli if it RUNS, else None.
+
+        No fallback to llama.cpp/build* trees: they hold retired kernels (A5-M2).
+        """
+        if self._mtmd_runs(LLAMA_MTMD_CLI) is not None:
+            return LLAMA_MTMD_CLI
+        logger.error("configured llama-mtmd-cli %s is not runnable", LLAMA_MTMD_CLI)
         return None
 
     @staticmethod
