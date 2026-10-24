@@ -242,7 +242,7 @@ class StructuralLab:
 
         results: dict[str, Any] = {"memory_count": memory_count}
 
-        # Extract training data (applies label normalization, uses reembedded.npz if available)
+        # Extract training data (applies label normalization; defaults to the episodic DB)
         try:
             extract_script = ORCH_ROOT / "scripts" / "graph_router" / "extract_training_data.py"
             if extract_script.exists():
