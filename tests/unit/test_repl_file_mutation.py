@@ -9,20 +9,12 @@ since they are not exposed in REPL globals.
 """
 
 import glob
-import os
-import shutil
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-# Skip entire module in CI - tests require /mnt/raid0/llm/ paths
-if os.environ.get("CI") == "true" or os.environ.get("ORCHESTRATOR_MOCK_MODE") == "true":
-    pytest.skip("REPL file mutation tests require local paths", allow_module_level=True)
-
-import pytest
-
-from src.repl_environment import REPLEnvironment
+from src.repl_environment import REPLEnvironment, file_mutation
 
 # REPLEnvironment resolves logs/ and orchestration/patches through
 # get_config().paths.project_root, which follows the checkout it runs in.
@@ -39,12 +31,16 @@ def repl():
 
 
 @pytest.fixture
+def log_dir(tmp_path, monkeypatch):
+    """log_append's logs/ under tmp_path, never the checkout's (it may sit outside the allowed prefixes)."""
+    monkeypatch.setattr(file_mutation, "_get_project_root", lambda: tmp_path)
+    return tmp_path / "logs"
+
+
+@pytest.fixture
 def tmp_write_dir(tmp_path):
-    """Provide a writable temp dir under /mnt/raid0/llm/tmp for path validation."""
-    d = Path("/mnt/raid0/llm/tmp/test_file_mutation")
-    d.mkdir(parents=True, exist_ok=True)
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
+    """A writable dir that passes path validation (/tmp/ is always an allowed prefix)."""
+    return tmp_path
 
 
 @pytest.fixture
@@ -62,22 +58,13 @@ def patches_base(tmp_path):
 class TestLogAppend:
     """Test _log_append() method."""
 
-    def test_append_writes_with_timestamp(self, repl):
-        log_file = str(_PROJECT_ROOT / "logs" / "test_mutation.log")
-        try:
-            if os.path.exists(log_file):
-                os.remove(log_file)
+    def test_append_writes_with_timestamp(self, repl, log_dir):
+        result = repl._log_append("test_mutation.log", "Hello from test")
 
-            result = repl._log_append("test_mutation.log", "Hello from test")
-
-            assert "Appended" in result
-            with open(log_file) as f:
-                content = f.read()
-            assert "Hello from test" in content
-            assert "[" in content  # timestamp bracket
-        finally:
-            if os.path.exists(log_file):
-                os.remove(log_file)
+        assert "Appended" in result
+        content = (log_dir / "test_mutation.log").read_text()
+        assert "Hello from test" in content
+        assert "[" in content  # timestamp bracket
 
     def test_append_to_blocked_path(self, repl):
         """Log name that would resolve outside allowed paths."""
@@ -85,15 +72,10 @@ class TestLogAppend:
         result = repl._log_append("../../etc/passwd", "bad")
         assert "[ERROR:" in result
 
-    def test_append_increments_exploration_calls(self, repl):
+    def test_append_increments_exploration_calls(self, repl, log_dir):
         before = repl._exploration_calls
-        log_file = str(_PROJECT_ROOT / "logs" / "test_counter.log")
-        try:
-            repl._log_append("test_counter.log", "msg")
-            assert repl._exploration_calls == before + 1
-        finally:
-            if os.path.exists(log_file):
-                os.remove(log_file)
+        repl._log_append("test_counter.log", "msg")
+        assert repl._exploration_calls == before + 1
 
 
 # ── file_write_safe tests ───────────────────────────────────────────────
@@ -108,14 +90,11 @@ class TestFileWriteSafe:
         assert "Wrote 11 bytes" in result
         assert Path(path).read_text() == "Hello World"
 
-    def test_write_creates_parent_dirs(self, repl):
-        deep = "/mnt/raid0/llm/tmp/test_deep/a/b/c/file.txt"
-        try:
-            result = repl._file_write_safe(deep, "nested", backup=False)
-            assert "Wrote" in result
-            assert Path(deep).read_text() == "nested"
-        finally:
-            shutil.rmtree("/mnt/raid0/llm/tmp/test_deep", ignore_errors=True)
+    def test_write_creates_parent_dirs(self, repl, tmp_write_dir):
+        deep = tmp_write_dir / "a/b/c/file.txt"
+        result = repl._file_write_safe(str(deep), "nested", backup=False)
+        assert "Wrote" in result
+        assert deep.read_text() == "nested"
 
     def test_write_with_backup(self, repl, tmp_write_dir):
         path = str(tmp_write_dir / "backup_test.txt")
