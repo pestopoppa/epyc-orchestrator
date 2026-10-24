@@ -39,10 +39,11 @@ logger = logging.getLogger(__name__)
 #   * DEFAULT_LEAN_REGISTRY     — `<repo>/orchestration/model_registry.yaml`, the
 #     lean runtime view that `src/registry/registry_compiler.py` compiles from the
 #     master at every stack start.
-# Re-exported here rather than restated so there is no fourth copy to drift.
+# Re-exported here rather than restated so there is no fourth copy to drift. Only the
+# lean path: with config unavailable the loader reads the lean registry, as config
+# does, not the research master (A3-06).
 from src.registry.model_descriptors import (  # noqa: E402
     DEFAULT_LEAN_REGISTRY as DEFAULT_LEAN_REGISTRY_PATH,
-    DEFAULT_RESEARCH_REGISTRY as DEFAULT_REGISTRY_PATH,
 )
 
 
@@ -298,8 +299,8 @@ class RegistryLoader:
 
                     self.registry_path = get_config().paths.registry_path
                 except Exception as e:
-                    logger.debug("Config unavailable, using default registry path: %s", e)
-                    self.registry_path = DEFAULT_REGISTRY_PATH
+                    logger.warning("Config unavailable, using the lean registry: %s", e)
+                    self.registry_path = DEFAULT_LEAN_REGISTRY_PATH
         self._raw: dict[str, Any] = {}
         self._roles: dict[str, RoleConfig] = {}
         self._routing_hints: list[RoutingHint] = []

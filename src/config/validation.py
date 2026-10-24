@@ -168,13 +168,13 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
         return {}
     try:
         _LOADING_RUNTIME_DEFAULTS = True
+        from src.registry.model_descriptors import DEFAULT_LEAN_REGISTRY
+
         registry_path = Path(
-            os.environ.get(
-                "ORCHESTRATOR_PATHS_REGISTRY_PATH",
-                "orchestration/model_registry.yaml",
-            )
+            os.environ.get("ORCHESTRATOR_PATHS_REGISTRY_PATH", str(DEFAULT_LEAN_REGISTRY))
         )
         if not registry_path.exists():
+            logger.warning("Model registry %s not found; registry timeouts fall back", registry_path)
             _REGISTRY_RUNTIME_DEFAULTS_CACHE = {}
             _record_registry_diag(
                 "runtime_defaults",

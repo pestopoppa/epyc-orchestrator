@@ -453,3 +453,17 @@ class TestProductionRegistry:
         corpus_config = loader.get_corpus_config()
         assert corpus_config["enabled"] is False
         assert corpus_config["min_score"] == 0.0
+
+
+def test_config_unavailable_falls_back_to_the_lean_registry(monkeypatch):
+    """A3-06: the fallback was the research master, not the lean registry config resolves to."""
+    import src.config
+    from src.registry.registry_loader import DEFAULT_LEAN_REGISTRY_PATH
+
+    def _boom():
+        raise RuntimeError("config unavailable")
+
+    monkeypatch.delenv("ORCHESTRATOR_REGISTRY_MODE", raising=False)
+    monkeypatch.setattr(src.config, "get_config", _boom)
+    loader = RegistryLoader(validate_paths=False, allow_missing=True)
+    assert loader.registry_path == DEFAULT_LEAN_REGISTRY_PATH

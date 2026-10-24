@@ -11,6 +11,7 @@ from src.config import get_config, reset_config
 from src.config.validation import (
     _load_registry_runtime_defaults,
     _load_registry_timeouts,
+    _registry_timeout,
     get_validation_diagnostics,
     reset_validation_caches,
 )
@@ -37,6 +38,27 @@ def test_runtime_defaults_records_missing_registry(monkeypatch, tmp_path: Path):
     diag = get_validation_diagnostics()["runtime_defaults"]
     assert diag["status"] == "missing"
     assert diag["failure_reason"] == "missing_registry"
+
+
+def test_missing_registry_is_logged_as_a_warning(monkeypatch, tmp_path: Path, caplog):
+    reset_validation_caches()
+    missing = tmp_path / "missing-model-registry.yaml"
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_REGISTRY_PATH", str(missing))
+
+    with caplog.at_level("WARNING", logger="src.config.validation"):
+        _load_registry_runtime_defaults()
+
+    assert str(missing) in caplog.text
+
+
+def test_default_registry_path_does_not_depend_on_cwd(monkeypatch, tmp_path: Path):
+    """A3-06: the default was CWD-relative, so any other cwd lost every registry timeout."""
+    monkeypatch.delenv("ORCHESTRATOR_PATHS_REGISTRY_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    reset_validation_caches()
+
+    assert _registry_timeout("roles", "frontdoor", -1) != -1
+    assert get_validation_diagnostics()["runtime_defaults"]["status"] == "loaded"
 
 
 def test_timeouts_records_yaml_parse_fallback(monkeypatch, tmp_path: Path):
