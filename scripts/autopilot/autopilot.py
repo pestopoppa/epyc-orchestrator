@@ -7527,6 +7527,7 @@ def _journal_archive_payload_for_authority(
         snapshot_payload = archive_payload_from_verified_snapshot(
             rows,
             journal.ledger_events(),
+            prefix_verification_cache=getattr(journal, "prefix_verification_cache", None),
         )
         if (
             snapshot_payload is not None

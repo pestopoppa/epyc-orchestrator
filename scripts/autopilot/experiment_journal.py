@@ -916,6 +916,9 @@ class ExperimentJournal:
         # Replay scope for segment snapshots ({"objective_policy", "exclude_before_ts"});
         # AutoPilot keeps it aligned with the live archive-authority scope.
         self.segment_snapshot_scope: dict[str, Any] = {}
+        # B5-M1: last snapshot-prefix comparison for the archive authority; sound because
+        # this journal is append-only in-process (record() writes fields before append).
+        self.prefix_verification_cache: dict[Any, str] = {}
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
         self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}
