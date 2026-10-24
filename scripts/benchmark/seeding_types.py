@@ -651,6 +651,10 @@ class RoleResult:
     external_restart: bool = False
     retry_count: int = 0
     resilient_meta: dict[str, Any] = field(default_factory=dict)
+    # Separate request-local native output usage; legacy token fields remain unchanged.
+    output_tokens_reported: int | None = None
+    output_tokens_status: str = "unknown"
+    output_tokens_sources: list[str] = field(default_factory=list)
 
 
 @dataclass

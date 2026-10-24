@@ -95,6 +95,22 @@ from src.features import features
 if TYPE_CHECKING:
     from src.api.routes.chat_utils import RoutingResult
 
+
+def _validated_output_usage(
+    count: Any, status: Any, sources: Any
+) -> tuple[int | None, str, list[str]]:
+    """Preserve reported output usage only with complete native provenance."""
+    valid = (
+        isinstance(count, int)
+        and not isinstance(count, bool)
+        and count >= 0
+        and status == "reported"
+        and isinstance(sources, list)
+        and bool(sources)
+        and all(isinstance(source, str) and bool(source.strip()) for source in sources)
+    )
+    return (count, "reported", list(sources)) if valid else (None, "unknown", [])
+
 # Phase 1b: Pipeline stage functions (extracted from _handle_chat)
 from src.api.routes.chat_pipeline import (
     _route_request,
@@ -846,6 +862,7 @@ async def _handle_chat(
     ):
         if routing.formalization_attempted:
             primitives.mark_request_prompt_usage_unknown()
+            primitives.mark_request_output_usage_unknown()
 
         def _attach_routing_telemetry(resp: ChatResponse) -> ChatResponse:
             """NIB2-35: stamp shadow routing signals onto the response so
@@ -901,6 +918,28 @@ async def _handle_chat(
                     exc_info=True,
                 )
                 resp.prompt_tokens = None
+            get_request_output_usage = getattr(
+                primitives, "get_request_output_usage", None
+            )
+            try:
+                if request.real_mode and callable(get_request_output_usage):
+                    output_count, output_status, output_sources = get_request_output_usage()
+                else:
+                    output_count, output_status, output_sources = None, "unknown", []
+                (
+                    resp.output_tokens_reported,
+                    resp.output_tokens_status,
+                    resp.output_tokens_sources,
+                ) = _validated_output_usage(output_count, output_status, output_sources)
+            except Exception:
+                log.warning(
+                    "Could not read request output-token usage for request_id=%s; returning unknown",
+                    request.request_id,
+                    exc_info=True,
+                )
+                resp.output_tokens_reported = None
+                resp.output_tokens_status = "unknown"
+                resp.output_tokens_sources = []
             return _annotate_error(
                 _attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives))
             )

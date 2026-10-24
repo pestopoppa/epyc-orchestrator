@@ -528,6 +528,7 @@ class LlamaServerBackend(ModelBackend):
             # Extract metrics
             output = result_data.get("content", "")
             tokens_generated = result_data.get("tokens_predicted", 0)
+            output_tokens_reported = _server_count(result_data.get("tokens_predicted"))
             prompt_tokens = result_data.get("tokens_evaluated", 0)
             completion_reason = str(
                 result_data.get("stop_type")
@@ -665,6 +666,11 @@ class LlamaServerBackend(ModelBackend):
                 ),
                 cached_prompt_tokens=_server_count(timings.get("cache_n")),
                 timings=dict(timings) if isinstance(timings, dict) else {},
+                output_tokens_reported=output_tokens_reported,
+                output_tokens_source=(
+                    "llama_server:/completion.tokens_predicted"
+                    if output_tokens_reported is not None else None
+                ),
             )
 
         except httpx.TimeoutException:
@@ -895,6 +901,7 @@ class LlamaServerBackend(ModelBackend):
             usage = data.get("usage", {}) or {}
             prompt_tokens = int(usage.get("prompt_tokens", 0))
             tokens_generated = int(usage.get("completion_tokens", 0))
+            output_tokens_reported = _server_count(usage.get("completion_tokens"))
             # KV-reuse count: usage.prompt_tokens_details.cached_tokens (the
             # server's n_prompt_tokens_cache), else timings.cache_n — the same
             # quantity on both fields; None when the server reported neither.
@@ -973,6 +980,11 @@ class LlamaServerBackend(ModelBackend):
                 prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
                 cached_prompt_tokens=cached_prompt_tokens,
                 reasoning_content=reasoning_content,
+                output_tokens_reported=output_tokens_reported,
+                output_tokens_source=(
+                    "llama_server:/v1/chat/completions.usage.completion_tokens"
+                    if output_tokens_reported is not None else None
+                ),
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
@@ -1021,6 +1033,8 @@ class LlamaServerBackend(ModelBackend):
         """
         payload = self._build_payload(role_config, request)
         payload["stream"] = True
+        request.stream_output_tokens_reported = None
+        request.stream_output_tokens_source = None
 
         # UFH14-LB6.2: this generator is not wrapped by ``recorded_call`` (a generator
         # cannot be), so it writes its own ``serving_call.v1`` record from ``finally``.
@@ -1090,6 +1104,13 @@ class LlamaServerBackend(ModelBackend):
 
                     # Check for completion
                     if data.get("stop", False):
+                        request.stream_output_tokens_reported = _server_count(
+                            data.get("tokens_predicted")
+                        )
+                        if request.stream_output_tokens_reported is not None:
+                            request.stream_output_tokens_source = (
+                                "llama_server:/completion.stream.tokens_predicted"
+                            )
                         break
 
         except httpx.RequestError as e:
@@ -1227,6 +1248,7 @@ class LlamaServerBackend(ModelBackend):
 
                 timings: dict[str, Any] = {}
                 tokens_generated = 0
+                output_tokens_reported: int | None = None
                 prompt_tokens = 0
                 cached_tokens = 0
                 first_token_ms = 0.0
@@ -1301,6 +1323,9 @@ class LlamaServerBackend(ModelBackend):
                         timings = data.get("timings", {})
                         serving_calls.note_server_slot(data.get("id_slot"))
                         tokens_generated = data.get("tokens_predicted", 0)
+                        output_tokens_reported = _server_count(
+                            data.get("tokens_predicted")
+                        )
                         prompt_tokens = data.get("tokens_evaluated", 0)
                         # cache_n = true KV-reuse hit count (see non-streaming
                         # path for the tokens_cached-vs-cache_n defect history).
@@ -1419,6 +1444,11 @@ class LlamaServerBackend(ModelBackend):
                 ),
                 cached_prompt_tokens=_server_count(timings.get("cache_n")),
                 timings=dict(timings) if isinstance(timings, dict) else {},
+                output_tokens_reported=output_tokens_reported,
+                output_tokens_source=(
+                    "llama_server:/completion.stream.tokens_predicted"
+                    if output_tokens_reported is not None else None
+                ),
             )
 
         except httpx.HTTPStatusError as e:
@@ -1832,12 +1862,14 @@ class LlamaServerBackend(ModelBackend):
         reasoning_chunks: list[str] = []
         tool_call_parts: dict[int, dict[str, Any]] = {}
         completion_reason = "stop"
+        terminal_event_seen = False
         # llama-server attaches its `timings` object to the LAST chunk of a chat
         # stream (server-task.cpp to_json_oaicompat_chat_stream: `if (timings.prompt_n
         # >= 0) deltas.back().push_back({"timings", ...})`). This path used to ignore
         # it and hard-code prompt_eval_ms=0.0, which is why every progress-log
         # completion read prompt_eval_ms = 0.0 (workspace-89, 2026-10-03).
         stream_timings: dict[str, Any] = {}
+        output_tokens_reported: int | None = None
 
         try:
             _overall = request.timeout or self.config.timeout
@@ -1937,6 +1969,7 @@ class LlamaServerBackend(ModelBackend):
                                     fr = choices[0].get("finish_reason")
                                     if fr:
                                         completion_reason = str(fr)
+                                        terminal_event_seen = True
                             except _json.JSONDecodeError:
                                 continue
                 except httpx.ReadTimeout:
@@ -1974,7 +2007,16 @@ class LlamaServerBackend(ModelBackend):
                 predicted_per_second = float(
                     stream_timings.get("predicted_per_second", 0.0) or 0.0
                 )
-                if isinstance(stream_timings.get("predicted_n"), int) and stream_timings["predicted_n"] > 0:
+                if terminal_event_seen and completion_reason != "read_timeout":
+                    output_tokens_reported = _server_count(
+                        stream_timings.get("predicted_n")
+                    )
+                if (
+                    isinstance(stream_timings.get("predicted_n"), int)
+                    and stream_timings["predicted_n"] > 0
+                ):
+                    # Keep the old positive-only override unchanged, including its
+                    # legacy handling of malformed Python bool values.
                     tokens_generated = int(stream_timings["predicted_n"])
                 _prompt_n = stream_timings.get("prompt_n")
                 _cache_n = stream_timings.get("cache_n")
@@ -2033,6 +2075,11 @@ class LlamaServerBackend(ModelBackend):
                 cached_prompt_tokens=cached_prompt_tokens,
                 reasoning_content="".join(reasoning_chunks) or None,
                 tool_calls=[tool_call_parts[index] for index in sorted(tool_call_parts)],
+                output_tokens_reported=output_tokens_reported,
+                output_tokens_source=(
+                    "llama_server:/v1/chat/completions.stream.timings.predicted_n"
+                    if output_tokens_reported is not None else None
+                ),
             )
         except Exception as e:
             elapsed = time.time() - start_time

@@ -128,6 +128,116 @@ def test_build_role_result_preserves_only_exact_prompt_usage(
     assert result.prompt_tokens == expected_prompt_tokens
 
 
+def test_build_role_result_keeps_reported_output_separate_from_legacy_counters():
+    resp = {
+        "answer": "42",
+        "tokens_used": 17,
+        "tokens_generated": 13,
+        "output_tokens_reported": 0,
+        "output_tokens_status": "reported",
+        "output_tokens_sources": ["server:/completion.tokens_predicted"],
+    }
+
+    with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
+        result, error_type = _MOD._build_role_result(
+            role="frontdoor",
+            mode="direct",
+            resp=resp,
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+        )
+
+    assert error_type == "none"
+    assert result.tokens_used == 17
+    assert result.tokens_generated == 13
+    assert result.output_tokens_reported == 0
+    assert result.output_tokens_status == "reported"
+    assert result.output_tokens_sources == ["server:/completion.tokens_predicted"]
+    assert asdict(result)["output_tokens_reported"] == 0
+
+    legacy_resp = {"answer": "42", "tokens_used": 5, "tokens_generated": 4}
+    with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
+        legacy, _ = _MOD._build_role_result(
+            role="frontdoor",
+            mode="direct",
+            resp=legacy_resp,
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+        )
+    assert legacy.output_tokens_reported is None
+    assert legacy.output_tokens_status == "unknown"
+    assert legacy.tokens_used == 5
+    assert legacy.tokens_generated == 4
+
+    no_source_resp = {
+        "answer": "42",
+        "tokens_generated": 5,
+        "output_tokens_reported": 5,
+        "output_tokens_status": "reported",
+    }
+    with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
+        no_source, _ = _MOD._build_role_result(
+            role="frontdoor",
+            mode="direct",
+            resp=no_source_resp,
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+        )
+    assert no_source.output_tokens_reported is None
+    assert no_source.output_tokens_status == "unknown"
+
+    for bad_sources in ([], [""], ["server:valid", "  "], ["server:valid", None]):
+        bad_source_resp = {
+            "answer": "42",
+            "output_tokens_reported": 5,
+            "output_tokens_status": "reported",
+            "output_tokens_sources": bad_sources,
+        }
+        with patch.object(_MOD, "score_answer_or_error", return_value=(True, None)):
+            bad_source, _ = _MOD._build_role_result(
+                role="frontdoor",
+                mode="direct",
+                resp=bad_source_resp,
+                elapsed=1.0,
+                expected="42",
+                scoring_method="exact_match",
+                scoring_config={},
+            )
+        assert bad_source.output_tokens_reported is None
+        assert bad_source.output_tokens_status == "unknown"
+        assert bad_source.output_tokens_sources == []
+
+    failed_resp = {
+        "answer": "",
+        "error": "transport failed",
+        "tokens_used": 0,
+        "tokens_generated": 0,
+        "output_tokens_reported": 8,
+        "output_tokens_status": "reported",
+        "output_tokens_sources": ["server:/completion.tokens_predicted"],
+    }
+    with patch.object(_MOD, "score_answer_or_error") as score_mock:
+        failed, failed_type = _MOD._build_role_result(
+            role="frontdoor",
+            mode="direct",
+            resp=failed_resp,
+            elapsed=1.0,
+            expected="42",
+            scoring_method="exact_match",
+            scoring_config={},
+        )
+    assert failed_type == "infrastructure"
+    assert failed.output_tokens_reported is None
+    assert failed.output_tokens_status == "unknown"
+    score_mock.assert_not_called()
+
+
 def test_build_role_result_inband_error_answer_is_excluded_not_scored():
     # REL-1 Guard 1: an HTTP-200 body whose answer IS an in-band "[ERROR: ...]"
     # banner (error=None) must be EXCLUDED as infrastructure, never scored as a

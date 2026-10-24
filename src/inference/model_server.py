@@ -129,6 +129,10 @@ class InferenceRequest:
     # registry kwargs on the /v1/chat/completions lane; inert on /completion. A real
     # field for the same dataclasses.replace() reason as chat_payload.
     chat_template_kwargs: dict[str, Any] | None = field(default=None, repr=False)
+    # Set only by the /completion token-ID stream parser after its native terminal
+    # event. A closed/failed/early-aborted stream leaves this unknown.
+    stream_output_tokens_reported: int | None = field(default=None, repr=False)
+    stream_output_tokens_source: str | None = field(default=None, repr=False)
 
     def __post_init__(self):
         """Sync max_tokens ↔ n_tokens bidirectionally.
@@ -197,6 +201,10 @@ class InferenceResult:
     # distinct from legacy estimates/defaults so callers preserve unknowns. Last
     # to preserve the positional order of the existing public dataclass fields.
     timings: dict[str, Any] | None = None
+    # Exact server-reported decoded output count. Legacy tokens_generated may retain
+    # chunk/text estimates on some stream paths; this field never does.
+    output_tokens_reported: int | None = None
+    output_tokens_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -205,6 +213,8 @@ class InferenceResult:
             "prompt_tokens": self.prompt_tokens,
             "output": self.output,
             "tokens_generated": self.tokens_generated,
+            "output_tokens_reported": self.output_tokens_reported,
+            "output_tokens_source": self.output_tokens_source,
             "generation_speed": self.generation_speed,
             "elapsed_time": self.elapsed_time,
             "success": self.success,

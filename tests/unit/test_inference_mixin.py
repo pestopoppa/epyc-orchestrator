@@ -93,6 +93,54 @@ def writable_tmp_dir(monkeypatch, tmp_path):
 class TestInferenceMixinRealCall:
     """Tests for _real_call() method."""
 
+    def test_request_output_usage_uses_only_reported_successful_backend_counts(
+        self, mock_model_server
+    ):
+        prims = LLMPrimitives(mock_mode=False, model_server=mock_model_server)
+        mock_model_server.infer.side_effect = [
+            InferenceResult(
+                role="coder_escalation", output="first", tokens_generated=12,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                output_tokens_reported=4,
+                output_tokens_source="server:/completion.tokens_predicted",
+            ),
+            InferenceResult(
+                role="coder_escalation", output="estimated", tokens_generated=19,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+            ),
+            InferenceResult(
+                role="coder_escalation", output="partial", tokens_generated=21,
+                generation_speed=1.0, elapsed_time=0.1, success=True, partial=True,
+                output_tokens_reported=21,
+                output_tokens_source="server:/completion.tokens_predicted",
+            ),
+        ]
+
+        with prims.request_context(request_id="exact-output"):
+            prims._real_call("first", "coder_escalation", n_tokens=8)
+            assert prims.get_request_output_usage() == (
+                4,
+                "reported",
+                ["server:/completion.tokens_predicted"],
+            )
+
+        with prims.request_context(request_id="estimated-output"):
+            prims._real_call("estimated", "coder_escalation", n_tokens=8)
+            assert prims.get_request_output_usage() == (None, "unknown", [])
+
+        with prims.request_context(request_id="partial-output"):
+            prims._real_call("partial", "coder_escalation", n_tokens=8)
+            assert prims.get_request_output_usage() == (None, "unknown", [])
+
+    def test_failed_backend_attempt_makes_request_output_usage_unknown(self, mock_model_server):
+        prims = LLMPrimitives(mock_mode=False, model_server=mock_model_server)
+        mock_model_server.infer.side_effect = RuntimeError("transport failed")
+
+        with prims.request_context(request_id="failed-output"):
+            with pytest.raises(RuntimeError, match="transport failed"):
+                prims._real_call("request", "coder_escalation", n_tokens=8)
+            assert prims.get_request_output_usage() == (None, "unknown", [])
+
     def test_request_prompt_usage_sums_exact_backend_counts_and_propagates_unknown(
         self, mock_model_server
     ):
@@ -236,9 +284,17 @@ class TestInferenceMixinRealCall:
             generation_ms=300.0,
             predicted_per_second=25.0,
             http_overhead_ms=10.0,
+            output_tokens_reported=9,
+            output_tokens_source="server:/completion.tokens_predicted",
         )
 
-        result = prims._real_call("Test prompt", "test_role", n_tokens=128)
+        with prims.request_context(request_id="cached-backend-output"):
+            result = prims._real_call("Test prompt", "test_role", n_tokens=128)
+            assert prims.get_request_output_usage() == (
+                9,
+                "reported",
+                ["server:/completion.tokens_predicted"],
+            )
 
         assert result == "Backend response"
         mock_backend.infer.assert_called_once()
@@ -457,11 +513,19 @@ class TestCallCachingBackend:
             elapsed_time=0.5,
             success=True,
             predicted_per_second=40.0,
+            output_tokens_reported=20,
+            output_tokens_source="server:/completion.tokens_predicted",
         )
 
-        result = prims._call_caching_backend(
-            mock_backend, "Write hello function", "coder", n_tokens=128
-        )
+        with prims.request_context(request_id="call-caching-output"):
+            result = prims._call_caching_backend(
+                mock_backend, "Write hello function", "coder", n_tokens=128
+            )
+            assert prims.get_request_output_usage() == (
+                20,
+                "reported",
+                ["server:/completion.tokens_predicted"],
+            )
 
         assert result == "def hello(): pass"
         assert prims.total_tokens_generated == 20
@@ -1270,6 +1334,29 @@ class TestFallbackBatch:
 
 class TestWorkerPoolBatch:
     """Tests for _worker_pool_batch() method."""
+
+    def test_text_only_worker_pool_invalidates_both_usage_aggregates(self):
+        mock_pool = Mock()
+        mock_pool.batch = Mock(return_value=object())
+        prims = LLMPrimitives(
+            mock_mode=False,
+            worker_pool=mock_pool,
+            use_worker_pool=True,
+        )
+        mock_loop = Mock()
+        mock_loop.is_running.return_value = False
+
+        with prims.request_context(request_id="worker-pool-unmetered"):
+            prims._record_request_prompt_tokens(19)
+            prims._record_request_output_tokens(7, "server:chat")
+            with (
+                patch("asyncio.get_event_loop", return_value=mock_loop),
+                patch("asyncio.run", return_value=["text only"]),
+            ):
+                prims._worker_pool_batch(["prompt"], "worker_code")
+
+            assert prims.get_request_prompt_tokens() is None
+            assert prims.get_request_output_usage() == (None, "unknown", [])
 
     def test_worker_pool_batch_routes_correctly(self):
         """Test worker pool batch routes to correct task type."""

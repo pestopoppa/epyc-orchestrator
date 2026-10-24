@@ -25,6 +25,7 @@ from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.routes.chat import (
     _handle_chat,
     _try_cheap_first,
+    _validated_output_usage,
     chat,
     chat_stream,
     inject_reward,
@@ -34,6 +35,22 @@ from src.api.routes.chat_utils import RoutingResult
 from src.api.state import AppState
 from src.prompt_builders.resolver import current_prompt_dir, resolve_prompt
 from src.proactive_delegation.types import PlanReviewResult
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [[], [""], ["server:chat", "  "], ["server:chat", None], "server:chat"],
+)
+def test_output_usage_requires_nonempty_all_valid_provenance(sources):
+    assert _validated_output_usage(0, "reported", sources) == (None, "unknown", [])
+
+
+def test_output_usage_accepts_explicit_native_zero_with_complete_provenance():
+    assert _validated_output_usage(0, "reported", ["server:chat"]) == (
+        0,
+        "reported",
+        ["server:chat"],
+    )
 
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
