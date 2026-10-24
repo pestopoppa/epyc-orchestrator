@@ -136,6 +136,28 @@ def _worker_synthesis_target() -> tuple[str, str]:
     return worker_url, worker_hint
 
 
+def _record_worker_synthesis(worker_url: str, prompt: str, n_predict: int, ts_start: float,
+                             status: int | None, data: Any, exc: BaseException | None,
+                             attempt: str) -> None:
+    """UFH14-LB6.2: one ``serving_call.v1`` record for a research worker-synthesis
+    ``/completion`` call (a model call to ``worker_general``, bypassing
+    ``LlamaServerBackend``). Never raises, never alters the call."""
+    try:
+        from src.backends import serving_calls
+
+        d = data if isinstance(data, dict) else {}
+        serving_calls.record_http_call(
+            method="research_synthesis_completion", role="worker_general",
+            base_url=worker_url.rsplit("/completion", 1)[0], endpoint="/completion",
+            ts_start=ts_start, ts_end=time.time(), prompt=prompt, n_tokens=n_predict,
+            status=status, finish_reason=d.get("stop_type"), timings=d.get("timings"),
+            tokens_generated=d.get("tokens_predicted"), prompt_tokens=d.get("tokens_evaluated"),
+            exc=exc, notes={"attempt": attempt},
+        )
+    except Exception:  # noqa: BLE001 -- recording never fails the call
+        pass
+
+
 def _is_irrelevant_synthesis(synthesis: str) -> bool:
     """Detect if worker synthesis indicates the page was not relevant.
 
@@ -795,9 +817,15 @@ def _synthesize_page(
         payload = _worker_completion_payload(prompt, n_predict=n_predict)
         req = urllib.request.Request(worker_url, data=payload, headers=headers)
         attempt_start = time.perf_counter()
+        _ts0 = time.time()
+        _rec_status: int | None = None
+        _rec_data: Any = None
+        _rec_exc: BaseException | None = None
         try:
             with urllib.request.urlopen(req, timeout=_WORKER_TIMEOUT) as response:
+                _rec_status = getattr(response, "status", None)
                 data = json.loads(response.read().decode("utf-8"))
+                _rec_data = data
                 synthesis = data.get("content", "").strip()
                 elapsed = (time.perf_counter() - total_start) * 1000
 
@@ -812,6 +840,7 @@ def _synthesize_page(
                     "attempt": attempt_label,
                 }
         except HTTPError as e:
+            _rec_exc, _rec_status = e, e.code
             elapsed = (time.perf_counter() - attempt_start) * 1000
             detail = _worker_http_error_detail(e)
             errors.append(f"{attempt_label} n_predict={n_predict}: {detail}")
@@ -830,6 +859,7 @@ def _synthesize_page(
             if e.code < 500:
                 break
         except Exception as e:
+            _rec_exc = e
             elapsed = (time.perf_counter() - attempt_start) * 1000
             errors.append(f"{attempt_label} n_predict={n_predict}: {e}")
             logger.warning(
@@ -845,6 +875,9 @@ def _synthesize_page(
                 e,
             )
             break
+        finally:
+            _record_worker_synthesis(worker_url, prompt, n_predict, _ts0, _rec_status, _rec_data,
+                                     _rec_exc, attempt_label)
 
     elapsed = (time.perf_counter() - total_start) * 1000
     return {

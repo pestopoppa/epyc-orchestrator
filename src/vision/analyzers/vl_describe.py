@@ -209,10 +209,24 @@ class VLDescribeAnalyzer(Analyzer):
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(request, timeout=VL_INFERENCE_TIMEOUT) as response:
-                body = response.read().decode("utf-8")
-                if response.status != 200:
-                    return self._error_result(f"VL server HTTP {response.status}: {body}", start)
+            _ts0 = time.time()
+            _status: int | None = None
+            _body: str | None = None
+            _err: BaseException | None = None
+            try:
+                with urllib.request.urlopen(request, timeout=VL_INFERENCE_TIMEOUT) as response:
+                    _status = response.status
+                    body = response.read().decode("utf-8")
+                    _body = body
+                    if response.status != 200:
+                        return self._error_result(f"VL server HTTP {response.status}: {body}", start)
+            except BaseException as exc:
+                _err = exc
+                if isinstance(exc, urllib.error.HTTPError):
+                    _status = exc.code
+                raise
+            finally:
+                self._record_server_call(_ts0, payload, _status, _body, _err)
 
             data = json.loads(body)
             description = self._extract_server_content(data)
@@ -222,6 +236,31 @@ class VLDescribeAnalyzer(Analyzer):
             return self._success_result({"description": self._clean_output(description)}, start)
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             return self._error_result(f"VL server inference failed: {exc}", start)
+
+    def _record_server_call(self, ts_start: float, payload: dict[str, Any], status: int | None,
+                            body: str | None, exc: BaseException | None) -> None:
+        """UFH14-LB6.2: one ``serving_call.v1`` record for the VL ``/v1/chat/completions``
+        call (it bypasses ``LlamaServerBackend``). Never raises, never alters the call."""
+        try:
+            from src.backends import serving_calls
+
+            parsed: Any = None
+            if body:
+                try:
+                    parsed = json.loads(body)
+                except ValueError:
+                    parsed = None
+            b = parsed if isinstance(parsed, dict) else {}
+            ch = b.get("choices") if isinstance(b.get("choices"), list) else []
+            serving_calls.record_http_call(
+                method="vl_describe_chat", role="vl", base_url=f"http://127.0.0.1:{self.server_port}",
+                endpoint="/v1/chat/completions", ts_start=ts_start, ts_end=time.time(),
+                n_tokens=payload.get("max_tokens"), status=status,
+                finish_reason=ch[0].get("finish_reason") if ch and isinstance(ch[0], dict) else None,
+                timings=b.get("timings"), usage=b.get("usage"), exc=exc,
+            )
+        except Exception:  # noqa: BLE001 -- recording never fails the call
+            pass
 
     def _analyze_with_cli(self, image_path: Path, start: float) -> AnalyzerResult:
         """Run inference through llama-mtmd-cli."""
