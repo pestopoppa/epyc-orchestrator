@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from src.security.control_tokens import neutralise_control_tokens
 from src.registry.stack_priors import (
     DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
     live_warm_worker_slots,
@@ -539,7 +540,9 @@ class StepExecutor:
         context_parts: list[str] = []
         for input_key in inputs:
             if input_key in self.step_outputs:
-                context_parts.append(f"### Output from {input_key}\n{self.step_outputs[input_key]}")
+                # CT-12.3c: prior step outputs are model text; break control-token spellings.
+                output = neutralise_control_tokens(str(self.step_outputs[input_key]))
+                context_parts.append(f"### Output from {input_key}\n{output}")
         if context_parts:
             parts.append("## Prior Context\n" + "\n\n".join(context_parts))
 

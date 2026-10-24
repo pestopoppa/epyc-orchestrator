@@ -1270,14 +1270,10 @@ async def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
     return result
 
 
-async def _llm_call_with_reasoning(primitives: Any, *args: Any, **kwargs: Any) -> tuple[str, str | None]:
-    """``llm_call`` off the event loop, with its RI-23 reasoning read in the same thread (A1-01)."""
-
-    def _run() -> tuple[str, str | None]:
-        text = primitives.llm_call(*args, **kwargs)
-        return text, _last_call_reasoning(primitives)
-
-    return await asyncio.to_thread(_run)
+def _llm_call_with_reasoning(primitives: Any, *args: Any, **kwargs: Any) -> tuple[str, str | None]:
+    """``llm_call`` plus its RI-23 reasoning, read in the call's own (worker-thread) context (A1-01)."""
+    text = primitives.llm_call(*args, **kwargs)
+    return text, _last_call_reasoning(primitives)
 
 
 @router.post("/chat/completions", response_model=None)
@@ -1718,7 +1714,8 @@ async def openai_chat_completions(
                                         else:
                                             raise value
                             else:
-                                response_text, response_reasoning = await _llm_call_with_reasoning(
+                                response_text, response_reasoning = await asyncio.to_thread(
+                                    _llm_call_with_reasoning,
                                     primitives,
                                     direct_prompt,
                                     role=role,
@@ -1807,7 +1804,8 @@ async def openai_chat_completions(
                             )
 
                             try:
-                                code, turn_reasoning = await _llm_call_with_reasoning(
+                                code, turn_reasoning = await asyncio.to_thread(
+                                    _llm_call_with_reasoning,
                                     primitives,
                                     root_prompt,
                                     role=role,
@@ -2130,7 +2128,8 @@ async def openai_chat_completions(
                 elif disable_repl:
                     # Direct LLM call — no REPL, no code execution.
                     # /chat's direct-stage prompt contract (_direct_call_prompt).
-                    response_text, call_reasoning = await _llm_call_with_reasoning(
+                    response_text, call_reasoning = await asyncio.to_thread(
+                        _llm_call_with_reasoning,
                         primitives,
                         _direct_call_prompt(
                             combined_context, role, getattr(state, "registry", None),
@@ -2182,7 +2181,8 @@ async def openai_chat_completions(
                             turn=turn,
                         )
 
-                        code, turn_reasoning = await _llm_call_with_reasoning(
+                        code, turn_reasoning = await asyncio.to_thread(
+                            _llm_call_with_reasoning,
                             primitives,
                             root_prompt,
                             role=role,

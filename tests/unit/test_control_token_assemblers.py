@@ -53,6 +53,7 @@ ACCOUNTED_ELSEWHERE = {
     "api/routes/chat_pipeline/stream_adapter.py::_stream_repl": "build_root_lm_prompt/build_escalation_prompt neutralise",
     "api/routes/chat_pipeline/proactive_stage.py::_execute_proactive": "build_task_decomposition_prompt neutralises",
     "api/routes/openai_compat.py::openai_chat_completions": "OpenAIChatRequest messages neutralised (CT-12.3a)",
+    "api/routes/openai_compat.py::_llm_call_with_reasoning": "pass-through for openai_chat_completions prompts (CT-12.3a)",
     "api/routes/openai_compat.py::_run_client_tool_completion": "messages come from OpenAIChatRequest (content + tool_calls neutralised, CT-12.3a)",
     "api/routes/openai_compat.py::generate_stream": "OpenAIChatRequest messages neutralised (CT-12.3a)",
     "api/routes/chat_utils.py::_formalize_output": "build_formalizer_prompt neutralises",
@@ -71,6 +72,8 @@ ACCOUNTED_ELSEWHERE = {
     "typed_decisions/native.py::_score_native_batch": "build_native_prompt neutralises STATE",
     "typed_decisions/native.py::run_typed_decisions_native_parallel": "build_native_prompt neutralises STATE",
     "typed_decisions/native.py::worker": "build_native_prompt neutralises STATE",
+    "parallel_step_executor.py::_execute_step": "_build_step_prompt neutralises prior step outputs",
+    "trace/replay/record.py::_wrap_llm_call": "recording pass-through around llm_call; sends nothing itself",
     # offline measurement fixtures authored in-repo; not request-derived
     "typed_decisions/judge_redundancy.py::_run_llm_case": "repo-authored judge fixtures (hashed prompts)",
     "typed_decisions/tool_args_pilot.py::_run_free_case": "repo-authored pilot cases (hashed prompts)",
@@ -90,10 +93,11 @@ def _function_sink_sites() -> dict[str, bool]:
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            # A loaded sink attribute: a call, or a callable handed to asyncio.to_thread.
             calls_sink = any(
-                isinstance(c, ast.Call)
-                and isinstance(c.func, ast.Attribute)
-                and c.func.attr in SINK_CALLS
+                isinstance(c, ast.Attribute)
+                and isinstance(c.ctx, ast.Load)
+                and c.attr in SINK_CALLS
                 for c in ast.walk(node)
             )
             if not calls_sink:
@@ -278,6 +282,15 @@ def test_step_prompt_is_clean_in_both_forms():
     assert not has_control_tokens(b.build_step_prompt(INJ, constraints=INJ))
     structured = b.build_step_prompt(INJ, constraints=INJ, as_structured=True)
     assert not has_control_tokens(structured.to_string())
+
+
+def test_parallel_step_prompt_neutralises_prior_step_outputs():
+    from src.parallel_step_executor import StepExecutor
+
+    ex = StepExecutor(primitives=MagicMock())
+    ex.step_outputs = {"a": INJ}
+    prompt = ex._build_step_prompt({"objective": "o"}, {"action": "x", "inputs": ["a"]})
+    assert "### Output from a" in prompt and not has_control_tokens(prompt)
 
 
 def test_delegation_prompts_are_clean():
