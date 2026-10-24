@@ -1526,17 +1526,17 @@ async def openai_chat_completions(
                 return f"data: {json.dumps(chunk)}\n\n"
 
             async def stream_call(call):
-                cancel_event = threading.Event()
+                call_cancel_event = threading.Event()
 
                 def invoke(sink):
                     with primitives.request_context(
-                        cancel_check=cancel_event.is_set,
+                        cancel_check=lambda: cancel_event.is_set() or call_cancel_event.is_set(),
                         session_id=request.x_session_id,
                     ):
                         return call(sink)
 
                 async with aclosing(_iter_thread_call_chunks(
-                    invoke, cancel_event=cancel_event
+                    invoke, cancel_event=call_cancel_event
                 )) as chunks:
                     async for kind, value in chunks:
                         if kind == "chunk":
@@ -2040,11 +2040,16 @@ async def openai_chat_completions(
             yield "data: [DONE]\n\n"
 
         stream = generate_stream()
+        # The first generation is consumed before StreamingResponse is returned,
+        # so Starlette's response disconnect handling cannot observe it yet.
+        watcher = asyncio.create_task(watch_disconnect(http_request, cancel_event))
         try:
             first = await anext(stream, None)
         except BaseException:
             cancel_event.set()
+            watcher.cancel()
             try:
+                await asyncio.gather(watcher, return_exceptions=True)
                 await stream.aclose()
             finally:
                 _clear_request_trace_keys(primitives, request_keys)
@@ -2055,7 +2060,10 @@ async def openai_chat_completions(
             if error.get("code") == 503 and error.get("type") in {
                 "admission_denied", "contention_denied", "context_overflow"
             }:
+                cancel_event.set()
+                watcher.cancel()
                 try:
+                    await asyncio.gather(watcher, return_exceptions=True)
                     await stream.aclose()
                 finally:
                     _clear_request_trace_keys(primitives, request_keys)
@@ -2073,7 +2081,9 @@ async def openai_chat_completions(
                     yield event
             finally:
                 cancel_event.set()
+                watcher.cancel()
                 try:
+                    await asyncio.gather(watcher, return_exceptions=True)
                     await stream.aclose()
                 finally:
                     _clear_request_trace_keys(primitives, request_keys)
