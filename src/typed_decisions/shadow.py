@@ -15,11 +15,12 @@ Contract:
       record. Nothing propagates to the caller. The shadow itself never
       retries; the runner's own one corrective schema retry still applies.
     * ``submit_shadow`` is the non-blocking door: it hands the work to a
-      module-level single-worker executor and returns a bool immediately. At
+      module-level single worker thread and returns a bool immediately. At
       most ``MAX_PENDING`` shadow runs may be pending (queued or running);
       excess submissions are dropped and counted instead of growing the
-      queue without bound. The worker is a daemon thread so a stuck shadow
-      call can never hold interpreter shutdown.
+      queue without bound. The worker is a plain daemon thread (not a
+      ``concurrent.futures`` pool, whose atexit hook joins every worker), so a
+      stuck shadow call can never hold interpreter shutdown.
     * Records carry the canonical question order, SHA-256 of the state and
       of the runner's canonical prompt, per-question decisions (typed value,
       local confidence, probabilities normalized and sorted by label), typed
@@ -40,31 +41,18 @@ Call-site note:
     helper builds the <=2-question catalogue (one ``choice`` over
     incumbent-first candidate roles, plus one ``noul`` for required
     escalation) and passes the incumbent mapping through unchanged.
-
-Executor note:
-    ``concurrent.futures.ThreadPoolExecutor`` workers have been non-daemon
-    since Python 3.9 and ``Thread.daemon`` is read-only once a thread has
-    started, so ``_DaemonThreadPoolExecutor`` recreates the single worker in
-    the private ``_adjust_thread_count`` hook (the one call site that runs
-    immediately before ``Thread.start()``). If the running interpreter's
-    private internals match neither known shape, the override degrades to
-    the stock implementation rather than risking a worker that cannot
-    consume its queue.
 """
 
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import logging
 import os
-import sys
+import queue
 import threading
 import time
-import weakref
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -105,71 +93,11 @@ _ROUTE_FALLBACK_ROLES = (
     "ingest_long_context",
 )
 
-_executor: ThreadPoolExecutor | None = None
-_executor_lock = threading.Lock()
+_worker: tuple[threading.Thread, queue.SimpleQueue] | None = None
+_worker_lock = threading.Lock()
 _state_lock = threading.Lock()
 _pending = 0
 _dropped = 0
-
-
-def _daemon_worker_mode() -> str | None:
-    """Detect which private ``_worker`` shape this interpreter uses."""
-    impl = sys.modules.get("concurrent.futures.thread")
-    if impl is None or not hasattr(impl, "_worker"):
-        return None
-    try:
-        params = list(inspect.signature(impl._worker).parameters)
-    except (TypeError, ValueError):  # pragma: no cover - defensive
-        return None
-    if len(params) == 3 and params[0] == "executor_reference":
-        return "context"
-    if len(params) == 4 and params[:2] == ["executor_reference", "work_queue"]:
-        return "legacy"
-    return None
-
-
-_DAEMON_WORKER_MODE = _daemon_worker_mode()
-
-
-class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
-    """Single-worker pool whose thread dies with the process.
-
-    See the module docstring's executor note. The override mirrors CPython's
-    ``_adjust_thread_count`` (3.11 through 3.14) with ``daemon=True``; the
-    work item is already queued by ``submit`` before this hook runs, exactly
-    as in the stdlib.
-    """
-
-    def _adjust_thread_count(self) -> None:
-        impl = sys.modules.get("concurrent.futures.thread")
-        mode = _DAEMON_WORKER_MODE
-        if impl is None or mode is None:
-            return super()._adjust_thread_count()
-        if self._idle_semaphore.acquire(timeout=0):
-            return
-
-        def weakref_cb(_, q=self._work_queue):
-            q.put(None)
-
-        if len(self._threads) >= self._max_workers:
-            return
-        reference = weakref.ref(self, weakref_cb)
-        if mode == "context":
-            create_context = getattr(self, "_create_worker_context", None)
-            if not callable(create_context):
-                return super()._adjust_thread_count()
-            args = (reference, create_context(), self._work_queue)
-        else:
-            args = (reference, self._work_queue, self._initializer, self._initargs)
-        thread = threading.Thread(
-            name="%s_%d" % (self._thread_name_prefix or self, len(self._threads)),
-            target=impl._worker,
-            args=args,
-            daemon=True,
-        )
-        thread.start()
-        self._threads.add(thread)
-        impl._threads_queues[thread] = self._work_queue
 
 
 def shadow_stats() -> dict[str, int]:
@@ -268,22 +196,24 @@ def submit_shadow(
         )
         return False
     try:
-        future = _get_executor().submit(
-            shadow_decision,
-            primitives,
-            surface=surface,
-            state=state,
-            questions=questions,
-            incumbent=incumbent,
-            role=role,
-            log_path=resolved,
-            mode=mode,
+        _enqueue(
+            (
+                primitives,
+                dict(
+                    surface=surface,
+                    state=state,
+                    questions=questions,
+                    incumbent=incumbent,
+                    role=role,
+                    log_path=resolved,
+                    mode=mode,
+                ),
+            )
         )
     except Exception:
         _release_slot()
         logger.warning("typed-decisions shadow submit failed on %s", surface, exc_info=True)
         return False
-    future.add_done_callback(_release_slot)
     return True
 
 
@@ -358,17 +288,18 @@ def route_questions(
     )
 
 
-def drain_shadow() -> None:
-    """Wait for every queued shadow run, then retire the worker.
+def drain_shadow(timeout: float | None = None) -> None:
+    """Wait (up to ``timeout``) for every queued shadow run, then retire the worker.
 
     Exposed for tests and shutdown hooks; never called on the request path.
     """
-    global _executor
-    with _executor_lock:
-        pool = _executor
-        _executor = None
-    if pool is not None:
-        pool.shutdown(wait=True)
+    global _worker
+    with _worker_lock:
+        worker, _worker = _worker, None
+    if worker is not None:
+        thread, work = worker
+        work.put(None)  # sentinel: the worker exits after the queued runs
+        thread.join(timeout)
 
 
 def _reset_for_tests() -> None:
@@ -380,15 +311,26 @@ def _reset_for_tests() -> None:
         _dropped = 0
 
 
-def _get_executor() -> ThreadPoolExecutor:
-    global _executor
-    with _executor_lock:
-        if _executor is None:
-            _executor = _DaemonThreadPoolExecutor(
-                max_workers=1,
-                thread_name_prefix="td-shadow",
-            )
-        return _executor
+def _enqueue(item: tuple[object, dict[str, object]]) -> None:
+    global _worker
+    with _worker_lock:
+        if _worker is None:
+            work: queue.SimpleQueue = queue.SimpleQueue()
+            thread = threading.Thread(target=_drain, args=(work,), name="td-shadow", daemon=True)
+            thread.start()
+            _worker = (thread, work)
+        _worker[1].put(item)
+
+
+def _drain(work: queue.SimpleQueue) -> None:
+    while (item := work.get()) is not None:
+        primitives, kwargs = item
+        try:
+            shadow_decision(primitives, **kwargs)
+        except Exception:  # keep the single worker alive
+            logger.warning("typed-decisions shadow worker error", exc_info=True)
+        finally:
+            _release_slot()
 
 
 def _reserve_slot() -> bool:
@@ -401,7 +343,7 @@ def _reserve_slot() -> bool:
         return True
 
 
-def _release_slot(_future=None) -> None:
+def _release_slot() -> None:
     global _pending
     with _state_lock:
         if _pending > 0:

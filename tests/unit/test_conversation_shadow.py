@@ -48,7 +48,7 @@ def _reset_flags(monkeypatch):
         shadow._pending = 0
         shadow._dropped = 0
     yield
-    assert shadow._executor is None  # these fixtures never start an executor
+    assert shadow._worker is None  # these fixtures never start the worker
     with shadow._state_lock:
         shadow._pending = 0
         shadow._dropped = 0
@@ -123,7 +123,7 @@ def test_submission_refusals_are_nonblocking_and_fail_open(monkeypatch, tmp_path
         )
     elif reason == "queue_full":
         set_features(Features(typed_decisions_shadow=True))
-        monkeypatch.setattr(shadow, "_get_executor", lambda: pytest.fail("queue-full path started executor"))
+        monkeypatch.setattr(shadow, "_enqueue", lambda _item: pytest.fail("queue-full path enqueued"))
         with shadow._state_lock:
             shadow._pending = shadow.MAX_PENDING
             shadow._dropped = 0

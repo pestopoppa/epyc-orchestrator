@@ -27,7 +27,7 @@ Environment Variables:
     ORCHESTRATOR_SCRIPTS=1       Enable script registry (prepared scripts)
     ORCHESTRATOR_STREAMING=1     Enable SSE streaming endpoints
     ORCHESTRATOR_OPENAI_COMPAT=1 Enable OpenAI-compatible API
-    ORCHESTRATOR_REPL=1          Enable REPL execution environment
+    ORCHESTRATOR_FEATURE_REPL=1  Enable REPL execution environment (ORCHESTRATOR_REPL also works)
     ORCHESTRATOR_DEFERRED_TOOL_RESULTS=1  Disable mixin tool-output wrapping
 
 Design Principles:

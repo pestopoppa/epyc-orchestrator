@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
+
+import yaml
+
+from src.registry.model_descriptors import DEFAULT_LEAN_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +36,12 @@ def _env_str(name: str, default: str) -> str:
 # Registry timeout cache (avoids repeated YAML parsing)
 _REGISTRY_TIMEOUTS_CACHE: dict[str, int | float] | None = None
 _REGISTRY_RUNTIME_DEFAULTS_CACHE: dict[str, Any] | None = None
-_LOADING_REGISTRY_TIMEOUTS = False
-_LOADING_RUNTIME_DEFAULTS = False
+# Parsed runtime_defaults keyed on (path, mtime_ns, size). Content-keyed, so it
+# survives reset_validation_caches() and a reset_config() costs no re-parse.
+_PARSED_RUNTIME_DEFAULTS: tuple[tuple[str, int, int], dict[str, Any]] | None = None
+# Serializes first loads so a concurrent caller waits instead of caching a fallback
+# (A3-05); re-entrant because the timeouts load reads the runtime defaults.
+_REGISTRY_LOAD_LOCK = threading.RLock()
 _REGISTRY_DIAGNOSTICS: dict[str, Any] = {
     "runtime_defaults": {},
     "timeouts": {},
@@ -60,19 +70,16 @@ def _load_registry_timeouts() -> dict[str, int | float]:
         "roles.architect_general", "server.request", "services.ocr_pdf"
     """
     global _REGISTRY_TIMEOUTS_CACHE
-    global _LOADING_REGISTRY_TIMEOUTS
     if _REGISTRY_TIMEOUTS_CACHE is not None:
         return _REGISTRY_TIMEOUTS_CACHE
-    if _LOADING_REGISTRY_TIMEOUTS:
-        # Avoid recursive config->registry->config loops during bootstrap.
-        _record_registry_diag(
-            "timeouts",
-            {"status": "recursive_guard", "failure_reason": "recursive_load", "failure_detail": ""},
-        )
-        return {}
+    with _REGISTRY_LOAD_LOCK:
+        if _REGISTRY_TIMEOUTS_CACHE is None:
+            _REGISTRY_TIMEOUTS_CACHE = _read_registry_timeouts()
+        return _REGISTRY_TIMEOUTS_CACHE
 
+
+def _read_registry_timeouts() -> dict[str, int | float]:
     try:
-        _LOADING_REGISTRY_TIMEOUTS = True
         runtime_defaults = _load_registry_runtime_defaults()
         raw_timeouts = runtime_defaults.get("timeouts", {}) if isinstance(runtime_defaults, dict) else {}
         runtime_diag = _REGISTRY_DIAGNOSTICS.get("runtime_defaults", {})
@@ -89,7 +96,6 @@ def _load_registry_timeouts() -> dict[str, int | float]:
             for key, value in cat_data.items():
                 flat[f"{category}.{key}"] = value
 
-        _REGISTRY_TIMEOUTS_CACHE = flat
         if runtime_diag.get("status") and runtime_diag.get("status") != "loaded":
             _record_registry_diag(
                 "timeouts",
@@ -113,7 +119,6 @@ def _load_registry_timeouts() -> dict[str, int | float]:
         return flat
     except Exception as e:
         logger.warning("Registry timeouts unavailable, using hardcoded fallbacks: %s", e)
-        _REGISTRY_TIMEOUTS_CACHE = {}
         _record_registry_diag(
             "timeouts",
             {
@@ -124,8 +129,6 @@ def _load_registry_timeouts() -> dict[str, int | float]:
             },
         )
         return {}
-    finally:
-        _LOADING_REGISTRY_TIMEOUTS = False
 
 
 def _registry_timeout(category: str, key: str, fallback: int | float) -> int | float:
@@ -153,25 +156,22 @@ def _registry_timeout(category: str, key: str, fallback: int | float) -> int | f
 def _load_registry_runtime_defaults() -> dict[str, Any]:
     """Load runtime_defaults block from registry (cached)."""
     global _REGISTRY_RUNTIME_DEFAULTS_CACHE
-    global _LOADING_RUNTIME_DEFAULTS
     if _REGISTRY_RUNTIME_DEFAULTS_CACHE is not None:
         return _REGISTRY_RUNTIME_DEFAULTS_CACHE
-    if _LOADING_RUNTIME_DEFAULTS:
-        _record_registry_diag(
-            "runtime_defaults",
-            {"status": "recursive_guard", "failure_reason": "recursive_load", "failure_detail": ""},
-        )
-        return {}
+    with _REGISTRY_LOAD_LOCK:
+        if _REGISTRY_RUNTIME_DEFAULTS_CACHE is None:
+            _REGISTRY_RUNTIME_DEFAULTS_CACHE = _read_registry_runtime_defaults()
+        return _REGISTRY_RUNTIME_DEFAULTS_CACHE
+
+
+def _read_registry_runtime_defaults() -> dict[str, Any]:
+    global _PARSED_RUNTIME_DEFAULTS
     try:
-        _LOADING_RUNTIME_DEFAULTS = True
         registry_path = Path(
-            os.environ.get(
-                "ORCHESTRATOR_PATHS_REGISTRY_PATH",
-                "orchestration/model_registry.yaml",
-            )
+            os.environ.get("ORCHESTRATOR_PATHS_REGISTRY_PATH", str(DEFAULT_LEAN_REGISTRY))
         )
         if not registry_path.exists():
-            _REGISTRY_RUNTIME_DEFAULTS_CACHE = {}
+            logger.warning("Model registry %s not found; registry timeouts fall back", registry_path)
             _record_registry_diag(
                 "runtime_defaults",
                 {
@@ -181,29 +181,31 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
                     "entries": 0,
                 },
             )
-            return _REGISTRY_RUNTIME_DEFAULTS_CACHE
+            return {}
 
-        import yaml
-
-        with registry_path.open(encoding="utf-8") as fh:
-            payload = yaml.safe_load(fh) or {}
-        runtime_defaults = payload.get("runtime_defaults", {})
-        _REGISTRY_RUNTIME_DEFAULTS_CACHE = (
-            dict(runtime_defaults) if isinstance(runtime_defaults, dict) else {}
-        )
+        st = registry_path.stat()
+        key = (str(registry_path.resolve()), st.st_mtime_ns, st.st_size)
+        if _PARSED_RUNTIME_DEFAULTS is None or _PARSED_RUNTIME_DEFAULTS[0] != key:
+            with registry_path.open(encoding="utf-8") as fh:
+                payload = yaml.load(fh, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
+            runtime_defaults = payload.get("runtime_defaults", {})
+            _PARSED_RUNTIME_DEFAULTS = (
+                key,
+                dict(runtime_defaults) if isinstance(runtime_defaults, dict) else {},
+            )
+        loaded = copy.deepcopy(_PARSED_RUNTIME_DEFAULTS[1])
         _record_registry_diag(
             "runtime_defaults",
             {
                 "status": "loaded",
                 "failure_reason": "",
                 "failure_detail": "",
-                "entries": len(_REGISTRY_RUNTIME_DEFAULTS_CACHE),
+                "entries": len(loaded),
             },
         )
-        return _REGISTRY_RUNTIME_DEFAULTS_CACHE
+        return loaded
     except Exception as e:
         logger.warning("Registry runtime defaults unavailable, using hardcoded fallbacks: %s", e)
-        _REGISTRY_RUNTIME_DEFAULTS_CACHE = {}
         _record_registry_diag(
             "runtime_defaults",
             {
@@ -214,8 +216,6 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
             },
         )
         return {}
-    finally:
-        _LOADING_RUNTIME_DEFAULTS = False
 
 
 def _registry_runtime_value(path: tuple[str, ...], fallback: Any) -> Any:
@@ -232,17 +232,7 @@ def reset_validation_caches() -> None:
     """Reset internal helper caches used by config loading."""
     global _REGISTRY_TIMEOUTS_CACHE
     global _REGISTRY_RUNTIME_DEFAULTS_CACHE
-    global _LOADING_REGISTRY_TIMEOUTS
-    global _LOADING_RUNTIME_DEFAULTS
     _REGISTRY_TIMEOUTS_CACHE = None
     _REGISTRY_RUNTIME_DEFAULTS_CACHE = None
-    _LOADING_REGISTRY_TIMEOUTS = False
-    _LOADING_RUNTIME_DEFAULTS = False
     _REGISTRY_DIAGNOSTICS["runtime_defaults"] = {}
     _REGISTRY_DIAGNOSTICS["timeouts"] = {}
-
-
-def reset_runtime_defaults_cache() -> None:
-    """Reset only runtime-default cache (preserves timeout cache behavior)."""
-    global _REGISTRY_RUNTIME_DEFAULTS_CACHE
-    _REGISTRY_RUNTIME_DEFAULTS_CACHE = None

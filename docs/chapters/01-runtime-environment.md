@@ -20,7 +20,7 @@ Independent feature flags let us turn orchestration modules on and off without t
 | `scripts` | `ORCHESTRATOR_SCRIPTS` | SCRIPT() function for prepared scripts | `tools` |
 | `streaming` | `ORCHESTRATOR_STREAMING` | SSE /chat/stream endpoint | None |
 | `openai_compat` | `ORCHESTRATOR_OPENAI_COMPAT` | OpenAI-compatible /v1/* endpoints | None |
-| `repl` | `ORCHESTRATOR_REPL` | Python REPL execution environment | None |
+| `repl` | `ORCHESTRATOR_FEATURE_REPL` | Python REPL execution environment | None |
 | `caching` | `ORCHESTRATOR_CACHING` | LLM response caching | None |
 | `restricted_python` | `ORCHESTRATOR_RESTRICTED_PYTHON` | Use RestrictedPython sandbox | RestrictedPython>=7.0 |
 | `generation_monitor` | `ORCHESTRATOR_GENERATION_MONITOR` | Early failure detection (Phase 6) | None |

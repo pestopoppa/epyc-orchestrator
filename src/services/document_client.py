@@ -182,12 +182,14 @@ class DocumentFormalizerClient:
         self,
         image: Image.Image | bytes | str,
         output_format: str = "bbox",
+        timeout: float | None = None,
     ) -> PageOCRResult:
         """OCR a single image.
 
         Args:
             image: PIL Image, bytes, or base64 string.
             output_format: Output format ("text", "bbox", or "json").
+            timeout: Request timeout in seconds (default: SINGLE_PAGE_TIMEOUT).
 
         Returns:
             PageOCRResult with text and bounding boxes.
@@ -215,7 +217,7 @@ class DocumentFormalizerClient:
             response = await client.post(
                 "/v1/document/ocr",
                 data={"image": image_b64, "output_format": output_format},
-                timeout=SINGLE_PAGE_TIMEOUT,
+                timeout=SINGLE_PAGE_TIMEOUT if timeout is None else timeout,
             )
 
             if response.status_code != 200:
@@ -316,40 +318,32 @@ class DocumentFormalizerClient:
         if not path.exists():
             raise FileNotFoundError(f"PDF not found: {path}")
 
-        # Get page count
         pdf = pdfium.PdfDocument(path)
-        num_pages = min(len(pdf), max_pages)
-
         total_start = time.time()
-
-        # Render all pages to images first (CPU-bound, fast)
-        page_images: list[tuple[int, "Image.Image"]] = []
-        for page_num in range(num_pages):
-            page = pdf[page_num]
-            scale = 200 / 72  # 200 DPI
-            bitmap = page.render(scale=scale)
-            image = bitmap.to_pil()
-            page_images.append((page_num + 1, image))
-
-        # Process pages in parallel with semaphore for concurrency control
+        # Each page is rendered (200 DPI) under the semaphore, so at most
+        # max_concurrent bitmaps are alive at once.
         semaphore = asyncio.Semaphore(max_concurrent)
-        results: list[tuple[int, PageOCRResult | Exception]] = []
 
-        async def process_page(
-            page_num: int, image: "Image.Image"
-        ) -> tuple[int, PageOCRResult | Exception]:
+        async def process_page(page_num: int) -> tuple[int, PageOCRResult | Exception]:
             async with semaphore:
                 try:
-                    result = await self.ocr_image(image, output_format)
+                    page = pdf[page_num - 1]
+                    try:
+                        image = page.render(scale=200 / 72).to_pil()
+                    finally:
+                        page.close()
+                    result = await self.ocr_image(image, output_format, timeout=page_timeout)
                     result.page = page_num
                     return (page_num, result)
                 except Exception as e:
                     logger.warning(f"Failed to process page {page_num}: {e}")
                     return (page_num, e)
 
-        # Launch all tasks in parallel
-        tasks = [process_page(page_num, image) for page_num, image in page_images]
-        results = await asyncio.gather(*tasks)
+        try:
+            num_pages = min(len(pdf), max_pages)
+            results = await asyncio.gather(*(process_page(n) for n in range(1, num_pages + 1)))
+        finally:
+            pdf.close()
 
         # Separate successes and failures, maintaining page order
         pages: list[PageOCRResult] = []

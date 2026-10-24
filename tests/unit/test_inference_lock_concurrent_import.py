@@ -27,12 +27,15 @@ pre-fix tree.
 
 from __future__ import annotations
 
+import importlib
 import shutil
 import subprocess
 import sys
 import textwrap
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 # tests/unit/test_inference_lock_concurrent_import.py -> tests/unit -> tests -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -149,3 +152,84 @@ def test_reproducer_catches_the_pre_fix_shim(tmp_path):
         "concurrent-import ImportError at least once in 700 trials; "
         "the harness or fixture is stale"
     )
+
+
+# A3-16/A4-08: every compat alias resolves through the same finder.
+_COMPAT_ALIASES = {
+    "src.concurrency": "src.runtime.concurrency",
+    "src.delegation_cache": "src.orchestration.delegation_cache",
+    "src.delegation_reports": "src.orchestration.delegation_reports",
+    "src.dispatcher": "src.orchestration.dispatcher",
+    "src.escalation": "src.orchestration.escalation",
+    "src.executor": "src.runtime.executor",
+    "src.inference_lock": "src.runtime.inference_lock",
+    "src.inference_tap": "src.runtime.inference_tap",
+    "src.llm_cache": "src.inference.llm_cache",
+    "src.model_server": "src.inference.model_server",
+    "src.prefix_cache": "src.inference.prefix_cache",
+    "src.registry_loader": "src.registry.registry_loader",
+    "src.script_registry": "src.registry.script_registry",
+    "src.task_ir": "src.orchestration.task_ir",
+    "src.tool_loader": "src.registry.tool_loader",
+    "src.tool_registry": "src.registry.tool_registry",
+}
+
+
+@pytest.mark.parametrize(("alias", "target"), sorted(_COMPAT_ALIASES.items()))
+def test_compat_alias_is_the_unrenamed_target_module(alias, target):
+    """The old shims swapped sys.modules from their own body and renamed the target."""
+    module = importlib.import_module(alias)
+    assert module is sys.modules[target]
+    assert module.__name__ == target
+    assert module.__spec__.name == target
+
+
+def test_all_compat_aliases_concurrent_first_import_is_safe():
+    def _one(alias: str, target: str) -> str:
+        script = textwrap.dedent(
+            f"""
+            import importlib, sys, threading
+            sys.path.insert(0, {str(REPO_ROOT)!r})
+            sys.setswitchinterval(0.000005)
+            alias, target = {alias!r}, {target!r}
+            errors = []
+            modules = []
+            barrier = threading.Barrier(24)
+
+            def worker():
+                barrier.wait()
+                try:
+                    modules.append(importlib.import_module(alias))
+                except BaseException as exc:
+                    errors.append(f"{{alias}}: {{exc!r}}")
+
+            threads = [threading.Thread(target=worker) for _ in range(24)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            canonical = importlib.import_module(target)
+            if len(modules) != 24 or any(module is not canonical for module in modules):
+                errors.append(f"{{alias}} did not resolve to one canonical module")
+            if canonical.__name__ != target or canonical.__spec__.name != target:
+                errors.append(f"{{alias}} changed canonical module identity or spec")
+            sys.exit(f"FAILED {{errors[:3]}}" if errors else 0)
+            """
+        )
+        proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+        return proc.stderr[-500:] if proc.returncode else ""
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        failures = [
+            err
+            for err in ex.map(_one, *_zip_compat_aliases())
+            if err
+        ]
+    assert not failures, failures[0]
+
+
+def _zip_compat_aliases():
+    """Return positional argument streams for one clean-process race per alias."""
+    pairs = sorted(_COMPAT_ALIASES.items())
+    return tuple(tuple(pair[index] for pair in pairs) for index in range(2))

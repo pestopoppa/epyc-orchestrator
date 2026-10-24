@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,10 +40,11 @@ logger = logging.getLogger(__name__)
 #   * DEFAULT_LEAN_REGISTRY     — `<repo>/orchestration/model_registry.yaml`, the
 #     lean runtime view that `src/registry/registry_compiler.py` compiles from the
 #     master at every stack start.
-# Re-exported here rather than restated so there is no fourth copy to drift.
+# Re-exported here rather than restated so there is no fourth copy to drift. Only the
+# lean path: with config unavailable the loader reads the lean registry, as config
+# does, not the research master (A3-06).
 from src.registry.model_descriptors import (  # noqa: E402
     DEFAULT_LEAN_REGISTRY as DEFAULT_LEAN_REGISTRY_PATH,
-    DEFAULT_RESEARCH_REGISTRY as DEFAULT_REGISTRY_PATH,
 )
 
 
@@ -297,8 +300,8 @@ class RegistryLoader:
 
                     self.registry_path = get_config().paths.registry_path
                 except Exception as e:
-                    logger.debug("Config unavailable, using default registry path: %s", e)
-                    self.registry_path = DEFAULT_REGISTRY_PATH
+                    logger.warning("Config unavailable, using the lean registry: %s", e)
+                    self.registry_path = DEFAULT_LEAN_REGISTRY_PATH
         self._raw: dict[str, Any] = {}
         self._roles: dict[str, RoleConfig] = {}
         self._routing_hints: list[RoutingHint] = []
@@ -947,20 +950,36 @@ def main() -> int:
 # RegistryLoader handle through every call site. Lazily loads the default
 # registry once (validate_paths=False — read-only metadata lookup).
 _CTK_LOADER: "RegistryLoader | None" = None
+_CTK_RETRY_AFTER_S = 30.0
+_CTK_RETRY_AT = 0.0  # monotonic; a failed load is not retried before this
+_CTK_LOAD_LOCK = threading.Lock()
 
 
 def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
     """Per-role chat_template_kwargs from the default registry, or None.
 
     Cached + fail-soft: any load/lookup error returns None (no injection),
-    so a missing/invalid registry never breaks inference.
+    so a missing/invalid registry never breaks inference. A failed load is
+    logged and retried at most every _CTK_RETRY_AFTER_S (it runs per request).
     """
-    global _CTK_LOADER
+    global _CTK_LOADER, _CTK_RETRY_AT
     if _CTK_LOADER is None:
-        try:
-            _CTK_LOADER = RegistryLoader(validate_paths=False)
-        except Exception:
-            return None
+        # Serialize only the first load/failure transition. Without the lock,
+        # concurrent request threads all observe an empty loader and bypass
+        # the failure backoff while the first construction is still running.
+        with _CTK_LOAD_LOCK:
+            if _CTK_LOADER is None:
+                if time.monotonic() < _CTK_RETRY_AT:
+                    return None
+                try:
+                    _CTK_LOADER = RegistryLoader(validate_paths=False)
+                except Exception as exc:
+                    _CTK_RETRY_AT = time.monotonic() + _CTK_RETRY_AFTER_S
+                    logger.warning(
+                        "registry load failed; per-role chat_template_kwargs are dropped "
+                        "(retry in %.0f s): %s", _CTK_RETRY_AFTER_S, exc,
+                    )
+                    return None
     try:
         return _CTK_LOADER.get_role_chat_template_kwargs(role_name)
     except Exception:

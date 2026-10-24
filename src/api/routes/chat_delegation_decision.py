@@ -457,7 +457,6 @@ _DEFAULT_ARCHITECT_DECISION_N_TOKENS = 512
 _DEFAULT_NON_ARCHITECT_COMPUTE_N_TOKENS = 512
 _DEFAULT_NON_ARCHITECT_DECISION_N_TOKENS = 256
 _DEGRADED_ARCHITECT_BUDGET_ROLES = frozenset({"architect_general"})
-_STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE: frozenset[str] | None = None
 
 
 def _architect_budget_roles_from_stack_priors(
@@ -480,15 +479,7 @@ def _architect_budget_roles(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> frozenset[str]:
     """Return roles that receive architect delegation budgets."""
-    global _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE
-    if stack_priors_path == DEFAULT_STACK_PRIORS:
-        if _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE is None:
-            _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE = _architect_budget_roles_from_stack_priors(
-                stack_priors_path
-            )
-        derived = _STACK_PRIOR_ARCHITECT_BUDGET_ROLES_CACHE
-    else:
-        derived = _architect_budget_roles_from_stack_priors(stack_priors_path)
+    derived = _architect_budget_roles_from_stack_priors(stack_priors_path)
     return derived if derived is not None else _DEGRADED_ARCHITECT_BUDGET_ROLES
 
 

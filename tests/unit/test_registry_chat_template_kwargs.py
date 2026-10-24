@@ -69,3 +69,58 @@ def test_alias_thinking_kwarg_agrees_with_its_host():
                 f"{host_ctk['enable_thinking']}"
             )
     assert checked, "no alias with a thinking kwarg found: the guard would be vacuous"
+
+
+def test_registry_load_failure_backs_off_and_warns_once(monkeypatch, caplog):
+    # A3-19: a failing registry used to be re-parsed on every request, silently.
+    attempts = []
+
+    def _boom(**_kwargs):
+        attempts.append(1)
+        raise rl.RegistryError("broken registry")
+
+    monkeypatch.setattr(rl, "RegistryLoader", _boom)
+    monkeypatch.setattr(rl, "_CTK_LOADER", None)
+    monkeypatch.setattr(rl, "_CTK_RETRY_AT", 0.0)
+    with caplog.at_level("WARNING", logger=rl.logger.name):
+        for _ in range(100):
+            assert rl.chat_template_kwargs_for_role("frontdoor") is None
+        assert len(attempts) == 1
+        assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+        assert rl._CTK_RETRY_AT > rl.time.monotonic()
+        monkeypatch.setattr(rl, "_CTK_RETRY_AT", 0.0)  # backoff window elapsed
+        assert rl.chat_template_kwargs_for_role("frontdoor") is None
+    assert len(attempts) == 2
+
+
+def test_concurrent_registry_load_failure_shares_backoff(monkeypatch):
+    """Concurrent requests must not all parse the same broken registry."""
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    attempts = 0
+    attempts_lock = threading.Lock()
+
+    def _boom(**_kwargs):
+        nonlocal attempts
+        with attempts_lock:
+            attempts += 1
+        # Keep the failing constructor in flight while the other request
+        # threads pass the initial cache/backoff check.
+        time.sleep(0.05)
+        raise rl.RegistryError("broken registry")
+
+    monkeypatch.setattr(rl, "RegistryLoader", _boom)
+    monkeypatch.setattr(rl, "_CTK_LOADER", None)
+    monkeypatch.setattr(rl, "_CTK_RETRY_AT", 0.0)
+    start = threading.Barrier(12)
+
+    def _request():
+        start.wait()
+        return rl.chat_template_kwargs_for_role("frontdoor")
+
+    with ThreadPoolExecutor(max_workers=12) as workers:
+        assert list(workers.map(lambda _i: _request(), range(12))) == [None] * 12
+
+    assert attempts == 1

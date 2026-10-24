@@ -537,6 +537,26 @@ class TestForInstanceConvenience:
         with cpu_region_lock_for_instance("unknown_role", 999) as paths:
             assert paths == {}
 
+    def test_topology_import_failure_is_logged_and_not_cached(self, monkeypatch, caplog):
+        """A3-08: one broken stack_numa import used to disable every region lock until restart."""
+        import sys
+
+        from src.runtime import instance_topology
+
+        monkeypatch.setattr(instance_topology, "_INSTANCE_REGIONS_CACHE", None)
+        monkeypatch.setattr(instance_topology, "_INSTANCE_REGIONS_RETRY_AT", 0.0)
+        monkeypatch.setitem(sys.modules, "scripts.server.stack_numa", None)
+        with caplog.at_level("ERROR", logger=instance_topology.__name__):
+            assert instance_topology.get_instance_regions() == {}
+        assert any(r.levelname == "ERROR" for r in caplog.records)
+        assert instance_topology._INSTANCE_REGIONS_CACHE is None
+
+        fake = type(sys)("fake_stack_numa")
+        fake.NUMA_CONFIG = {"test_role": {"instances": [("0-23", 4)]}}
+        monkeypatch.setitem(sys.modules, "scripts.server.stack_numa", fake)
+        monkeypatch.setattr(instance_topology, "_INSTANCE_REGIONS_RETRY_AT", 0.0)  # backoff elapsed
+        assert instance_topology.get_instance_regions() == {("test_role", 0): frozenset({"q0"})}
+
 
 class TestSharedNativeBatchOccupancy:
     def test_shared_holders_report_fractional_load_and_block_exclusive(self, monkeypatch):

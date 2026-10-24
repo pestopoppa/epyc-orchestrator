@@ -397,6 +397,34 @@ def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: P
     assert live_stack_serving_slot_limits(missing) == {}
 
 
+def test_runtime_artifact_parse_is_cached_until_the_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3-01/A1-03: per-request readers must not re-parse an unchanged artifact."""
+    import os
+
+    import src.registry.stack_priors as sp
+
+    live = {"deployment_status": "live_stack"}
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", {"roles": {"frontdoor": live}})
+    parses = []
+    real_load = yaml.load
+    monkeypatch.setattr(
+        sp.yaml, "load", lambda text, Loader: parses.append(1) or real_load(text, Loader=Loader)
+    )
+
+    assert live_stack_role_ids(priors) == ["frontdoor"]
+    live_stack_role_records(priors)["frontdoor"]["deployment_status"] = "mutated"
+    assert live_stack_role_ids(priors) == ["frontdoor"]
+    assert len(parses) == 1
+
+    _write_yaml(priors, {"roles": {"frontdoor": live, "worker_general": live}})
+    st = priors.stat()
+    os.utime(priors, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert live_stack_role_ids(priors) == ["frontdoor", "worker_general"]
+    assert len(parses) == 2
+
+
 def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
     priors = _write_yaml(
         tmp_path / "stack_priors.yaml",
@@ -1494,6 +1522,24 @@ def test_compile_refuses_missing_descriptor_without_allow_incomplete(tmp_path: P
         )
 
     assert f"{_RETIRED_ARCHITECT_ROLE}: Missing model descriptor binding" in str(exc.value)
+
+
+def test_compile_refuses_when_stack_manifest_does_not_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A3-02: a broken scripts.server import compiled 'status: compiled', 0 gaps, 0 live roles."""
+    import sys
+
+    registry_path = _write_yaml(tmp_path / "registry.yaml", {"server_mode": {}, "roles": {}})
+    descriptor_path = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    monkeypatch.setitem(sys.modules, "scripts.server.stack_manifest", None)
+    kwargs = {"registry_path": registry_path, "descriptor_path": descriptor_path, "active_roles": set()}
+
+    with pytest.raises(StackPriorsCompileError, match="stack manifest unavailable"):
+        compile_stack_priors(**kwargs)
+    priors = compile_stack_priors(**kwargs, allow_incomplete=True)
+    assert priors["status"] == "compiled_with_gaps"
+    assert "stack manifest unavailable" in priors["known_global_gaps"]["*"][0]
 
 
 # --------------------------------------------------------------------------- #

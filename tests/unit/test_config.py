@@ -321,6 +321,29 @@ class TestPathsConfig:
             cfg = PathsConfig()
             assert cfg.raid_prefix == "/mnt/raid0/"
 
+    def test_project_root_without_registry_is_warned(self, monkeypatch, tmp_path, caplog) -> None:
+        """A3-M2: epyc-root's env.sh exports this name for a tree with no registry."""
+        monkeypatch.setenv("ORCHESTRATOR_PATHS_PROJECT_ROOT", str(tmp_path))
+        with caplog.at_level("WARNING", logger="src.config.models"):
+            assert PathsConfig().project_root == tmp_path
+        assert "ORCHESTRATOR_PATHS_PROJECT_ROOT" in caplog.text and str(tmp_path) in caplog.text
+
+    @pytest.mark.parametrize("inherited", [None, "/nonexistent/epyc-root"])
+    def test_env_sh_project_root_holds_the_registry(self, inherited) -> None:
+        """A3-M2: env.sh defaulted to the archived monorepo and honoured any inherited root."""
+        import subprocess
+
+        repo = Path(__file__).resolve().parents[2]
+        env = {k: v for k, v in os.environ.items() if not k.startswith("ORCHESTRATOR_PATHS_")}
+        if inherited:
+            env["ORCHESTRATOR_PATHS_PROJECT_ROOT"] = inherited
+        out = subprocess.run(
+            ["bash", "-c", 'source "$1" && printf "%s" "$ORCHESTRATOR_PATHS_REGISTRY_PATH"',
+             "bash", str(repo / "scripts/lib/env.sh")],
+            env=env, capture_output=True, text=True, check=True,
+        ).stdout
+        assert Path(out) == repo / "orchestration/model_registry.yaml"
+
 
 # ============================================================================
 # ServerURLsConfig.as_dict()
@@ -639,6 +662,30 @@ class TestTimeoutsConfig:
         assert cfg.ocr_pdf > 0
         assert cfg.health_check > 0
 
+    def test_every_timeout_field_honours_its_env_override(self, monkeypatch) -> None:
+        """A3-04: get_config() dropped TIMEOUTS_WORKER_CODER and had no ARCHITECT_CRITIC."""
+        import dataclasses
+
+        from src.config import TimeoutsSettings, _load_from_env
+
+        names = [f.name for f in dataclasses.fields(TimeoutsConfig)]
+        assert set(names) == set(TimeoutsSettings.model_fields)
+        expected = {name: 1000 + i for i, name in enumerate(names)}
+        for name, value in expected.items():
+            monkeypatch.setenv(f"ORCHESTRATOR_TIMEOUTS_{name.upper()}", str(value))
+        reset_config()
+        try:
+            for timeouts in (get_config().timeouts, _load_from_env().timeouts):
+                assert {name: getattr(timeouts, name) for name in names} == expected
+        finally:
+            reset_config()
+
+    def test_env_loader_default_request_matches_dataclass(self, monkeypatch) -> None:
+        from src.config import _load_from_env
+
+        monkeypatch.delenv("ORCHESTRATOR_TIMEOUTS_DEFAULT_REQUEST", raising=False)
+        assert _load_from_env().timeouts.default_request == TimeoutsConfig().default_request
+
 
 # ============================================================================
 # get_config() singleton behavior
@@ -691,6 +738,31 @@ class TestGetConfig:
         assert isinstance(cfg.timeouts, TimeoutsConfig)
         assert isinstance(cfg.monitor, MonitorConfigData)
         assert isinstance(cfg.paths, PathsConfig)
+
+    @pytest.mark.parametrize("value", ["1", "true", "on"])
+    def test_scalar_section_env_does_not_crash_config(self, monkeypatch, value) -> None:
+        """A3-M1: ORCHESTRATOR_<SECTION>=1 (e.g. the legacy REPL feature flag) must not fail get_config()."""
+        from src.config import OrchestratorSettings
+
+        sections = [n for n, f in OrchestratorSettings.model_fields.items() if f.default_factory]
+        assert {"repl", "chat", "server", "features"} <= set(sections)
+        for name in sections:
+            monkeypatch.setenv(f"ORCHESTRATOR_{name.upper()}", value)
+        monkeypatch.setenv("ORCHESTRATOR_REPL_TIMEOUT_SECONDS", "77")
+        get_config.cache_clear()
+        try:
+            cfg = get_config()
+        finally:
+            get_config.cache_clear()
+        assert cfg.repl.timeout_seconds == 77  # the section's own prefixed vars still apply
+
+    def test_json_section_env_still_overrides(self, monkeypatch) -> None:
+        monkeypatch.setenv("ORCHESTRATOR_ESCALATION", '{"max_retries": 9}')
+        get_config.cache_clear()
+        try:
+            assert get_config().escalation.max_retries == 9
+        finally:
+            get_config.cache_clear()
 
 
 def test_server_urls_bridge_survives_a_field_the_settings_model_lacks():

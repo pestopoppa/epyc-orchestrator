@@ -43,8 +43,12 @@ fi
 export ORCHESTRATOR_PATHS_LLM_ROOT="${ORCHESTRATOR_PATHS_LLM_ROOT:-/mnt/raid0/llm}"
 export LLM_ROOT="${ORCHESTRATOR_PATHS_LLM_ROOT}"
 
-# Project root - this repository
-export ORCHESTRATOR_PATHS_PROJECT_ROOT="${ORCHESTRATOR_PATHS_PROJECT_ROOT:-${LLM_ROOT}/claude}"
+# Project root - this repository, self-located. An inherited value is honoured only
+# if it holds the lean registry: epyc-root's env.sh exports the same name for itself.
+if [[ ! -f "${ORCHESTRATOR_PATHS_PROJECT_ROOT:-}/orchestration/model_registry.yaml" ]]; then
+  ORCHESTRATOR_PATHS_PROJECT_ROOT="${_PROJECT_ROOT}"
+fi
+export ORCHESTRATOR_PATHS_PROJECT_ROOT
 export PROJECT_ROOT="${ORCHESTRATOR_PATHS_PROJECT_ROOT}"
 
 # =============================================================================

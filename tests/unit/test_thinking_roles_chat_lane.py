@@ -34,10 +34,8 @@ REGISTRY_CTK = {"enable_thinking": True, "reasoning_effort": "medium"}
 @pytest.fixture(autouse=True)
 def _clean_features():
     reset_features()
-    cc._thinking_roles_cache = None
     yield
     reset_features()
-    cc._thinking_roles_cache = None
 
 
 @pytest.fixture

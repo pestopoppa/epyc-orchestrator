@@ -38,9 +38,13 @@ caller keep their exact prior meaning.
 from __future__ import annotations
 
 import functools
+import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Iterable, Literal, Mapping
+
+logger = logging.getLogger(__name__)
 
 
 # The four atomic quarters of the EPYC 9655's 96 physical cores.
@@ -396,6 +400,8 @@ def canonical_shape_for_regions(regions) -> str | None:
 # ── Derived module-level table (lazy import to avoid circulars) ─────────
 
 _INSTANCE_REGIONS_CACHE: dict[tuple[str, int], frozenset[str]] | None = None
+_INSTANCE_REGIONS_RETRY_AFTER_S = 30.0
+_INSTANCE_REGIONS_RETRY_AT = 0.0  # monotonic; a failed load is not retried before this
 
 
 def get_instance_regions() -> dict[tuple[str, int], frozenset[str]]:
@@ -404,17 +410,25 @@ def get_instance_regions() -> dict[tuple[str, int], frozenset[str]]:
     Memoized for cheap repeated access. The NUMA_CONFIG is effectively
     immutable at runtime, so caching is safe. Tests should use
     `build_instance_regions` directly with a synthetic config.
+
+    A failed stack_numa import (it raises at import on a malformed
+    stack_topology.yaml) returns {} — every region lock becomes a no-op — but is
+    logged at ERROR and retried after _INSTANCE_REGIONS_RETRY_AFTER_S, never cached.
     """
-    global _INSTANCE_REGIONS_CACHE
+    global _INSTANCE_REGIONS_CACHE, _INSTANCE_REGIONS_RETRY_AT
     if _INSTANCE_REGIONS_CACHE is None:
+        if time.monotonic() < _INSTANCE_REGIONS_RETRY_AT:
+            return {}
         try:
             from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
             _INSTANCE_REGIONS_CACHE = build_instance_regions(NUMA_CONFIG)
         except Exception:
-            # Defensive: if stack_numa import path differs in some
-            # deployment, return an empty mapping (lock layer treats
-            # missing entries as no-CPU-conflict → no-op blocking).
-            _INSTANCE_REGIONS_CACHE = {}
+            _INSTANCE_REGIONS_RETRY_AT = time.monotonic() + _INSTANCE_REGIONS_RETRY_AFTER_S
+            logger.error(
+                "instance topology unavailable: CPU-region locks are no-ops until it loads "
+                "(retry in %.0f s)", _INSTANCE_REGIONS_RETRY_AFTER_S, exc_info=True,
+            )
+            return {}
     return _INSTANCE_REGIONS_CACHE
 
 
