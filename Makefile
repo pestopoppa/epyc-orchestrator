@@ -222,7 +222,6 @@ coverage-orchestrator-slice:
 		tests/unit/test_script_lib_onboard.py \
 		tests/unit/test_seed_specialist_routing_main_and_retry.py \
 		tests/unit/test_seed_specialist_routing_helpers.py \
-		tests/unit/test_seed_specialist_routing_v2_helpers.py \
 		--cov=scripts/benchmark \
 		--cov=scripts/lib \
 		--cov-report=term-missing \
@@ -248,7 +247,6 @@ warnings-orchestrator-slice:
 		tests/unit/test_script_lib_onboard.py \
 		tests/unit/test_seed_specialist_routing_main_and_retry.py \
 		tests/unit/test_seed_specialist_routing_helpers.py \
-		tests/unit/test_seed_specialist_routing_v2_helpers.py \
 		tests/unit/test_seeding_legacy.py \
 		-W error::ResourceWarning \
 		-W error::DeprecationWarning \

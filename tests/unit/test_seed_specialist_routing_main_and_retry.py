@@ -21,10 +21,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_BENCH))
 
 
-_ROUTING_FILES = (
-    "seed_specialist_routing.py",
-    "seed_specialist_routing_v2.py",
-)
+_ROUTING_FILES = ("seed_specialist_routing.py",)
 
 _RETRIEVAL_OVERRIDE_KEYS = (
     "cost_lambda",

@@ -26,7 +26,7 @@ def _reset_seeding_shutdown_flag(monkeypatch):
 
     ``evaluate_question_per_role`` breaks out of its wave loop when
     ``state.shutdown`` is set; signal-handler tests in other files (e.g.
-    test_seed_specialist_routing_v2_helpers.py) leave it True, which made these
+    test_seed_specialist_routing_helpers.py) leave it True, which made these
     tests order-dependent under xdist.
     """
     monkeypatch.setattr(_MOD.state, "shutdown", False)

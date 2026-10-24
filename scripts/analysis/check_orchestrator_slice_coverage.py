@@ -17,7 +17,6 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "scripts/benchmark/seeding_injection.py": 100.0,
     "scripts/benchmark/seeding_orchestrator.py": 100.0,
     "scripts/benchmark/seed_specialist_routing.py": 100.0,
-    "scripts/benchmark/seed_specialist_routing_v2.py": 100.0,
 }
 
 
