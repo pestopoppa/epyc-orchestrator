@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import random
 import statistics
 from itertools import combinations
@@ -91,7 +92,19 @@ def hypervolume(
 
     if len(point_list) > exact_limit:
         return hypervolume_monte_carlo(valid, ref_tuple, samples=samples)
+    return _exact_hypervolume(tuple(valid), ref_tuple)
 
+
+@functools.lru_cache(maxsize=1024)
+def _exact_hypervolume(valid: tuple[tuple[float, ...], ...], ref: tuple[float, ...]) -> float:
+    """Exact inclusion-exclusion over all 2^n - 1 subsets of ``valid``.
+
+    Exponential: roughly doubles per frontier point (~1 s at 18 points, ~5 s at 20).
+    B5-01: memoized because a journal replay recomputes the same frontier hundreds of
+    times. The key is the ORDERED points: the summation order, and so the float result,
+    depends on it, so it must never be sorted or canonicalized.
+    """
+    dims = len(ref)
     total = 0.0
     for size in range(1, len(valid) + 1):
         sign = (-1) ** (size + 1)
@@ -99,7 +112,7 @@ def hypervolume(
             box_min = tuple(min(point[dim] for point in subset) for dim in range(dims))
             volume = 1.0
             for dim in range(dims):
-                volume *= max(0.0, box_min[dim] - ref_tuple[dim])
+                volume *= max(0.0, box_min[dim] - ref[dim])
             total += sign * volume
     return total
 

@@ -455,7 +455,8 @@ class ParetoArchive:
     def hypervolume(self, ref: tuple[float, ...] | None = None, tier: int | None = None) -> float:
         """Hypervolume indicator for one tier's frontier (its TierSpec reference point).
 
-        Uses inclusion-exclusion for 4D (exact, fast enough for <1000 entries).
+        Exact inclusion-exclusion: exponential in the frontier size (~1 s at 18 points);
+        repeated frontiers hit the pareto_math memo.
         """
         front = self._front(tier)
         if not front:
@@ -1333,10 +1334,10 @@ def pareto_archive_from_journal_rows(
 def _hypervolume_4d(
     points: list[tuple[float, ...]], ref: tuple[float, ...]
 ) -> float:
-    """Exact 4D hypervolume via inclusion-exclusion.
+    """Exact hypervolume via inclusion-exclusion (memoized in pareto_math).
 
-    For small frontiers (<100 entries), this is fast enough.
-    Falls back to 2D Monte Carlo approximation for very large frontiers.
+    Exponential: roughly doubles per frontier point (~1 s at 18, ~5 s at 20). Only above
+    100 points does it fall back to a deterministic Monte Carlo estimate.
     """
     return pareto_hypervolume(points, ref, exact_limit=100, samples=10000)
 
