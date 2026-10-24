@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from src.api.routes.chat_vision import (
+    _any_vl_server_reachable,
     _execute_vision_tool,
     _fallback_vl_port_for_role,
     _handle_multi_file_vision,
@@ -718,10 +719,12 @@ class TestHandleVisionRequest:
             await _handle_vision_request(request, primitives, state, "task123")
 
     @pytest.mark.asyncio
-    async def test_handle_vision_request_success(self):
+    async def test_handle_vision_request_success(self, monkeypatch):
         """Test successful vision request."""
         from src.api.models import ChatRequest
         from PIL import Image
+
+        monkeypatch.setenv("ORCHESTRATOR_VISION_VL_BACKEND", "auto")
 
         # Create a small test image
         img = Image.new("RGB", (100, 100), color="blue")
@@ -758,10 +761,12 @@ class TestHandleVisionRequest:
                 assert result == "The image is blue"
 
     @pytest.mark.asyncio
-    async def test_handle_vision_request_all_servers_fail(self):
+    async def test_handle_vision_request_all_servers_fail(self, monkeypatch):
         """Test vision request when all VL servers fail."""
         from src.api.models import ChatRequest
         from PIL import Image
+
+        monkeypatch.setenv("ORCHESTRATOR_VISION_VL_BACKEND", "auto")
 
         # Create a small test image
         img = Image.new("RGB", (100, 100), color="red")
@@ -793,6 +798,266 @@ class TestHandleVisionRequest:
 
                 with pytest.raises(RuntimeError, match="All vision paths failed"):
                     await _handle_vision_request(request, primitives, state, "task123")
+
+    @pytest.mark.asyncio
+    async def test_vl_reachability_probe_deduplicates_unreachable_aliases(
+        self, monkeypatch
+    ):
+        import asyncio
+
+        attempted = []
+
+        async def open_connection(host, port):
+            attempted.append((host, port))
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(asyncio, "open_connection", open_connection)
+
+        assert not await _any_vl_server_reachable(
+            [
+                ("worker_vision", "http://localhost:8086"),
+                ("vision_escalation", "http://localhost:8086/v1/chat/completions"),
+            ]
+        )
+
+        assert attempted == [("localhost", 8086)]
+
+    @pytest.mark.asyncio
+    async def test_vl_reachability_probe_finds_second_endpoint_within_deadline(
+        self, monkeypatch
+    ):
+        import asyncio
+
+        first_started = asyncio.Event()
+        first_cancelled = asyncio.Event()
+        writer = Mock()
+        writer.wait_closed = AsyncMock()
+
+        async def open_connection(_host, port):
+            if port == 8086:
+                first_started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    first_cancelled.set()
+            await first_started.wait()
+            return Mock(), writer
+
+        monkeypatch.setattr(asyncio, "open_connection", open_connection)
+
+        assert await _any_vl_server_reachable(
+            [
+                ("worker_vision", "http://localhost:8086"),
+                ("vision_escalation", "http://localhost:8087"),
+            ],
+            timeout_s=0.1,
+        )
+
+        assert first_cancelled.is_set()
+        writer.close.assert_called_once_with()
+        writer.wait_closed.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_vl_reachability_probe_bounds_and_cancels_pending_connects(
+        self, monkeypatch
+    ):
+        import asyncio
+
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def hanging_connection(_host, _port):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        monkeypatch.setattr(asyncio, "open_connection", hanging_connection)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+
+        assert not await asyncio.wait_for(
+            _any_vl_server_reachable(
+                [
+                    ("worker_vision", "http://localhost:8086"),
+                    ("vision_escalation", "http://localhost:8087"),
+                ],
+                timeout_s=0.02,
+            ),
+            timeout=0.1,
+        )
+
+        assert started.is_set()
+        assert cancelled.is_set()
+        assert loop.time() - start < 0.1
+
+    @pytest.mark.asyncio
+    async def test_vl_reachability_probe_bounds_writer_cleanup(self, monkeypatch):
+        import asyncio
+
+        cleanup_cancelled = asyncio.Event()
+        writer = Mock()
+
+        async def hanging_wait_closed():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleanup_cancelled.set()
+
+        writer.wait_closed = hanging_wait_closed
+        monkeypatch.setattr(
+            asyncio,
+            "open_connection",
+            AsyncMock(return_value=(Mock(), writer)),
+        )
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+
+        assert await asyncio.wait_for(
+            _any_vl_server_reachable(
+                [("worker_vision", "http://localhost:8086")], timeout_s=0.02
+            ),
+            timeout=0.1,
+        )
+
+        assert cleanup_cancelled.is_set()
+        assert loop.time() - start < 0.1
+        writer.close.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_vl_reachability_probe_closes_writer_when_cancelled(self, monkeypatch):
+        import asyncio
+
+        writer = Mock()
+        closed = asyncio.Event()
+        close_started = asyncio.Event()
+
+        async def wait_closed():
+            close_started.set()
+            await closed.wait()
+
+        writer.wait_closed = wait_closed
+        monkeypatch.setattr(
+            asyncio,
+            "open_connection",
+            AsyncMock(return_value=(Mock(), writer)),
+        )
+
+        task = asyncio.create_task(
+            _any_vl_server_reachable([("worker_vision", "http://localhost:8086")])
+        )
+        await close_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        writer.close.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_server_only_cold_refusal_precedes_ocr_and_structured_analysis(
+        self, monkeypatch
+    ):
+        import asyncio
+        from src.api.models import ChatRequest
+
+        monkeypatch.setenv("ORCHESTRATOR_VISION_VL_BACKEND", "server")
+        request = ChatRequest(
+            prompt="analyze this diagram",
+            image_base64=base64.b64encode(b"synthetic image bytes").decode("ascii"),
+        )
+        probed = []
+
+        async def unreachable(vl_servers, *, timeout_s):
+            assert timeout_s == 0.25
+            probed.extend(vl_servers)
+            return False
+
+        monkeypatch.setattr(
+            "src.api.routes.chat_vision._any_vl_server_reachable", unreachable
+        )
+        monkeypatch.setattr(
+            "src.api.routes.chat_vision._vl_url_for_role",
+            lambda _role: "http://localhost:8086",
+        )
+        structured = Mock(return_value=True)
+        monkeypatch.setattr(
+            "src.api.routes.chat_vision._needs_structured_analysis", structured
+        )
+
+        with (
+            patch("src.services.document_client.get_document_client") as get_document_client,
+            patch("httpx.AsyncClient") as http_client,
+        ):
+            with pytest.raises(RuntimeError, match="All vision paths failed"):
+                await asyncio.wait_for(
+                    _handle_vision_request(request, Mock(), Mock(), "task-cold"),
+                    timeout=0.25,
+                )
+
+        assert probed == [
+            ("worker_vision", "http://localhost:8086"),
+            ("vision_escalation", "http://localhost:8086"),
+        ]
+        structured.assert_not_called()
+        get_document_client.assert_not_called()
+        http_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_server_only_reachable_endpoint_keeps_ocr_and_vl_request(
+        self, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from src.api.models import ChatRequest
+
+        monkeypatch.setenv("ORCHESTRATOR_VISION_VL_BACKEND", "server")
+        request = ChatRequest(
+            prompt="What is in this image?",
+            image_base64=base64.b64encode(b"synthetic image bytes").decode("ascii"),
+        )
+        reachable = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "src.api.routes.chat_vision._any_vl_server_reachable", reachable
+        )
+        monkeypatch.setattr(
+            "src.api.routes.chat_vision._vl_url_for_role",
+            lambda role: f"http://{role}",
+        )
+
+        vl_response = MagicMock(status_code=200)
+        vl_response.json.return_value = {
+            "choices": [{"message": {"content": "A healthy vision answer"}}]
+        }
+        http_client = AsyncMock()
+        http_client.__aenter__.return_value = http_client
+        http_client.post.return_value = vl_response
+
+        with (
+            patch("src.services.document_client.get_document_client") as get_document_client,
+            patch("httpx.AsyncClient", return_value=http_client),
+            patch(
+                "src.api.routes.chat_vision._get_config",
+                return_value=SimpleNamespace(
+                    timeouts=SimpleNamespace(vision_inference=1),
+                    server_urls=SimpleNamespace(api_url="http://api"),
+                ),
+            ),
+        ):
+            get_document_client.return_value.ocr_image = AsyncMock(
+                return_value=SimpleNamespace(text="")
+            )
+            result = await _handle_vision_request(
+                request, Mock(), Mock(), "task-healthy", force_server="worker_vision"
+            )
+
+        assert result == "A healthy vision answer"
+        reachable.assert_awaited_once_with(
+            [("worker_vision", "http://worker_vision")], timeout_s=0.25
+        )
+        get_document_client.return_value.ocr_image.assert_awaited_once()
+        http_client.post.assert_awaited_once()
+        assert http_client.post.await_args.args[0].endswith("/v1/chat/completions")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -831,6 +1096,7 @@ class TestHandleVisionRequest:
         http_client.__aenter__.return_value = http_client
         http_client.post.side_effect = post
 
+        reachability_probe = AsyncMock(return_value=True)
         with (
             patch("src.services.document_client.get_document_client") as get_document_client,
             patch("httpx.AsyncClient", return_value=http_client),
@@ -844,6 +1110,10 @@ class TestHandleVisionRequest:
             patch(
                 "src.api.routes.chat_vision._vl_url_for_role",
                 side_effect=lambda role: f"http://{role}",
+            ),
+            patch(
+                "src.api.routes.chat_vision._any_vl_server_reachable",
+                new=reachability_probe,
             ),
         ):
             get_document_client.return_value.ocr_image = AsyncMock(
@@ -860,3 +1130,4 @@ class TestHandleVisionRequest:
 
         assert sum(url.endswith("/vision/analyze") for url in posts) == int(expect_legacy)
         assert len(posts) == 2 + int(expect_legacy)
+        assert reachability_probe.await_count == int(backend == "server")

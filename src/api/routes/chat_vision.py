@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
 )
+_SERVER_ONLY_VL_PREFLIGHT_TIMEOUT_S = 0.25
 
 if TYPE_CHECKING:
     from src.api.models import ChatRequest
@@ -165,6 +166,92 @@ def _vl_url_for_port(
     return f"http://localhost:{vl_port}"
 
 
+async def _any_vl_server_reachable(
+    vl_servers: list[tuple[str, str]],
+    *,
+    timeout_s: float = _SERVER_ONLY_VL_PREFLIGHT_TIMEOUT_S,
+) -> bool:
+    """Return whether any selected VL endpoint accepts a TCP connection.
+
+    This is a connect-only check used before optional OCR in explicit
+    server-only mode. A single deadline bounds DNS lookup, connection setup,
+    and writer cleanup across the selected endpoints.
+    """
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_s)
+    checked: set[tuple[str, int]] = set()
+    endpoints: list[tuple[str, int]] = []
+    connected = asyncio.Event()
+
+    for _role, url in vl_servers:
+        try:
+            parsed = urlparse(url)
+            scheme = parsed.scheme.lower()
+            host = parsed.hostname
+            port = parsed.port or (443 if scheme == "https" else 80)
+        except ValueError:
+            continue
+        if scheme not in {"http", "https"} or not host:
+            continue
+
+        endpoint = (host.lower(), port)
+        if endpoint not in checked:
+            checked.add(endpoint)
+            endpoints.append((host, port))
+
+    async def _connect(host: str, port: int) -> bool:
+        writer = None
+        try:
+            # TLS is intentionally left to the eventual HTTP client. The
+            # preflight only asks whether the configured socket can connect.
+            _reader, writer = await asyncio.open_connection(host, port)
+            connected.set()
+            return True
+        except (OSError, ValueError):
+            return False
+        finally:
+            if writer is not None:
+                writer.close()
+                remaining = deadline - loop.time()
+                if remaining > 0:
+                    try:
+                        await asyncio.wait_for(writer.wait_closed(), timeout=remaining)
+                    except Exception:
+                        pass
+
+    pending_connects = {
+        asyncio.create_task(_connect(host, port)) for host, port in endpoints
+    }
+    connected_waiter = asyncio.create_task(connected.wait())
+    try:
+        while pending_connects:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return connected.is_set()
+            done, unfinished = await asyncio.wait(
+                pending_connects | {connected_waiter},
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if connected.is_set():
+                return True
+            if not done:
+                return False
+            for task in done & pending_connects:
+                if not task.cancelled():
+                    task.exception()  # Retrieve unexpected endpoint errors.
+            pending_connects.intersection_update(unfinished)
+        return connected.is_set()
+    finally:
+        pending = pending_connects | {connected_waiter}
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def _handle_vision_request(
     request: "ChatRequest",
     primitives: "LLMPrimitives",
@@ -214,6 +301,31 @@ async def _handle_vision_request(
     if not image_b64:
         raise RuntimeError("No image data provided (need image_path or image_base64)")
 
+    # ── Base64 size guard (50MB max for images) ─────────────────────────
+    MAX_IMG_B64_SIZE = 50 * 1024 * 1024  # 50MB
+    if len(image_b64) > MAX_IMG_B64_SIZE:
+        raise RuntimeError(f"Image too large ({len(image_b64) // 1024 // 1024}MB, max 50MB)")
+
+    # Resolve the selected server endpoints before optional preprocessing. In
+    # server-only mode, a cold request should refuse before OCR or structured
+    # analysis can wait on services that cannot produce a permitted answer.
+    if force_server == "worker_vision":
+        vl_servers = [("worker_vision", _vl_url_for_role("worker_vision"))]
+    elif force_server == "vision_escalation":
+        vl_servers = [("vision_escalation", _vl_url_for_role("vision_escalation"))]
+    else:
+        vl_servers = [
+            ("worker_vision", _vl_url_for_role("worker_vision")),
+            ("vision_escalation", _vl_url_for_role("vision_escalation")),
+        ]
+
+    server_only = os.environ.get("ORCHESTRATOR_VISION_VL_BACKEND", "auto").lower() == "server"
+    if server_only and not await _any_vl_server_reachable(
+        vl_servers, timeout_s=_SERVER_ONLY_VL_PREFLIGHT_TIMEOUT_S
+    ):
+        last_error = "no selected VL server accepted a connection before the preflight deadline"
+        raise RuntimeError(f"All vision paths failed. Last error: {last_error}")
+
     # ── Always-on OCR pre-processing (~1s, deterministic, port 9001) ─────
     ocr_text = ""
     try:
@@ -230,11 +342,6 @@ async def _handle_vision_request(
     except Exception as e:
         logger.warning(f"OCR pre-processing failed (continuing without): {e}")
         ocr_text = ""
-
-    # ── Base64 size guard (50MB max for images) ─────────────────────────
-    MAX_IMG_B64_SIZE = 50 * 1024 * 1024  # 50MB
-    if len(image_b64) > MAX_IMG_B64_SIZE:
-        raise RuntimeError(f"Image too large ({len(image_b64) // 1024 // 1024}MB, max 50MB)")
 
     # ── Structured analysis for document/diagram prompts ───────────────
     structured_context = ""
@@ -315,17 +422,7 @@ async def _handle_vision_request(
         "stop": [QWEN_STOP],
     }
 
-    # Try VL servers — constrained if force_server is set
-    if force_server == "worker_vision":
-        vl_servers = [("worker_vision", _vl_url_for_role("worker_vision"))]
-    elif force_server == "vision_escalation":
-        vl_servers = [("vision_escalation", _vl_url_for_role("vision_escalation"))]
-    else:
-        vl_servers = [
-            ("worker_vision", _vl_url_for_role("worker_vision")),
-            ("vision_escalation", _vl_url_for_role("vision_escalation")),
-        ]
-
+    # Try VL servers — constrained if force_server is set.
     last_error = None
     for server_name, server_url in vl_servers:
         try:
@@ -374,7 +471,7 @@ async def _handle_vision_request(
     # A server-only deployment has no permitted CLI/legacy fallback. The
     # legacy endpoint can otherwise spend another connect timeout probing the
     # same unavailable server before refusing the request.
-    if os.environ.get("ORCHESTRATOR_VISION_VL_BACKEND", "auto").lower() == "server":
+    if server_only:
         raise RuntimeError(f"All vision paths failed. Last error: {last_error}")
 
     # All VL servers failed — try legacy vision pipeline as last resort
