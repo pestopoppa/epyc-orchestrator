@@ -16,9 +16,7 @@ from src.features import reset_features
 
 
 @pytest.mark.asyncio
-async def test_disconnect_during_first_streamed_generation_sets_backend_cancel(
-    monkeypatch
-):
+async def test_disconnect_during_first_streamed_generation_sets_backend_cancel(monkeypatch):
     """The route has not returned StreamingResponse while it awaits its first event."""
     started = threading.Event()
     observed_cancel = threading.Event()
@@ -58,6 +56,7 @@ async def test_disconnect_during_first_streamed_generation_sets_backend_cancel(
     state = get_state()
     state.registry = MagicMock()
     import src.llm_primitives as llm_primitives_module
+
     monkeypatch.setattr(llm_primitives_module, "LLMPrimitives", lambda **_kwargs: primitives)
 
     class DisconnectingRequest:
