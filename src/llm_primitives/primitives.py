@@ -28,6 +28,7 @@ from src.workload_model import infer_workload_class
 
 
 _NO_PROMPT_USAGE_ATTEMPT = object()
+_NO_OUTPUT_USAGE_ATTEMPT = object()
 
 
 class _RequestPromptUsage:
@@ -63,6 +64,52 @@ class _RequestPromptUsage:
             if self._calls == 0 or not self._complete or self._pending:
                 return None
             return self._total
+
+
+class _RequestOutputUsage:
+    """Thread-safe sum of native reported output counts in one request scope."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = 0
+        self._total = 0
+        self._complete = True
+        self._pending: set[object] = set()
+        self._sources: set[str] = set()
+
+    def begin(self) -> object:
+        token = object()
+        with self._lock:
+            self._pending.add(token)
+        return token
+
+    def record(self, value: Any, source: Any, token: object | None = None) -> None:
+        with self._lock:
+            if token is not None:
+                if token not in self._pending:
+                    return
+                self._pending.remove(token)
+            self._calls += 1
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                or not isinstance(source, str)
+                or not source
+            ):
+                self._complete = False
+                return
+            self._total += value
+            self._sources.add(source)
+
+    def snapshot(self) -> tuple[int | None, str, list[str]]:
+        with self._lock:
+            complete = self._calls > 0 and self._complete and not self._pending
+            return (
+                self._total if complete else None,
+                "reported" if complete else "unknown",
+                sorted(self._sources),
+            )
 
 
 class LLMPrimitives(
@@ -276,6 +323,9 @@ class LLMPrimitives(
         self._request_prompt_usage_ctx: contextvars.ContextVar[_RequestPromptUsage | None] = (
             contextvars.ContextVar("llm_primitives_request_prompt_usage", default=None)
         )
+        self._request_output_usage_ctx: contextvars.ContextVar[_RequestOutputUsage | None] = (
+            contextvars.ContextVar("llm_primitives_request_output_usage", default=None)
+        )
         # HS-4 P0.2: typed /v1 request keys stamped onto the inference trace.
         # Instance-level (not a contextvar) because /v1 builds one primitives
         # object per request and its streaming body runs in a different context
@@ -461,6 +511,37 @@ class LLMPrimitives(
         if collector is not None:
             collector.record(value, token)
 
+    def get_request_output_usage(self) -> tuple[int | None, str, list[str]]:
+        """Return complete native decoded-output counts and their parser sources."""
+        collector = self._request_output_usage_ctx.get()
+        return collector.snapshot() if collector is not None else (None, "unknown", [])
+
+    def mark_request_output_usage_unknown(self) -> None:
+        """Invalidate request output usage after unmetered generation."""
+        collector = self._request_output_usage_ctx.get()
+        if collector is not None:
+            collector.record(None, None)
+
+    def _begin_request_output_tokens(self) -> tuple[_RequestOutputUsage, object] | None:
+        collector = self._request_output_usage_ctx.get()
+        return (collector, collector.begin()) if collector is not None else None
+
+    def _record_request_output_tokens(
+        self,
+        value: Any,
+        source: Any,
+        attempt: tuple[_RequestOutputUsage, object] | None | object = _NO_OUTPUT_USAGE_ATTEMPT,
+    ) -> None:
+        if attempt is None:
+            return
+        if attempt is _NO_OUTPUT_USAGE_ATTEMPT:
+            collector = self._request_output_usage_ctx.get()
+            token = None
+        else:
+            collector, token = attempt
+        if collector is not None:
+            collector.record(value, source, token)
+
     def get_max_queue_wait_ms(self) -> int | None:
         """Get request-local cross-role contention gate budget, if set.
 
@@ -545,6 +626,9 @@ class LLMPrimitives(
         token_prompt_usage = None
         if self._request_prompt_usage_ctx.get() is None:
             token_prompt_usage = self._request_prompt_usage_ctx.set(_RequestPromptUsage())
+        token_output_usage = None
+        if self._request_output_usage_ctx.get() is None:
+            token_output_usage = self._request_output_usage_ctx.set(_RequestOutputUsage())
         try:
             yield
         finally:
@@ -567,6 +651,8 @@ class LLMPrimitives(
             self._max_queue_wait_ms_ctx.reset(token_queue_wait)
             if token_prompt_usage is not None:
                 self._request_prompt_usage_ctx.reset(token_prompt_usage)
+            if token_output_usage is not None:
+                self._request_output_usage_ctx.reset(token_output_usage)
 
     def _remaining_deadline_s(self) -> float | None:
         """Return remaining request deadline in seconds, if any."""

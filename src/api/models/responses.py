@@ -105,6 +105,23 @@ class ChatResponse(BaseModel):
             "was still in flight when the response finalized."
         ),
     )
+    output_tokens_reported: int | None = Field(
+        default=None,
+        description=(
+            "Complete request-local sum of native server-reported decoded output tokens; "
+            "null if no generation count was observed exactly or any attempted generation "
+            "was incomplete, failed, or unmetered. Includes provider-reported reasoning and "
+            "tool-call output; excludes tool-return text and embedding work."
+        ),
+    )
+    output_tokens_status: str = Field(
+        default="unknown",
+        description="reported only when every generation attempt has exact native output usage",
+    )
+    output_tokens_sources: list[str] = Field(
+        default_factory=list,
+        description="Native response fields contributing to output_tokens_reported.",
+    )
     elapsed_seconds: float = Field(..., description="Total processing time")
     mock_mode: bool = Field(..., description="Whether mock mode was used")
     real_mode: bool = Field(default=False, description="Whether real inference was used")

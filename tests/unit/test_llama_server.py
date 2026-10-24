@@ -311,6 +311,8 @@ class TestLlamaServerBackend:
         assert result.success is True
         assert result.output == "Hello world"
         assert result.tokens_generated == 5
+        assert result.output_tokens_reported == 5
+        assert result.output_tokens_source == "llama_server:/completion.tokens_predicted"
         assert result.generation_speed == 33.0
         assert result.partial is False
         assert result.degraded is False
@@ -548,6 +550,7 @@ class TestLlamaServerBackend:
         assert result.degraded is True
         assert result.failure_reason == "read_timeout"
         assert result.completion_reason == "read_timeout_partial"
+        assert result.output_tokens_reported is None
 
     def test_infer_stream_text_read_timeout_covers_full_budget(self, role_config):
         """/completion streaming read MUST equal the request budget, not min(_,120).
@@ -704,6 +707,41 @@ class TestLlamaServerBackend:
         assert result.output == chunk
         assert result.completion_reason == "length"
         assert result.tokens_generated == 8
+        assert result.output_tokens_reported is None
+
+    def test_chat_completions_stream_native_zero_is_reported_without_changing_legacy_estimate(
+        self, role_config
+    ):
+        config = ServerConfig(base_url="http://test:8080", use_chat_completions=True)
+        backend = LlamaServerBackend(config=config)
+        role_config.name = "frontdoor"
+        request = InferenceRequest(role="frontdoor", prompt="Hello", n_tokens=8)
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"ok"}}]}'
+                yield ('data: {"choices":[{"delta":{},"finish_reason":"length"}],'
+                       '"timings":{"predicted_n":0}}')
+                yield "data: [DONE]"
+
+        with patch.object(backend.client, "stream", return_value=_StreamResponse()):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.output_tokens_reported == 0
+        assert result.output_tokens_source == (
+            "llama_server:/v1/chat/completions.stream.timings.predicted_n"
+        )
+        # The new exact field does not reinterpret the legacy text/chunk estimate.
+        assert result.tokens_generated > 0
 
     def test_health_check_success(self):
         """Test health check with healthy server."""
@@ -877,12 +915,49 @@ class TestEarlyStopTiming:
         assert result.predicted_per_second > 0, "Early-stop should still produce TPS"
         assert result.prompt_tokens is None
         assert result.cached_prompt_tokens is None
+        assert result.output_tokens_reported is None
         assert "prompt_n" not in result.timings
         assert "cache_n" not in result.timings
         assert "prompt_ms" not in result.timings
 
 
 class TestCompletionStreamPrefillTimings:
+    def test_token_id_stream_reports_native_terminal_count_and_early_close_is_unknown(
+        self, role_config
+    ):
+        backend = LlamaServerBackend(base_url="http://test:8080")
+
+        class FakeResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"tokens":[1,2]}'
+                yield 'data: {"tokens":[],"stop":true,"tokens_predicted":2}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with patch.object(backend.client, "stream", return_value=FakeResponse()):
+            request = InferenceRequest(role="test_role", prompt="test", n_tokens=8)
+            assert [token for token, _ in backend.infer_stream(role_config, request)] == [1, 2]
+            assert request.stream_output_tokens_reported == 2
+            assert request.stream_output_tokens_source == (
+                "llama_server:/completion.stream.tokens_predicted"
+            )
+
+        with patch.object(backend.client, "stream", return_value=FakeResponse()):
+            request = InferenceRequest(role="test_role", prompt="test", n_tokens=8)
+            stream = backend.infer_stream(role_config, request)
+            next(stream)
+            stream.close()
+            assert request.stream_output_tokens_reported is None
+
     def test_stream_carries_server_prefill_counts_including_zero_cache(self, role_config):
         backend = LlamaServerBackend(base_url="http://test:8080")
         request = InferenceRequest(role="test_role", prompt="test", n_tokens=8, timeout=30)
@@ -908,6 +983,10 @@ class TestCompletionStreamPrefillTimings:
             result = backend.infer_stream_text(role_config, request)
 
         assert result.prompt_tokens == 7
+        assert result.output_tokens_reported == 1
+        assert result.output_tokens_source == (
+            "llama_server:/completion.stream.tokens_predicted"
+        )
         assert result.cached_prompt_tokens == 0
         assert result.timings["prompt_n"] == 7
         assert result.timings["cache_n"] == 0
@@ -963,6 +1042,10 @@ class TestChatCompletionsLogprobs:
         assert captured["logprobs"] is True
         assert captured["top_logprobs"] == 5
         assert result.success is True
+        assert result.output_tokens_reported == 1
+        assert result.output_tokens_source == (
+            "llama_server:/v1/chat/completions.usage.completion_tokens"
+        )
         assert result.completion_probabilities == [
             {"token": "4", "logprob": -0.05, "top_logprobs": []}
         ]

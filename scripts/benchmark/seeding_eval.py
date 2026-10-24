@@ -374,6 +374,33 @@ def _build_role_result(
     # `task_failure` and were scored as WRONG ANSWERS: absence reported as
     # failure. See src/autopilot_core/measurement_guards.py.
     error_type = _classify_error(error, resp)
+    _output_raw = resp.get("output_tokens_reported")
+    _output_status = resp.get("output_tokens_status", "unknown")
+    _output_sources_raw = resp.get("output_tokens_sources", [])
+    output_tokens_sources_valid = (
+        isinstance(_output_sources_raw, list)
+        and bool(_output_sources_raw)
+        and all(
+            isinstance(source, str) and bool(source.strip())
+            for source in _output_sources_raw
+        )
+    )
+    output_tokens_sources = (
+        list(_output_sources_raw) if output_tokens_sources_valid else []
+    )
+    output_tokens_reported = (
+        _output_raw
+        if _output_status == "reported"
+        and error_type != "infrastructure"
+        and output_tokens_sources_valid
+        and isinstance(_output_raw, int)
+        and not isinstance(_output_raw, bool)
+        and _output_raw >= 0
+        else None
+    )
+    output_tokens_status = "reported" if output_tokens_reported is not None else "unknown"
+    if output_tokens_status != "reported":
+        output_tokens_sources = []
 
     if error_type == "infrastructure":
         passed = None
@@ -417,6 +444,9 @@ def _build_role_result(
         error=error,
         error_type=error_type,
         tokens_generated=resp.get("tokens_generated", 0),
+        output_tokens_reported=output_tokens_reported,
+        output_tokens_status=output_tokens_status,
+        output_tokens_sources=output_tokens_sources,
         turns=resp.get("turns", 0),
         # Preserve the API's legacy approximate usage field independently from
         # exact prompt-side usage below.

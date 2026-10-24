@@ -1006,6 +1006,7 @@ class InferenceMixin:
             _ms_port,
         )
         prompt_usage_attempt = self._begin_request_prompt_tokens()
+        output_usage_attempt = self._begin_request_output_tokens()
         try:
             with inference_lock(
                 role,
@@ -1027,6 +1028,7 @@ class InferenceMixin:
                 "error": str(exc),
             })
             self._record_request_prompt_tokens(None, prompt_usage_attempt)
+            self._record_request_output_tokens(None, None, output_usage_attempt)
             if "lock timeout" in str(exc).lower() or "cancelled" in str(exc).lower():
                 log.warning(
                     "Inference aborted before model call (role=%s, transport=model_server, elapsed_ms=%.1f): %s",
@@ -1048,6 +1050,7 @@ class InferenceMixin:
             # The backend answered, but this path does not expose a finalized per-call
             # usage record when context validation raises. Keep the request total unknown.
             self._record_request_prompt_tokens(None, prompt_usage_attempt)
+            self._record_request_output_tokens(None, None, output_usage_attempt)
             raise
         call_meta: dict[str, Any] = {
             "role": role,
@@ -1084,6 +1087,15 @@ class InferenceMixin:
         self._set_last_inference_meta(call_meta)
         self._record_request_prompt_tokens(
             call_meta.get("prompt_tokens"), prompt_usage_attempt
+        )
+        self._record_request_output_tokens(
+            getattr(result, "output_tokens_reported", None)
+            if result.success
+            and not result.partial
+            and getattr(result, "completion_reason", "") != "read_timeout"
+            else None,
+            getattr(result, "output_tokens_source", None),
+            output_usage_attempt,
         )
         if _is_frontdoor_role(role) and _frontdoor_trace_enabled():
             log.warning(
@@ -1403,6 +1415,7 @@ class InferenceMixin:
         lifecycle_token = bind_lifecycle_context(**lifecycle_identity)
 
         prompt_usage_attempt = None
+        output_usage_attempt = None
         try:
             # Circuit breaker: fast-fail if backend is known to be down
             if backend_url and self.health_tracker:
@@ -1480,6 +1493,7 @@ class InferenceMixin:
                     kv_admission=pool_admission.admission_record(pool_ticket)
                 )
             prompt_usage_attempt = self._begin_request_prompt_tokens()
+            output_usage_attempt = self._begin_request_output_tokens()
             try:
                 with lock_ctx:
                     request.timeout = self._clamp_timeout_to_request_budget(request.timeout)
@@ -1688,6 +1702,7 @@ class InferenceMixin:
                     "error": str(exc),
                 })
                 self._record_request_prompt_tokens(None, prompt_usage_attempt)
+                self._record_request_output_tokens(None, None, output_usage_attempt)
                 if "lock timeout" in str(exc).lower() or "cancelled" in str(exc).lower():
                     log.warning(
                         "Inference aborted before backend response (role=%s, transport=%s, elapsed_ms=%.1f): %s",
@@ -1791,7 +1806,18 @@ class InferenceMixin:
                 from src.scheduling.kv_pool_admission import get_shared_pool_admission
 
                 get_shared_pool_admission().report_pool_exhausted(backend_url)
+            # The context-overflow branch is a failed generation attempt even if its
+            # backend-shaped result happens to carry a token count.
             _raise_if_context_overflow(result, role, backend_url)
+            self._record_request_output_tokens(
+                getattr(result, "output_tokens_reported", None)
+                if result.success
+                and not result.partial
+                and getattr(result, "completion_reason", "") != "read_timeout"
+                else None,
+                getattr(result, "output_tokens_source", None),
+                output_usage_attempt,
+            )
             if max_tokens_clamp is not None:
                 call_meta["max_tokens_clamped"] = dict(max_tokens_clamp)
                 reason = str(getattr(result, "completion_reason", "") or "")
@@ -1986,6 +2012,11 @@ class InferenceMixin:
 
         try:
             # Run async batch in sync context
+            # WorkerPoolManager returns text only and has no native output-usage
+            # carrier; its generation (including a failed attempt before fallback)
+            # makes the whole request aggregate unknown.
+            self.mark_request_prompt_usage_unknown()
+            self.mark_request_output_usage_unknown()
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
@@ -2087,6 +2118,7 @@ class InferenceMixin:
             stream=True,  # Enable streaming for per-token monitoring
         )
         request.timeout = self._clamp_timeout_to_request_budget(request.timeout)
+        output_usage_attempt = self._begin_request_output_tokens()
 
         output_tokens = []
         from src.inference_lock import inference_lock
@@ -2114,6 +2146,9 @@ class InferenceMixin:
                     health = monitor.get_health()
                     # Decode partial output
                     partial_text = self.model_server.decode_tokens(output_tokens)
+                    self._record_request_output_tokens(
+                        None, None, output_usage_attempt
+                    )
                     return LLMResult(
                         text=partial_text,
                         aborted=True,
@@ -2126,6 +2161,11 @@ class InferenceMixin:
         # Completed without abort
         health = monitor.get_health()
         full_text = self.model_server.decode_tokens(output_tokens)
+        self._record_request_output_tokens(
+            getattr(request, "stream_output_tokens_reported", None),
+            getattr(request, "stream_output_tokens_source", None),
+            output_usage_attempt,
+        )
         self.total_tokens_generated += len(output_tokens)
 
         return LLMResult(
