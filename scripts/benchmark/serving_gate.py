@@ -422,11 +422,26 @@ def judge_role(out, items, role, tag, spec_label, phase_info):
               'regression_given_baseline_pass': cp_block(reg, bpass),
               'denominator_note': 'regression rate = k / n_clean (filed spec); gains rate = k / baseline-FAIL clean prompts; regression_given_baseline_pass is informational'})
     r['regression_upper_95_one_sided'] = r['regressions']['one_sided_95_upper']
+    r['net_paired'] = net_paired(reg, gain, sum(1 for x in rows if x['outcome'] == 'SAME_PASS'), sum(1 for x in rows if x['outcome'] == 'SAME_FAIL'))
     if aa_id != n: r['verdict'] = 'VOID_AA'
     elif not guards_ok: r['verdict'] = 'VOID_GUARDS'
     elif clean < MIN_N: r['verdict'] = 'INSUFFICIENT_N'
     else: r['verdict'] = 'PASS' if r['regression_upper_95_one_sided'] < THRESHOLD else 'FAIL'
+    r['verdict_strict_upper_bound_informational'] = r['verdict']
+    if r['verdict'] in ('PASS', 'FAIL'): r['verdict'] = r['net_paired']['rule_verdict']   # operator rule 2026-10-21 decides; the 5% upper-bound reading is informational
     return r
+
+RULE_SHA256 = '350a2a2031495f2a0e6334c507b4bbcbcc8cc4e64a995187761d2db92979ffb3'   # PREDECLARED_RULE.md, 'Net, paired' (operator 2026-10-21)
+
+def net_paired(reg, gain, both_pass=0, both_fail=0, alpha=0.05):
+    """Q38-T10.1a: predeclared verdict inputs. R = base PASS & spec FAIL, G = base FAIL & spec PASS over clean prompts;
+    FAIL iff one-sided exact sign/McNemar test P(X >= R | n = R+G, p = .5) < alpha (H1: regressions exceed gains)."""
+    nd = reg + gain
+    p_one = (sum(math.comb(nd, i) for i in range(reg, nd + 1)) / 2 ** nd) if nd else 1.0
+    p_two = min(1.0, 2 * sum(math.comb(nd, i) for i in range(0, min(reg, gain) + 1)) / 2 ** nd) if nd else 1.0
+    return {'R': reg, 'G': gain, 'discordant': nd, 'both_pass': both_pass, 'both_fail': both_fail,
+            'p_one_sided_exact_R_gt_G': p_one, 'p_two_sided_exact': p_two, 'alpha': alpha, 'rule_sha256': RULE_SHA256,
+            'rule_verdict': 'FAIL' if p_one < alpha else 'PASS', 'strict_reading_informational': 'FAIL' if reg > 0 else 'PASS'}
 
 def judge(out, status_by_phase):
     items, digest = load_corpus()
@@ -447,7 +462,7 @@ def judge(out, status_by_phase):
     (out / 'per_prompt.tsv').write_text('\n'.join(tsv) + '\n')
     line = {}
     for ph, rr in res.items():
-        line[ph] = {k: rr.get(k) for k in ('verdict', 'aa_identical', 'n_clean', 'baseline_pass', 'token_identical_clean', 'regression_upper_95_one_sided')}
+        line[ph] = {k: rr.get(k) for k in ('verdict', 'net_paired', 'verdict_strict_upper_bound_informational', 'aa_identical', 'n_clean', 'baseline_pass', 'token_identical_clean', 'regression_upper_95_one_sided')}
         line[ph].update({'regressions': (rr.get('regressions') or {}).get('k'), 'gains': (rr.get('gains') or {}).get('k'), 'excluded': len(rr.get('excluded_truncated', []))})
     line['parity'] = overall
     (out / 'judge_line.json').write_text(json.dumps(line))
@@ -552,6 +567,8 @@ def selfcheck():
     assert grade_ifeval('```json\n{"a":1}\n```', {'instruction': 'detectable_format:json_format'})[0]
     u = cp_upper(0, 59, 0.05); assert abs(u - (1 - 0.05 ** (1 / 59))) < 1e-9 and u < 0.05, u      # filed spec: 0.95^59 < 0.05
     assert cp_upper(1, 59, 0.05) > 0.05 and cp_lower(0, 59, 0.025) == 0.0
+    np0 = net_paired(0, 0, 64, 14); assert np0['p_one_sided_exact_R_gt_G'] == 1.0 and np0['rule_verdict'] == 'PASS'
+    assert net_paired(5, 0)['rule_verdict'] == 'FAIL' and net_paired(4, 0)['rule_verdict'] == 'PASS' and net_paired(3, 3)['p_one_sided_exact_R_gt_G'] == 0.65625
     print('selfcheck ok; k=0,n=59 one-sided upper =', round(u, 5), '; k=1,n=59 =', round(cp_upper(1, 59, 0.05), 5), '; k=1,n=80 =', round(cp_upper(1, 80, 0.05), 5))
     return 0
 
