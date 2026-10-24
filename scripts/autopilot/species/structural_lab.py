@@ -332,9 +332,9 @@ class StructuralLab:
         """
         try:
             import asyncio
-
             import numpy as np
 
+            from scripts.autopilot.species.distillation_pool_capture import write_capture
             from orchestration.repl_memory.distillation.pipeline import DistillationPipeline
             from orchestration.repl_memory.distillation.teachers import (
                 ClaudeTeacher,
@@ -381,10 +381,12 @@ class StructuralLab:
                 )
 
             store = EpisodicStore()
-            # Zero-vector query = "any k, ranked by Q" (all IP scores are 0.0,
-            # so ordering falls to the Q filter) — same idiom as seed_skills.py.
+            # This preserves the existing zero-vector retrieval request. The store
+            # searches 2*k candidates, applies indexed-row and Q filters in SQLite,
+            # then sorts by similarity and returns top-k; it is not a Q-ranked scan.
+            query_vector = np.zeros(1024, dtype=np.float32)
             memories = store.retrieve_by_similarity(
-                np.zeros(1024, dtype=np.float32),
+                query_vector,
                 k=max_trajectories,
                 min_q_value=min_q_value,
             )
@@ -392,6 +394,29 @@ class StructuralLab:
             for mem in memories:
                 trajectories.append(self._memory_distillation_record(mem))
             pool = self._distill_pool_composition(trajectories, min_q_value)
+            capture = write_capture(
+                repo_root=ORCH_ROOT,
+                output_dir=MEMORY_DIR,
+                source_path=Path(__file__).resolve(),
+                loaded_function=self.distill_skillbank,
+                store=store,
+                memories=memories,
+                teacher_requested=teacher,
+                teacher_declared_model_id=getattr(teacher_obj, "model_id", None),
+                max_trajectories=max_trajectories,
+                min_q_value=min_q_value,
+                query_vector=query_vector,
+                projected_records=trajectories,
+                legacy_m25_pool=pool,
+                synthetic=teacher == "mock",
+            )
+            if not capture["verdict"]:
+                return {
+                    "status": "error",
+                    "error": "distillation input integrity check failed; teacher call prevented",
+                    "capture": capture,
+                    "pool": pool,
+                }
             if not trajectories:
                 return {
                     "status": "ok",
@@ -401,6 +426,7 @@ class StructuralLab:
                         "input_unit": "episodic_memory_pattern",
                     },
                     "pool": pool,
+                    "capture": capture,
                     "note": f"no memories with Q >= {min_q_value}; nothing to distill",
                 }
 
@@ -422,6 +448,7 @@ class StructuralLab:
                 sb.close()
             return {
                 "status": "ok",
+                "capture": capture,
                 "report": {
                     "teacher": teacher_obj.model_id,
                     # Preserve the M-25 report keys for operator/checkpoint
@@ -506,7 +533,8 @@ class StructuralLab:
     ) -> dict[str, Any]:
         """Composition of the pool ``distill_skillbank`` would draw. Read-only; no inference.
 
-        Uses the same zero-vector Q-ranked retrieval as ``distill_skillbank``.
+        Uses the same zero-vector, two-phase top-k retrieval and Q filter as
+        ``distill_skillbank``; it does not scan or rank the whole store by Q.
         Returns ``{}`` when the store is unavailable, so callers can use it in
         a checkpoint note without a new failure mode.
         """
