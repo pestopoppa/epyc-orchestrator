@@ -41,8 +41,7 @@ import sys
 from typing import Any
 
 from scripts.server.gpu_shadow_lane import (
-    LANE_BINARY_COMMIT,
-    LANE_BINARY_VERSION,
+    LANE_BINARY_DIR,
     LANE_DEVICE,
     LANE_HOST_CPUSET,
     LANE_PORT,
@@ -326,13 +325,12 @@ def smoke_checks(
         )
     )
 
-    # 2. Slot pins match the frozen production kernel + the host-thread rule.
+    # 2. Slot runs the production kernel (the store's gpu backend) + the host-thread rule.
     checks.append(
         Check(
-            "slot.binary_pin",
-            tenancy.slot.binary_version == LANE_BINARY_VERSION
-            and tenancy.slot.binary_commit == LANE_BINARY_COMMIT,
-            f"{tenancy.slot.binary_version} ({tenancy.slot.binary_commit})",
+            "slot.binary_from_store",
+            tenancy.slot.binary_dir == str(LANE_BINARY_DIR),
+            f"binary_dir={tenancy.slot.binary_dir}",
         )
     )
     checks.append(

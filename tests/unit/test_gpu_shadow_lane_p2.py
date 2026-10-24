@@ -75,7 +75,7 @@ class TestTenancyValidation:
         assert tenancy.slot.port == lane.LANE_PORT
         assert tenancy.slot.host_cpuset == lane.LANE_HOST_CPUSET
         assert tenancy.slot.device == lane.LANE_DEVICE
-        assert tenancy.slot.binary_version == lane.LANE_BINARY_VERSION
+        assert tenancy.slot.binary_dir == str(lane.LANE_BINARY_DIR)
 
     def test_refuses_declaring_state_b(self, tmp_path: Path, enabled: Features):
         bad = tmp_path / "tenancy.yaml"
@@ -95,7 +95,7 @@ slot:
   port: 18100
   host_cpuset: "184-191"
   host_threads: 8
-  binary: {{dir: /x, version: "10107", commit: 67a433bf4}}
+  binary: {{dir: /x}}
   region_claim: {{lock_role: gpu_shadow_lane, cpu_regions_from: host_cpuset_smt_folded, device_lock: true}}
 resident_state: state_a
 resident_tenant: null
@@ -775,6 +775,13 @@ class TestDeterministicSmoke:
         checks = stage0.smoke_checks(tenancy, policy)
         gate = next(c for c in checks if c.name == "serving_shape.within_ceiling")
         assert gate.passed, gate.detail
+
+    def test_slot_off_the_kernel_store_fails_smoke(self, tenancy, policy):
+        import dataclasses
+
+        moved = dataclasses.replace(tenancy, slot=dataclasses.replace(tenancy.slot, binary_dir="/x"))
+        gate = next(c for c in stage0.smoke_checks(moved, policy) if c.name == "slot.binary_from_store")
+        assert not gate.passed
 
     def test_smoke_is_deterministic(self, tenancy, policy):
         first = [(c.name, c.passed) for c in stage0.smoke_checks(tenancy, policy)]

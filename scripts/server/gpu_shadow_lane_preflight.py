@@ -12,7 +12,8 @@ server, or sending any inference:
   - no foreign GPU compute PIDs (rocm-smi showpids); PIDs on the
     ``--expected-gpu-pid`` allowlist (default empty) are reported, not blocked
   - KFD state (/dev/kfd + /sys/class/kfd topology)
-  - production HIP binary reports version 10107 (67a433bf4) — the v8 freeze
+  - the kernel-store HIP binary (production/gpu) reports a version; the
+    identity is recorded in the report and attestation, not pinned
   - lane TCP port (18100) is free
   - tenant GGUF identity: streamed sha256 against the policy's pinned hash
     (~28 GiB file — expect a couple of minutes of read I/O; skippable via an
@@ -61,8 +62,6 @@ from typing import Any
 
 from scripts.server.gpu_shadow_lane import (
     LANE_BINARY,
-    LANE_BINARY_COMMIT,
-    LANE_BINARY_VERSION,
     LANE_DEVICE,
     LANE_HOST_CPUSET,
     LANE_PORT,
@@ -355,14 +354,13 @@ def evaluate_preflight(
 
     if not facts.binary_exists:
         blockers.append(f"production HIP binary missing: {LANE_BINARY}")
+    elif (identity := binary_identity(facts.binary_version_output)) is None:
+        blockers.append(
+            "HIP binary did not report a version: "
+            f"{(facts.binary_version_output or '').strip()[:200] or '<no output>'}"
+        )
     else:
-        version_output = facts.binary_version_output or ""
-        if LANE_BINARY_VERSION not in version_output or LANE_BINARY_COMMIT not in version_output:
-            blockers.append(
-                "HIP binary version mismatch: expected "
-                f"{LANE_BINARY_VERSION} ({LANE_BINARY_COMMIT}), got: "
-                f"{version_output.strip()[:200] or '<no output>'}"
-            )
+        infos.append(f"HIP binary {LANE_BINARY}: {identity}")
 
     if not facts.kfd_dev_present or not facts.kfd_topology_present:
         blockers.append("KFD state not healthy (/dev/kfd or kfd topology missing)")
@@ -501,6 +499,12 @@ def _run_json(cmd: list[str], timeout_s: float = 10.0) -> tuple[Any, str | None]
         return json.loads(proc.stdout), None
     except json.JSONDecodeError:
         return None, f"{cmd[0]}: non-JSON output ({proc.stdout[:120]!r})"
+
+
+def binary_identity(version_output: str | None) -> str | None:
+    """Return the ``version: N (sha)`` line a llama-server reports, or None."""
+    match = re.search(r"version: \d+ \([0-9a-f]+\)", version_output or "")
+    return match.group(0) if match else None
 
 
 def _binary_version_output() -> str | None:
@@ -850,7 +854,7 @@ def main(argv: list[str] | None = None) -> int:
         # P2-2: the attestation derives every boolean from the ACTUAL check
         # results (not literals), records the warnings/infos it was granted
         # under, the allow-flags in force, and a freshness field.
-        version_output = facts.binary_version_output or ""
+        identity = binary_identity(facts.binary_version_output)
         attestation_path = output_dir / "preflight_attestation.json"
         attestation_path.write_text(
             json.dumps(
@@ -869,11 +873,8 @@ def main(argv: list[str] | None = None) -> int:
                             if facts.vram_total_gib is None or facts.vram_used_gib is None
                             else round(facts.vram_total_gib - facts.vram_used_gib, 2)
                         ),
-                        "binary_version_ok": bool(
-                            facts.binary_exists
-                            and LANE_BINARY_VERSION in version_output
-                            and LANE_BINARY_COMMIT in version_output
-                        ),
+                        "binary_version_ok": bool(facts.binary_exists and identity),
+                        "binary_identity": identity,
                         "kfd_ok": bool(
                             facts.kfd_dev_present and facts.kfd_topology_present
                         ),

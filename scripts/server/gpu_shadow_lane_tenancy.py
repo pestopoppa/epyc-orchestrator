@@ -156,8 +156,6 @@ class LaneSlot:
     host_cpuset: str
     host_threads: int
     binary_dir: str
-    binary_version: str
-    binary_commit: str
     lock_role: str
     cpu_regions_from: str
     device_lock: bool
@@ -300,8 +298,6 @@ def _parse_slot(raw: Any) -> LaneSlot:
         host_cpuset=str(slot["host_cpuset"]),
         host_threads=int(slot["host_threads"]),
         binary_dir=_resolve_slot_binary_dir(binary),
-        binary_version=str(binary["version"]),
-        binary_commit=str(binary["commit"]),
         lock_role=str(claim["lock_role"]),
         cpu_regions_from=str(claim["cpu_regions_from"]),
         device_lock=bool(claim.get("device_lock", False)),
