@@ -8,19 +8,19 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.action_identity import representative_cluster_key
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
+    fold_frontier_entry,
     fold_supersession_events,
     parse_journal_ts,
     objectives_from_journal_row,
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.learning_exclusions import (
-    WITHIN_NOISE_EXCLUSIONS,
     row_is_representative_member,
 )
-from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
+from src.autopilot_core.pareto_math import median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
@@ -149,7 +149,7 @@ def representative_replay_state_from_rows(
             trial_id = int(row.get("trial_id"))
         except (TypeError, ValueError):
             continue
-        key = (int(shaped["eval_tier"]), config_fingerprint_from_row(row))
+        key = (int(shaped["eval_tier"]), representative_cluster_key(row))
         cluster = clusters.setdefault(
             key,
             {
@@ -189,7 +189,12 @@ def archive_payload_from_current_snapshot(
     still return ``None`` so callers keep using full replay until a tail-fold
     consumer exists.
     """
-    diagnostic = build_snapshot_replay_diagnostic(rows, ledger_events)
+    return _current_archive_from_diagnostic(build_snapshot_replay_diagnostic(rows, ledger_events))
+
+
+def _current_archive_from_diagnostic(
+    diagnostic: JournalSnapshotReplayDiagnostic,
+) -> dict[str, Any] | None:
     if diagnostic.bounded_replay_readiness != "current":
         return None
     event = diagnostic.latest_event or {}
@@ -203,6 +208,8 @@ def archive_payload_from_current_snapshot(
 def archive_payload_from_verified_snapshot(
     rows: Iterable[dict[str, Any]],
     ledger_events: Iterable[dict[str, Any]],
+    *,
+    prefix_verification_cache: dict[Any, str] | None = None,
 ) -> dict[str, Any] | None:
     """Return a verified snapshot archive, folding a safe post-snapshot tail.
 
@@ -211,6 +218,7 @@ def archive_payload_from_verified_snapshot(
     in within-noise representative clustering (for example ``seq_accumulating``)
     need raw prefix samples that a compact snapshot does not retain, so this
     helper returns ``None`` and leaves callers on full replay for those tails.
+    ``prefix_verification_cache``: see :func:`build_snapshot_replay_diagnostic`.
     """
     rows_list = list(rows)
     ledger_events_list = [
@@ -218,14 +226,12 @@ def archive_payload_from_verified_snapshot(
         for event in ledger_events
         if event.get("type") and "trial_id" not in event
     ]
-    current_payload = archive_payload_from_current_snapshot(
-        rows_list,
-        ledger_events_list,
+    # B5-M1: one diagnostic (one prefix replay) serves both the current and the tail path.
+    diagnostic = build_snapshot_replay_diagnostic(
+        rows_list, ledger_events_list, prefix_verification_cache=prefix_verification_cache
     )
-    if current_payload is not None:
-        return current_payload
-
-    diagnostic = build_snapshot_replay_diagnostic(rows_list, ledger_events_list)
+    if diagnostic.bounded_replay_readiness == "current":
+        return _current_archive_from_diagnostic(diagnostic)
     if diagnostic.bounded_replay_readiness != "tail_unverified":
         return None
     event = diagnostic.latest_event or {}
@@ -269,6 +275,10 @@ def archive_payload_from_verified_snapshot(
     }:
         return None
     for row in tail_rows:
+        if (row.get("bug_corrupted_by") or "") not in ("", "mad_noise"):
+            # B5-M1: the tail fold excludes and counts a bug-tagged row exactly as full
+            # replay does; it still reaches reconstruct below.
+            continue
         if objectives_from_journal_row(row, objective_policy=policy) is None:
             return None
 
@@ -418,7 +428,7 @@ def _fold_representative_tail_into_snapshot(
         except (TypeError, ValueError):
             continue
         if _row_requires_prefix_raw_samples(row):
-            key = (tier, config_fingerprint_from_row(row))
+            key = (tier, representative_cluster_key(row))
             cluster = clusters.setdefault(
                 key,
                 {
@@ -560,6 +570,11 @@ def _merge_archive_exclusions(
             tail.get("truncated_above_cap") or {},
         ),
         "max_trial_id_cap": max_trial_id_cap,
+        # A tail row with an unmeasured axis forces full replay, so only the prefix counts.
+        "unmeasured_objectives": _merge_exclusion_slot(
+            prefix.get("unmeasured_objectives") or {},
+            tail.get("unmeasured_objectives") or {},
+        ),
     }
 
 
@@ -599,28 +614,14 @@ def _rebuild_archive_from_entries(
     frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
     hv_history_by_tier: dict[int, list[list[float]]] = {}
     for entry in sorted_entries:
-        tier = int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER))
-        trial_id = int(entry.get("trial_id"))
-        objectives = entry["objectives"]
-        frontier = frontiers_by_tier.setdefault(tier, [])
-        if not any(dominates(front["objectives"], objectives) for front in frontier):
-            frontiers_by_tier[tier] = [
-                front
-                for front in frontier
-                if not dominates(objectives, front["objectives"])
-            ]
-            frontiers_by_tier[tier].append(entry)
-        history = hv_history_by_tier.setdefault(tier, [])
-        hv = round(
-            hypervolume(
-                [front["objectives"] for front in frontiers_by_tier[tier]],
-                ref=ref,
-            ),
-            4,
+        fold_frontier_entry(
+            frontiers_by_tier,
+            hv_history_by_tier,
+            int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER)),
+            int(entry.get("trial_id")),
+            entry,
+            ref,
         )
-        if history:
-            hv = max(history[-1][1], hv)
-        history.append([trial_id, hv])
 
     canonical_tier = int(snapshot_archive.get("canonical_tier") or DEFAULT_FRONTIER_TIER)
     rebuilt = copy.deepcopy(snapshot_archive)
@@ -669,29 +670,9 @@ def _fold_tail_archive_into_snapshot(
             trial_id = int(entry.get("trial_id"))
         except (TypeError, ValueError):
             return None
-        objectives = entry.get("objectives")
-        if not isinstance(objectives, list):
+        if not isinstance(entry.get("objectives"), list):
             return None
-        key = str(tier)
-        frontier = frontiers_by_tier.setdefault(key, [])
-        if not any(dominates(front["objectives"], objectives) for front in frontier):
-            frontiers_by_tier[key] = [
-                front
-                for front in frontier
-                if not dominates(objectives, front["objectives"])
-            ]
-            frontiers_by_tier[key].append(entry)
-        history = hv_history_by_tier.setdefault(key, [])
-        hv = round(
-            hypervolume(
-                [front["objectives"] for front in frontiers_by_tier[key]],
-                ref=ref,
-            ),
-            4,
-        )
-        if history:
-            hv = max(history[-1][1], hv)
-        history.append([trial_id, hv])
+        fold_frontier_entry(frontiers_by_tier, hv_history_by_tier, str(tier), trial_id, entry, ref)
 
     canonical_key = str(merged.get("canonical_tier") or DEFAULT_FRONTIER_TIER)
     merged["frontiers_by_tier"] = {
@@ -826,14 +807,49 @@ def verify_snapshot_chain(ledger_events: Iterable[dict[str, Any]]) -> dict[str, 
     }
 
 
+def _prefix_verification_key(
+    recorded_hash: str,
+    scope: dict[str, Any],
+    prefix_trial_rows: list[dict[str, Any]],
+    prefix_ledger_events: list[dict[str, Any]],
+) -> tuple[Any, ...]:
+    """Identity of one prefix comparison. Sound only for an append-only journal held in
+    one process (ExperimentJournal appends entries after their last field write and
+    corrects through new supersession events): the prefix can then change only by gaining
+    rows or ledger events. A snapshot event enters the digest by its recorded hash."""
+    tids = [_trial_id_from_row(row) for row in prefix_trial_rows]
+    digest = hashlib.sha256()
+    for event in prefix_ledger_events:
+        if event.get("type") == JOURNAL_SNAPSHOT_EVENT_TYPE:
+            part: Any = event.get("snapshot_hash") or event
+        else:
+            part = event
+        digest.update(json.dumps(part, sort_keys=True, default=str).encode("utf-8"))
+    return (
+        recorded_hash,
+        tuple(sorted(scope.items())),
+        len(tids),
+        min(tids, default=None),
+        max(tids, default=None),
+        digest.hexdigest(),
+    )
+
+
 def build_snapshot_replay_diagnostic(
     rows: Iterable[dict[str, Any]],
     ledger_events: Iterable[dict[str, Any]],
+    *,
+    prefix_verification_cache: dict[Any, str] | None = None,
 ) -> JournalSnapshotReplayDiagnostic:
     """Check whether the latest snapshot can act as a bounded replay prefix.
 
     This is diagnostics-only. It does not use a snapshot as replay authority and
     does not mutate archive, baseline, journal, or planner state.
+
+    ``prefix_verification_cache`` (opt-in, journal-scoped; B5-M1) holds the outcome of
+    the last prefix comparison, so a repeat call on an unchanged prefix skips the full
+    prefix replay. Pass it only for a live append-only journal (see
+    :func:`_prefix_verification_key`); one-shot readers pass nothing.
     """
     all_ledger_events = [
         event
@@ -909,25 +925,42 @@ def build_snapshot_replay_diagnostic(
         # prefix (those are real prefix drift). A post-snapshot event that only
         # touches tail trials belongs to the tail fold; counting it here reported
         # false prefix drift for every tail supersession (W3).
-        prefix_rows = [
+        prefix_trial_rows = [
             row
             for row in _rows_for_prefix_replay(rows_list, through_trial_id)
             if _trial_id_from_row(row) is not None
-        ] + all_ledger_events[:latest_snapshot_index] + post_snapshot_prefix_events
+        ]
+        prefix_ledger_events = all_ledger_events[:latest_snapshot_index] + post_snapshot_prefix_events
         scope = snapshot_fold_scope(snapshot_archive)
-        try:
-            prefix_archive = reconstruct_archive_from_journal_rows(
-                prefix_rows,
-                None,
-                current_run_only=False,
-                **scope,
-            )
-        except ValueError:  # unknown recorded objective policy
-            prefix_archive = None
-        if prefix_archive is None:
+        key = (
+            _prefix_verification_key(recorded_hash, scope, prefix_trial_rows, prefix_ledger_events)
+            if prefix_verification_cache is not None
+            else None
+        )
+        outcome = prefix_verification_cache.get(key) if key is not None else None
+        if outcome is None:
+            try:
+                prefix_archive = reconstruct_archive_from_journal_rows(
+                    prefix_trial_rows + prefix_ledger_events,
+                    None,
+                    current_run_only=False,
+                    **scope,
+                )
+            except ValueError:  # unknown recorded objective policy
+                prefix_archive = None
+            if prefix_archive is None:
+                outcome = "empty"
+            elif canonical_jsonable(snapshot_archive) == canonical_jsonable(prefix_archive):
+                outcome = "match"
+            else:
+                outcome = "drift"
+            if key is not None:
+                prefix_verification_cache.clear()
+                prefix_verification_cache[key] = outcome
+        if outcome == "empty":
             status = "archive_prefix_empty"
             warnings.append("journal prefix replay produced no archive payload")
-        elif canonical_jsonable(snapshot_archive) == canonical_jsonable(prefix_archive):
+        elif outcome == "match":
             status = (
                 "archive_prefix_match"
                 if hash_status == "match"

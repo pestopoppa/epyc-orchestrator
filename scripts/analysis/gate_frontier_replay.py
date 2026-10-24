@@ -37,7 +37,6 @@ import argparse
 import hashlib
 import json
 import logging
-import math
 import sys
 import tempfile
 from collections import Counter
@@ -333,27 +332,6 @@ def baselines_before(decisions: list[dict[str, Any]], trial_id: int) -> dict[int
     return out
 
 
-def _classify(reason: str) -> str:
-    table = (
-        ("carries no served-config identity", "refused_no_config_identity"),
-        ("empty-frontier rule (b): the candidate's journal row", "refused_b_no_candidate_row"),
-        ("empty-frontier rule (b): candidate config", "refused_b_too_few_reproductions"),
-        ("empty-frontier rule (b): reproduced median", "refused_b_median_below_quantum"),
-        ("promotion guard archive unavailable", "refused_guard_unavailable"),
-        ("not a same-tier frontier representative", "refused_not_frontier_representative"),
-        ("exceeds same-tier archive max", "refused_above_archive_max"),
-        ("reproductions; source has", "refused_too_few_reproductions"),
-        ("does not clear baseline", "refused_repro_median_below_quantum"),
-        ("missing objective tuple", "refused_objective_tuple"),
-        ("missing n_questions", "refused_no_quantum"),
-        ("not a monotonic", "skipped_not_monotonic"),
-    )
-    for needle, label in table:
-        if needle in reason:
-            return label
-    return "other:" + reason[:60]
-
-
 PATHS = ("old", "live", "live_c")
 
 
@@ -420,10 +398,10 @@ def replay(
                 )
                 if update.updated:
                     decision = "promoted"
-                elif update.reason.startswith("not a monotonic"):
+                elif update.refusal_code == sg.REFUSAL_NOT_MONOTONIC:
                     continue  # ratchet skip, not a guard decision
                 else:
-                    decision = _classify(update.reason)
+                    decision = update.refusal_code
                 tier = int(row["tier"])
                 decisions.append(
                     {

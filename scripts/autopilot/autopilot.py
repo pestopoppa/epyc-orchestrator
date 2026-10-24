@@ -231,8 +231,6 @@ from src.autopilot_core.baseline_ledger import (
     reconcile_baseline_ledger,
 )
 from src.autopilot_core.instrument_era_guard import (
-    E7_EVAL_INSTRUMENT_BOUNDARY,
-    E7_EVAL_INSTRUMENT_ERA_ID,
     last_known_eval_quality_era,
     EVAL_QUALITY_SCOPE,
     active_eval_quality_era,
@@ -7527,6 +7525,7 @@ def _journal_archive_payload_for_authority(
         snapshot_payload = archive_payload_from_verified_snapshot(
             rows,
             journal.ledger_events(),
+            prefix_verification_cache=getattr(journal, "prefix_verification_cache", None),
         )
         if (
             snapshot_payload is not None
@@ -7873,8 +7872,8 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
     Idempotent — only acts when ``active_instrument_eras.eval_quality`` is missing. Resolves
     the active eval_quality era from the human-owned registry via
     ``instrument_era_guard.active_eval_quality_era``; on a registry read failure it falls
-    forward to the ``E7-eval-instrument`` code constant (still fences) but ONLY once the clock
-    is at/after that boundary. Returns True when it mutated state. A no-op (False) before any
+    forward to the last era the live system recorded, but ONLY once the clock is at/after
+    that boundary. Returns True when it mutated state. A no-op (False) before any
     boundary opens, so the pre-boundary single-era world stays unfenced.
 
     This is the code-path state migration the operator constraint requires: the era registry
@@ -7889,8 +7888,8 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
     era_id = ""
     source = ""
     if guard.get("ok"):
-        era_id = str(guard.get("era_id") or "").strip() or E7_EVAL_INSTRUMENT_ERA_ID
-        boundary_epoch = guard.get("boundary_epoch")
+        era_id = str(guard["era_id"])
+        boundary_epoch = float(guard["boundary_epoch"])
         source = f"registry:{guard.get('path')}"
     elif guard.get("status") == "no_active_era":
         # Registry read fine; no eval_quality era active yet (clock before the boundary).
@@ -7898,15 +7897,7 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
         return False
     else:
         # Registry unreadable/malformed. Fall back to the last era the LIVE SYSTEM
-        # recorded, not to a code constant.
-        #
-        # This branch used to fence at E7_EVAL_INSTRUMENT_BOUNDARY (2026-07-21) and stamp
-        # E7_EVAL_INSTRUMENT_ERA_ID. That constant stopped tracking the live era at the
-        # v8 eval boundary on 2026-07-25 and eval_quality is now at E16, so an unreadable
-        # registry silently UNDER-fenced by three weeks and several instrument changes —
-        # every cross-instrument observation in that span read as in-era and was admitted.
-        # Fail-open, in the guard whose job is to fail closed. Bumping the constant would
-        # only move the staleness to the next cutover.
+        # recorded, never to a code constant (a stale E7 constant once under-fenced here).
         last_known = last_known_eval_quality_era()
         fallback_epoch = last_known.get("boundary_epoch")
         if last_known.get("ok") and fallback_epoch is not None:
@@ -7944,15 +7935,6 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
                 last_known.get("status"),
             )
             return False
-
-    if boundary_epoch is None:
-        boundary_epoch = _parse_journal_timestamp(E7_EVAL_INSTRUMENT_BOUNDARY)
-    if boundary_epoch is None:
-        log.error(
-            "eval_quality era migration aborted — could not resolve a boundary epoch; "
-            "quality axis remains unfenced."
-        )
-        return False
 
     eras = state.get("active_instrument_eras")
     eras = dict(eras) if isinstance(eras, dict) else {}
@@ -10648,6 +10630,9 @@ def _run_loop_inner(
         trial_infra_digest = fingerprint_digest(trial_infra_fingerprint)
         trial_regime_digest = regime_digest(trial_infra_fingerprint)
         trial_served = _served_content_for_row(trial_served_content)
+        trial_identity = action_config_identity(effective_action, trial_regime_digest, trial_served)
+        # B5-M2: the same key as the replay's representative_cluster_key on this trial's row.
+        trial_cluster_key = trial_identity or _config_fingerprint(effective_action)
         # Re-review B1: only an action that names its served-config delta may join a
         # reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw
         # per-trial points exactly as before.
@@ -10657,8 +10642,7 @@ def _run_loop_inner(
             and bool(verdict.passed)
             and rate_measured
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
-            and action_config_identity(effective_action, trial_regime_digest, trial_served)
-            is not None
+            and trial_identity is not None
         )
         frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
         provisional_row = _provisional_trial_row(
@@ -10689,7 +10673,7 @@ def _run_loop_inner(
             learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
         ):
-            fingerprint = _config_fingerprint(effective_action)
+            fingerprint = trial_cluster_key
             if rate_measured:
                 pareto_status, rep_objs = archive.upsert_representative(
                     fingerprint,
@@ -10777,7 +10761,7 @@ def _run_loop_inner(
                 # Decision (c): same median-representative admission as the replay applies
                 # to the stamped row, so the live archive and journal authority agree.
                 pareto_status, _rep_objs = archive.upsert_representative(
-                    _config_fingerprint(effective_action),
+                    trial_cluster_key,
                     eval_result.tier,
                     objectives_from(eval_result),
                     trial_id=trial_counter,
@@ -11849,6 +11833,7 @@ def _append_baseline_promotion_event(
                 "n_questions": eval_result.n_questions,
                 "pareto_status": pareto_status,
                 "refusal_detail": baseline_update.reason,
+                "refusal_code": getattr(baseline_update, "refusal_code", ""),
             },
             baseline_state=baseline_state,
             infra_fingerprint=infra_fingerprint,

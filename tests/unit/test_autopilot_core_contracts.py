@@ -355,3 +355,56 @@ def test_reconstruction_uncapped_includes_newer_rows_and_reports_cap() -> None:
     # journal_max_trial_id tracks the FULL segment, above the cap — that is how
     # a caller spots staleness (counter 3 < journal max 5).
     assert capped["journal_max_trial_id"] == 5
+
+
+def test_representative_clusters_split_by_served_config_identity() -> None:
+    """B5-M2: replay pools representatives by the same served-config identity the
+    promotion gate counts reproductions by, so two prompt contents or two AP-55 regimes
+    behind one ``{"type": "prompt_mutation", ...}`` action are never one median."""
+    from src.autopilot_core.action_identity import row_config_identity
+    from src.autopilot_core.journal_snapshot_replay import representative_replay_state_from_rows
+
+    action = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"}
+
+    def served(trial_id: int, sha_char: str, regime: str) -> dict:
+        return _row(
+            trial_id,
+            1.80,
+            50.0 + trial_id,
+            tier=2,
+            config=dict(action),
+            eval_details={
+                "learning_exclusion": {"by": "mad_noise"},
+                "served_content": {"files": {"frontdoor.md": sha_char * 64}},
+                "infra_regime_digest": regime,
+            },
+        )
+
+    rows = [served(1, "a", "r1"), served(2, "b", "r1"), served(3, "a", "r2"), served(4, "a", "r1")]
+    identities = {row_config_identity(row) for row in rows}
+    assert len(identities) == 3 and None not in identities
+
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    reps = [e for e in archive["all_entries"] if e.get("is_representative")]
+    assert {e["config_fingerprint"] for e in reps} == identities
+    assert sorted(e["n_reproductions"] for e in reps) == [1, 1, 2]
+
+    state = representative_replay_state_from_rows(rows)
+    assert {c["fingerprint"] for c in state["clusters"]} == identities
+
+    # Identity-less measurement rows (seed_batch) still cluster on the action fingerprint.
+    seed = [_row(t, 1.8, 50.0, eval_details={"learning_exclusion": {"by": "mad_noise"}}) for t in (5, 6)]
+    seed_archive = reconstruct_archive_from_journal_rows(seed, None, current_run_only=False)
+    (seed_rep,) = [e for e in seed_archive["all_entries"] if e.get("is_representative")]
+    assert seed_rep["config_fingerprint"] == config_fingerprint_from_row(seed[0])
+    assert seed_rep["n_reproductions"] == 2
+
+
+def test_reconstruction_counts_rows_dropped_for_unmeasured_objectives() -> None:
+    """B5-12: a row whose objective tuple cannot be built (unmeasured axis) is counted."""
+    rows = [_row(1, 1.5, 40.0), _row(2, 1.6, None), _row(3, 1.7, 50.0), _row(4, 1.8, None)]
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    assert archive["exclusions"]["unmeasured_objectives"] == {"count": 2, "max_trial_id": 4}
+    assert {e["trial_id"] for e in archive["all_entries"]} == {1, 3}

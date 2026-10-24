@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
-from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.action_identity import representative_cluster_key
 from src.autopilot_core.learning_exclusions import (
-    WITHIN_NOISE_EXCLUSIONS,
     row_is_representative_member,
 )
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
@@ -182,6 +181,34 @@ def latest_journal_run_rows(
     return selected, meta
 
 
+def fold_frontier_entry(
+    frontiers: dict[Any, list[dict[str, Any]]],
+    hv_history: dict[Any, list[list[float]]],
+    key: Any,
+    trial_id: int,
+    entry: dict[str, Any],
+    ref: Sequence[float],
+) -> None:
+    """Admit ``entry`` to the ``key`` frontier unless it is dominated, then append that
+    frontier's running-max hypervolume (4 dp) to ``hv_history[key]``.
+
+    The one per-entry fold behind full replay and the snapshot rebuild / tail fold; each
+    caller keeps its own key type (int or str tier).
+    """
+    objectives = entry["objectives"]
+    frontier = frontiers.setdefault(key, [])
+    if not any(dominates(front["objectives"], objectives) for front in frontier):
+        frontiers[key] = [
+            front for front in frontier if not dominates(objectives, front["objectives"])
+        ]
+        frontiers[key].append(entry)
+    history = hv_history.setdefault(key, [])
+    hv = round(hypervolume([front["objectives"] for front in frontiers[key]], ref=ref), 4)
+    if history:
+        hv = max(history[-1][1], hv)
+    history.append([trial_id, hv])
+
+
 def reconstruct_archive_from_journal_rows(
     rows: Iterable[dict[str, Any]],
     session_start_ts: float | None,
@@ -217,14 +244,15 @@ def reconstruct_archive_from_journal_rows(
     repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
 
     # Exclusion telemetry — so a dashboard can SHOW why trials vanished from the
-    # frontier instead of silently truncating. Two paths drop rows: a
-    # `bug_corrupted_by` tag (rolled-back / corrupted trials) and the optional
-    # `max_trial_id` cap. `journal_max_trial_id` is the highest trial id present
+    # frontier instead of silently truncating: a `bug_corrupted_by` tag (rolled-back /
+    # corrupted trials), the epoch fence, the optional `max_trial_id` cap and an
+    # unmeasured objective axis. `journal_max_trial_id` is the highest trial id present
     # in the segment regardless of any filter, so callers can detect a stale
     # state counter that lags the journal.
     excluded_bug = {"count": 0, "max_trial_id": None}
     truncated_cap = {"count": 0, "max_trial_id": None}
     excluded_before_ts = {"count": 0, "max_trial_id": None}
+    excluded_unmeasured = {"count": 0, "max_trial_id": None}
     journal_max_trial_id: int | None = None
 
     def _bump(slot: dict[str, Any], tid: int) -> None:
@@ -272,6 +300,7 @@ def reconstruct_archive_from_journal_rows(
 
         objectives = objectives_from_journal_row(row, objective_policy=objective_policy)
         if objectives is None:
+            _bump(excluded_unmeasured, trial_id)
             continue
 
         deinflated = False
@@ -305,8 +334,7 @@ def reconstruct_archive_from_journal_rows(
             t0_audit.append(shaped)
             continue
         if trusted_within_noise:
-            fingerprint = config_fingerprint_from_row(row)
-            key = (tier, fingerprint)
+            key = (tier, representative_cluster_key(row))
             cluster = repr_clusters.setdefault(
                 key,
                 {"objs": [], "last_tid": -1, "shaped": shaped},
@@ -328,28 +356,11 @@ def reconstruct_archive_from_journal_rows(
     processed.sort(key=lambda item: item[0])
     reference_point = _reference_point_for_policy(objective_policy)
     for trial_id, shaped in processed:
-        tier = shaped["eval_tier"]
-        objectives = shaped["objectives"]
         all_entries.append(shaped)
-        frontier = frontiers_by_tier.setdefault(tier, [])
-        if not any(dominates(front["objectives"], objectives) for front in frontier):
-            frontiers_by_tier[tier] = [
-                front for front in frontier
-                if not dominates(objectives, front["objectives"])
-            ]
-            frontiers_by_tier[tier].append(shaped)
-        tier_frontier = frontiers_by_tier[tier]
-        tier_hv_history = hv_history_by_tier.setdefault(tier, [])
-        hv = round(
-            hypervolume(
-                [front["objectives"] for front in tier_frontier],
-                ref=reference_point,
-            ),
-            4,
+        fold_frontier_entry(
+            frontiers_by_tier, hv_history_by_tier, shaped["eval_tier"], trial_id, shaped,
+            reference_point,
         )
-        if tier_hv_history:
-            hv = max(tier_hv_history[-1][1], hv)
-        tier_hv_history.append([trial_id, hv])
 
     if not all_entries and not t0_audit:
         return None
@@ -377,6 +388,7 @@ def reconstruct_archive_from_journal_rows(
             "exclude_before_ts": exclude_before_ts,
             "truncated_above_cap": truncated_cap,
             "max_trial_id_cap": max_trial_id,
+            "unmeasured_objectives": excluded_unmeasured,
         },
         "supersessions": supersession_meta,
     }

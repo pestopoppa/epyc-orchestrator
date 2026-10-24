@@ -5615,7 +5615,9 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
     # ~700 while the journal holds 1000 trials" report). `current_run_only` +
     # `pareto_epoch_ts` already scope to the live run, so the cap only ever
     # truncated real data. We now surface the divergence as a warning instead.
-    journal_rows = _read_autopilot_journal_rows()
+    # B5-01: the read and the replays run off the event loop (this router shares the API
+    # app with chat; a full replay is seconds of CPU).
+    journal_rows = await asyncio.to_thread(_read_autopilot_journal_rows)
     state_archive_present = isinstance(data.get("pareto_archive"), dict) and bool(
         data.get("pareto_archive")
     )
@@ -5641,7 +5643,8 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             ),
             None,
         )
-        journal_archive = _pareto_from_journal(
+        journal_archive = await asyncio.to_thread(
+            _pareto_from_journal,
             None,
             current_run_only=False,
             max_trial_id=None,
@@ -5660,7 +5663,8 @@ async def pareto(max_dominated: int = 600, scope: str = "current") -> JSONRespon
             "(era-labeled; comparative visualization, not decision-grade)"
         )
     else:
-        journal_archive = _pareto_from_journal(
+        journal_archive = await asyncio.to_thread(
+            _pareto_from_journal,
             None,
             current_run_only=True,
             max_trial_id=None,

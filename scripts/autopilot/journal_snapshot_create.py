@@ -26,7 +26,7 @@ from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
 from src.autopilot_core.tier_specs import LEGACY_OBJECTIVE_POLICY  # noqa: E402
 
 
-DEFAULT_POLICY_VERSION = "journal-archive-snapshot-v1"
+DEFAULT_POLICY_VERSION = "journal-archive-snapshot-v2"  # see SEGMENT_SNAPSHOT_POLICY_VERSION
 
 
 @dataclass(frozen=True)

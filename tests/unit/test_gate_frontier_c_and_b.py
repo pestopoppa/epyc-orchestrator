@@ -506,7 +506,8 @@ def test_reproductions_on_a_different_infra_regime_do_not_count(tmp_path):
     loop.trial("A", 1.8, infra_digest="d1")
     loop.trial("A", 1.8, infra_digest="d2")
     _, third = loop.trial("A", 1.8, infra_digest="d1")
-    assert not third.updated and "has 2 of 3 required" in third.reason
+    # B5-M2: the archive representative itself splits, so it holds only 2 reproductions.
+    assert not third.updated and "source has 2" in third.reason
 
 
 def test_seed_still_allowed_for_a_tier_without_baseline(tmp_path):
@@ -621,7 +622,8 @@ def test_different_served_content_does_not_count(tmp_path):
     loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
     loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v3"), infra_digest="r1")
     _, third = loop.trial("p", 1.8, action=dict(PROMPT), served=_served("v2"), infra_digest="r1")
-    assert not third.updated and "has 2 of 3 required" in third.reason
+    # B5-M2: the archive representative itself splits, so it holds only 2 reproductions.
+    assert not third.updated and "source has 2" in third.reason
 
 
 def test_mutation_row_without_sha_does_not_count(tmp_path):
@@ -717,7 +719,8 @@ def test_kernel_change_splits_the_cluster(tmp_path):
     loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint()))
     loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint(kernel="k2")))
     _, third = loop.trial("A", 1.8, infra_digest=regime_digest(_fingerprint()))
-    assert not third.updated and "has 2 of 3 required" in third.reason
+    # B5-M2: the archive representative itself splits, so it holds only 2 reproductions.
+    assert not third.updated and "source has 2" in third.reason
 
 
 def test_row_regime_digest_falls_back_to_the_recorded_fingerprint():

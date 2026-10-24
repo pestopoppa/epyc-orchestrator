@@ -171,6 +171,18 @@ def test_migration_refuses_rather_than_substituting_a_stale_boundary(
     assert "quality_exclude_before_ts" not in state
 
 
+def test_migration_never_fences_at_e7_for_an_active_row_without_from(
+    tmp_path, monkeypatch
+) -> None:
+    """B5-16: a malformed active row takes the unresolved-registry path, not a 2026-07-21 fence."""
+    _write_registry(tmp_path, "eras:\n  - id: E99\n    scope: eval_quality\n", monkeypatch)
+    monkeypatch.setattr(era_guard, "AUTOPILOT_STATE_PATH", tmp_path / "absent-state.json")
+    monkeypatch.setattr(autopilot.time, "time", lambda: _E7_EPOCH + 86400.0)
+    state: dict = {}
+    assert autopilot._migrate_eval_quality_era(state) is False
+    assert "quality_exclude_before_ts" not in state
+
+
 def test_migration_defers_when_registry_missing_and_before_boundary(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(INSTRUMENT_ERAS_ENV, str(tmp_path / "absent.yaml"))
     monkeypatch.setattr(autopilot.time, "time", lambda: _E7_EPOCH - 86400.0)

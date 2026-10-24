@@ -95,7 +95,9 @@ class DeficiencyCategory(str, Enum):
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000
-SEGMENT_SNAPSHOT_POLICY_VERSION = "journal-segment-snapshot-v1"
+# v2: archive payload gained exclusions.unmeasured_objectives and identity-keyed
+# representatives (B5-12/B5-M2); v1 snapshots replay as prefix drift -> full replay.
+SEGMENT_SNAPSHOT_POLICY_VERSION = "journal-segment-snapshot-v2"
 
 _BASELINE_QUALITY_RE = re.compile(r"\bbaseline\s+([0-9]+(?:\.[0-9]+)?)")
 _SUITE_REGRESSION_RE = re.compile(
@@ -916,6 +918,9 @@ class ExperimentJournal:
         # Replay scope for segment snapshots ({"objective_policy", "exclude_before_ts"});
         # AutoPilot keeps it aligned with the live archive-authority scope.
         self.segment_snapshot_scope: dict[str, Any] = {}
+        # B5-M1: last snapshot-prefix comparison for the archive authority; sound because
+        # this journal is append-only in-process (record() writes fields before append).
+        self.prefix_verification_cache: dict[Any, str] = {}
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
         self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}

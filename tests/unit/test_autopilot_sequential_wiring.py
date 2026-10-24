@@ -16,12 +16,24 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
-from safety_gate import EvalResult, SafetyGate  # type: ignore[import-not-found]  # noqa: E402
+from safety_gate import (  # type: ignore[import-not-found]  # noqa: E402
+    EvalResult,
+    SafetyGate,
+    configure_promotion_guard_archive,
+)
 from src.autopilot_core.authority_consent import (  # noqa: E402
     SEQ_P0_2_BRIDGE_CONSENT,
     SEQ_P0_2_BRIDGE_ENV,
     SEQ_P0_2_BRIDGE_MODE,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_promotion_guard_provider():
+    # The loop installs a module-global promotion-guard provider; clear it so it cannot
+    # leak into later safety_gate tests in the same worker.
+    yield
+    configure_promotion_guard_archive(None)
 
 
 def _enable_seq_p0_2_bridge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -146,6 +146,76 @@ def test_seq_aware_call_can_upgrade_cached_legacy_pass_without_side_effects(tmp_
     assert g.quality_history_for_tier(2) == [pytest.approx(result.quality)]
 
 
+_SEQ_KW = dict(
+    question_results={"q1": True},
+    baseline_profile={"q1": 0.0},
+    task_rate=1.0,
+    baseline_task_rate=0.5,
+    prior_quality_obs=[(i, 1.2) for i in range(10)],
+    prior_rate_obs=[(i, 1.2) for i in range(10)],
+)
+
+
+def test_seq_upgrade_of_throttle_demoted_pass_does_not_resample_host(tmp_path, monkeypatch):
+    """B2-02: the seq-aware upgrade of a cached PASS attaches the seq block only. Re-running
+    the legs re-sampled host state, so a recovered host turned a throttle-demoted PASS into
+    a throughput FAIL after the rollback counter and MAD window had acted on the PASS."""
+    import scripts.autopilot.host_health as hh
+
+    throttled = iter([True, False])
+    calls: list[int] = []
+
+    class _State:
+        def __init__(self):
+            calls.append(1)
+            self._t = next(throttled)
+
+        def is_throttled(self):
+            return self._t, ["cpu_freq_dip"] if self._t else []
+
+    monkeypatch.setattr(hh.HostHealthState, "snapshot", staticmethod(_State))
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=True)
+    g.baseline.frontdoor_speed = 100.0  # speed 5 is under the 0.8 floor
+    result = _improvement_result(quality=1.5, speed=5.0)
+
+    legacy = g.check(result)
+    assert legacy.passed and "throughput_throttle_demoted" in legacy.categories
+    upgraded = g.check(result, **_SEQ_KW)
+
+    assert upgraded.passed
+    assert upgraded.violations == legacy.violations
+    assert upgraded.categories == legacy.categories + ["seq_" + upgraded.seq["state"]]
+    assert upgraded.warnings[:-1] == legacy.warnings
+    assert len(calls) == 1
+    assert g._consecutive_failures == 0
+
+
+def test_seq_upgrade_replaces_mad_leg_like_a_fresh_seq_check(tmp_path):
+    """Seq replaces the MAD noise filter: the upgraded verdict drops the cached MAD leg and
+    carries what a seq-aware first call would have produced."""
+
+    def gate() -> SafetyGate:
+        g = SafetyGate(
+            baseline_path=tmp_path / "absent.yaml",
+            use_sequential=True,
+            quality_history=[2.00, 2.02, 1.98, 2.01, 1.99],
+        )
+        g.baseline.baselines_by_tier = {2: 1.16}
+        return g
+
+    g = gate()
+    result = _improvement_result(quality=2.01)
+    legacy = g.check(result)
+    assert "mad_noise" in legacy.categories
+    upgraded = g.check(result, **_SEQ_KW)
+    fresh = gate().check(_improvement_result(quality=2.01), **_SEQ_KW)
+
+    assert "mad_noise" not in upgraded.categories
+    assert sorted(upgraded.categories) == sorted(fresh.categories)
+    assert sorted(upgraded.warnings) == sorted(fresh.warnings)
+    assert upgraded.seq == fresh.seq
+
+
 # ---------------------------------------------------------------------------
 # seq path through check() — the three joint states
 # ---------------------------------------------------------------------------
