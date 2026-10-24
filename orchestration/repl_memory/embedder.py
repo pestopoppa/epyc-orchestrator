@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,11 +50,20 @@ LEGACY_EMBEDDING_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embeddi
 
 
 def resolve_embedding_binary(
-    store: Path = KERNEL_STORE_CPU, legacy: Path = LEGACY_EMBEDDING_BINARY
+    store: Path = KERNEL_STORE_CPU,
+    legacy: Path = LEGACY_EMBEDDING_BINARY,
+    use_store: Optional[bool] = None,
 ) -> Path:
-    """``<kernel store>/llama-embedding`` when it exists, else the legacy in-tree path."""
+    """The legacy in-tree binary by default (zero live-behaviour change).
+
+    ``<kernel store>/llama-embedding`` is returned only when ``use_store`` is true (default:
+    ``EPYC_EMBED_USE_KERNEL_STORE=1``, OFF) AND the store binary exists. Flipping the default is
+    REPL-EMB-2.14, after a per-text cosine parity check.
+    """
+    if use_store is None:
+        use_store = os.environ.get("EPYC_EMBED_USE_KERNEL_STORE", "") == "1"
     candidate = store / "llama-embedding"
-    return candidate if candidate.exists() else legacy
+    return candidate if use_store and candidate.exists() else legacy
 
 
 DEFAULT_EMBEDDING_BINARY = resolve_embedding_binary()

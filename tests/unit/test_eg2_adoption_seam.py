@@ -370,7 +370,8 @@ def test_llama_embedding_resolves_through_the_kernel_store_not_the_in_tree_build
     legacy = tmp_path / "build" / "bin" / "llama-embedding"
     assert embedder.resolve_embedding_binary(store, legacy) == legacy  # store absent: fallback
     (store / "llama-embedding").write_text("")
-    assert embedder.resolve_embedding_binary(store, legacy) == store / "llama-embedding"
+    assert embedder.resolve_embedding_binary(store, legacy) == legacy  # flag OFF: legacy even if store exists
+    assert embedder.resolve_embedding_binary(store, legacy, use_store=True) == store / "llama-embedding"
     assert "build/bin" not in str(embedder.KERNEL_STORE_CPU)
     assert embedder.KERNEL_STORE_CPU.as_posix().endswith("kernels/production/cpu")
 
@@ -511,3 +512,14 @@ def test_session_store_refusal_names_the_migration_and_keeps_the_file(tmp_path):
     assert "reembed_stores_eg2" in str(store.embeddings_refusal)
     assert npy.read_bytes() == h
     store.close()
+
+
+def test_default_embedding_binary_is_main_legacy_path(monkeypatch):
+    """Zero live-behaviour change: the default resolves to the legacy in-tree binary, as on main."""
+    from orchestration.repl_memory import embedder
+
+    monkeypatch.delenv("EPYC_EMBED_USE_KERNEL_STORE", raising=False)
+    legacy = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedding")
+    assert embedder.resolve_embedding_binary() == legacy
+    assert embedder.DEFAULT_EMBEDDING_BINARY == legacy
+    assert embedder.EmbeddingConfig().embedding_binary == legacy
