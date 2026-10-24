@@ -82,6 +82,7 @@ from src.sse_utils import (
 # Decomposed modules (Phase 1 — extract-and-move, no behavior changes)
 from src.api.routes.chat_utils import (
     _resolve_answer,
+    to_thread_keeping_context,
     watch_disconnect,
 )
 from src.api.routes.chat_review import (
@@ -569,7 +570,8 @@ async def _try_cheap_first(
         # QWEN_STOP only applies if the templated prompt is actually Qwen-
         # marked. For non-Qwen families, the marker won't appear in output;
         # for Qwen, leaving it in is safe.
-        answer = primitives.llm_call(
+        answer = await asyncio.to_thread(
+            primitives.llm_call,
             templated_prompt,
             role=cheap_role,
             n_tokens=cfg.try_cheap_first_max_tokens,
@@ -816,7 +818,7 @@ async def _handle_chat(
             )
 
     # Stage 1: Routing
-    routing = _route_request(request, state)
+    routing = await to_thread_keeping_context(_route_request, request, state)
 
     # Stage 2: Input formalization
     _preprocess(request, state, routing)

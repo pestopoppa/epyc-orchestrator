@@ -1248,7 +1248,7 @@ async def list_models() -> OpenAIModelsResponse:
     return OpenAIModelsResponse(data=infos)
 
 
-def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
+async def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
     """Execute one /v1 REPL turn, rescuing an unquoted one-word ``FINAL(OK)``.
 
     This loop never feeds ``last_error`` back into the next root prompt, so a
@@ -1256,14 +1256,28 @@ def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
     returned ``""`` with ``finish_reason=stop`` (bare "OK"/"yes"/"Done" replies
     were dropped while "hello" — emitted quoted — survived). See
     :func:`rescue_bare_name_final` for the exact, narrow trigger.
+    Runs off the event loop (A1-01) under the graph's wait_for timeout: the REPL's
+    SIGALRM timeout only works on the main thread.
     """
-    result = repl.execute(code)
+    from src.graph.helpers import _execute_repl_with_timeout
+
+    result = await _execute_repl_with_timeout(repl, code)
     if not result.is_final:
         rescued = rescue_bare_name_final(code, result.error)
         if rescued is not None:
             logger.info("Bare-name FINAL rescue: %r -> %r", code.strip(), rescued)
-            result = repl.execute(rescued)
+            result = await _execute_repl_with_timeout(repl, rescued)
     return result
+
+
+async def _llm_call_with_reasoning(primitives: Any, *args: Any, **kwargs: Any) -> tuple[str, str | None]:
+    """``llm_call`` off the event loop, with its RI-23 reasoning read in the same thread (A1-01)."""
+
+    def _run() -> tuple[str, str | None]:
+        text = primitives.llm_call(*args, **kwargs)
+        return text, _last_call_reasoning(primitives)
+
+    return await asyncio.to_thread(_run)
 
 
 @router.post("/chat/completions", response_model=None)
@@ -1601,7 +1615,8 @@ async def openai_chat_completions(
                                             raise value
                             else:
                                 response_text, client_tool_calls, finish_reason, client_usage = (
-                                    _run_client_tool_completion(
+                                    await asyncio.to_thread(
+                                        _run_client_tool_completion,
                                         primitives, request, client_messages,
                                         role=role, sampling_kwargs=sampling_kwargs,
                                     )
@@ -1703,7 +1718,8 @@ async def openai_chat_completions(
                                         else:
                                             raise value
                             else:
-                                response_text = primitives.llm_call(
+                                response_text, response_reasoning = await _llm_call_with_reasoning(
+                                    primitives,
                                     direct_prompt,
                                     role=role,
                                     n_tokens=request.max_tokens,
@@ -1756,12 +1772,13 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
+                        call_reasoning = response_reasoning
                         response_reasoning, response_text = _split_leading_reasoning(
                             response_text
                         )
                         if response_reasoning is None:
                             # RI-23: chat lane — the server already split it off.
-                            response_reasoning = _last_call_reasoning(primitives)
+                            response_reasoning = call_reasoning or _last_call_reasoning(primitives)
                         total_tokens = primitives.total_tokens_generated
                     else:
                         # Create REPL environment
@@ -1790,14 +1807,14 @@ async def openai_chat_completions(
                             )
 
                             try:
-                                code = primitives.llm_call(
+                                code, turn_reasoning = await _llm_call_with_reasoning(
+                                    primitives,
                                     root_prompt,
                                     role=role,
                                     n_tokens=1024,
                                     **sampling_kwargs,
                                 )
                                 _raise_admission_denied_text(code)
-                                turn_reasoning = _last_call_reasoning(primitives)
                                 # In-band guard: "[ERROR: ...]" at start-of-answer
                                 # is a backend failure, not a generation — do not
                                 # extract/auto-wrap/execute it as the answer.
@@ -1851,7 +1868,7 @@ async def openai_chat_completions(
                                 return
 
                             # Execute in REPL
-                            result = _execute_repl_turn(repl, code)
+                            result = await _execute_repl_turn(repl, code)
 
                             if result.is_final:
                                 response_text = result.final_answer or ""
@@ -2094,7 +2111,8 @@ async def openai_chat_completions(
 
                 if client_mode:
                     response_text, client_tool_calls, finish_reason, client_usage = (
-                        _run_client_tool_completion(
+                        await asyncio.to_thread(
+                            _run_client_tool_completion,
                             primitives, request, client_messages,
                             role=role, sampling_kwargs=sampling_kwargs,
                         )
@@ -2112,7 +2130,8 @@ async def openai_chat_completions(
                 elif disable_repl:
                     # Direct LLM call — no REPL, no code execution.
                     # /chat's direct-stage prompt contract (_direct_call_prompt).
-                    response_text = primitives.llm_call(
+                    response_text, call_reasoning = await _llm_call_with_reasoning(
+                        primitives,
                         _direct_call_prompt(
                             combined_context, role, getattr(state, "registry", None),
                         ),
@@ -2137,7 +2156,7 @@ async def openai_chat_completions(
                     )
                     if response_reasoning is None:
                         # RI-23: chat lane — the server already split it off.
-                        response_reasoning = _last_call_reasoning(primitives)
+                        response_reasoning = call_reasoning
                 else:
                     repl = REPLEnvironment(
                         context=combined_context,
@@ -2163,14 +2182,14 @@ async def openai_chat_completions(
                             turn=turn,
                         )
 
-                        code = primitives.llm_call(
+                        code, turn_reasoning = await _llm_call_with_reasoning(
+                            primitives,
                             root_prompt,
                             role=role,
                             n_tokens=1024,
                             **sampling_kwargs,
                         )
                         _raise_admission_denied_text(code)
-                        turn_reasoning = _last_call_reasoning(primitives)
                         # Same in-band guard as the direct path: an "[ERROR: ...]"
                         # generation is a backend failure, not code to auto-wrap
                         # and execute as the model's final answer.
@@ -2183,7 +2202,7 @@ async def openai_chat_completions(
                         code = extract_code_from_response(code)
                         code = auto_wrap_final(code)
 
-                        result = _execute_repl_turn(repl, code)
+                        result = await _execute_repl_turn(repl, code)
 
                         if result.is_final:
                             response_text = result.final_answer or ""

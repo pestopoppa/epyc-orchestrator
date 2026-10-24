@@ -119,7 +119,8 @@ class AdmissionController:
     """Thread-safe per-backend concurrency limiter.
 
     Uses threading.Semaphore (not asyncio.Semaphore) because inference calls
-    happen in thread pool via asyncio.to_thread / inference_lock (fcntl).
+    must run in worker threads (asyncio.to_thread / inference_lock (fcntl));
+    acquire() blocks, so a caller on the event loop stalls the whole worker.
     """
 
     def __init__(self, limits: dict[str, int] | None = None):
