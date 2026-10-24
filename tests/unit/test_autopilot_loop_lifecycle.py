@@ -8,13 +8,17 @@ each carried key, cadence, poll, restore or skip in autopilot.py turns its case 
 
 from __future__ import annotations
 
+import signal
+
 import pytest
 
+from src.autopilot_core import mutation_guards
 from tests.unit.autopilot_loop_harness import (
     autopilot,
     fresh_state,
     measured_result,
     run_loop_inner,
+    safety_gate,
 )
 
 NUMERIC = {"type": "numeric_trial", "surface": "s", "params": {"x": 1}}
@@ -89,3 +93,16 @@ def test_blacklisted_action_is_journaled_invalid_and_never_dispatched(
     assert entry.failure_analysis == "action blacklisted: known bad config"
     assert run.state["last_invalid_status"] == "invalid"
 
+
+def test_loop_hooks_do_not_leak_into_the_test_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B1-15: the loop installs signal handlers, the promotion-guard provider and the
+    eval-leakage observer and never removes them; the harness must contain all three."""
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+
+    run = _autonomous(monkeypatch)
+
+    assert set(run.handlers) == {signal.SIGINT, signal.SIGTERM}  # the loop did install them
+    assert {"guard_scope", "leakage_install"} <= set(run.names)
+    assert {sig: signal.getsignal(sig) for sig in before} == before
+    assert safety_gate._PROMOTION_GUARD_PROVIDER is None
+    assert mutation_guards._EVAL_LEAKAGE_OBSERVER is None
