@@ -67,7 +67,11 @@ def _reset(monkeypatch):
 
 
 class Loop:
-    """The slice of the trial loop around the promotion decision, with real components."""
+    """The slice of the trial loop around the promotion decision, with real components.
+
+    Admission and the provisional row come from autopilot's own functions; the loop itself
+    is pinned by the real-loop tests below (``_loop_trial``).
+    """
 
     def __init__(self, tmp_path, *, baseline=1.5):
         self.journal = ExperimentJournal(journal_dir=tmp_path / "journal")
@@ -115,9 +119,10 @@ class Loop:
             eval_wall_s=wall_s,
             question_results=[{"qid": f"q{i}", "correct": True} for i in range(50)],
         )
-        clean = (
-            not exclusion
-            and action_config_identity(action, infra_digest, served) is not None
+        clean = autopilot._is_clean_trial_representative(
+            action, learning_excluded_by=exclusion, verdict_passed=True,
+            rate_measured=autopilot.objectives_measurable(result), tier=result.tier,
+            regime_digest=infra_digest, served=served,
         )
         admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean else ""
         comp = {"status": comparability}
@@ -238,10 +243,8 @@ def _loop_trial(monkeypatch, *, multitier=False, **kwargs):
             monkeypatch, state=multitier_final_t1_state(CANDIDATE), multitier=True,
             use_controller=True, higher_tier_probe=False, **kwargs,
         )
-    return run_loop_inner(
-        monkeypatch, state=fresh_state(), auto_actions=[CANDIDATE], higher_tier_probe=False,
-        **kwargs,
-    )
+    kwargs.setdefault("auto_actions", [CANDIDATE])
+    return run_loop_inner(monkeypatch, state=fresh_state(), higher_tier_probe=False, **kwargs)
 
 
 def _assert_decided_on_the_journaled_row(run):
@@ -260,6 +263,28 @@ PROMOTION_PATHS = [
     {"multitier": True},
     {"multitier": True, "learning_exclusion": WITHIN_NOISE},
 ]
+
+
+UNMEASURED_RATE = EvalResult(tier=1, quality=1.8, speed=10.0, cost=0.2, reliability=0.98)
+ADMISSION = {
+    "clean": ({}, True),
+    "within_noise": ({"learning_exclusion": WITHIN_NOISE}, False),
+    "measurement_action": ({"auto_actions": [{"type": "seed_batch", "n_questions": 3}]}, False),
+    "verdict_failed": ({"verdict_passed": False}, False),
+    "rate_unmeasured": ({"dispatch_results": [UNMEASURED_RATE]}, False),
+    "disabled": ({"env_off": True}, False),
+}
+
+
+@pytest.mark.parametrize("case", ADMISSION)
+def test_loop_admits_only_clean_passing_measured_config_trials(monkeypatch, case):
+    kwargs, admitted = ADMISSION[case]
+    kwargs = dict(kwargs)
+    if kwargs.pop("env_off", False):
+        monkeypatch.setenv(autopilot.CLEAN_TRIAL_REPRESENTATIVES_ENV, "0")
+    [entry] = _loop_trial(monkeypatch, **kwargs).journal_entries
+    expected = FRONTIER_ADMISSION_REPRESENTATIVE if admitted else None
+    assert entry.eval_details.get(FRONTIER_ADMISSION_KEY) == expected
 
 
 def test_within_noise_reproduction_reaches_update_baseline_without_multitier(monkeypatch):

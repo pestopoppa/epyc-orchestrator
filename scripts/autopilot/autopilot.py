@@ -7711,6 +7711,28 @@ def _clean_trial_representatives_enabled() -> bool:
     }
 
 
+def _is_clean_trial_representative(
+    action: Mapping[str, Any],
+    *,
+    learning_excluded_by: str,
+    verdict_passed: bool,
+    rate_measured: bool,
+    tier: int,
+    regime_digest: str,
+    served: Any,
+) -> bool:
+    """Re-review B1: only an action that names its served-config delta may join a
+    reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw points."""
+    return (
+        _clean_trial_representatives_enabled()
+        and not learning_excluded_by
+        and verdict_passed
+        and rate_measured
+        and tier >= MIN_FRONTIER_EVAL_TIER
+        and action_config_identity(action, regime_digest, served) is not None
+    )
+
+
 def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> None:
     """Gate-frontier (2026-09-16): promotion evidence reads the LIVE frontier.
 
@@ -10648,17 +10670,14 @@ def _run_loop_inner(
         trial_infra_digest = fingerprint_digest(trial_infra_fingerprint)
         trial_regime_digest = regime_digest(trial_infra_fingerprint)
         trial_served = _served_content_for_row(trial_served_content)
-        # Re-review B1: only an action that names its served-config delta may join a
-        # reproduction cluster; measurement actions (seed_batch, deep_eval, ...) stay raw
-        # per-trial points exactly as before.
-        clean_representative = (
-            _clean_trial_representatives_enabled()
-            and not learning_excluded_by
-            and bool(verdict.passed)
-            and rate_measured
-            and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
-            and action_config_identity(effective_action, trial_regime_digest, trial_served)
-            is not None
+        clean_representative = _is_clean_trial_representative(
+            effective_action,
+            learning_excluded_by=learning_excluded_by,
+            verdict_passed=bool(verdict.passed),
+            rate_measured=rate_measured,
+            tier=eval_result.tier,
+            regime_digest=trial_regime_digest,
+            served=trial_served,
         )
         frontier_admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean_representative else ""
         provisional_row = _provisional_trial_row(
