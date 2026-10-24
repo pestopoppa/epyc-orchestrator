@@ -766,6 +766,9 @@ class SafetyVerdict:
     # cause — reliability below the floor) so a consumer can tell the two apart; both mean
     # RETRY, not revert, which `retry_not_revert` folds for consumers that only need that.
     quality_unmeasured: bool = False
+    # B2-02: the MAD noise-filter leg's contribution, so a seq-aware re-check can swap it
+    # for the sequential leg without re-running the other legs.
+    mad_leg: "GateLeg | None" = field(default=None, repr=False, compare=False)
 
     @property
     def retry_not_revert(self) -> bool:
@@ -2629,6 +2632,52 @@ class SafetyGate:
             )
         return block
 
+    def _seq_leg(self, result: EvalResult, seq_kwargs: dict[str, Any]) -> tuple[dict, GateLeg]:
+        """LEDGER-W4 (01c §3): the anytime-valid e-process verdict as a gate leg.
+
+        Advisory at the safety gate: it never adds a violation, and baseline promotion is
+        still gated downstream through update_baseline(seq_confirmed=...)."""
+        block = self._sequential_verdict(result, **seq_kwargs)
+        e_rate = block.get("E_rate_noninf")
+        warning = (
+            "Sequential verdict ({state}): E_quality={eq:.3f}, "
+            "E_rate_noninf={er}, rate_axis_mode={rate_axis_mode}, "
+            "k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
+            "baseline promotion {gate}.".format(
+                state=block["state"],
+                eq=block.get("E_quality", float("nan")),
+                er=f"{e_rate:.3f}" if e_rate is not None else "n/a",
+                rate_axis_mode=block.get("rate_axis_mode", "binding_joint"),
+                k=block.get("k"),
+                gate=(
+                    "permitted (confirmed)" if block.get("confirmed") else "blocked until confirmed"
+                ),
+            )
+        )
+        return block, GateLeg(warnings=(warning,), categories=("seq_" + block["state"],))
+
+    def _upgrade_cached_with_seq(
+        self, result: EvalResult, cached: SafetyVerdict, seq_kwargs: dict[str, Any]
+    ) -> SafetyVerdict:
+        """B2-02: attach the seq leg to a cached legacy PASS without re-running the others.
+
+        Re-running them re-sampled host state, so a recovered host could flip a throttle-
+        demoted PASS that the rollback counter and MAD window had already acted on. Seq
+        replaces the MAD noise filter, so the cached MAD leg is dropped."""
+        mad = cached.mad_leg or GateLeg()
+        seq_block, seq_leg = self._seq_leg(result, seq_kwargs)
+        verdict = replace(
+            cached,
+            violations=list(cached.violations),
+            warnings=[w for w in cached.warnings if w not in mad.warnings] + list(seq_leg.warnings),
+            categories=[c for c in cached.categories if c not in mad.categories]
+            + list(seq_leg.categories),
+            seq=seq_block,
+            mad_leg=None,
+        )
+        result.gate_verdict = verdict
+        return verdict
+
     def check(
         self,
         result: EvalResult,
@@ -2654,67 +2703,27 @@ class SafetyGate:
         seq_inputs_ready = (
             self.use_sequential and question_results is not None and bool(baseline_profile)
         )
+        seq_kwargs = dict(
+            question_results=question_results,
+            task_rate=task_rate,
+            baseline_profile=baseline_profile,
+            baseline_task_rate=baseline_task_rate,
+            prior_quality_obs=prior_quality_obs or (),
+            prior_rate_obs=prior_rate_obs or (),
+            candidate=candidate,
+            core_id=core_id,
+        )
         cached_verdict = result.gate_verdict
-        record_side_effects = cached_verdict is None
         if cached_verdict is not None:
-            can_upgrade_cached_seq = (
-                cached_verdict.passed
-                and cached_verdict.seq is None
-                and seq_inputs_ready
-                and not any(
-                    category.startswith("throughput_host_")
-                    for category in cached_verdict.categories
-                )
-            )
-            if not can_upgrade_cached_seq:
-                return cached_verdict
+            if cached_verdict.passed and cached_verdict.seq is None and seq_inputs_ready:
+                return self._upgrade_cached_with_seq(result, cached_verdict, seq_kwargs)
+            return cached_verdict
 
         violations = []
         warnings = []
         categories = []  # AP-14: track which checks failed
         seq_block: dict[str, Any] | None = None  # LEDGER-W4 journal block (default-off)
-
-        def record_seq_shadow() -> None:
-            nonlocal seq_block
-            if seq_block is not None or not seq_inputs_ready:
-                return
-            # LEDGER-W4 (01c §3): when the default-off sequential path is active
-            # and the caller threads per-question results, journal the anytime-valid
-            # e-process verdict for every trusted trial, including regressions. The
-            # verdict remains advisory at the safety gate: it never adds a violation,
-            # and baseline promotion is still gated downstream through
-            # update_baseline(seq_confirmed=...).
-            seq_block = self._sequential_verdict(
-                result,
-                question_results=question_results,
-                task_rate=task_rate,
-                baseline_profile=baseline_profile,
-                baseline_task_rate=baseline_task_rate,
-                prior_quality_obs=prior_quality_obs or (),
-                prior_rate_obs=prior_rate_obs or (),
-                candidate=candidate,
-                core_id=core_id,
-            )
-            categories.append("seq_" + seq_block["state"])
-            e_rate = seq_block.get("E_rate_noninf")
-            rate_axis_mode = seq_block.get("rate_axis_mode", "binding_joint")
-            warnings.append(
-                "Sequential verdict ({state}): E_quality={eq:.3f}, "
-                "E_rate_noninf={er}, rate_axis_mode={rate_axis_mode}, "
-                "k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
-                "baseline promotion {gate}.".format(
-                    state=seq_block["state"],
-                    eq=seq_block.get("E_quality", float("nan")),
-                    er=f"{e_rate:.3f}" if e_rate is not None else "n/a",
-                    rate_axis_mode=rate_axis_mode,
-                    k=seq_block.get("k"),
-                    gate=(
-                        "permitted (confirmed)"
-                        if seq_block.get("confirmed")
-                        else "blocked until confirmed"
-                    ),
-                )
-            )
+        mad_leg: GateLeg | None = None
 
         # HIL-6 S4: every leg below is a pure function (module level, above); this method
         # supplies its own state as their inputs, in the original order, and keeps the side
@@ -2794,23 +2803,20 @@ class SafetyGate:
             _add(regression, violations, warnings, categories)
             if improved:
                 if seq_inputs_ready:
-                    record_seq_shadow()
-                    # Seq evidence is already journaled above and replaces the MAD noise
-                    # filter as the "is this a real improvement?" significance test.
+                    # Seq evidence replaces the MAD noise filter as the "is this a real
+                    # improvement?" significance test.
+                    seq_block, seq_leg = self._seq_leg(result, seq_kwargs)
+                    _add(seq_leg, violations, warnings, categories)
                 else:
                     # Improvement or no change — MAD noise filter (intake-421). Never blocks;
                     # `mad_noise` is consumed by autopilot's classify_learning_exclusion()
                     # (journaled, but no archive.update / AP-22 memory for noise-level gains).
-                    _add(
-                        mad_noise_leg(
-                            result.quality,
-                            baseline_q,
-                            self._mad_significance(result.quality, result.tier),
-                        ),
-                        violations,
-                        warnings,
-                        categories,
+                    mad_leg = mad_noise_leg(
+                        result.quality,
+                        baseline_q,
+                        self._mad_significance(result.quality, result.tier),
                     )
+                    _add(mad_leg, violations, warnings, categories)
 
             # 3. Per-suite regression (resolution-aware since 2026-06-06; N-aware binding).
             # Under the re-baseline hold the pre-boundary per-suite baselines are withheld.
@@ -2873,7 +2879,9 @@ class SafetyGate:
         # 6. Proxy-only improvement detection (skeptical re-questioning)
         warnings.extend(self._proxy_check(result))
 
-        record_seq_shadow()
+        if seq_inputs_ready and seq_block is None:
+            seq_block, seq_leg = self._seq_leg(result, seq_kwargs)
+            _add(seq_leg, violations, warnings, categories)
 
         passed = len(violations) == 0
         verdict = SafetyVerdict(
@@ -2884,26 +2892,24 @@ class SafetyGate:
             seq=seq_block,
             reliability_blocked=reliability_blocked,
             quality_unmeasured=quality_unmeasured,
+            mad_leg=mad_leg,
         )
 
-        # Track consecutive failures only for the first gate pass over this
-        # EvalResult. The central AutoPilot loop may re-enter check() with W4
-        # per-question evidence after an action handler already cached a legacy
-        # verdict; that seq-aware upgrade must not double-count failures.
-        if record_side_effects:
-            if verdict.retry_not_revert:
-                # REL-1 (B1): an untrustworthy-evidence failure signals RETRY, not a
-                # revert — it must NOT advance the auto-rollback counter (nor reset it).
-                # Otherwise a run of infra-error trials would trip should_rollback() and
-                # revert a config that was never actually shown to regress.
-                # ETR-2: the same reasoning covers an UNMEASURED quality — the absence of
-                # a measurement is not evidence of a regression, so it blocks promotion
-                # (violation above) without arming the auto-rollback.
-                pass
-            elif not passed:
-                self._consecutive_failures += 1
-            else:
-                self._consecutive_failures = 0
+        # Consecutive failures: counted once per EvalResult (a re-entry returns the cached
+        # verdict above, or upgrades it without side effects).
+        if verdict.retry_not_revert:
+            # REL-1 (B1): an untrustworthy-evidence failure signals RETRY, not a
+            # revert — it must NOT advance the auto-rollback counter (nor reset it).
+            # Otherwise a run of infra-error trials would trip should_rollback() and
+            # revert a config that was never actually shown to regress.
+            # ETR-2: the same reasoning covers an UNMEASURED quality — the absence of
+            # a measurement is not evidence of a regression, so it blocks promotion
+            # (violation above) without arming the auto-rollback.
+            pass
+        elif not passed:
+            self._consecutive_failures += 1
+        else:
+            self._consecutive_failures = 0
 
         # Record this trial's quality in the rolling window (after the verdict
         # so the current measurement doesn't bias its own significance test).
@@ -2915,12 +2921,7 @@ class SafetyGate:
         # band and helped mask a real reproduced gain). Narrow, deliberate:
         # bug-corrupted / killed trials never reach here with a clean
         # EvalResult, so they are already excluded from the window.
-        if (
-            record_side_effects
-            and passed
-            and not math.isnan(result.quality)
-            and result.quality >= 0
-        ):
+        if passed and not math.isnan(result.quality) and result.quality >= 0:
             # Defect #4: append WITH provenance. The era stamp is the active eval_quality era
             # (or "" when unfenced), so a resumed gate's MAD window filters to same-era samples
             # and a boundary crossing can never be silently averaged into the median.
