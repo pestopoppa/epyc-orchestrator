@@ -681,6 +681,24 @@ def run_scout(index: int, target: ScoutTarget, *, reader: ScopedReader,
 # ── transport: streamed /v1/chat/completions straight to the target llama-server ─────────
 
 
+def _record_scout_call(method: str, url: str, messages: list[dict[str, str]], max_tokens: int | None,
+                       ts_start: float, status: int | None, finish: str | None, timings: Any,
+                       usage: Any, exc: BaseException | None, notes: dict[str, Any] | None = None) -> None:
+    """UFH14-LB6.2: one ``serving_call.v1`` record for a scout ``/v1/chat/completions``
+    call (it bypasses ``LlamaServerBackend``). Never raises, never alters the call."""
+    try:
+        from src.backends import serving_calls
+
+        prompt = "\n".join(str(m.get("content") or "") for m in messages)
+        serving_calls.record_http_call(
+            method=method, role="scout", base_url=url, endpoint="/v1/chat/completions",
+            ts_start=ts_start, ts_end=time.time(), prompt=prompt, n_tokens=max_tokens,
+            status=status, finish_reason=finish, timings=timings, usage=usage, exc=exc, notes=notes,
+        )
+    except Exception:  # noqa: BLE001 -- recording never fails the call
+        pass
+
+
 class ChatCompletionsTransport:
     """Streams one completion from ``<url>/v1/chat/completions``. Checks ``should_stop``
     between chunks and closes the stream on a stop, so a cancelled scout stops decoding on
@@ -715,16 +733,27 @@ class ChatCompletionsTransport:
             payload["checkpoint_at"] = checkpoint_at
         timeout = httpx.Timeout(max(1.0, timeout_s), connect=CONNECT_TIMEOUT_S)
         client = self._client or httpx.Client(timeout=timeout)
+        _ts0 = time.time()
+        _status: int | None = None
+        _err: BaseException | None = None
+        body: Any = {}
         try:
             resp = client.post(f"{self.url}/v1/chat/completions", json=payload, timeout=timeout)
+            _status = getattr(resp, "status_code", None)
             resp.raise_for_status()
             try:
                 body = resp.json()
             except ValueError:
                 body = {}
+        except BaseException as exc:
+            _err = exc
+            raise
         finally:
             if self._client is None:
                 client.close()
+            _b = body if isinstance(body, dict) else {}
+            _record_scout_call("scout_stage_prefill_trunk", self.url, messages, 0, _ts0, _status,
+                               None, _b.get("timings"), _b.get("usage"), _err)
         timings = body.get("timings") if isinstance(body, dict) else None
         return {"timings": timings if isinstance(timings, dict) else None}
 
@@ -753,17 +782,29 @@ class ChatCompletionsTransport:
         timings: dict[str, Any] = {}
         finish = None
         started = time.monotonic()
+        _ts0 = time.time()
+        _status: int | None = None
+        _err: BaseException | None = None
+        _gaps: list[float] = []
+        _last_mono: float | None = None
+        _cancelled = False
         try:
             with client.stream("POST", f"{self.url}/v1/chat/completions", json=payload,
                                timeout=timeout) as resp:
+                _status = getattr(resp, "status_code", None)
                 resp.raise_for_status()
                 for line in resp.iter_lines():
                     if should_stop() or time.monotonic() - started > timeout_s:
+                        _cancelled = True
                         return CompletionResult("".join(text), usage.get("prompt_tokens"),
                                                 usage.get("completion_tokens"), "cancelled",
                                                 cancelled=True, timings=timings or None)
                     if not line or not line.startswith("data:"):
                         continue
+                    _now = time.monotonic()
+                    if _last_mono is not None:
+                        _gaps.append((_now - _last_mono) * 1000.0)
+                    _last_mono = _now
                     data = line[5:].strip()
                     if data == "[DONE]":
                         break
@@ -789,9 +830,26 @@ class ChatCompletionsTransport:
                         if delta.get("content"):
                             text.append(delta["content"])
                         finish = choice.get("finish_reason") or finish
+        except BaseException as exc:
+            _err = exc
+            raise
         finally:
             if self._client is None:
                 client.close()
+            try:
+                from src.backends import serving_calls
+
+                _notes: dict[str, Any] = {}
+                if _cancelled:
+                    _notes["early_stop"] = True
+                _sg = serving_calls.stream_gap_stats(_gaps) if _gaps else None
+                if _sg:
+                    _notes["stream_gaps"] = _sg
+            except Exception:  # noqa: BLE001
+                _notes = {}
+            _record_scout_call("scout_stage_chat_stream", self.url, messages, int(max_tokens), _ts0,
+                               _status, "cancelled" if _cancelled else finish, timings or None,
+                               usage or None, _err, _notes)
         prompt_tokens = usage.get("prompt_tokens", timings.get("prompt_n"))
         # Unknown stays None (tokens_exact=False upstream): stream chunks are not tokens.
         completion_tokens = usage.get("completion_tokens", timings.get("predicted_n"))

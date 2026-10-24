@@ -1022,6 +1022,12 @@ class LlamaServerBackend(ModelBackend):
         payload = self._build_payload(role_config, request)
         payload["stream"] = True
 
+        # UFH14-LB6.2: this generator is not wrapped by ``recorded_call`` (a generator
+        # cannot be), so it writes its own ``serving_call.v1`` record from ``finally``.
+        _rec: dict[str, Any] = {
+            "ts0": time.time(), "status": None, "finish": None, "timings": None,
+            "usage": None, "n_tokens": 0, "exc": None, "gaps": [], "last": None,
+        }
         try:
             _overall = request.timeout or self.config.timeout
             _stream_timeout = httpx.Timeout(
@@ -1042,6 +1048,7 @@ class LlamaServerBackend(ModelBackend):
                 json=payload,
                 timeout=_stream_timeout,
             ) as response:
+                _rec["status"] = getattr(response, "status_code", None)
                 response.raise_for_status()
 
                 # Parse streaming response (SSE format)
@@ -1055,18 +1062,30 @@ class LlamaServerBackend(ModelBackend):
 
                     import json
 
+                    _now = time.monotonic()
+                    if _rec["last"] is not None:
+                        _rec["gaps"].append((_now - _rec["last"]) * 1000.0)
+                    _rec["last"] = _now
+
                     try:
                         data = json.loads(line_str[6:])
                     except json.JSONDecodeError:
                         continue
+                    if isinstance(data, dict):
+                        if isinstance(data.get("timings"), dict):
+                            _rec["timings"] = data["timings"]
+                        if data.get("stop_type"):
+                            _rec["finish"] = data["stop_type"]
 
                     # Extract token info
                     if "tokens" in data:
                         for token_id in data["tokens"]:
+                            _rec["n_tokens"] += 1
                             yield (token_id, None)
                     elif "content" in data:
                         # Single token mode - no direct ID available
                         # This is a limitation - ideally server returns token IDs
+                        _rec["n_tokens"] += 1
                         yield (0, None)
 
                     # Check for completion
@@ -1074,8 +1093,45 @@ class LlamaServerBackend(ModelBackend):
                         break
 
         except httpx.RequestError as e:
+            _rec["exc"] = e
             logger.error(f"Stream error: {e}")
             return
+        except BaseException as e:  # incl. GeneratorExit/HTTPStatusError: record, re-raise unchanged
+            _rec["exc"] = e
+            raise
+        finally:
+            self._record_infer_stream(request, role_config, _rec)
+
+    def _record_infer_stream(self, request: InferenceRequest, role_config: RoleConfig,
+                             rec: dict[str, Any]) -> None:
+        """UFH14-LB6.2: ``serving_call.v1`` record for one ``infer_stream`` generator
+        (``/completion`` stream). Never raises, never alters the stream."""
+        try:
+            exc = rec.get("exc")
+            if isinstance(exc, GeneratorExit):
+                exc = None  # consumer closed the stream early: an early stop, not a failure
+                notes: dict[str, Any] = {"early_stop": True}
+            else:
+                notes = {}
+            gaps = rec.get("gaps")
+            if gaps:
+                notes["stream_gaps"] = serving_calls.stream_gap_stats(gaps)
+            timings = rec.get("timings")
+            finish = rec.get("finish")
+            if finish is None and exc is None and rec.get("status") == 200:
+                finish = "stream_ended"
+            serving_calls.record_http_call(
+                method="llama_server_infer_stream", role=getattr(role_config, "name", None),
+                base_url=getattr(self.config, "base_url", None), endpoint="/completion",
+                ts_start=rec["ts0"], ts_end=time.time(),
+                prompt=getattr(request, "prompt", None), n_tokens=getattr(request, "n_tokens", None),
+                status=rec.get("status"), finish_reason=finish, timings=timings,
+                tokens_generated=(timings or {}).get("predicted_n") if isinstance(timings, dict)
+                and timings.get("predicted_n") is not None else rec.get("n_tokens"),
+                exc=exc, notes=notes,
+            )
+        except Exception:  # noqa: BLE001 -- recording never fails the stream
+            pass
 
     @serving_calls.recorded_call("infer_stream_text")
     def infer_stream_text(
