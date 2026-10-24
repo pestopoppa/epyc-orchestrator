@@ -97,3 +97,35 @@ def test_reset_config_rereads_registry_defaults(monkeypatch, tmp_path: Path):
     assert cfg.timeouts.frontdoor == 4242
     assert cfg.timeouts.architect_general == 4343
     assert cfg.llm.depth_override_max_depth == 9
+
+
+def test_concurrent_first_access_does_not_cache_a_fallback(monkeypatch, tmp_path: Path):
+    """A3-05: a second thread saw the loading flag, got {} and cached {'default': 600}."""
+    import threading
+    import time
+
+    from src.config import validation
+
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        yaml.safe_dump({"runtime_defaults": {"timeouts": {"roles": {"frontdoor": 4242}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_REGISTRY_PATH", str(registry_path))
+    monkeypatch.setattr(validation, "_PARSED_RUNTIME_DEFAULTS", None)
+    reset_validation_caches()
+    parsing = threading.Event()
+    real_load = yaml.load
+
+    def slow_load(*args, **kwargs):
+        parsing.set()
+        time.sleep(0.3)
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(yaml, "load", slow_load)
+    other = threading.Thread(target=validation._registry_runtime_value, args=(("timeouts",), None))
+    other.start()
+    assert parsing.wait(5)
+    assert _registry_timeout("roles", "frontdoor", -1) == 4242
+    other.join(5)
+    assert _registry_timeout("roles", "frontdoor", -1) == 4242

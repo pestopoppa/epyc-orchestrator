@@ -38,7 +38,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "src/__init__.py": ("ff893046a8e7d2598657b950e9e41449f358d25f", "16e20bce77e6470646b90def0e3d653a3bd9fb024b484f7cd034f96ff8a0a5f8"),
     "src/config/__init__.py": ("644ecc9e4ee3e0afeb3235be651976a3562eb8ca", "e2c868f3481591c5b61a420b92bc2dba7e6a0699ef5fa93bade89a9672302831"),
     "src/config/models.py": ("a846546e725d448cbf9321fba84c2128905ccaf3", "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7"),
-    "src/config/validation.py": ("48afdb46f50f4e2d812e874ba37390e17823c892", "16d40b632bfff8cbecd3a0687a4bc5218334309a3e25dab3015d437fd18fc549"),
+    "src/config/validation.py": ("eab4945f939d5aa2f35cd167dcece1a55c5546ff", "e69b9b2ab0b38e0e2b50bcc435a19695ed20eb627b69fbb4dd302bea680bc51d"),
     "src/env_parsing.py": ("11e3b7c80df1a6f921d467f7a924d287e1ac28dc", "2626fb2c47012c56a7f7e99fe03f088977f9b061c77bcd1edf0dfa1e12b7d52f"),
     "src/registry/__init__.py": ("287333a63889217a52c0082a7e316dc64670ee1f", "50ddc75e291c2caaae688bbe94c4f3144a5751eb11e0a65ee35b5632ea3a9c6d"),
     "src/registry/kernel_paths.py": ("fb006e99f7ab8f3706f1371934e51800256988eb", "3993e914d5436f753a114bd6d92aaf727c75230baa1efe32d28351183b42a379"),
