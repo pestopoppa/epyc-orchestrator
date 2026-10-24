@@ -13,6 +13,8 @@ from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
 
+import pytest
+
 from scripts.registry import stack_change_pipeline as pipeline
 from scripts.registry.stack_change_pipeline import (
     StackChangePipelineConfig,
@@ -44,6 +46,12 @@ def _scenario_helpers():
     return importlib.import_module("tests.unit.test_stack_change_pipeline_simulated_fixtures")
 
 
+# Runs the full real promotion gate (~80s) once per world x4 worlds (~6 min total),
+# which looks like a hang in a default unit run. Opt in with EPYC_RUN_SLOW_TESTS=1.
+@pytest.mark.skipif(
+    not os.environ.get("EPYC_RUN_SLOW_TESTS"),
+    reason="slow (~6 min): set EPYC_RUN_SLOW_TESTS=1 to run the real promotion gate x4 worlds",
+)
 def test_real_promotion_gate_accepts_each_approved_swapped_temporary_world(
     tmp_path: Path, _synthetic_stack_manifest_inputs
 ) -> None:

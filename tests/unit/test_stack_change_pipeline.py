@@ -434,9 +434,11 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     )
     promotion_step = next(step for step in check_report.steps if step.name == "promotion_gate")
     assert promotion_step.status == "reference"
-    assert any(PROMOTION_GATE_COMMAND.removeprefix("promotion_gate: run ") in detail for detail in promotion_step.details)
+    assert any(" ".join(pipeline._promotion_gate_command()) in detail for detail in promotion_step.details)
     assert check_report.acceptance_lines() == [
         "acceptance: no-inference checks passed",
+        # SEC-ART-4 template-pin-missing is a non-strict warning in the fixture world.
+        "warnings: 1 unique (1 total)",
         PROMOTION_GATE_COMMAND,
         SURFACE_INVENTORY_LINE,
     ]
@@ -571,7 +573,7 @@ def test_run_promotion_gate_executes_combined_no_inference_targets(
     captured: dict[str, object] = {}
 
     def fake_run(cmd, **kwargs):
-        if cmd[:4] != ["uv", "run", "pytest", "-q"]:
+        if cmd != pipeline._promotion_gate_command():
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         captured["cmd"] = cmd
         captured["cwd"] = kwargs["cwd"]
@@ -589,7 +591,7 @@ def test_run_promotion_gate_executes_combined_no_inference_targets(
     promotion_step = next(step for step in report.steps if step.name == "promotion_gate")
 
     assert report.ok
-    assert captured["cmd"] == ["uv", "run", "pytest", "-q", *PROMOTION_GATE_TARGETS]
+    assert captured["cmd"] == pipeline._promotion_gate_command()
     assert captured["cwd"] == tmp_path
     assert promotion_step.status == "ok"
     assert any("53 passed" in detail for detail in promotion_step.details)
