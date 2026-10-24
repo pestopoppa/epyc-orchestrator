@@ -7,6 +7,7 @@ call, none on a repeat call that shares the journal-scoped verification cache.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -101,3 +102,80 @@ def test_verified_snapshot_replays_the_prefix_at_most_once(rows, monkeypatch):
     )
     assert canonical_jsonable(again) == canonical_jsonable(first)
     assert [n for n in calls if n > 100] == [], calls
+
+
+def test_pre_p2_snapshot_falls_back_until_current_format_rebuild(rows):
+    """A pre-P2 snapshot stays immutable and uses full replay until it is recut.
+
+    The real fixture's pre-P2 archive is pinned by its historical golden digest. The
+    current-format snapshot produced at the same boundary must then verify and equal
+    full replay exactly.
+    """
+    policy = POLICIES[0]
+    through = max(int(row["trial_id"]) for row in rows)
+    current = reconstruct_archive_from_journal_rows(
+        rows, None, objective_policy=policy
+    )
+    assert current is not None
+
+    # Recreate the old archive payload from the pinned pre-P2 result. The only archive
+    # field added by B5-12 is an additive exclusion counter; this fixture's
+    # representative clusters are unchanged by B5-M2.
+    pre_p2_archive = json.loads(json.dumps(current))
+    pre_p2_archive["exclusions"].pop("unmeasured_objectives")
+    digest = hashlib.sha256(
+        json.dumps(pre_p2_archive, sort_keys=True, default=str).encode()
+    ).hexdigest()
+    assert digest == "3d04f5798fa2ae91bb2ae96e6c3504f6c55fd1bbf9fc33aee55f5ecd6fc9f29e"
+
+    def snapshot_event(archive: dict, policy_version: str) -> dict:
+        snapshot = {
+            "archive": archive,
+            "replay_state": jsr.representative_replay_state_from_rows(
+                rows, objective_policy=policy
+            ),
+            "source": {"kind": "full_journal_replay", "trial_count": len(rows)},
+        }
+        event = {
+            "type": "journal_snapshot",
+            "through_trial_id": through,
+            "snapshot": snapshot,
+            "policy_version": policy_version,
+            "actor": "migration-test",
+            "parent_snapshot_hash": "",
+        }
+        event["snapshot_hash"] = _snapshot_hash(
+            through_trial_id=through,
+            snapshot=snapshot,
+            policy_version=policy_version,
+        )
+        return event
+
+    pre_p2_event = snapshot_event(pre_p2_archive, "journal-segment-snapshot-v1")
+    pre_p2_cache: dict = {}
+    diagnostic = jsr.build_snapshot_replay_diagnostic(
+        rows, [pre_p2_event], prefix_verification_cache=pre_p2_cache
+    )
+    assert diagnostic.status == "archive_prefix_drift"
+    assert diagnostic.bounded_replay_readiness == "prefix_invalidated"
+    assert diagnostic.hash_status == "match"
+
+    bounded = jsr.archive_payload_from_verified_snapshot(
+        rows, [pre_p2_event], prefix_verification_cache=pre_p2_cache
+    )
+    assert bounded is None
+    # This is the consumer fallback when bounded authority declines the old snapshot.
+    fallback = reconstruct_archive_from_journal_rows(rows, None, objective_policy=policy)
+    assert canonical_jsonable(current) == canonical_jsonable(fallback)
+
+    rebuilt_event = snapshot_event(current, SEGMENT_SNAPSHOT_POLICY_VERSION)
+    rebuilt_cache: dict = {}
+    rebuilt = jsr.build_snapshot_replay_diagnostic(
+        rows, [rebuilt_event], prefix_verification_cache=rebuilt_cache
+    )
+    rebuilt_payload = jsr.archive_payload_from_verified_snapshot(
+        rows, [rebuilt_event], prefix_verification_cache=rebuilt_cache
+    )
+    assert rebuilt.status == "archive_prefix_match"
+    assert rebuilt.bounded_replay_readiness == "current"
+    assert canonical_jsonable(rebuilt_payload) == canonical_jsonable(current)
