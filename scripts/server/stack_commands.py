@@ -1408,23 +1408,82 @@ def _only_mode_transition_allowed(numa_mode: str, realized_mode: str) -> bool:
     return numa_mode == "both" and realized_mode in ("quarter", "full")
 
 
-def cmd_start(args: argparse.Namespace) -> int:
-    """Start the orchestrator stack."""
-    # SS-BENCH-GATE-b: --allow-during-bench flows into the per-spawn placement
-    # guard (the CLI-level guard already exited 2 without it when a bench runs).
-    bench_force = bool(getattr(args, "allow_during_bench", False))
-    _registry_yaml = Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml"
-    _descriptor_yaml = (
-        Path(__file__).parent.parent.parent / "orchestration" / "model_descriptors.yaml"
+def _start_master_registry_needed(args: argparse.Namespace) -> bool:
+    """Whether this start will actually read the research master registry."""
+    compiles_lean = bool(getattr(args, "compile_registry", True)) and (
+        os.environ.get("ORCHESTRATOR_REGISTRY_NO_COMPILE") != "1"
     )
-    _master_registry = Path(
-        "/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml"
-    )
-    _cache_key_path = _registry_yaml.parent / ".lean_cache_key"
+    return compiles_lean or bool(getattr(args, "compile_descriptors", False))
 
+
+def _start_registry_prelude(
+    args: argparse.Namespace,
+    *,
+    registry_yaml: Path,
+    descriptor_yaml: Path,
+    cache_key_path: Path,
+) -> int:
+    """The registry part of ``start``: compile lean -> validate -> compile descriptors.
+
+    Returns 0 to continue the start, 2 to refuse it. Launches nothing, so tests and
+    offline proofs call it directly with temp output paths.
+
+    NIB2-102 (2026-10-24): the research MASTER registry comes from
+    ``src.registry.research_origin.resolve_research_registry`` -- the same origin/main
+    materialization the stack-change pipeline uses -- never from the shared research
+    clone's working copy, which is deliberately left behind origin/main (compiling
+    from it silently dropped ratified declarations, e.g. ``ctx_checkpoints: 32``).
+    ``--research-registry PATH`` or ``$EPYC_RESEARCH_MASTER_REGISTRY`` still win. If
+    origin/main cannot be read at all, the start is REFUSED (fail closed).
+    """
+    resolved = None
+    master_registry: Path | None = None
+    if _start_master_registry_needed(args):
+        from src.registry.research_origin import (
+            RESEARCH_REGISTRY_ENV,
+            ResearchOriginError,
+            resolve_research_registry,
+        )
+
+        try:
+            resolved = resolve_research_registry(
+                getattr(args, "research_registry", None),
+                flag="--research-registry",
+                warn=lambda message: print(f"[registry-compile] WARNING (LOUD): {message}"),
+            )
+        except ResearchOriginError as exc:
+            print(f"[registry-compile] FATAL — refusing to start: {exc}")
+            print(
+                "[registry-compile]   e.g. orchestrator_stack.py start --research-registry "
+                f"<origin/main checkout>/orchestration/model_registry.yaml, or {RESEARCH_REGISTRY_ENV}=<path>"
+            )
+            return 2
+        master_registry = resolved.path
+        print(f"[registry-compile] master source: {resolved.description}")
+    try:
+        return _start_registry_prelude_body(
+            args,
+            _registry_yaml=registry_yaml,
+            _descriptor_yaml=descriptor_yaml,
+            _cache_key_path=cache_key_path,
+            _master_registry=master_registry,
+        )
+    finally:
+        if resolved is not None:
+            resolved.cleanup()
+
+
+def _start_registry_prelude_body(
+    args: argparse.Namespace,
+    *,
+    _registry_yaml: Path,
+    _descriptor_yaml: Path,
+    _cache_key_path: Path,
+    _master_registry: Path | None,
+) -> int:
     # 2026-06-27: lean-registry compile is default-on for normal starts.
     # Regenerates orchestration/model_registry.yaml from
-    # the master at epyc-inference-research/orchestration/model_registry.yaml,
+    # the research master (origin/main since NIB2-102; see _start_registry_prelude),
     # filtered to active roles per ROLE_LAUNCH_META + their transitive
     # draft/alias deps. Cache-keyed by SHA-256 of (master content + active
     # role names) — re-runs without changes are no-ops.
@@ -1491,6 +1550,24 @@ def cmd_start(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"[descriptor-compile] FATAL: {exc}")
             return 2
+
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    """Start the orchestrator stack."""
+    # SS-BENCH-GATE-b: --allow-during-bench flows into the per-spawn placement
+    # guard (the CLI-level guard already exited 2 without it when a bench runs).
+    bench_force = bool(getattr(args, "allow_during_bench", False))
+    _repo = Path(__file__).parent.parent.parent
+    rc = _start_registry_prelude(
+        args,
+        registry_yaml=_repo / "orchestration" / "model_registry.yaml",
+        descriptor_yaml=_repo / "orchestration" / "model_descriptors.yaml",
+        cache_key_path=_repo / "orchestration" / ".lean_cache_key",
+    )
+    if rc:
+        return rc
 
     if not _run_stack_change_launch_gate(args):
         return 2

@@ -17,8 +17,11 @@ commit never churns the recorded path.
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tempfile
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +29,10 @@ RESEARCH_REPO = Path("/mnt/raid0/llm/epyc-inference-research")
 REGISTRY_RELPATH = "orchestration/model_registry.yaml"
 FETCH_TIMEOUT_S = 20
 LABEL_PREFIX = "origin/main:"
+# Explicit override for every default reader of the research MASTER registry (stack
+# start, the compiler/descriptor/shared_with/reviewer-pool CLIs). A path given here or
+# by a CLI flag wins over origin/main; nothing ever falls back to the shared clone.
+RESEARCH_REGISTRY_ENV = "EPYC_RESEARCH_MASTER_REGISTRY"
 
 # resolved materialized path -> (stable label, short commit)
 _PROVENANCE: dict[Path, tuple[str, str]] = {}
@@ -76,6 +83,10 @@ def materialize_research_registry(
         why = fetch.stderr.strip()[:200]
     except subprocess.TimeoutExpired:
         fetched, why = False, f"timed out after {FETCH_TIMEOUT_S}s"
+    except OSError as exc:
+        # No git binary (or it cannot be executed): there is no origin/main to read, and
+        # the working copy is exactly what this module exists to avoid. Fail closed.
+        raise ResearchOriginError(f"git is unavailable ({exc}); cannot read origin/main in {repo}") from exc
     if not fetched:
         warnings.append(
             f"git fetch origin main failed in {repo} ({why}); using the EXISTING "
@@ -101,3 +112,68 @@ def materialize_research_registry(
     label = f"{LABEL_PREFIX}{relpath}"
     _PROVENANCE[dest.resolve()] = (label, short)
     return MaterializedRegistry(path=dest, sha=full, label=label, warnings=warnings, _tmp=tmp)
+
+
+@dataclass
+class ResolvedResearchRegistry:
+    """The research MASTER registry a default reader should use, and where it came from."""
+
+    path: Path
+    source: str  # "explicit" | "env" | "origin/main"
+    materialized: MaterializedRegistry | None = None
+
+    @property
+    def description(self) -> str:
+        if self.materialized is not None:
+            return f"{self.materialized.label} @ {self.materialized.sha}"
+        return f"{self.path} ({self.source} override)"
+
+    def cleanup(self) -> None:
+        if self.materialized is not None:
+            self.materialized.cleanup()
+
+
+def _warn_stderr(message: str) -> None:
+    print(f"WARNING: {message}", file=sys.stderr)
+
+
+def resolve_research_registry(
+    explicit: Path | str | None = None,
+    *,
+    flag: str = "--research-registry",
+    env: Mapping[str, str] | None = None,
+    repo: Path | None = None,
+    warn: Callable[[str], None] = _warn_stderr,
+) -> ResolvedResearchRegistry:
+    """Resolve the research master for a DEFAULT reader: explicit > env > origin/main.
+
+    * ``explicit`` (a CLI flag value) wins, then ``$EPYC_RESEARCH_MASTER_REGISTRY``.
+    * Otherwise the registry is materialized from ``origin/main`` (ref-only fetch; a
+      failed fetch falls back to the EXISTING origin/main ref, loudly via ``warn``).
+    * If origin/main cannot be read at all (git missing, ref missing, blob missing) this
+      raises :class:`ResearchOriginError` naming ``flag`` and the env var. It never falls
+      back to the shared clone's working copy, which is deliberately left stale.
+
+    The caller owns ``cleanup()`` of the result (removes the temp dir and provenance).
+    """
+    if explicit is not None and str(explicit) != "":
+        return ResolvedResearchRegistry(path=Path(explicit), source="explicit")
+    environ = os.environ if env is None else env
+    from_env = (environ.get(RESEARCH_REGISTRY_ENV) or "").strip()
+    if from_env:
+        return ResolvedResearchRegistry(path=Path(from_env), source="env")
+    repo = RESEARCH_REPO if repo is None else Path(repo)
+    try:
+        materialized = materialize_research_registry(repo=repo)
+    except ResearchOriginError as exc:
+        raise ResearchOriginError(
+            f"cannot materialize the research master registry from origin/main: {exc}. "
+            f"Refusing to fall back to the shared clone working copy {repo / REGISTRY_RELPATH} "
+            f"(it is deliberately behind origin/main). Pass {flag} <path> or set "
+            f"{RESEARCH_REGISTRY_ENV}=<path> to name a registry explicitly."
+        ) from exc
+    for message in materialized.warnings:
+        warn(message)
+    return ResolvedResearchRegistry(
+        path=materialized.path, source="origin/main", materialized=materialized
+    )

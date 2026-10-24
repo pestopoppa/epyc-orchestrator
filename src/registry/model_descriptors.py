@@ -1414,7 +1414,14 @@ def _roles_from_stack_manifest() -> set[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compile model-capability descriptors")
     parser.add_argument("--lean", type=Path, default=DEFAULT_LEAN_REGISTRY)
-    parser.add_argument("--research", type=Path, default=DEFAULT_RESEARCH_REGISTRY)
+    parser.add_argument(
+        "--research",
+        type=Path,
+        default=None,
+        help="Research master registry. Default: research origin/main materialized from "
+        "git (never the shared clone's working copy); $EPYC_RESEARCH_MASTER_REGISTRY "
+        "also overrides. Refuses when origin/main cannot be read.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_DESCRIPTOR_OUTPUT)
     parser.add_argument("--roles", nargs="+", help="Explicit active role list")
     parser.add_argument(
@@ -1428,12 +1435,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     active_roles = set(args.roles) if args.roles else _roles_from_stack_manifest()
-    descriptors = compile_model_descriptors(
-        lean_registry_path=args.lean,
-        research_registry_path=args.research,
-        active_roles=active_roles,
-        allow_incomplete=args.allow_incomplete,
-    )
+    from src.registry.research_origin import ResearchOriginError, resolve_research_registry
+
+    try:
+        resolved = resolve_research_registry(args.research, flag="--research")
+    except ResearchOriginError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        descriptors = compile_model_descriptors(
+            lean_registry_path=args.lean,
+            research_registry_path=resolved.path,
+            active_roles=active_roles,
+            allow_incomplete=args.allow_incomplete,
+        )
+    finally:
+        # provenance_for() was consulted inside compile; the temp copy is no longer needed.
+        resolved.cleanup()
     if args.dry_run:
         yaml.safe_dump(
             descriptors,

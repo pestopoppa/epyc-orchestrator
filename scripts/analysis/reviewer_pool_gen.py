@@ -613,7 +613,12 @@ def dumps(out: Dict[str, Any]) -> str:
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--registry", default=DEFAULT_REGISTRY)
+    p.add_argument(
+        "--registry",
+        default=None,
+        help="research master registry; default: research origin/main materialized from git "
+        "(never the shared clone's working copy). $EPYC_RESEARCH_MASTER_REGISTRY also overrides.",
+    )
     p.add_argument("--output", default=None, help="output path (default stdout)")
     p.add_argument("--pools-only", action="store_true",
                    help="emit pools + anchors only (skip pairing cross-product)")
@@ -661,8 +666,23 @@ def config_from_args(args: argparse.Namespace) -> PruneConfig:
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     cfg = config_from_args(args)
-    data, sha = load_registry(args.registry)
-    out = build_output(data, cfg, args.registry, sha, pools_only=args.pools_only)
+    # NIB2-102: the default master is research origin/main (same resolver as the stack
+    # start and the compile pipeline), never the deliberately-stale shared clone.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.registry.research_origin import ResearchOriginError, resolve_research_registry
+
+    try:
+        resolved = resolve_research_registry(args.registry, flag="--registry")
+    except ResearchOriginError as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        return 2
+    try:
+        data, sha = load_registry(str(resolved.path))
+    finally:
+        resolved.cleanup()
+    # A materialized temp path means nothing; record the stable origin/main label.
+    recorded = resolved.materialized.label if resolved.materialized else str(resolved.path)
+    out = build_output(data, cfg, recorded, sha, pools_only=args.pools_only)
     text = dumps(out)
     if args.output:
         Path(args.output).write_text(text + "\n")

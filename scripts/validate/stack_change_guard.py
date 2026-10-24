@@ -297,13 +297,35 @@ def derive_retired_live_roles(
 
 
 _RETIRED_LIVE_ROLES_CACHE: frozenset[str] | None = None
+# Set by a caller that has already resolved the research master (the stack-change
+# pipeline CLI, which the start-time launch gate runs, materializes origin/main).
+# None keeps DEFAULT_MASTER_REGISTRY for standalone use.
+_RETIRED_ROLES_MASTER_OVERRIDE: Path | None = None
+
+
+def use_master_registry(path: Path | None) -> None:
+    """Derive retired roles from ``path`` (an already-resolved master) from now on.
+
+    NIB2-102: without this, the in-process guard of the start-time launch gate read
+    retirement markers from the shared research clone's working copy, which is
+    deliberately behind origin/main, while every other step of the same run read
+    origin/main. Resets the cache.
+    """
+    global _RETIRED_ROLES_MASTER_OVERRIDE, _RETIRED_LIVE_ROLES_CACHE
+    _RETIRED_ROLES_MASTER_OVERRIDE = None if path is None else Path(path)
+    _RETIRED_LIVE_ROLES_CACHE = None
 
 
 def retired_live_roles(*, refresh: bool = False) -> frozenset[str]:
     """Cached accessor for the derived retired-role set."""
     global _RETIRED_LIVE_ROLES_CACHE
     if refresh or _RETIRED_LIVE_ROLES_CACHE is None:
-        _RETIRED_LIVE_ROLES_CACHE = derive_retired_live_roles()
+        if _RETIRED_ROLES_MASTER_OVERRIDE is not None:
+            _RETIRED_LIVE_ROLES_CACHE = derive_retired_live_roles(
+                master_registry_path=_RETIRED_ROLES_MASTER_OVERRIDE
+            )
+        else:
+            _RETIRED_LIVE_ROLES_CACHE = derive_retired_live_roles()
     return _RETIRED_LIVE_ROLES_CACHE
 
 

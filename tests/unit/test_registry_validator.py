@@ -339,10 +339,18 @@ def test_consumer_validates_this_exact_registry() -> None:
     """`stack_commands.cmd_start` gates on `validate_or_raise` over LIVE_REGISTRY."""
     from scripts.server import stack_commands
 
-    source = inspect.getsource(stack_commands.cmd_start)
+    # NIB2-102 moved the compile -> validate -> descriptor prelude out of cmd_start
+    # into _start_registry_prelude[_body]; cmd_start still names the lean path and
+    # passes it in as `registry_yaml`, which the body receives as `_registry_yaml`.
+    start_source = inspect.getsource(stack_commands.cmd_start)
+    assert "_start_registry_prelude(" in start_source
+    assert 'registry_yaml=_repo / "orchestration" / "model_registry.yaml"' in start_source
+    assert "_registry_yaml=registry_yaml" in inspect.getsource(
+        stack_commands._start_registry_prelude
+    )
+    source = inspect.getsource(stack_commands._start_registry_prelude_body)
     assert "from src.registry.registry_validator import validate_or_raise" in source
     assert "validate_or_raise(_registry_yaml)" in source
-    assert '"orchestration" / "model_registry.yaml"' in source
 
     # The path expression the consumer builds, evaluated the same way.
     consumer_registry = (

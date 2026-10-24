@@ -1880,9 +1880,15 @@ def main(argv: list[str] | None = None) -> int:
         numa_mode=args.numa_mode,
         allow_stale_research_registry=args.allow_stale_research_registry,
     )
+    # NIB2-102: the guard's retired-role derivation reads the SAME master as every
+    # other step of this run (origin/main by default), not its own clone default.
+    from scripts.validate import stack_change_guard as _guard
+
+    _guard.use_master_registry(research_registry)
     try:
         report = run_stack_change_pipeline(config)
     finally:
+        _guard.use_master_registry(None)
         if materialized is not None:
             materialized.cleanup()
     _print_report(report)

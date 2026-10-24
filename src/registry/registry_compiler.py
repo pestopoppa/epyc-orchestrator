@@ -458,14 +458,17 @@ def load_or_compile(
 
 # --- CLI for diagnostic / dry-run inspection -------------------------------
 
-def _main() -> int:
+def _main(argv: list[str] | None = None) -> int:
     import argparse
 
     p = argparse.ArgumentParser(description="Compile lean orchestrator registry")
     p.add_argument(
         "--master",
         type=Path,
-        default=DEFAULT_MASTER_PATH,
+        default=None,
+        help="Research master registry. Default: research origin/main materialized from "
+        "git (never the shared clone's working copy); $EPYC_RESEARCH_MASTER_REGISTRY "
+        "also overrides. Refuses when origin/main cannot be read.",
     )
     p.add_argument(
         "--output",
@@ -490,7 +493,7 @@ def _main() -> int:
     )
     p.add_argument("--dry-run", action="store_true", help="Compile to stdout, do not write")
     p.add_argument("--force", action="store_true", help="Recompile even on cache hit")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     if args.roles:
         active = set(args.roles)
@@ -501,17 +504,31 @@ def _main() -> int:
         from scripts.server.stack_manifest import ROLE_LAUNCH_META  # type: ignore[import]
         active = active_roles_from_launch_meta(ROLE_LAUNCH_META)
 
+    from src.registry.research_origin import ResearchOriginError, resolve_research_registry
+
+    try:
+        resolved = resolve_research_registry(args.master, flag="--master")
+    except ResearchOriginError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        return _compile_cli(args, active, resolved.path, resolved.description)
+    finally:
+        resolved.cleanup()
+
+
+def _compile_cli(args, active: set[str], master: Path, master_desc: str) -> int:
     if args.dry_run:
-        compiled = compile_lean(args.master, active, args.topology)
+        compiled = compile_lean(master, active, args.topology)
         yaml.safe_dump(compiled, sys.stdout, sort_keys=False, default_flow_style=False)
         return 0
 
     if args.force and args.cache_key.exists():
         args.cache_key.unlink()
 
-    out = load_or_compile(args.master, active, args.output, args.cache_key, args.topology)
+    out = load_or_compile(master, active, args.output, args.cache_key, args.topology)
     print(f"OK: {len(out.get('roles', {}))} roles in compiled output")
-    print(f"  master:    {args.master}")
+    print(f"  master:    {master_desc}")
     print(f"  output:    {args.output}")
     print(f"  topology:  {args.topology}")
     print(f"  cache key: {args.cache_key}")

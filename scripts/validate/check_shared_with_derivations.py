@@ -980,7 +980,13 @@ def apply_fixes(sources: Sources, findings: list[Finding]) -> tuple[list[str], l
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--master-registry", type=Path, default=DEFAULT_MASTER_REGISTRY)
+    parser.add_argument(
+        "--master-registry",
+        type=Path,
+        default=None,
+        help="research master registry; default: research origin/main materialized from git "
+        "(never the shared clone's working copy). $EPYC_RESEARCH_MASTER_REGISTRY also overrides.",
+    )
     parser.add_argument("--launch-manifest", type=Path, default=DEFAULT_LAUNCH_MANIFEST)
     parser.add_argument("--stack-topology", type=Path, default=DEFAULT_STACK_TOPOLOGY)
     parser.add_argument("--models-py", type=Path, default=DEFAULT_MODELS_PY)
@@ -993,6 +999,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
+    # NIB2-102: same resolver as the stack start and the compile pipeline. --fix
+    # rewrites surfaces FROM the master, so a stale default would write stale values.
+    sys.path.insert(0, str(REPO_ROOT))
+    from src.registry.research_origin import ResearchOriginError, resolve_research_registry
+
+    try:
+        resolved = resolve_research_registry(args.master_registry, flag="--master-registry")
+    except ResearchOriginError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    try:
+        args.master_registry = resolved.path
+        return _run(args)
+    finally:
+        resolved.cleanup()
+
+
+def _run(args: argparse.Namespace) -> int:
     try:
         sources = load_sources(
             args.master_registry, args.launch_manifest, args.stack_topology

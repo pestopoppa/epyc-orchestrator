@@ -3490,11 +3490,21 @@ def main() -> int:
         "--compile-registry",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Recompile orchestration/model_registry.yaml from the master "
-        "registry at epyc-inference-research before starting (default: on). "
+        help="Recompile orchestration/model_registry.yaml from the research master "
+        "registry before starting (default: on). The master is read from the research "
+        "repo's origin/main (git fetch + git show), never the shared clone's working "
+        "copy; see --research-registry. "
         "Cache-aware: no-op if neither master nor active role set has changed. "
         "Use --no-compile-registry or set ORCHESTRATOR_REGISTRY_NO_COMPILE=1 "
         "to disable.",
+    )
+    start_parser.add_argument(
+        "--research-registry",
+        type=Path,
+        default=None,
+        help="Explicit research master registry for the start-time lean/descriptor "
+        "compile (overrides $EPYC_RESEARCH_MASTER_REGISTRY and the origin/main default). "
+        "Without either, start refuses when origin/main cannot be read.",
     )
     start_parser.add_argument(
         "--compile-descriptors",

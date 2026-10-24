@@ -179,6 +179,25 @@ def test_start_parser_accepts_no_compile_registry(monkeypatch, _no_running_cpu_b
     assert captured["compile_registry"] is False
 
 
+def test_start_parser_research_registry_flag(monkeypatch, _no_running_cpu_bench) -> None:
+    """NIB2-102: start takes an explicit research master; default None = origin/main."""
+    captured: dict[str, object] = {}
+
+    def fake_cmd_start(args: Namespace) -> int:
+        captured["research_registry"] = args.research_registry
+        return 0
+
+    monkeypatch.setattr(stack_commands, "cmd_start", fake_cmd_start)
+    monkeypatch.setattr(sys, "argv", ["orchestrator_stack.py", "start"])
+    assert stack.main() == 0
+    assert captured["research_registry"] is None
+    monkeypatch.setattr(
+        sys, "argv", ["orchestrator_stack.py", "start", "--research-registry", "/x/reg.yaml"]
+    )
+    assert stack.main() == 0
+    assert captured["research_registry"] == Path("/x/reg.yaml")
+
+
 def test_cmd_start_compiles_registry_by_default_arg_absence(
     monkeypatch, isolated_runtime_facts_tmp: Path
 ) -> None:
@@ -191,6 +210,18 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(
     import src.registry.registry_compiler as compiler
 
     monkeypatch.setattr(compiler, "load_or_compile", fake_load_or_compile)
+    # NIB2-102: the master is resolved from research origin/main; keep this unit test
+    # off the real research clone (its own test file covers the resolver).
+    import src.registry.research_origin as research_origin
+
+    resolved_master = isolated_runtime_facts_tmp / "master.yaml"
+    monkeypatch.setattr(
+        research_origin,
+        "resolve_research_registry",
+        lambda *a, **k: research_origin.ResolvedResearchRegistry(
+            path=resolved_master, source="explicit"
+        ),
+    )
 
     args = _stack_gate_args(
         stack_profile="default",
@@ -201,6 +232,7 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(
 
     assert stack_commands.cmd_start(args) == 0
     assert len(calls) == 1
+    assert calls[0]["master_path"] == resolved_master
     assert calls[0]["output_path"].name == "model_registry.yaml"
     assert calls[0]["cache_key_path"].name == ".lean_cache_key"
     assert not (isolated_runtime_facts_tmp / "orchestrator_runtime_facts.json").exists()
