@@ -60,6 +60,9 @@ class RoutingResult:
     routing_decision: list = field(default_factory=list)
     routing_strategy: str = ""
     formalization_applied: bool = False
+    # Input formalization uses a separate generation subprocess without exact
+    # prompt-token reporting, so any attempt makes request generation usage unknown.
+    formalization_attempted: bool = False
     timeout_s: int = DEFAULT_TIMEOUT_S
     document_result: PreprocessingResult | None = None
     tool_required: bool = False  # True when task needs tools (file search, computation)

@@ -93,6 +93,94 @@ def writable_tmp_dir(monkeypatch, tmp_path):
 class TestInferenceMixinRealCall:
     """Tests for _real_call() method."""
 
+    def test_request_prompt_usage_sums_exact_backend_counts_and_propagates_unknown(
+        self, mock_model_server
+    ):
+        prims = LLMPrimitives(mock_mode=False, model_server=mock_model_server)
+        mock_model_server.infer.side_effect = [
+            InferenceResult(
+                role="coder_escalation", output="first", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": 7, "cache_n": 3},
+            ),
+            InferenceResult(
+                role="coder_escalation", output="second", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": 0, "cache_n": 0},
+            ),
+        ]
+
+        with prims.request_context(request_id="exact-usage"):
+            prims._real_call("first", "coder_escalation", n_tokens=8)
+            prims._real_call("second", "coder_escalation", n_tokens=8)
+            assert prims.get_request_prompt_tokens() == 10
+        assert prims.get_request_prompt_tokens() is None
+
+        mock_model_server.infer.side_effect = None
+        mock_model_server.infer.return_value = InferenceResult(
+            role="coder_escalation", output="unknown", tokens_generated=1,
+            generation_speed=1.0, elapsed_time=0.1, success=True,
+        )
+        with prims.request_context(request_id="incomplete-usage"):
+            prims._real_call("unknown", "coder_escalation", n_tokens=8)
+            assert prims.get_request_prompt_tokens() is None
+
+    def test_failed_backend_attempt_makes_request_prompt_usage_unknown(self, mock_model_server):
+        prims = LLMPrimitives(mock_mode=False, model_server=mock_model_server)
+        mock_model_server.infer.side_effect = RuntimeError("transport failed")
+
+        with prims.request_context(request_id="failed-usage"):
+            with pytest.raises(RuntimeError, match="transport failed"):
+                prims._real_call("request", "coder_escalation", n_tokens=8)
+            assert prims.get_request_prompt_tokens() is None
+
+        mock_model_server.infer.side_effect = None
+        mock_model_server.infer.return_value = InferenceResult(
+            role="coder_escalation", output="ok", tokens_generated=1,
+            generation_speed=1.0, elapsed_time=0.1, success=True,
+            timings={"prompt_n": 3, "cache_n": 0},
+        )
+        with prims.request_context(request_id="after-failed-usage"):
+            prims._real_call("request", "coder_escalation", n_tokens=8)
+            assert prims.get_request_prompt_tokens() == 3
+
+    def test_prompt_usage_is_null_while_a_copied_request_call_is_in_flight(
+        self, mock_model_server
+    ):
+        import threading
+
+        prims = LLMPrimitives(mock_mode=False, model_server=mock_model_server)
+        started = threading.Event()
+        release = threading.Event()
+
+        def _infer(role, request):
+            if request.prompt == "blocked":
+                started.set()
+                assert release.wait(timeout=5), "blocked fake inference was never released"
+            return InferenceResult(
+                role=role, output="ok", tokens_generated=1,
+                generation_speed=1.0, elapsed_time=0.1, success=True,
+                timings={"prompt_n": 5, "cache_n": 0},
+            )
+
+        mock_model_server.infer.side_effect = _infer
+        with prims.request_context(request_id="in-flight"):
+            prims._real_call("finished", "coder_escalation", n_tokens=8)
+            worker = threading.Thread(
+                target=prims._bind_current_context(
+                    prims._real_call, "blocked", "coder_escalation", n_tokens=8
+                )
+            )
+            worker.start()
+            try:
+                assert started.wait(timeout=5), "copied inference worker did not start"
+                assert prims.get_request_prompt_tokens() is None
+            finally:
+                release.set()
+                worker.join(timeout=5)
+            assert not worker.is_alive(), "copied inference worker did not finish"
+            assert prims.get_request_prompt_tokens() == 10
+
     def test_fallback_runtime_error_after_streamed_chunk_does_not_try_next_role(
         self, monkeypatch
     ):

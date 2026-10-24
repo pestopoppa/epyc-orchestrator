@@ -96,6 +96,15 @@ class ChatResponse(BaseModel):
     answer: str = Field(..., description="The final answer")
     turns: int = Field(..., description="Number of orchestration turns used")
     tokens_used: int = Field(default=0, description="Approximate tokens used")
+    prompt_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Sum of exact server-reported prompt tokens for generation calls in this request; "
+            "embedding-only work is excluded. Null when no generation call was observed, an "
+            "attempted generation lacked exact usage (including input formalization), or a call "
+            "was still in flight when the response finalized."
+        ),
+    )
     elapsed_seconds: float = Field(..., description="Total processing time")
     mock_mode: bool = Field(..., description="Whether mock mode was used")
     real_mode: bool = Field(default=False, description="Whether real inference was used")

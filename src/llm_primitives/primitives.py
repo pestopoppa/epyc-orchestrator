@@ -27,6 +27,44 @@ from src.roles import Role
 from src.workload_model import infer_workload_class
 
 
+_NO_PROMPT_USAGE_ATTEMPT = object()
+
+
+class _RequestPromptUsage:
+    """Thread-safe sum of server-reported prompt usage for one request scope."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls = 0
+        self._total = 0
+        self._complete = True
+        self._pending: set[object] = set()
+
+    def begin(self) -> object:
+        token = object()
+        with self._lock:
+            self._pending.add(token)
+        return token
+
+    def record(self, value: Any, token: object | None = None) -> None:
+        with self._lock:
+            if token is not None:
+                if token not in self._pending:
+                    return
+                self._pending.remove(token)
+            self._calls += 1
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                self._complete = False
+                return
+            self._total += value
+
+    def total(self) -> int | None:
+        with self._lock:
+            if self._calls == 0 or not self._complete or self._pending:
+                return None
+            return self._total
+
+
 class LLMPrimitives(
     BackendMixin,
     CostTrackingMixin,
@@ -231,6 +269,13 @@ class LLMPrimitives(
         self._last_inference_meta_ctx: contextvars.ContextVar[dict[str, Any] | None] = (
             contextvars.ContextVar("llm_primitives_last_inference_meta", default=None)
         )
+        # A request sums the backend-reported prompt count for every inference call it
+        # makes. The ContextVar separates concurrent requests, while the shared collector
+        # is locked because asyncio.to_thread and copied executor contexts inherit the same
+        # mutable collector object. Nested request_context scopes retain the outer collector.
+        self._request_prompt_usage_ctx: contextvars.ContextVar[_RequestPromptUsage | None] = (
+            contextvars.ContextVar("llm_primitives_request_prompt_usage", default=None)
+        )
         # HS-4 P0.2: typed /v1 request keys stamped onto the inference trace.
         # Instance-level (not a contextvar) because /v1 builds one primitives
         # object per request and its streaming body runs in a different context
@@ -379,6 +424,43 @@ class LLMPrimitives(
         """
         return self._last_inference_meta_ctx.get()
 
+    def get_request_prompt_tokens(self) -> int | None:
+        """Return complete server-reported generation prompt usage for this request.
+
+        ``None`` means no backend call occurred or at least one attempted backend call
+        lacked an exact non-negative integer usage count. Estimates and shared cumulative
+        counters are deliberately excluded. Embedding-only work is outside this metric.
+        """
+        collector = self._request_prompt_usage_ctx.get()
+        return collector.total() if collector is not None else None
+
+    def mark_request_prompt_usage_unknown(self) -> None:
+        """Invalidate request generation usage after an unmetered generation call."""
+        collector = self._request_prompt_usage_ctx.get()
+        if collector is not None:
+            collector.record(None)
+
+    def _begin_request_prompt_tokens(self) -> tuple[_RequestPromptUsage, object] | None:
+        """Register an in-flight backend attempt in the current request, if active."""
+        collector = self._request_prompt_usage_ctx.get()
+        return (collector, collector.begin()) if collector is not None else None
+
+    def _record_request_prompt_tokens(
+        self,
+        value: Any,
+        attempt: tuple[_RequestPromptUsage, object] | None | object = _NO_PROMPT_USAGE_ATTEMPT,
+    ) -> None:
+        """Finish one backend attempt with exact usage or an explicit unknown."""
+        if attempt is None:
+            return
+        if attempt is _NO_PROMPT_USAGE_ATTEMPT:
+            collector = self._request_prompt_usage_ctx.get()
+            token = None
+        else:
+            collector, token = attempt
+        if collector is not None:
+            collector.record(value, token)
+
     def get_max_queue_wait_ms(self) -> int | None:
         """Get request-local cross-role contention gate budget, if set.
 
@@ -460,6 +542,9 @@ class LLMPrimitives(
         token_workload_class = self._request_workload_class_ctx.set(normalized_workload_class)
         token_batch_placement = self._batch_placement_mode_ctx.set(batch_placement_mode)
         token_queue_wait = self._max_queue_wait_ms_ctx.set(max_queue_wait_ms)
+        token_prompt_usage = None
+        if self._request_prompt_usage_ctx.get() is None:
+            token_prompt_usage = self._request_prompt_usage_ctx.set(_RequestPromptUsage())
         try:
             yield
         finally:
@@ -480,6 +565,8 @@ class LLMPrimitives(
             self._request_workload_class_ctx.reset(token_workload_class)
             self._batch_placement_mode_ctx.reset(token_batch_placement)
             self._max_queue_wait_ms_ctx.reset(token_queue_wait)
+            if token_prompt_usage is not None:
+                self._request_prompt_usage_ctx.reset(token_prompt_usage)
 
     def _remaining_deadline_s(self) -> float | None:
         """Return remaining request deadline in seconds, if any."""

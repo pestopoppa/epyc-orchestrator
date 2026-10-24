@@ -6,9 +6,43 @@ from unittest.mock import Mock
 
 import pytest
 
+from src.llm_primitives import LLMPrimitives
 from src.repl_environment import REPLEnvironment
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
+
+def test_parallel_delegation_workers_share_request_prompt_usage(monkeypatch):
+    monkeypatch.setattr("src.concurrency.is_small_worker_role", lambda _role: True)
+    primitives = LLMPrimitives(mock_mode=False, model_server=object())
+    prompt_counts: dict[str, int | None] = {"alpha": 13, "beta": 17}
+
+    def _llm_call(prompt, *, role, **_kwargs):
+        assert role == "worker_general"
+        primitives._record_request_prompt_tokens(
+            next(count for item, count in prompt_counts.items() if item in prompt)
+        )
+        return "done"
+
+    primitives.llm_call = _llm_call  # type: ignore[method-assign]
+    repl = REPLEnvironment(
+        context="",
+        llm_primitives=primitives,
+        role="architect_general",
+    )
+
+    with primitives.request_context(request_id="parallel-delegation"):
+        results = repl._delegate_parallel("[alpha, beta]", "worker_general")
+        assert len(results) == 2
+        assert primitives.get_request_prompt_tokens() == 30
+
+    prompt_counts["beta"] = None
+    with primitives.request_context(request_id="parallel-delegation-missing"):
+        results = repl._delegate_parallel("[alpha, beta]", "worker_general")
+        assert len(results) == 2
+        assert primitives.get_request_prompt_tokens() is None
+
+    assert primitives.get_request_prompt_tokens() is None
 
 
 class TestMyRole:

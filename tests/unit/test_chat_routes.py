@@ -1209,6 +1209,7 @@ class TestHandleChatXmasCheapFirst:
         from unittest.mock import AsyncMock
 
         mock_primitives.request_context = MagicMock(return_value=nullcontext())
+        mock_primitives.get_request_prompt_tokens.return_value = 42
         xmas_meta = {
             "mode": "enforce",
             "applied": True,
@@ -1271,13 +1272,14 @@ class TestHandleChatXmasCheapFirst:
         assert result.xmas_meta is xmas_meta
 
     @pytest.mark.asyncio
-    async def test_xmas_enforce_to_non_cheap_role_keeps_cheap_first_bypass(
+    async def test_xmas_enforce_applies_only_to_allowlisted_roles(
         self, mock_state, mock_primitives
     ):
         from contextlib import nullcontext
         from unittest.mock import AsyncMock
 
         mock_primitives.request_context = MagicMock(return_value=nullcontext())
+        mock_primitives.get_request_prompt_tokens.return_value = 42
         xmas_meta = {
             "mode": "enforce",
             "applied": True,
@@ -1337,3 +1339,5 @@ class TestHandleChatXmasCheapFirst:
         assert mock_cheap.await_count == 0
         assert result.routing_strategy == "xmas_enforce:learned"
         assert result.xmas_meta is xmas_meta
+        assert result.prompt_tokens == 42
+        assert result.model_dump()["prompt_tokens"] == 42
