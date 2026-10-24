@@ -111,5 +111,3 @@ def test_get_role_returns_an_object_the_consumer_can_actually_read() -> None:
                 f"A plain dict from get_role_config() fails here — that is the trap."
             )
             obj = getattr(obj, attr)
-
-
