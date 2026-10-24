@@ -185,39 +185,51 @@ def test_compat_alias_is_the_unrenamed_target_module(alias, target):
 
 
 def test_all_compat_aliases_concurrent_first_import_is_safe():
-    script = textwrap.dedent(
-        f"""
-        import importlib, random, sys, threading
-        sys.path.insert(0, {str(REPO_ROOT)!r})
-        sys.setswitchinterval(0.000005)
-        aliases = {_COMPAT_ALIASES!r}
-        errors = []
-        barrier = threading.Barrier(24)
+    def _one(alias: str, target: str) -> str:
+        script = textwrap.dedent(
+            f"""
+            import importlib, sys, threading
+            sys.path.insert(0, {str(REPO_ROOT)!r})
+            sys.setswitchinterval(0.000005)
+            alias, target = {alias!r}, {target!r}
+            errors = []
+            modules = []
+            barrier = threading.Barrier(24)
 
-        def worker():
-            order = list(aliases.items())
-            random.shuffle(order)
-            barrier.wait()
-            for alias, target in order:
+            def worker():
+                barrier.wait()
                 try:
-                    if importlib.import_module(alias) is not importlib.import_module(target):
-                        errors.append(alias)
+                    modules.append(importlib.import_module(alias))
                 except BaseException as exc:
                     errors.append(f"{{alias}}: {{exc!r}}")
 
-        threads = [threading.Thread(target=worker) for _ in range(24)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        sys.exit(f"FAILED {{errors[:3]}}" if errors else 0)
-        """
-    )
+            threads = [threading.Thread(target=worker) for _ in range(24)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
-    def _one(_i: int) -> str:
+            canonical = importlib.import_module(target)
+            if len(modules) != 24 or any(module is not canonical for module in modules):
+                errors.append(f"{{alias}} did not resolve to one canonical module")
+            if canonical.__name__ != target or canonical.__spec__.name != target:
+                errors.append(f"{{alias}} changed canonical module identity or spec")
+            sys.exit(f"FAILED {{errors[:3]}}" if errors else 0)
+            """
+        )
         proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
         return proc.stderr[-500:] if proc.returncode else ""
 
     with ThreadPoolExecutor(max_workers=4) as ex:
-        failures = [err for err in ex.map(_one, range(20)) if err]
+        failures = [
+            err
+            for err in ex.map(_one, *_zip_compat_aliases())
+            if err
+        ]
     assert not failures, failures[0]
+
+
+def _zip_compat_aliases():
+    """Return positional argument streams for one clean-process race per alias."""
+    pairs = sorted(_COMPAT_ALIASES.items())
+    return tuple(tuple(pair[index] for pair in pairs) for index in range(2))
