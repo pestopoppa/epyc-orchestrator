@@ -216,6 +216,9 @@ def test_build_role_result_keeps_reported_output_separate_from_legacy_counters()
     failed_resp = {
         "answer": "",
         "error": "transport failed",
+        # Match the structural transport fact supplied by the caller; generic
+        # prose alone does not promote an unclassified error to infrastructure.
+        "failure_reason": "connect_error",
         "tokens_used": 0,
         "tokens_generated": 0,
         "output_tokens_reported": 8,
