@@ -692,6 +692,31 @@ class TestGetConfig:
         assert isinstance(cfg.monitor, MonitorConfigData)
         assert isinstance(cfg.paths, PathsConfig)
 
+    @pytest.mark.parametrize("value", ["1", "true", "on"])
+    def test_scalar_section_env_does_not_crash_config(self, monkeypatch, value) -> None:
+        """A3-M1: ORCHESTRATOR_<SECTION>=1 (e.g. the legacy REPL feature flag) must not fail get_config()."""
+        from src.config import OrchestratorSettings
+
+        sections = [n for n, f in OrchestratorSettings.model_fields.items() if f.default_factory]
+        assert {"repl", "chat", "server", "features"} <= set(sections)
+        for name in sections:
+            monkeypatch.setenv(f"ORCHESTRATOR_{name.upper()}", value)
+        monkeypatch.setenv("ORCHESTRATOR_REPL_TIMEOUT_SECONDS", "77")
+        get_config.cache_clear()
+        try:
+            cfg = get_config()
+        finally:
+            get_config.cache_clear()
+        assert cfg.repl.timeout_seconds == 77  # the section's own prefixed vars still apply
+
+    def test_json_section_env_still_overrides(self, monkeypatch) -> None:
+        monkeypatch.setenv("ORCHESTRATOR_ESCALATION", '{"max_retries": 9}')
+        get_config.cache_clear()
+        try:
+            assert get_config().escalation.max_retries == 9
+        finally:
+            get_config.cache_clear()
+
 
 def test_server_urls_bridge_survives_a_field_the_settings_model_lacks():
     """A dataclass URL field absent from the Pydantic model must NOT become MISSING.

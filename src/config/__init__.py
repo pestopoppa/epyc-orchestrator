@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import json
+import logging
 import os
 from functools import lru_cache
 
@@ -41,6 +43,7 @@ from ..env_parsing import env_int as _env_int
 # Try to use pydantic-settings if available, fall back to basic dataclass
 try:
     from pydantic import Field as PydanticField
+    from pydantic import field_validator
     from pydantic_settings import BaseSettings, SettingsConfigDict
 
     PYDANTIC_SETTINGS_AVAILABLE = True
@@ -448,7 +451,27 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         model_config = SettingsConfigDict(
             env_prefix="ORCHESTRATOR_",
             extra="ignore",
+            enable_decoding=False,
         )
+
+        @field_validator("*", mode="before")
+        @classmethod
+        def _section_env_must_be_object(cls, value, info):
+            # A3-M1: ORCHESTRATOR_<SECTION> (e.g. the ORCHESTRATOR_REPL=1 feature flag)
+            # is read as the whole nested section; only a JSON object overrides it.
+            field = cls.model_fields[info.field_name]
+            if field.default_factory is None or not isinstance(value, str):
+                return value
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
+            logging.getLogger(__name__).warning(
+                "Ignoring ORCHESTRATOR_%s=%r: it names a config section", info.field_name.upper(), value
+            )
+            return field.default_factory()
 
 
 # ============================================================================
