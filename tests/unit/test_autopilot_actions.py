@@ -4150,11 +4150,14 @@ def test_memory_distillation_record_marks_only_native_escalations() -> None:
     assert role_change_only["escalations"] == []
 
 
+@pytest.mark.parametrize("capture_verdict", [True, False])
 def test_distill_skillbank_reports_episodic_pattern_counts_without_inference(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capture_verdict
 ) -> None:
     from orchestration.repl_memory import episodic_store, embedder, skill_bank
     from orchestration.repl_memory.distillation import pipeline, teachers
+    from scripts.autopilot.species import distillation_pool_capture
+    from scripts.autopilot.species import structural_lab as structural_lab_module
     from scripts.autopilot.species.structural_lab import StructuralLab
 
     records = [
@@ -4164,6 +4167,8 @@ def test_distill_skillbank_reports_episodic_pattern_counts_without_inference(
             action_type="escalation",
             context={"extra": {"from_tier": "worker", "to_tier": "architect"}},
             outcome="success",
+            q_value=0.9,
+            model_id="fixture-model",
         ),
         SimpleNamespace(
             id="r1",
@@ -4173,11 +4178,27 @@ def test_distill_skillbank_reports_episodic_pattern_counts_without_inference(
             outcome="success",
             assigned_role="verifier",
             sub_decision="delegate",
+            q_value=0.85,
+            model_id=None,
         ),
     ]
     captured = {}
 
+    store_dir = tmp_path / "source-store"
+    store_dir.mkdir()
+    sqlite_path = store_dir / "episodic.db"
+    sqlite_path.write_bytes(b"synthetic-source-store")
+
     class FakeStore:
+        def __init__(self):
+            self.sqlite_path = sqlite_path
+            self.storage_dir = store_dir
+            self._embedding_store = SimpleNamespace(
+                index_path=store_dir / "embeddings.faiss",
+                id_map_path=store_dir / "id_map.npy",
+            )
+            self.use_faiss = True
+
         def retrieve_by_similarity(self, *_args, **_kwargs):
             return records
 
@@ -4215,13 +4236,41 @@ def test_distill_skillbank_reports_episodic_pattern_counts_without_inference(
 
     monkeypatch.setattr(episodic_store, "EpisodicStore", FakeStore)
     monkeypatch.setattr(teachers, "MockTeacher", FakeTeacher)
+    monkeypatch.setattr(teachers, "ClaudeTeacher", FakeTeacher)
     monkeypatch.setattr(skill_bank, "SkillBank", FakeSkillBank)
     monkeypatch.setattr(pipeline, "DistillationPipeline", FakePipeline)
     monkeypatch.setattr(embedder, "TaskEmbedder", lambda: object())
+    monkeypatch.setattr(structural_lab_module, "MEMORY_DIR", tmp_path / "memory")
+    if not capture_verdict:
+        original_write_capture = distillation_pool_capture.write_capture
+
+        def synthetic_capture(**kwargs):
+            # Exercise the real producer while keeping this fake-store/fake-teacher
+            # invocation explicitly outside any measurement ledger.
+            kwargs["synthetic"] = True
+            return original_write_capture(**kwargs)
+
+        monkeypatch.setattr(distillation_pool_capture, "write_capture", synthetic_capture)
+        monkeypatch.setattr(
+            StructuralLab,
+            "_distill_pool_composition",
+            staticmethod(lambda *_args, **_kwargs: {
+                "total": 0, "by_outcome": {}, "min_q_value": 0.7,
+            }),
+        )
 
     result = StructuralLab().distill_skillbank(
-        teacher="mock", skill_db_path=tmp_path / "unused-skills.db"
+        teacher="mock" if capture_verdict else "claude",
+        skill_db_path=tmp_path / "unused-skills.db",
     )
+
+    if not capture_verdict:
+        assert result["status"] == "error"
+        assert result["capture"]["verdict"] is False
+        assert Path(result["capture"]["path"]).is_relative_to(tmp_path / "memory")
+        assert json.loads(Path(result["capture"]["path"]).read_bytes())["synthetic"] is True
+        assert "patterns" not in captured
+        return
 
     assert result["status"] == "ok"
     assert result["report"]["input_unit"] == "episodic_memory_pattern"
@@ -4229,5 +4278,7 @@ def test_distill_skillbank_reports_episodic_pattern_counts_without_inference(
     assert result["report"]["success_trajectories"] == 2
     assert result["report"]["escalation_trajectories"] == 1
     assert result["pool"]["by_outcome"] == {"success": 2}
+    assert result["capture"]["verdict"] is True
+    assert Path(result["capture"]["path"]).is_relative_to(tmp_path / "memory")
     assert captured["patterns"][0]["escalations"][0]["memory_id"] == "e1"
     assert captured["patterns"][1]["escalations"] == []
