@@ -26,9 +26,14 @@ See also:
 """
 
 import atexit
+import fnmatch
+import importlib
+import inspect
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import warnings
 from pathlib import Path
@@ -44,6 +49,17 @@ _PREVIOUS_PROGRESS_LOG_DIR = os.environ.get(_PROGRESS_LOG_DIR_ENV)
 _TEST_PROGRESS_LOG_TEMP = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-progress-")
 os.environ[_PROGRESS_LOG_DIR_ENV] = _TEST_PROGRESS_LOG_TEMP.name
 
+# Runtime stores that default into the checkout, pinned to a temp dir for the whole run
+# (also before application imports: some bind their path at import).
+_TEST_RUNTIME_STORES = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-stores-")
+_TEST_TRACE_DB_PATHS: set[Path] = set()
+_RUNTIME_STORE_ENVS = {
+    "ORCHESTRATOR_DELEGATION_REPORT_DIR": "delegation_reports",
+    "AUTOPILOT_EVAL_INSTRUMENT_LEDGER": "eval_instrument_ledger.json",
+}
+_PREVIOUS_RUNTIME_STORE_ENVS = {key: os.environ.get(key) for key in _RUNTIME_STORE_ENVS}
+for _env, _name in _RUNTIME_STORE_ENVS.items():
+    os.environ[_env] = os.path.join(_TEST_RUNTIME_STORES.name, _name)
 _PRODUCTION_KERNEL_STORE_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
 
 
@@ -145,6 +161,12 @@ def pytest_addoption(parser):
         help="Run tests that require a live OCR server",
     )
     parser.addoption(
+        "--run-materialized-trace",
+        action="store_true",
+        default=False,
+        help="Read the host's materialized trace database in the smoke test",
+    )
+    parser.addoption(
         "--run-live-models",
         action="store_true",
         default=False,
@@ -164,6 +186,7 @@ def pytest_configure(config):
         "markers", "requires_live_models: marks tests that require live orchestrator models"
     )
     config.addinivalue_line("markers", "integration: marks integration tests")
+    config.addinivalue_line("markers", "requires_materialized_trace: reads host trace data")
 
     # Check available memory (skip in CI - mock mode tests don't load models)
     if IS_CI:
@@ -196,6 +219,56 @@ def pytest_configure(config):
             )
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_CHECKOUT_LEAK_EXEMPT = (
+    "*__pycache__/*", ".pytest_cache/*", ".hypothesis/*", ".coverage*",  # tool caches
+    # Leaks seen in a full run with no fix yet; shrink this list, never grow it.
+    "logs/.bg_cleanup.lock",
+    "logs/dispatch/*",
+    "logs/progress/*",
+    "logs/serving_calls/*",
+    "logs/tool_call_audit.jsonl",
+    "orchestration/procedures/state/test_*.json",
+    "orchestration/repl_memory/sessions/*",
+)
+
+
+def _checkout_untracked() -> set[str] | None:
+    """Untracked and ignored paths in this checkout; None when git cannot say."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(_REPO_ROOT), "status", "--porcelain", "--ignored",
+             "--untracked-files=all", "-z"],
+            capture_output=True, text=True, timeout=120, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    paths = {entry[3:] for entry in out.split("\0") if entry[:2] in ("??", "!!")}
+    return {p for p in paths if not any(fnmatch.fnmatch(p, pat) for pat in _CHECKOUT_LEAK_EXEMPT)}
+
+
+def pytest_sessionstart(session):
+    # Leak guard (A6-02): a test that writes into the checkout fails the run. --ignored
+    # matters: every leak seen so far (MagicMock/, data/trace, logs/) is gitignored.
+    if not hasattr(session.config, "workerinput"):
+        session.config._checkout_before = _checkout_untracked()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    before = getattr(session.config, "_checkout_before", None)
+    after = _checkout_untracked() if before is not None else None
+    leaked = sorted(after - before) if after is not None else []
+    if leaked:
+        listing = "\n  ".join(leaked[:50])
+        session.config.get_terminal_writer().line(
+            f"\nTests wrote {len(leaked)} new path(s) into the checkout {_REPO_ROOT}; "
+            f"write under tmp_path instead:\n  {listing}",
+            red=True,
+        )
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _restore_progress_log_override_after_suite():
     """Keep every default ProgressLogger inside this pytest run's temp directory."""
@@ -204,6 +277,78 @@ def _restore_progress_log_override_after_suite():
         os.environ.pop(_PROGRESS_LOG_DIR_ENV, None)
     else:
         os.environ[_PROGRESS_LOG_DIR_ENV] = _PREVIOUS_PROGRESS_LOG_DIR
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _restore_runtime_store_overrides_after_suite():
+    yield
+    for key, previous in _PREVIOUS_RUNTIME_STORE_ENVS.items():
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+
+@pytest.fixture(autouse=True)
+def _isolate_trace_store(tmp_path_factory):
+    """Redirect default trace APIs, including aliases bound during collection.
+
+    The path is captured in Python argument defaults, so patching the module
+    constant alone cannot isolate emit() or ReviewTracingProcessor. Patch the
+    callable objects themselves; explicit db_path arguments still work normally.
+    A private MonkeyPatch keeps teardown independent of tests' config patches.
+    """
+    from src.trace import store
+    from src.trace.emit import ReviewTracingProcessor, emit
+
+    # Load the navigation surface before rebinding keyword-only defaults too.
+    importlib.import_module("src.trace.navigation")
+    production_db = store.DEFAULT_DB_PATH
+    private_db = tmp_path_factory.mktemp("trace_store") / "events.sqlite"
+    _TEST_TRACE_DB_PATHS.add(private_db)
+    modules = [
+        module
+        for name, module in tuple(sys.modules.items())
+        if name == "src.trace" or name.startswith("src.trace.")
+    ]
+    functions = {ReviewTracingProcessor.__init__, emit}
+    for module in modules:
+        functions.update(
+            value
+            for value in vars(module).values()
+            if inspect.isfunction(value) and value.__module__.startswith("src.trace")
+        )
+
+    def redirect(value):
+        # A module imported mid-test may retain that test's private default after
+        # teardown. Recognize only our own prior paths when the next test begins.
+        if isinstance(value, Path) and (value == production_db or value in _TEST_TRACE_DB_PATHS):
+            return private_db
+        return value
+
+    with pytest.MonkeyPatch.context() as mp:
+        # Children must pass this path explicitly via db_path= or CLI --db;
+        # Python argument rebinding is local to this pytest worker process.
+        mp.setenv("ORCHESTRATOR_TEST_TRACE_DB", str(private_db))
+        # Includes CLI/package aliases loaded at collection. Later imports bind
+        # the already-private store constant, including the trace sink factories.
+        for module in modules:
+            current = getattr(module, "DEFAULT_DB_PATH", None)
+            if redirect(current) is not current:
+                mp.setattr(module, "DEFAULT_DB_PATH", private_db)
+        for function in functions:
+            defaults = function.__defaults__ or ()
+            if any(redirect(value) is not value for value in defaults):
+                mp.setattr(function, "__defaults__", tuple(map(redirect, defaults)))
+            if function.__kwdefaults__ and any(
+                redirect(value) is not value for value in function.__kwdefaults__.values()
+            ):
+                mp.setattr(
+                    function,
+                    "__kwdefaults__",
+                    {key: redirect(value) for key, value in function.__kwdefaults__.items()},
+                )
+        yield private_db
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -414,6 +559,12 @@ def pytest_collection_modifyitems(config, items):
     except (AttributeError, TypeError):
         # pytest-xdist not installed or not using -n flag
         pass
+
+    if not config.getoption("--run-materialized-trace"):
+        skip_trace = pytest.mark.skip(reason="Need --run-materialized-trace to read host trace data")
+        for item in items:
+            if "requires_materialized_trace" in item.keywords:
+                item.add_marker(skip_trace)
 
     if not config.getoption("--run-live-models"):
         skip_live_models = pytest.mark.skip(reason="Need --run-live-models to run live model tests")

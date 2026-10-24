@@ -12,8 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.autopilot_core.instrument_era_guard import E7_EVAL_INSTRUMENT_ERA_ID
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INTEGRATED_E8_ROOT = PROJECT_ROOT
@@ -34,12 +32,19 @@ def _integrated_e8_head() -> str:
     ).strip()
 
 
-# The canonical AutoPilot state is LIVE runtime state, not repo content: it is
-# gitignored, so it exists only in the main checkout.  Deliberately absolute — a
-# __file__ anchor would point a worktree at a file that cannot exist there.
+# The canonical AutoPilot state is LIVE runtime state, gitignored, in the main checkout
+# only. Tests never read it as a fixture; they only prove it is left untouched.
 CANONICAL_STATE_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/orchestration/autopilot_state.json"
 )
+PRE_E8_STATE_FIXTURE = Path(__file__).parent / "fixtures" / "e8" / "autopilot_state_pre_e8.json"
+
+
+def _canonical_state_snapshot() -> bytes | None:
+    """The live state's bytes, or None where it does not exist (any other machine)."""
+    return CANONICAL_STATE_PATH.read_bytes() if CANONICAL_STATE_PATH.exists() else None
+
+
 MODULE_PATH = PROJECT_ROOT / "scripts/benchmark/run_e8_quality_baseline_v5.py"
 spec = importlib.util.spec_from_file_location("e8_v5", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -66,50 +71,14 @@ def _canonical_applier_module(name: str):
     return adapter_module.module
 
 
-# apply_e8_quality_baseline_state.validate_state_precondition() requires the E8
-# quality-rebaseline hold to still be OPEN at the E8 boundary.  There is no shared
-# constant for the status string (the applier's SHA-256 is pinned by ratified
-# operator receipts and by scripts/benchmark/final_c1_retry.py, so it cannot be
-# refactored to export one).  _e7_pre_state() therefore re-checks every value it
-# writes against the applier's OWN predicate, so a contract change fails loudly
-# here instead of silently seeding an invalid fixture.
-_E8_HOLD_OPEN_STATUS = "hold_open"
-
-
 def _e7_pre_state(canonical) -> dict:
-    """Derive the E7 baseline pre-state that the canonical applier accepts.
+    """The frozen E7 -> E8 pre-state, checked against the canonical applier's own predicate.
 
-    The live AutoPilot state is the only realistic pre-state shape (four populated
-    quality tiers with real provenance), but it is MUTABLE runtime state, not a
-    fixture: on 2026-08-04T09:48:42Z the operator ran
-    ``scripts/autopilot/operator_seed_e8_operational_baseline.py --apply``, which
-    stamped ``baseline_state.eval_quality_era`` to the active era and moved
-    ``e8_quality_rebaseline.status`` ``hold_open -> closed_operational``.  The
-    ratification-grade applier is a one-shot E7 -> E8 transaction and correctly
-    refuses that post-seed state, so these tests must reconstruct the pre-state
-    rather than copy the live file. The live active era is also mutable: E9 moved
-    it on 2026-08-05, so this historical one-shot fixture must explicitly restore
-    the applier's E8 era instead of borrowing today's value.
+    The live state stopped being a valid one-shot pre-state on 2026-08-04 (operator seed
+    closed the E8 hold; E9 moved the era on 2026-08-05), so it is never the fixture. The
+    precondition check makes an applier contract change fail here, not seed a stale fixture.
     """
-    state = json.loads(CANONICAL_STATE_PATH.read_bytes())
-    state["baseline_state"] = {
-        **state["baseline_state"],
-        "eval_quality_era": E7_EVAL_INSTRUMENT_ERA_ID,
-    }
-    state["active_instrument_eras"] = {
-        **(state.get("active_instrument_eras") or {}),
-        "eval_quality": "E8",
-    }
-    hold = {
-        key: value
-        for key, value in (state.get("e8_quality_rebaseline") or {}).items()
-        if key not in ("closed_at", "closed_by")
-    }
-    hold["boundary"] = canonical.E8_BOUNDARY
-    hold["status"] = _E8_HOLD_OPEN_STATUS
-    state["e8_quality_rebaseline"] = hold
-    # Fail loudly if the applier's pre-state contract ever moves away from what
-    # this helper reconstructs, instead of handing tests a silently stale fixture.
+    state = json.loads(PRE_E8_STATE_FIXTURE.read_text(encoding="utf-8"))
     canonical.validate_state_precondition(state)
     return state
 
@@ -1964,7 +1933,7 @@ def test_v5_applier_adapter_plan_is_read_only(tmp_path: Path) -> None:
 def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     tmp_path: Path,
 ) -> None:
-    # The reviewed transaction is computed against a DERIVED E7 pre-state in a
+    # The reviewed transaction is computed against a FROZEN E7 pre-state in a
     # sandbox: the live production state is no longer a valid one-shot E7 -> E8
     # pre-state (see _e7_pre_state).  The canonical production state, the canonical
     # operator root, and the canonical apply lock must all still come out untouched.
@@ -1972,7 +1941,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
         _v5_wrapper_integration_fixture(tmp_path)
     )
     state_bytes = state.read_bytes()
-    canonical_state_bytes = CANONICAL_STATE_PATH.read_bytes()
+    canonical_state_bytes = _canonical_state_snapshot()
     evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
     operator_root = Path("/mnt/raid0/llm/epyc-root/artifacts/operator")
     before_outputs = set(operator_root.glob(f"*{evidence_sha}*"))
@@ -2016,7 +1985,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     ]
     assert state.read_bytes() == state_bytes
     assert set((sandbox_root / "artifacts/operator").iterdir()) == set()
-    assert CANONICAL_STATE_PATH.read_bytes() == canonical_state_bytes
+    assert _canonical_state_snapshot() == canonical_state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
     lock_after = (
         (
@@ -2042,7 +2011,7 @@ def test_final_wrapper_prevalidates_exact_transaction_without_writes(
     assert "E8_V5_FINAL_C1_VALIDATOR_SHA256" in rejected.stderr
     assert state.read_bytes() == state_bytes
     assert set((sandbox_root / "artifacts/operator").iterdir()) == set()
-    assert CANONICAL_STATE_PATH.read_bytes() == canonical_state_bytes
+    assert _canonical_state_snapshot() == canonical_state_bytes
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
 
 
@@ -2076,7 +2045,7 @@ def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_write
         _v5_wrapper_integration_fixture(tmp_path)
     )
     state_before = state.read_bytes()
-    canonical_state_before = CANONICAL_STATE_PATH.read_bytes()
+    canonical_state_before = _canonical_state_snapshot()
     completed = subprocess.run(
         [
             "bash", str(wrapper), "--prevalidate", "--evidence", str(evidence),
@@ -2092,7 +2061,7 @@ def test_final_wrapper_prevalidation_rejects_stale_reviewed_hashes_without_write
     assert "reviewed pre-state" in completed.stderr
     assert state.read_bytes() == state_before
     assert set((sandbox_root / "artifacts/operator").iterdir()) == set()
-    assert CANONICAL_STATE_PATH.read_bytes() == canonical_state_before
+    assert _canonical_state_snapshot() == canonical_state_before
 
 
 def _v5_wrapper_integration_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path, Path, str, str]:
@@ -2387,7 +2356,7 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
     evidence = _bind_synthetic_candidate_to_integrated_source(
         _synthetic_candidate(evidence_root)
     )
-    state_before = CANONICAL_STATE_PATH.read_bytes()
+    state_before = _canonical_state_snapshot()
     # A genuinely well-formed transaction binding: the true live pre-state hash and
     # a real candidate hash for this sealed evidence, so nothing but the canonical
     # paths distinguishes this attempt from an authorised one.
@@ -2411,7 +2380,7 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
             wrapper,
             "--apply",
             evidence,
-            hashlib.sha256(state_before).hexdigest(),
+            hashlib.sha256(state_before or b"").hexdigest(),
             candidate_sha,
         ),
         env={
@@ -2428,7 +2397,7 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
         check=False,
     )
     assert completed.returncode != 0
-    assert CANONICAL_STATE_PATH.read_bytes() == state_before
+    assert _canonical_state_snapshot() == state_before
     assert set(operator_root.glob(f"*{evidence_sha}*")) == before_outputs
     lock_after = (
         (lock_path.stat().st_ino, lock_path.stat().st_mtime_ns, lock_path.read_bytes())
@@ -2494,7 +2463,7 @@ def test_final_wrapper_fake_pytest_flags_cannot_bypass_tty_on_canonical_paths(
     assert passed_gate.returncode != 0
     assert "interactive terminal confirmation" not in passed_gate.stderr
     assert not receipt.exists()
-    assert CANONICAL_STATE_PATH.read_bytes() == state_before
+    assert _canonical_state_snapshot() == state_before
 
 
 def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Path) -> None:
@@ -2510,7 +2479,7 @@ def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Pat
     state_link = tmp_path / "state.json"
     state_link.symlink_to(canonical_state)
     lock = tmp_path / "apply.lock"
-    before = canonical_state.read_bytes()
+    before = _canonical_state_snapshot()
     completed = subprocess.run(
         ["bash", str(wrapper), "--prevalidate"],
         env={
@@ -2528,4 +2497,4 @@ def test_final_wrapper_rejects_symlinked_test_sandbox_state_escape(tmp_path: Pat
     )
     assert completed.returncode != 0
     assert "paths must not be symlinks" in completed.stderr
-    assert canonical_state.read_bytes() == before
+    assert _canonical_state_snapshot() == before
