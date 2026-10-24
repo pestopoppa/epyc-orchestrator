@@ -192,12 +192,15 @@ def _priors_roles() -> dict:
 
 def test_this_trees_priors_carry_the_master_declaration_verbatim() -> None:
     server_mode = _lean_server_mode()
+    """Each launch record carries its SERVING host's declaration (aliases inherit it)."""
     for role, rec in _priors_roles().items():
-        flags = (((rec.get("serving") or {}).get("launch") or {}).get("runtime") or {}).get("flags")
-        if not isinstance(flags, dict) or role not in server_mode:
+        serving = rec.get("serving") or {}
+        flags = ((serving.get("launch") or {}).get("runtime") or {}).get("flags")
+        host = serving.get("server_role")
+        if not isinstance(flags, dict) or host not in server_mode:
             continue
-        declared = (server_mode.get(role) or {}).get("ctx_checkpoints")
-        assert flags.get("ctx_checkpoints") == declared, role
+        declared = (server_mode.get(host) or {}).get("ctx_checkpoints")
+        assert flags.get("ctx_checkpoints") == declared, (role, host)
 
 
 def test_this_trees_hybrid_host_servers_declare_32_and_nothing_else_does() -> None:
