@@ -4016,6 +4016,24 @@ def _bitwise_spec_kwargs() -> dict[str, int]:
     return {} if n_max is None else {"speculative_n_max": n_max}
 
 
+EVAL_BITWISE_GENERATION_ENV = "AUTOPILOT_EVAL_BITWISE_GENERATION"
+
+
+def _bitwise_generation_spec_kwargs() -> dict[str, int]:
+    """Q38-T10.2(b): spec-off opt-in for EvalTower GENERATION, only when asked.
+
+    Generation on the roles under test stays speculative by default (it measures
+    the serving path). A run that is parity-gated or reproducibility-claimed sets
+    ``AUTOPILOT_EVAL_BITWISE_GENERATION=1``; the request then carries
+    ``speculative.n_max: 0`` (still subject to the ``spec_off_bitwise_roles``
+    flag via ``_bitwise_spec_kwargs``). Unset -> ``{}`` and the call is unchanged.
+    """
+    raw = os.environ.get(EVAL_BITWISE_GENERATION_ENV, "").strip().lower()
+    if raw not in {"1", "true", "yes", "on"}:
+        return {}
+    return _bitwise_spec_kwargs()
+
+
 def _configured_rubric_judge_roles() -> list[str]:
     raw = os.environ.get("AUTOPILOT_RUBRIC_JUDGE_ROLES", "").strip()
     if not raw:
@@ -4810,7 +4828,7 @@ class EvalTower:
             prompt_root = str(q.get("_prompt_root") or "").strip()
             if prompt_root:
                 call_kwargs["prompt_root"] = prompt_root
-            resp = call_orchestrator_forced(**call_kwargs)
+            resp = call_orchestrator_forced(**call_kwargs, **_bitwise_generation_spec_kwargs())
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")
