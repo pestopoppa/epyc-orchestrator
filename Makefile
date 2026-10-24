@@ -214,6 +214,17 @@ coverage-orchestrator-slice:
 		tests/unit/test_seeding_injection.py \
 		tests/unit/test_seeding_injection_additional.py \
 		tests/unit/test_seeding_orchestrator.py \
+		tests/unit/test_seeding_scoring.py \
+		tests/unit/test_seeding_eval.py \
+		tests/unit/test_debug_scorer_code_execution.py \
+		tests/unit/test_debug_scorer_ev19_none_variants.py \
+		tests/unit/test_debug_scorer_hard_fail.py \
+		tests/unit/test_debug_scorer_multiple_choice.py \
+		tests/unit/test_debug_scorer_nugget_judge_transport.py \
+		tests/unit/test_debug_scorer_prbt4_guards.py \
+		tests/unit/test_debug_scorer_score25_26.py \
+		tests/unit/test_debug_scorer_semantics.py \
+		tests/unit/test_debug_scorer_td21_parse_exclusion.py \
 		tests/unit/test_seed_specialist_routing_main_and_retry.py \
 		tests/unit/test_seed_specialist_routing_helpers.py \
 		--cov=scripts/benchmark \
