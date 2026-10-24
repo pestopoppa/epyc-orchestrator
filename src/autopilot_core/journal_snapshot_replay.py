@@ -11,16 +11,16 @@ from typing import Any, Iterable
 from src.autopilot_core.action_identity import config_fingerprint_from_row
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
+    fold_frontier_entry,
     fold_supersession_events,
     parse_journal_ts,
     objectives_from_journal_row,
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.learning_exclusions import (
-    WITHIN_NOISE_EXCLUSIONS,
     row_is_representative_member,
 )
-from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
+from src.autopilot_core.pareto_math import median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
@@ -599,28 +599,14 @@ def _rebuild_archive_from_entries(
     frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
     hv_history_by_tier: dict[int, list[list[float]]] = {}
     for entry in sorted_entries:
-        tier = int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER))
-        trial_id = int(entry.get("trial_id"))
-        objectives = entry["objectives"]
-        frontier = frontiers_by_tier.setdefault(tier, [])
-        if not any(dominates(front["objectives"], objectives) for front in frontier):
-            frontiers_by_tier[tier] = [
-                front
-                for front in frontier
-                if not dominates(objectives, front["objectives"])
-            ]
-            frontiers_by_tier[tier].append(entry)
-        history = hv_history_by_tier.setdefault(tier, [])
-        hv = round(
-            hypervolume(
-                [front["objectives"] for front in frontiers_by_tier[tier]],
-                ref=ref,
-            ),
-            4,
+        fold_frontier_entry(
+            frontiers_by_tier,
+            hv_history_by_tier,
+            int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER)),
+            int(entry.get("trial_id")),
+            entry,
+            ref,
         )
-        if history:
-            hv = max(history[-1][1], hv)
-        history.append([trial_id, hv])
 
     canonical_tier = int(snapshot_archive.get("canonical_tier") or DEFAULT_FRONTIER_TIER)
     rebuilt = copy.deepcopy(snapshot_archive)
@@ -669,29 +655,9 @@ def _fold_tail_archive_into_snapshot(
             trial_id = int(entry.get("trial_id"))
         except (TypeError, ValueError):
             return None
-        objectives = entry.get("objectives")
-        if not isinstance(objectives, list):
+        if not isinstance(entry.get("objectives"), list):
             return None
-        key = str(tier)
-        frontier = frontiers_by_tier.setdefault(key, [])
-        if not any(dominates(front["objectives"], objectives) for front in frontier):
-            frontiers_by_tier[key] = [
-                front
-                for front in frontier
-                if not dominates(objectives, front["objectives"])
-            ]
-            frontiers_by_tier[key].append(entry)
-        history = hv_history_by_tier.setdefault(key, [])
-        hv = round(
-            hypervolume(
-                [front["objectives"] for front in frontiers_by_tier[key]],
-                ref=ref,
-            ),
-            4,
-        )
-        if history:
-            hv = max(history[-1][1], hv)
-        history.append([trial_id, hv])
+        fold_frontier_entry(frontiers_by_tier, hv_history_by_tier, str(tier), trial_id, entry, ref)
 
     canonical_key = str(merged.get("canonical_tier") or DEFAULT_FRONTIER_TIER)
     merged["frontiers_by_tier"] = {
