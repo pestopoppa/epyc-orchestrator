@@ -266,6 +266,8 @@ class StackChangePipelineConfig:
     # Explicit NUMA lineup to evaluate. None => the declared topology mode
     # (production). Never inherited from the ambient environment.
     numa_mode: str | None = None
+    # Deliberate offline use: skip the research-registry-vs-origin/main check.
+    allow_stale_research_registry: bool = False
 
 
 @dataclass
@@ -1509,12 +1511,97 @@ def _promotion_gate_step(config: StackChangePipelineConfig, *, prior_ok: bool) -
     )
 
 
+def _git_out(repo: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(repo), *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _research_registry_staleness_step(config: StackChangePipelineConfig) -> PipelineStep:
+    """Refuse to compile from a research (master) registry that is not origin/main's.
+
+    The default research registry is a SHARED clone that can sit many commits behind
+    origin/main; compiling from it silently drops operator-ratified declarations
+    (2026-10-24: ten ``ctx_checkpoints: 32`` lines). Compares
+    ``git hash-object <file>`` with ``git rev-parse origin/main:<relpath>``.
+    ``git fetch`` only moves the remote-tracking ref (never the worktree); if it
+    fails, the existing origin/main ref is used and the step says so.
+    """
+    name = "research_registry_fresh"
+    path = config.research_registry
+    if path is None:
+        return PipelineStep(name=name, status="skipped", details=["no research registry configured"])
+    if config.allow_stale_research_registry:
+        return PipelineStep(
+            name=name,
+            status="skipped",
+            warnings=["--allow-stale-research-registry: research registry NOT checked against origin/main"],
+        )
+    path = Path(path)
+    if not path.exists():
+        return PipelineStep(name=name, status="skipped", details=[f"{path} does not exist (reported by the compile step)"])
+    resolved = path.resolve()
+    top = _git_out(resolved.parent, "rev-parse", "--show-toplevel")
+    if top.returncode != 0:
+        return PipelineStep(
+            name=name,
+            status="skipped",
+            details=[f"{resolved} is not inside a git checkout; origin/main comparison not possible"],
+        )
+    repo = Path(top.stdout.strip())
+    relpath = resolved.relative_to(repo.resolve()).as_posix()
+    details: list[str] = []
+    try:
+        fetch = _git_out(repo, "fetch", "--quiet", "origin", "main", timeout=30)
+        fetched = fetch.returncode == 0
+    except subprocess.TimeoutExpired:
+        fetched = False
+    if not fetched:
+        details.append("git fetch failed; compared against the existing origin/main ref (may itself be stale)")
+    remote = _git_out(repo, "rev-parse", f"origin/main:{relpath}")
+    if remote.returncode != 0:
+        return PipelineStep(
+            name=name,
+            status="skipped",
+            details=details + [f"origin/main:{relpath} not resolvable in {repo}; comparison not possible"],
+        )
+    local = _git_out(repo, "hash-object", str(resolved))
+    remote_hash, local_hash = remote.stdout.strip(), local.stdout.strip()
+    if remote_hash != local_hash:
+        return PipelineStep(
+            name=name,
+            status="failed",
+            details=details,
+            errors=[
+                f"research registry {resolved} is stale or modified vs origin/main of {repo}: "
+                f"on-disk blob {local_hash} != origin/main:{relpath} blob {remote_hash}. "
+                "Compiling from it would drop landed declarations. Pass "
+                "--research-registry <path to a fresh origin/main checkout>/orchestration/model_registry.yaml, "
+                "or --allow-stale-research-registry for deliberate offline use."
+            ],
+        )
+    return PipelineStep(
+        name=name, status="ok", details=details + [f"matches origin/main:{relpath} ({remote_hash})"]
+    )
+
+
 def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineReport:
     report = PipelineReport()
     # Resolved ONCE and recorded as the first step, so the output always says
     # which lineup was evaluated and the compile and the guard cannot disagree.
     numa_resolution = resolve_pipeline_numa_mode(config)
     report.steps.append(_numa_mode_step(numa_resolution))
+    # Before anything compiles from the research registry. A quiet skip (not a git
+    # checkout) adds no step; a pass, a bypass warning or a refusal is always shown.
+    fresh_step = _research_registry_staleness_step(config)
+    if fresh_step.status != "skipped" or fresh_step.warnings or not fresh_step.ok:
+        report.steps.append(fresh_step)
+    if not fresh_step.ok:
+        return report
     report.steps.append(_shared_with_derivations_step(config))
     if config.mode == "check":
         report.steps.append(_lean_registry_step(config, check=True))
@@ -1676,6 +1763,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--allow-stale-research-registry",
+        action="store_true",
+        help=(
+            "Skip the check that the research registry file equals origin/main's "
+            "version (deliberate offline use only)"
+        ),
+    )
+    parser.add_argument(
         "--allow-descriptor-model-removal",
         action="store_true",
         help="Permit update mode to remove model IDs from the descriptor artifact",
@@ -1719,6 +1814,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_descriptor_model_removal=args.allow_descriptor_model_removal,
         run_promotion_gate=args.run_promotion_gate,
         numa_mode=args.numa_mode,
+        allow_stale_research_registry=args.allow_stale_research_registry,
     )
     report = run_stack_change_pipeline(config)
     _print_report(report)

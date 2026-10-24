@@ -32,6 +32,13 @@ SURFACE_INVENTORY_LINE = f"surface_inventory: run {SURFACE_INVENTORY_COMMAND}"
 
 @pytest.fixture(autouse=True)
 def _clean_runtime_attestation(monkeypatch):
+    # Unit tests never depend on the state of the shared research clone vs origin/main;
+    # the guard itself is covered in test_stack_change_pipeline_staleness_guard.py.
+    monkeypatch.setattr(
+        pipeline,
+        "_research_registry_staleness_step",
+        lambda config: PipelineStep(name="research_registry_fresh", status="skipped"),
+    )
     monkeypatch.setattr(pipeline, "_runtime_attestation_warnings", lambda: [])
     # Unit tests never read the live /proc: pin the declared-env attestation to a clean result.
     from scripts.server.env_attestation import EnvAttestation
