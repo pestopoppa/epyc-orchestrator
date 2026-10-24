@@ -320,7 +320,7 @@ MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many failures
 # MAD noise filter (intake-421 pi-autoresearch). Quality history depth + significance threshold.
 MAD_HISTORY_DEPTH = 10
 MAD_MIN_SAMPLES = 3  # Below this, skip MAD check (insufficient data → accept)
-MAD_Z_THRESHOLD = 2.0  # Improvement counts as real only if > this many MADs from history median
+MAD_Z_THRESHOLD = 2.0  # Improvement counts as real only if > this many MADs ABOVE history median
 MAD_CONSISTENCY = 1.4826  # Scaling so MAD ≈ σ under normal distribution
 
 # Quality-history provenance (defect #4 fix). Rolling MAD-window samples are no longer bare
@@ -1809,7 +1809,8 @@ def mad_significance(history: Any, new_quality: float) -> tuple[bool, float, flo
     """Whether ``new_quality`` is significant against a MAD window snapshot.
 
     Returns (is_significant, z_mad, median, mad). Fewer than MAD_MIN_SAMPLES samples →
-    (True, NaN, NaN, NaN): insufficient data to filter, accept at face value."""
+    (True, NaN, NaN, NaN): insufficient data to filter, accept at face value. One-sided
+    (B2-03): only a gain over the history median is significant, and z is signed."""
     history = list(history)
     if len(history) < MAD_MIN_SAMPLES:
         return True, math.nan, math.nan, math.nan
@@ -1822,8 +1823,8 @@ def mad_significance(history: Any, new_quality: float) -> tuple[bool, float, flo
         # TWO single-flip quanta before calling it significant. z is undefined for a
         # zero-MAD window → NaN; check() tags the resulting within-band case
         # ``mad_zero_window`` so a NaN z can no longer dodge the noise classification.
-        return (abs(new_quality - median_q) > MAD_ZERO_MIN_DELTA), math.nan, median_q, 0.0
-    z_mad = abs(new_quality - median_q) / (mad * MAD_CONSISTENCY)
+        return (new_quality - median_q > MAD_ZERO_MIN_DELTA), math.nan, median_q, 0.0
+    z_mad = (new_quality - median_q) / (mad * MAD_CONSISTENCY)
     return z_mad > MAD_Z_THRESHOLD, z_mad, median_q, mad
 
 
@@ -1839,12 +1840,20 @@ def mad_noise_leg(
     # distinctly so it still rides the mad_noise exclusion path while staying auditable.
     if math.isnan(z_mad):
         categories.append("mad_zero_window")
+    # B2-03: above the baseline but significantly BELOW the recent level is not a fresh gain
+    # either; it rides the mad_noise exclusion, tagged distinctly.
+    below_recent = (
+        quality - median_q < -MAD_ZERO_MIN_DELTA if mad == 0 else z_mad < -MAD_Z_THRESHOLD
+    )
+    if below_recent:
+        categories.append("below_recent_level")
     # Convergence-vs-corruption disambiguation (2026-05-31): a within-noise result whose
     # history median is itself significantly above the baseline REPRODUCES an established
     # gain; tag it so the planner never lumps it with noisy/untrustworthy trials.
     base_q = baseline_q
     reproduction_confirmed = (
-        base_q is not None
+        not below_recent
+        and base_q is not None
         and base_q > 0
         and not math.isnan(median_q)
         and mad > 0
@@ -1860,9 +1869,14 @@ def mad_noise_leg(
         if reproduction_confirmed
         else ""
     )
+    verdict_text = (
+        "Improvement over baseline but significantly BELOW recent level"
+        if below_recent
+        else "Improvement within noise"
+    )
     return GateLeg(
         warnings=(
-            f"Improvement within noise (MAD filter): q={quality:.3f} "
+            f"{verdict_text} (MAD filter): q={quality:.3f} "
             f"vs history median {median_q:.3f} (MAD={mad:.4f}, z={z_mad:.2f}, "
             f"threshold={MAD_Z_THRESHOLD}); still journaled, excluded "
             f"from archive/learning by autopilot." + convergence_note,

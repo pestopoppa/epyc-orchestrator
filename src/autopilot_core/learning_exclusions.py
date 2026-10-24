@@ -71,6 +71,13 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
                 "not a new improvement and not corrupted data",
                 "reproduction_confirmed",
             )
+        if "below_recent_level" in categories:
+            return (
+                "mad_noise",
+                "quality cleared the baseline but sits significantly below the recent "
+                "same-tier history median (safety_gate MAD filter): not a fresh gain",
+                "mad_noise",
+            )
         return (
             "mad_noise",
             "quality improvement was within MAD noise band per safety_gate "

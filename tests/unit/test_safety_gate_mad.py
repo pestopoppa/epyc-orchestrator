@@ -167,6 +167,30 @@ def test_mad_zero_window_large_change_is_significant(tmp_path):
     assert "mad_zero_window" not in verdict.categories
 
 
+def test_mad_below_history_median_is_not_significant_improvement(tmp_path):
+    """B2-03: the filter is one-sided. A result above the baseline but far BELOW the recent
+    level is not a fresh gain: it rides the mad_noise exclusion, tagged below_recent_level,
+    and is never a reproduction of the established level."""
+    from src.autopilot_core.learning_exclusions import classify_learning_exclusion
+
+    g = _gate(tmp_path, history=[2.0, 2.05, 1.95, 2.0, 2.02])
+    g.baseline.baselines_by_tier = {2: 1.5}
+    verdict = g.check(_result(1.6))
+    assert verdict.passed
+    assert {"mad_noise", "below_recent_level"} <= set(verdict.categories)
+    assert "reproduction_confirmed" not in verdict.categories
+    assert any("z=-" in w for w in verdict.warnings)  # signed z
+    by, reason, _ = classify_learning_exclusion(verdict, _result(1.6))
+    assert by == "mad_noise" and "below" in reason
+
+
+def test_mad_zero_window_large_drop_is_below_recent_level(tmp_path):
+    g = _gate(tmp_path, history=[2.0, 2.0, 2.0])
+    g.baseline.baselines_by_tier = {2: 1.16}
+    verdict = g.check(_result(1.5))  # delta -0.5 < -0.2
+    assert {"mad_noise", "mad_zero_window", "below_recent_level"} <= set(verdict.categories)
+
+
 def test_quality_history_persists_across_check_calls(tmp_path):
     """Each completed trial extends the rolling window, bounded by maxlen."""
     g = _gate(tmp_path)
