@@ -56,6 +56,23 @@ def test_authority_env_pins_the_ap55_gate_mode() -> None:
     assert rerun in {"0", "1"}
 
 
+def test_authority_env_pins_ap3_role_restart_scoped() -> None:
+    """DP-4 = (A): the spin-up environment runs the AP3 role-restart gate SCOPED. An
+    inherited unscoped "1" or an empty value cannot change it, the value is the one the
+    applicator recognises as scoped, and the daemon's boot check requires the key."""
+    import config_applicator
+    import autopilot
+
+    for inherited in ({"AUTOPILOT_AP3_ROLE_RESTART_ENABLE": "1"},
+                      {"AUTOPILOT_AP3_ROLE_RESTART_ENABLE": ""}, {}):
+        env = launcher.authority_env(inherited)
+        assert env["AUTOPILOT_AP3_ROLE_RESTART_ENABLE"] == "scoped"
+    assert launcher.AUTHORITY_ENV["AUTOPILOT_AP3_ROLE_RESTART_ENABLE"] == (
+        config_applicator.AP3_SCOPED_ENABLE_VALUE
+    )
+    assert autopilot.AUTOPILOT_REQUIRED_GATE_ENV["AUTOPILOT_AP3_ROLE_RESTART_ENABLE"] == "scoped"
+
+
 def test_authority_env_enforces_sealed_two_codex_zero_claude_roster() -> None:
     env = launcher.authority_env(
         {
