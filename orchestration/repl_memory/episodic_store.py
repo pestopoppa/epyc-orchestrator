@@ -15,6 +15,7 @@ Enhanced with optional graph integration:
 
 from __future__ import annotations
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM
 import asyncio
 import fcntl
 import json
@@ -251,7 +252,7 @@ class EpisodicStore:
         self,
         db_path: Path = DEFAULT_DB_PATH,
         embeddings_path: Optional[Path] = None,
-        embedding_dim: int = 1024,  # BGE-large-en-v1.5 embedding dim
+        embedding_dim: int = LEGACY_EMBEDDING_DIM,  # BGE-large-en-v1.5 embedding dim
         use_faiss: bool = True,
         flush_interval: float = 10.0,  # Write-behind flush interval (seconds)
     ):

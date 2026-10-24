@@ -482,6 +482,12 @@ class ContextBundle:
         start, end = self._page_bounds(section.text, max_chars, offset)
         out = section.text[start:end]
         self._record("get", name, _nbytes(out), span=(start, end), path=str(path))
+        try:  # REPL-EMB-2.8a trace tap (flag-off no-op; never raises)
+            from src.repl_environment import trace_capture
+
+            trace_capture.record_open(self, name, start, end)
+        except Exception:
+            pass
         return out
 
     def _get_or_default(self, path: Any, default: Any) -> Any:
@@ -609,6 +615,12 @@ class ContextBundle:
                 self._search_log.append(entry)
             else:
                 self._search_log_dropped += 1
+        try:  # REPL-EMB-2.8a trace tap (flag-off no-op; never raises)
+            from src.repl_environment import trace_capture
+
+            trace_capture.record_search(self, query, k, section, meta["mode"], hits)
+        except Exception:
+            pass
         return hits
 
     def set_embedder(self, embedder: Any) -> None:

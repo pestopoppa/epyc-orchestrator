@@ -9,6 +9,7 @@ Storage location: /workspace/orchestration/repl_memory/sessions/
 
 from __future__ import annotations
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM, marker_dim
 import json
 import logging
 import sqlite3
@@ -75,6 +76,8 @@ class SessionEmbeddingsRefused(RuntimeError):
         self.detail = detail
         if reason == "dim_mismatch":
             what = f"stored dimension {stored_dim} != expected dimension {expected_dim}"
+            if detail:  # e.g. the embedding_model.json pin that names the migration (B-4)
+                what += f" ({detail})"
         else:
             what = f"file is unreadable ({detail}); expected dimension {expected_dim}"
         super().__init__(
@@ -155,7 +158,7 @@ class SQLiteSessionStore(BaseSessionStore):
         self,
         db_path: Path | str = DEFAULT_DB_PATH,
         embeddings_path: Path | str = DEFAULT_EMBEDDINGS_PATH,
-        embedding_dim: int = 1024,  # BGE-large embedding dim (matches TaskEmbedder)
+        embedding_dim: int = LEGACY_EMBEDDING_DIM,  # BGE-large embedding dim (matches TaskEmbedder)
     ):
         self.db_path = Path(db_path)
         self.embeddings_path = Path(embeddings_path)
@@ -420,6 +423,15 @@ class SQLiteSessionStore(BaseSessionStore):
             SessionEmbeddingsRefused: stored dimension != ``embedding_dim``, or
                 the file cannot be parsed as a 2-D ``.npy`` array.
         """
+        pinned = marker_dim(self.embeddings_path.parent)
+        if pinned is not None and pinned != self.embedding_dim:
+            # REPL-EMB-2.10 B-4: the directory's embedding_model.json names the migration.
+            raise self._refuse_embeddings(
+                "dim_mismatch",
+                stored_dim=pinned,
+                detail="embedding_model.json (scripts/migration/reembed_stores_eg2.py) pins "
+                f"dim={pinned}; configure the store for it or roll the migration back",
+            )
         if self.embeddings_path.exists() and self.embeddings_path.stat().st_size > 0:
             # Probe READ-ONLY first so a refused file is never even opened for write.
             try:

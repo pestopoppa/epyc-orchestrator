@@ -110,8 +110,14 @@ Each migrated directory gets ``embedding_model.json``::
 ``verify_store_marker(dir, expected_dim=..., expected_identity=...)`` is the consumer-side check:
 a directory WITHOUT the file is a legacy BGE-1024 store, so a consumer configured for 256 refuses
 it and a consumer configured for 1024 refuses a marked 256-d directory. The tool runs this check in
-its own validation and ``check-marker`` exposes it. NO consumer reads the marker today (this task
-did not edit them); the ones that must are listed in CONSUMERS below.
+its own validation and ``check-marker`` exposes it. REPL-EMB-2.10 (2026-10-24): the marker also
+carries ``model_file`` + ``gguf_sha256`` (B-3, the pool's own identity key; ``--expect-model-file`` /
+``--expect-gguf-sha256`` compare them), and ``FAISSEmbeddingStore`` / ``NumpyEmbeddingStore`` /
+``SQLiteSessionStore`` now refuse a marked directory whose ``dim`` differs from their config, naming
+this tool (B-4, ``src/embedding_dims.py::check_store_marker``). ``--sessions-archive-only`` (B-1)
+archives sessions' source-less vectors instead of blocking; ``--strategy-dir`` (B-2) migrates
+autopilot's StrategyStore as its own unit. The CONSUMERS list below is the original survey; the ones
+not named above still have to follow the marker's dim.
 
 EXIT CODES: 0 ok | 2 refused (precondition, usage) | 3 BLOCKED store | 4 validation failed (live
 untouched) | 5 swap failed (reverted) | 6 rollback verification failed.
@@ -260,6 +266,10 @@ DEFAULT_RUNTIME = "llama-server experimental/gemma-embedding2-on-v10 (CPU, build
 CORE_KEYS = ("model", "revision", "dim", "dtype", "prompt_hash")
 #: A production pool / harness server reports the GGUF basename; see context_search markers.
 MODEL_NAME_MARKERS = ("embeddinggemma-2", "egemma2")
+#: REPL-EMB-2.10 B-3: the adopted GGUF's identity key (package section 1). A marker carries the
+#: file name and sha256 the pool reports/serves, so consumers compare ONE key, not ArmSpec fields.
+EG2_MODEL_FILE = "embeddinggemma-2-BF16.gguf"
+EG2_GGUF_SHA256 = "68bae29d62fb8c7d23e98d21fd4662753ddd636e6b62b8a70dfe059a9844f216"
 MIN_NORM = 1e-6
 SQL_CHUNK = 500
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -324,6 +334,9 @@ def _load_by_path(name: str, relpath: str) -> Any:
     """Load a shipped module by file path under a private name (no package __init__ side effects)."""
     if name in sys.modules:
         return sys.modules[name]
+    if str(REPO_ROOT) not in sys.path:
+        # shipped modules import `src.embedding_dims` (REPL-EMB-2.9 dimension constant)
+        sys.path.insert(0, str(REPO_ROOT))
     path = REPO_ROOT / relpath
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -348,6 +361,13 @@ def _memory_record() -> Any:
 
 def _skill_bank() -> Any:
     return _load_by_path("epyc_reembed_skill_bank", "orchestration/repl_memory/skill_bank.py")
+
+
+def _strategy_store_helpers() -> dict[str, Any]:
+    mod = _load_by_path(
+        "epyc_reembed_strategy_store", "orchestration/repl_memory/strategy_store.py"
+    )
+    return {"compact": mod._compact_text, "derive_title": mod._derive_title}
 
 
 def _faiss() -> Any:
@@ -542,6 +562,8 @@ def verify_store_marker(
     expected_dim: int,
     expected_identity: dict[str, Any] | None = None,
     legacy_dim: int = SOURCE_DIM,
+    expected_model_file: str | None = None,
+    expected_gguf_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Consumer-side load check. Raises ``StoreMarkerError`` on any mixed-store condition.
 
@@ -568,15 +590,32 @@ def verify_store_marker(
             raise StoreMarkerError(
                 f"{store_dir} marker disagrees with the expected embedding identity on {diff}"
             )
+    # B-3: compare the pool's own key (GGUF basename + sha256) when the consumer supplies it.
+    for key, want in (("model_file", expected_model_file), ("gguf_sha256", expected_gguf_sha256)):
+        if want is not None and marker.get(key) != want:
+            raise StoreMarkerError(
+                f"{store_dir} marker {key}={marker.get(key)!r} but the serving pool reports "
+                f"{want!r}: vectors from a different model file"
+            )
     return marker
 
 
 def build_marker(
-    identity: dict[str, Any], run_id: str, migrated_from: dict[str, Any]
+    identity: dict[str, Any],
+    run_id: str,
+    migrated_from: dict[str, Any],
+    *,
+    model_file: str = EG2_MODEL_FILE,
+    gguf_sha256: str = EG2_GGUF_SHA256,
+    gguf_sha256_verified: bool = False,
 ) -> dict[str, Any]:
     marker = {k: identity[k] for k in CORE_KEYS}
     marker.update(
         {
+            # B-3: the pool's identity key. `verified` is True only when this run hashed the GGUF.
+            "model_file": model_file,
+            "gguf_sha256": gguf_sha256,
+            "gguf_sha256_verified": gguf_sha256_verified,
             "arm_id": identity["arm_id"],
             "native_dim": identity["native_dim"],
             "normalise": identity["normalise"],
@@ -1099,6 +1138,10 @@ class SessionsComponent(Component):
         "NONE RETAINED: the embeddings table keeps (id, session_id, content_type) only and no "
         "production writer defines the embedded text"
     )
+    #: B-1: explicit, manifest-recorded archive-only mode (``--sessions-archive-only``). The old
+    #: vectors are NOT carried forward: they travel into ``<dir>.pre-eg2-<run_id>/`` (hashed in
+    #: the manifest, restored by rollback) and the migrated store gets a zeroed 256-d file.
+    archive_only = False
 
     def inspect(self) -> ComponentReport:
         r = ComponentReport(self.kind, text_source=self.text_source)
@@ -1144,12 +1187,22 @@ class SessionsComponent(Component):
         r.vectors = max(used, nonzero)
         r.rows = used
         r.detail.update({"metadata_rows": by_type, "nonzero_vector_rows": nonzero})
-        if r.vectors:
+        if r.vectors and self.archive_only:
+            r.detail["archive_only"] = True
+            r.detail["archived_vector_rows"] = nonzero
+            r.warnings.append(
+                f"archive-only: {nonzero} non-zero 1024-d session vector(s) are NOT migrated (no "
+                "source text exists); they stay in the .pre-eg2 directory and the migrated store "
+                "starts with an empty 256-d file"
+            )
+            r.status = BLOCKED if r.blocked else READY
+        elif r.vectors:
             r.blocked.append(
                 f"{used} embedding metadata row(s) and {nonzero} non-zero vector row(s) but NO "
                 "retained source text (the embedded text is not stored and no writer in src/ "
-                "defines it); cannot re-embed -- discard the vectors deliberately or keep this "
-                "store at its current dimension outside this migration"
+                "defines it); cannot re-embed -- pass --sessions-archive-only to archive the "
+                "vectors deliberately, or keep this store at its current dimension outside this "
+                "migration"
             )
             r.status = BLOCKED
         elif r.blocked:
@@ -1159,12 +1212,59 @@ class SessionsComponent(Component):
         return r
 
 
+class StrategyComponent(FaissComponent):
+    """B-2: autopilot's StrategyStore (``strategies.db`` + ``strategy_embeddings.faiss`` +
+    ``strategy_id_map.npy``), a 1024-d store in its own directory. Same copy-then-swap, same
+    marker. Embedded text = ``f"{title} {description} {insight}"``, exactly what
+    ``StrategyStore._publish_search_indexes_from_rows`` embeds (title from
+    ``metadata_json.insight_format.title`` else derived from the description)."""
+
+    kind = "strategy"
+    db_name = "strategies.db"
+    index_name = "strategy_embeddings.faiss"
+    idmap_name = "strategy_id_map.npy"
+    table = "strategies"
+    text_source = (
+        "strategies: title + description + insight "
+        "[orchestration/repl_memory/strategy_store.py _publish_search_indexes_from_rows]"
+    )
+
+    def resolve_rows(
+        self, con: sqlite3.Connection, ids: Sequence[str]
+    ) -> dict[str, tuple[str | None, str | None]]:
+        ss = _strategy_store_helpers()
+        marks = ",".join("?" * len(ids))
+        out: dict[str, tuple[str | None, str | None]] = {}
+        for sid, description, insight, meta_json in con.execute(
+            f"SELECT id, description, insight, metadata_json FROM strategies WHERE id IN ({marks})",
+            list(ids),
+        ):
+            if not (description or "").strip():
+                out[sid] = (None, "no_description")
+                continue
+            try:
+                meta = json.loads(meta_json or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            fmt = meta.get("insight_format") if isinstance(meta, dict) else {}
+            if not isinstance(fmt, dict):
+                fmt = {}
+            title = ss["compact"](fmt.get("title")) or ss["derive_title"](description)
+            out[sid] = (f"{title} {description} {insight}", None)
+        return out
+
+
 COMPONENT_CLASSES: tuple[type[Component], ...] = (
     EpisodicComponent,
     SkillsComponent,
     SessionsComponent,
 )
-KIND_OF_FLAG = {"episodic_dir": "episodic", "skill_dir": "skills", "session_dir": "sessions"}
+KIND_OF_FLAG = {
+    "episodic_dir": "episodic",
+    "skill_dir": "skills",
+    "session_dir": "sessions",
+    "strategy_dir": "strategy",
+}
 
 
 # ───────────────────────────────────────────────────────────────────────────── units
@@ -1209,7 +1309,12 @@ def has_component_files(directory: Path) -> bool:
 
 
 def inspect_unit(
-    path: Path, given: Sequence[str], declared: set[str], identity: dict[str, Any]
+    path: Path,
+    given: Sequence[str],
+    declared: set[str],
+    identity: dict[str, Any],
+    *,
+    sessions_archive_only: bool = False,
 ) -> Unit:
     real = Path(os.path.realpath(path))
     unit = Unit(path=real, given=list(given), declared=set(declared))
@@ -1217,8 +1322,13 @@ def inspect_unit(
         unit.status = BLOCKED
         unit.reasons.append(f"{path} is not a directory")
         return unit
-    for cls in COMPONENT_CLASSES:
+    # B-2: the strategy store is its own directory/unit, so it is only inspected when declared
+    # (--strategy-dir); a strategy index co-located with the other stores still blocks that unit.
+    classes = COMPONENT_CLASSES + ((StrategyComponent,) if "strategy" in unit.declared else ())
+    for cls in classes:
         comp = cls(real)
+        if isinstance(comp, SessionsComponent):
+            comp.archive_only = sessions_archive_only
         if comp.exists():
             unit.components.append(comp)
             unit.reports.append(comp.inspect())
@@ -1312,7 +1422,14 @@ def discover_dirs(args: argparse.Namespace) -> dict[Path, tuple[list[str], set[s
 def build_plan(args: argparse.Namespace, identity: dict[str, Any]) -> dict[str, Any]:
     dirs = discover_dirs(args)
     units = [
-        inspect_unit(p, given, declared, identity) for p, (given, declared) in sorted(dirs.items())
+        inspect_unit(
+            p,
+            given,
+            declared,
+            identity,
+            sessions_archive_only=bool(getattr(args, "sessions_archive_only", False)),
+        )
+        for p, (given, declared) in sorted(dirs.items())
     ]
     reasons = []
     paths = [u.path for u in units]
@@ -1610,7 +1727,18 @@ def rewrite_sessions(
     out = migrating / "session_embeddings.npy"
     np.save(out, np.zeros((rows, TARGET_DIM), dtype=np.float32))
     fsync_path(out)
-    return {"vectors": 0, "dim": TARGET_DIM, "file": out.name, "capacity_rows": rows}
+    info: dict[str, Any] = {"vectors": 0, "dim": TARGET_DIM, "file": out.name, "capacity_rows": rows}
+    if rep.detail.get("archive_only"):
+        src = comp.dir / "session_embeddings.npy"
+        info.update(
+            {
+                "mode": "archive-only",
+                "archived_vector_rows": rep.detail.get("archived_vector_rows"),
+                "archived_sha256": sha256_file(src),
+                "archived_in": "the .pre-eg2-<run_id> directory (rollback restores it)",
+            }
+        )
+    return info
 
 
 # ───────────────────────────────────────────────────────────────────────────── validation
@@ -2106,6 +2234,14 @@ def run_apply(
         if args.gguf_path:
             gp = Path(args.gguf_path)
             gguf = {"path": str(gp), "sha256": sha256_file(gp), "bytes": gp.stat().st_size}
+            if gguf["sha256"] != EG2_GGUF_SHA256:
+                raise Refused(
+                    [
+                        f"--gguf-path {gp} sha256 {gguf['sha256'][:16]}.. is not the adopted "
+                        f"EmbeddingGemma 2 BF16 pin {EG2_GGUF_SHA256[:16]}..; refusing to mark "
+                        "stores with another model file's identity"
+                    ]
+                )
 
         before = {u.path: tree_signature(u.path) for u in units}
         copies: dict[Path, dict[str, Any]] = {}
@@ -2130,7 +2266,14 @@ def run_apply(
                     "dims": sorted({r.dim for r in unit.reports if r.dim is not None}),
                     "assumed_source": "BGE-large-en-v1.5 (unmarked legacy store)",
                 }
-                marker = build_marker(identity, run_id, from_info)
+                marker = build_marker(
+                    identity,
+                    run_id,
+                    from_info,
+                    model_file=(Path(gguf["path"]).name if gguf else EG2_MODEL_FILE),
+                    gguf_sha256=(gguf["sha256"] if gguf else EG2_GGUF_SHA256),
+                    gguf_sha256_verified=bool(gguf),
+                )
                 (mig / MARKER_NAME).write_text(
                     json.dumps(marker, indent=1, sort_keys=True) + "\n", encoding="utf-8"
                 )
@@ -2301,6 +2444,17 @@ def add_store_args(p: argparse.ArgumentParser) -> None:
         help="directory holding skills.db + skill_embeddings.faiss + skill_id_map.npy",
     )
     g.add_argument("--session-dir", help="directory holding sessions.db + session_embeddings.npy")
+    g.add_argument(
+        "--strategy-dir",
+        help="directory holding strategies.db + strategy_embeddings.faiss + strategy_id_map.npy "
+        "(autopilot's StrategyStore; its own unit, same marker)",
+    )
+    g.add_argument(
+        "--sessions-archive-only",
+        action="store_true",
+        help="B-1: sessions keep no source text; archive their 1024-d vectors in the .pre-eg2 "
+        "directory instead of blocking, and start the migrated store with an empty 256-d file",
+    )
     p.add_argument(
         "--runtime", default=DEFAULT_RUNTIME, help="runtime string recorded in the identity"
     )
@@ -2373,6 +2527,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ck.add_argument("dir")
     p_ck.add_argument("--expect-dim", type=int, default=TARGET_DIM)
     p_ck.add_argument("--runtime", default=DEFAULT_RUNTIME)
+    p_ck.add_argument("--expect-model-file", default=None, help="B-3: the pool's GGUF basename")
+    p_ck.add_argument("--expect-gguf-sha256", default=None, help="B-3: the pool's GGUF sha256")
     return ap
 
 
@@ -2478,6 +2634,8 @@ def cmd_check_marker(args: argparse.Namespace) -> int:
         Path(args.dir),
         expected_dim=args.expect_dim,
         expected_identity=identity if args.expect_dim == TARGET_DIM else None,
+        expected_model_file=args.expect_model_file,
+        expected_gguf_sha256=args.expect_gguf_sha256,
     )
     print(json.dumps(marker, indent=1, sort_keys=True, default=str))
     return EXIT_OK

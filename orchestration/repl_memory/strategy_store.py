@@ -23,6 +23,7 @@ consumed by ``knowledge_distiller`` (AP-29).
 
 from __future__ import annotations
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM
 import hashlib
 import json
 import logging
@@ -293,7 +294,7 @@ class StrategyStore:
     def __init__(
         self,
         path: str | Path = DEFAULT_STRATEGY_PATH,
-        embedding_dim: int = 1024,
+        embedding_dim: int = LEGACY_EMBEDDING_DIM,
         embedder: Any = None,
     ):
         self.path = Path(path)

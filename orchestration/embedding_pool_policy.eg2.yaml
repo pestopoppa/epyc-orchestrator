@@ -1,0 +1,30 @@
+# EG2 overlay of embedding_pool_policy.yaml (REPL-EMB-2.9, package sections 3-4).
+#
+# NOT LOADED by anything: POLICY_PATH is embedding_pool_policy.yaml. This file is what the v11
+# stack change swaps in (copy over the live file, or pass load_policy(path=...)) when the pool
+# serves EmbeddingGemma 2 BF16. The server returns 768-d vectors; the client slices to 256 and
+# L2 re-normalises. Every other key is identical to the live file; keep them in step.
+version: 1
+
+client:
+  connect_timeout_s: 1.0
+  request_timeout_s: 15.0
+  call_timeout_s: 30.0
+  admission_wait_s: 0.0
+  failure_backoff_s: 2.0
+  min_norm: 1.0e-6
+  embedding_dim: 256
+  truncate_dim: 256
+  oversize_retry_clipped: true
+  oversize_max_halvings: 3
+  cache_max_entries: 20000
+  poll_interval_s: 0.02
+
+neighbour_cap:
+  enabled: true
+  guarded_roles: [frontdoor]
+  max_in_flight: 1
+  busy_sources: [ledger, slots]
+  busy_ttl_s: 0.25
+  slots_timeout_s: 0.5
+  unknown_is_busy: true

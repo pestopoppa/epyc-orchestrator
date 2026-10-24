@@ -15,6 +15,7 @@ See also: ALMA (Xiong et al., 2026) — meta-learned memory designs
 
 from __future__ import annotations
 
+from src.embedding_dims import LEGACY_EMBEDDING_DIM
 import json
 import logging
 import sqlite3
@@ -184,7 +185,7 @@ class SkillBank:
         self,
         db_path: Optional[Path] = None,
         faiss_path: Optional[Path] = None,
-        embedding_dim: int = 1024,
+        embedding_dim: int = LEGACY_EMBEDDING_DIM,
     ):
         if db_path is None:
             db_path = DEFAULT_SKILLBANK_PATH / "skills.db"

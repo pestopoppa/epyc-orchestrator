@@ -141,6 +141,16 @@ def check(min_local: float, allow_missing: bool) -> tuple[int, list[dict]]:
             got = _flag(argv, flag)
             if got != str(want):
                 row["problems"].append(f"argv {flag} {got} != recipe {want}")
+        # REPL-EMB-2.9: optional recipe keys; a recipe without them (live BGE) checks nothing new.
+        for flag, key in (("-b", "batch_tokens"), ("-ub", "ubatch_tokens"),
+                          ("--embd-normalize", "embd_normalize")):
+            if recipe.get(key) is not None:
+                got = _flag(argv, flag)
+                if got != str(recipe[key]):
+                    row["problems"].append(f"argv {flag} {got} != recipe {recipe[key]}")
+        if recipe.get("pooling") and _flag(argv, "--pooling") not in (None, str(recipe["pooling"])):
+            row["problems"].append(
+                f"argv --pooling {_flag(argv, '--pooling')} != recipe {recipe['pooling']}")
         if recipe.get("no_mmap") and "--no-mmap" not in argv:
             row["problems"].append("recipe asks for --no-mmap; argv lacks it")
         masks = _task_masks(pid)
