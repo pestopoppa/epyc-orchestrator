@@ -25,7 +25,7 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
     "scripts/server/runtime_facts_manifest.py": ("c18bb563aabfa092e6b378fdddbd5f516352cd5d", "e2bfec7bb580fac727ca184b2dd4d56bd487e443e89d4720cc037743ab1dc374"),
     "scripts/server/stack_env.py": ("0ad2da92f14a50e2145e36fe32e31011d0da8606", "c2dd2a40abf2ac3048e392a11bd910a27f6991e2a99cefdbd232172b67ea06a4"),
     "scripts/server/stack_health.py": ("99d48f391565e0befb10040a0fea252087fc0313", "19ede42e88efeda2ab1fc5eb82c1272ac9d992f59313103c7d8d83917d4dfcad"),
-    "scripts/server/stack_log_banner.py": ("acdf77435557f3e06635725dc17eb90b29d5b3c9", "70daa945b70e0d74962016aac85c21fda4c56e4c44d02fa6621cc5cdcf2d2ef5"),
+    "scripts/server/stack_log_banner.py": ("1c67ef1c1b4a48b8afa315e34b88511e0fa012ed", "cfec940567bdd359459537e2e3c6e964b05e3ea1136947ba67f3d0cc6b611221"),
     "scripts/server/stack_manifest.py": ("8ec58a7e5d28e3b214f3f4e18edefba136828930", "5f7acb6d067e4420edfc2bcc662148cd8fc7aff6c90682c51ece207666171610"),
     "scripts/server/stack_numa.py": ("78ba16a1d289fa7f44480aa5f0f225ce70103908", "edfdb41035ec638d3eab60631024ebece56a5e2d9b577851bf02e05a446e0c32"),
     "scripts/server/stack_numa_evict.py": ("09116f5040a575405f0d7807bb7af211085f906b", "575b811b72b31ed95f7296ee7aecb9e245aae9d603496e4baa1137ab42cb77de"),

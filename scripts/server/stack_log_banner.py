@@ -20,11 +20,12 @@ orchestrator's per-call serving record (``src/backends/serving_calls.py``) joins
 the sidecar to say which launch served each request.
 
 Everything here is best-effort: a banner that cannot be written never blocks a
-launch or a stop.
+launch or a stop, but every failure prints one ``[launch-banner]`` line to stderr.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -39,6 +40,13 @@ SIDECAR_DIRNAME = "server_launches"
 LAUNCH_SCHEMA = "epyc.stack.server_launch.v1"
 
 
+def _warn(message: str, log: IO[str] | None = None) -> None:
+    line = f"[launch-banner] {message}"
+    print(line, file=sys.stderr)
+    if log is not None:
+        _write_line(log, line)
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -48,7 +56,8 @@ def _stack_commit() -> str | None:
         from src.runtime.git_head import resolve_git_head
 
         return resolve_git_head(_REPO_ROOT)
-    except Exception:
+    except Exception as exc:
+        _warn(f"stack commit unresolved: {exc!r}")
         return None
 
 
@@ -77,8 +86,8 @@ def _write_line(log: IO[str], line: str) -> None:
     try:
         log.write(line + "\n")
         log.flush()
-    except Exception:
-        pass
+    except Exception as exc:
+        _warn(f"log write failed: {exc!r}")
 
 
 def write_launch_banner(
@@ -126,8 +135,8 @@ def write_launch_banner(
         detail = {k: record[k] for k in ("argv", "binary", "binary_realpath", "model_path",
                                          "ld_library_path", "stack_commit", "launcher_argv")}
         _write_line(log, f"=== launch-detail {json.dumps(detail, separators=(',', ':'))} ===")
-    except Exception:
-        pass
+    except Exception as exc:
+        _warn(f"launch banner failed: {exc!r}", log)
     return record
 
 
@@ -139,7 +148,12 @@ def _sidecar_dir_for(log: IO[str]) -> Path | None:
 
 
 def write_launch_pid(log: IO[str], record: dict[str, Any], pid: int) -> None:
-    """Record the spawned pid (banner line + sidecar). Called right after ``Popen``."""
+    """Record the spawned pid (banner line + sidecar). Called right after ``Popen``.
+
+    A failed sidecar rewrite removes the previous launch's ``<port>.json`` so
+    serving_calls reports identity ``absent`` rather than the wrong launch.
+    """
+    target = tmp = None
     try:
         record = dict(record, pid=int(pid), pid_recorded_at=_now_iso())
         _write_line(
@@ -156,10 +170,15 @@ def write_launch_pid(log: IO[str], record: dict[str, Any], pid: int) -> None:
         tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         tmp.write_text(payload + "\n")
         os.replace(tmp, target)
+        target = tmp = None  # the new identity is in place; keep it on a history failure
         with open(sidecar_dir / "launches.jsonl", "a") as fh:
             fh.write(payload + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        _warn(f"sidecar write failed: {exc!r}", log)
+        for stale in (tmp, target):
+            if stale is not None:
+                with contextlib.suppress(OSError):
+                    stale.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -207,8 +226,8 @@ def _append(path: Path, line: str) -> None:
     try:
         with open(path, "a") as fh:
             fh.write(line + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        _warn(f"stop banner write to {path} failed: {exc!r}")
 
 
 def write_stop_banner(logs: Mapping[Path, list[int]], *, reason: str | None = None) -> None:

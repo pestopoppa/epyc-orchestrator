@@ -69,6 +69,28 @@ def test_banner_failure_never_raises(tmp_path):
     banner.write_launch_pid(_Broken(), rec, 1)  # must not raise
 
 
+
+def test_failed_sidecar_rewrite_warns_and_drops_the_stale_identity(tmp_path, monkeypatch, capsys):
+    """A5-12: a stale <port>.json would attribute this launch's requests to the previous one."""
+    from src.backends import serving_calls
+
+    def _enospc(*_a):
+        raise OSError(28, "No space left on device")
+
+    log_path = tmp_path / "llama-server-8070.log"
+    with open(log_path, "a") as log:
+        banner.write_launch_pid(log, banner.write_launch_banner(log, port=8070, roles=["r"], argv=ARGV), 1)
+        monkeypatch.setattr(banner.os, "replace", _enospc)
+        banner.write_launch_pid(log, banner.write_launch_banner(log, port=8070, roles=["r"], argv=ARGV), 2)
+
+    assert "[launch-banner] sidecar write failed" in capsys.readouterr().err
+    assert "[launch-banner] sidecar write failed" in log_path.read_text()
+    assert [p.name for p in (tmp_path / "server_launches").iterdir()] == ["launches.jsonl"]
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(tmp_path))
+    serving_calls._SIDECAR_CACHE.clear()
+    assert serving_calls.server_identity(8070)["identity_source"] == "absent"
+
+
 # ── every start_server branch writes the banner (fake Popen) ─────────────────
 
 
