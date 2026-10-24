@@ -4646,6 +4646,10 @@ async function updatePareto() {
                 if (bugExcl && bugExcl.count) {
                     txt += ` · ⚠ ${bugExcl.count} excluded (corrupted, ≤trial ${bugExcl.max_trial_id})`;
                 }
+                const unmeasured = d.exclusions && d.exclusions.unmeasured_objectives;
+                if (unmeasured && unmeasured.count) {
+                    txt += ` · ${unmeasured.count} unmeasured (no objective tuple)`;
+                }
                 sumEl.textContent = txt;
             } else {
                 sumEl.textContent = '(no autopilot_state.json yet)';

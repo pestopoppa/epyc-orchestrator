@@ -399,3 +399,12 @@ def test_representative_clusters_split_by_served_config_identity() -> None:
     (seed_rep,) = [e for e in seed_archive["all_entries"] if e.get("is_representative")]
     assert seed_rep["config_fingerprint"] == config_fingerprint_from_row(seed[0])
     assert seed_rep["n_reproductions"] == 2
+
+
+def test_reconstruction_counts_rows_dropped_for_unmeasured_objectives() -> None:
+    """B5-12: a row whose objective tuple cannot be built (unmeasured axis) is counted."""
+    rows = [_row(1, 1.5, 40.0), _row(2, 1.6, None), _row(3, 1.7, 50.0), _row(4, 1.8, None)]
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    assert archive["exclusions"]["unmeasured_objectives"] == {"count": 2, "max_trial_id": 4}
+    assert {e["trial_id"] for e in archive["all_entries"]} == {1, 3}

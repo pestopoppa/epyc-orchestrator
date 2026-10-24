@@ -34,6 +34,14 @@ GOLDEN = {
         "8a963ee6ba95c999dea19a6025294e07b8bf52860f7ab47c4a94487b339430fb"
     ),
 }
+# Fixture rows dropped for an unmeasured objective axis, per policy (B5-12).
+UNMEASURED = {
+    "legacy_4d_v1": 85,
+    "task_rate_3d_v1": 85,
+    "task_rate_4d_v7_physical_cohort_exclusion": 88,
+    "task_rate_4d_v1": 88,
+    "task_rate_4d_v2_resource_lanes": 88,
+}
 
 
 @pytest.fixture(scope="module")
@@ -46,6 +54,10 @@ def test_replay_payload_matches_pre_memo_golden(rows, policy, exclude_before_ts)
     payload = reconstruct_archive_from_journal_rows(
         rows, None, objective_policy=policy, exclude_before_ts=exclude_before_ts
     )
+    # B5-12 added this telemetry slot after the capture; everything else stays pinned.
+    unmeasured = payload["exclusions"].pop("unmeasured_objectives")
+    if exclude_before_ts is None:
+        assert unmeasured["count"] == UNMEASURED[policy]
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
     assert digest == GOLDEN[(policy, exclude_before_ts)]
 

@@ -570,6 +570,11 @@ def _merge_archive_exclusions(
             tail.get("truncated_above_cap") or {},
         ),
         "max_trial_id_cap": max_trial_id_cap,
+        # A tail row with an unmeasured axis forces full replay, so only the prefix counts.
+        "unmeasured_objectives": _merge_exclusion_slot(
+            prefix.get("unmeasured_objectives") or {},
+            tail.get("unmeasured_objectives") or {},
+        ),
     }
 
 

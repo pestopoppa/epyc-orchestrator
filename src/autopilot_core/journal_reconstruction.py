@@ -244,14 +244,15 @@ def reconstruct_archive_from_journal_rows(
     repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
 
     # Exclusion telemetry — so a dashboard can SHOW why trials vanished from the
-    # frontier instead of silently truncating. Two paths drop rows: a
-    # `bug_corrupted_by` tag (rolled-back / corrupted trials) and the optional
-    # `max_trial_id` cap. `journal_max_trial_id` is the highest trial id present
+    # frontier instead of silently truncating: a `bug_corrupted_by` tag (rolled-back /
+    # corrupted trials), the epoch fence, the optional `max_trial_id` cap and an
+    # unmeasured objective axis. `journal_max_trial_id` is the highest trial id present
     # in the segment regardless of any filter, so callers can detect a stale
     # state counter that lags the journal.
     excluded_bug = {"count": 0, "max_trial_id": None}
     truncated_cap = {"count": 0, "max_trial_id": None}
     excluded_before_ts = {"count": 0, "max_trial_id": None}
+    excluded_unmeasured = {"count": 0, "max_trial_id": None}
     journal_max_trial_id: int | None = None
 
     def _bump(slot: dict[str, Any], tid: int) -> None:
@@ -299,6 +300,7 @@ def reconstruct_archive_from_journal_rows(
 
         objectives = objectives_from_journal_row(row, objective_policy=objective_policy)
         if objectives is None:
+            _bump(excluded_unmeasured, trial_id)
             continue
 
         deinflated = False
@@ -386,6 +388,7 @@ def reconstruct_archive_from_journal_rows(
             "exclude_before_ts": exclude_before_ts,
             "truncated_above_cap": truncated_cap,
             "max_trial_id_cap": max_trial_id,
+            "unmeasured_objectives": excluded_unmeasured,
         },
         "supersessions": supersession_meta,
     }

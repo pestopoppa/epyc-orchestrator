@@ -95,7 +95,9 @@ class DeficiencyCategory(str, Enum):
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000
-SEGMENT_SNAPSHOT_POLICY_VERSION = "journal-segment-snapshot-v1"
+# v2: archive payload gained exclusions.unmeasured_objectives and identity-keyed
+# representatives (B5-12/B5-M2); v1 snapshots replay as prefix drift -> full replay.
+SEGMENT_SNAPSHOT_POLICY_VERSION = "journal-segment-snapshot-v2"
 
 _BASELINE_QUALITY_RE = re.compile(r"\bbaseline\s+([0-9]+(?:\.[0-9]+)?)")
 _SUITE_REGRESSION_RE = re.compile(
