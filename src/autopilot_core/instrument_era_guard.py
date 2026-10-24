@@ -16,22 +16,9 @@ DEFAULT_INSTRUMENT_ERAS_PATH = (
 AUTOPILOT_QUALITY_SCOPE = "autopilot_quality"
 EVAL_QUALITY_SCOPE = "eval_quality"
 
-# E7-eval-instrument boundary (scope ``eval_quality``), 2026-07-21T10:30Z — the A3
-# 79k/41-suite question-pool rebuild + B7 deterministic scorer package.
-#
-# ⚠ THIS IS A HISTORICAL BOUNDARY, NOT "THE CURRENT ERA". Its comment used to say it
-# "MUST match that row's id + ``from``", i.e. it was meant to track the live era — and
-# it stopped doing so at the v8 eval boundary on 2026-07-25 and is now several eras
-# behind (``eval_quality`` reached E16 on 2026-08-10). Because the registry-unreadable
-# fallback fenced at THIS boundary, an unreadable registry silently UNDER-fenced: every
-# observation between E7 and today read as in-era and was admitted to the quality
-# decision plane. That is fail-open, in a guard whose whole job is to fail closed.
-#
-# The value is left untouched — E7 was a real boundary and pinning a specific PAST era
-# on purpose is legitimate (cf. dashboard's ``_PARETO_SPEED_DEINFLATE_ERA_ID = "E2"``,
-# a rescale boundary that must never move). What changed is that nothing treats it as
-# current any more: use :func:`last_known_eval_quality_era`, which reads a WITNESS the
-# live system maintains, so it cannot go stale the way a constant does.
+# E7-eval-instrument (scope ``eval_quality``, 2026-07-21T10:30Z: A3 pool rebuild + B7
+# scorer) is a pinned HISTORICAL era, never the current one; the live era comes from the
+# registry or :func:`last_known_eval_quality_era`.
 E7_EVAL_INSTRUMENT_ERA_ID = "E7-eval-instrument"
 E7_EVAL_INSTRUMENT_BOUNDARY = "2026-07-21T10:30:00Z"
 
@@ -365,6 +352,15 @@ def active_eval_quality_era(
     era = active_rows[0]
     boundary_iso = str(era.get("from", ""))
     boundary_epoch = _parse_epoch(era.get("from"))
+    if boundary_epoch is None or not str(era.get("id", "")).strip():
+        return {
+            **base,
+            "status": "invalid_registry",
+            "reason": (
+                f"active {EVAL_QUALITY_SCOPE} era {era.get('id', '<unknown>')!r} needs both "
+                "an id and a `from` boundary to fence on"
+            ),
+        }
     return {
         **base,
         "ok": True,

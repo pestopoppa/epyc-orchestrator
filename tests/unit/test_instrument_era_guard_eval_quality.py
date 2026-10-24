@@ -95,6 +95,16 @@ eras:
     assert guard["status"] == "invalid_registry"
 
 
+def test_active_era_without_from_or_id_fails_closed(tmp_path: Path) -> None:
+    # B5-16: an active row with no boundary (or no id) cannot fence; it used to resolve
+    # ok=True with boundary_epoch=None and the caller then fenced at the E7 constant.
+    for row in ("  - id: E99\n    scope: eval_quality\n",
+                '  - from: "2026-07-21T10:30:00Z"\n    scope: eval_quality\n'):
+        guard = active_eval_quality_era(path=_registry(tmp_path, "eras:\n" + row), now=_AFTER)
+        assert guard["ok"] is False
+        assert guard["status"] == "invalid_registry"
+
+
 def test_latest_opened_era_wins_when_two_are_active(tmp_path: Path) -> None:
     body = """
 eras:

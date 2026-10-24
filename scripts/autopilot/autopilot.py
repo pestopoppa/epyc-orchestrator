@@ -231,8 +231,6 @@ from src.autopilot_core.baseline_ledger import (
     reconcile_baseline_ledger,
 )
 from src.autopilot_core.instrument_era_guard import (
-    E7_EVAL_INSTRUMENT_BOUNDARY,
-    E7_EVAL_INSTRUMENT_ERA_ID,
     last_known_eval_quality_era,
     EVAL_QUALITY_SCOPE,
     active_eval_quality_era,
@@ -7874,8 +7872,8 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
     Idempotent — only acts when ``active_instrument_eras.eval_quality`` is missing. Resolves
     the active eval_quality era from the human-owned registry via
     ``instrument_era_guard.active_eval_quality_era``; on a registry read failure it falls
-    forward to the ``E7-eval-instrument`` code constant (still fences) but ONLY once the clock
-    is at/after that boundary. Returns True when it mutated state. A no-op (False) before any
+    forward to the last era the live system recorded, but ONLY once the clock is at/after
+    that boundary. Returns True when it mutated state. A no-op (False) before any
     boundary opens, so the pre-boundary single-era world stays unfenced.
 
     This is the code-path state migration the operator constraint requires: the era registry
@@ -7890,8 +7888,8 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
     era_id = ""
     source = ""
     if guard.get("ok"):
-        era_id = str(guard.get("era_id") or "").strip() or E7_EVAL_INSTRUMENT_ERA_ID
-        boundary_epoch = guard.get("boundary_epoch")
+        era_id = str(guard["era_id"])
+        boundary_epoch = float(guard["boundary_epoch"])
         source = f"registry:{guard.get('path')}"
     elif guard.get("status") == "no_active_era":
         # Registry read fine; no eval_quality era active yet (clock before the boundary).
@@ -7899,15 +7897,7 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
         return False
     else:
         # Registry unreadable/malformed. Fall back to the last era the LIVE SYSTEM
-        # recorded, not to a code constant.
-        #
-        # This branch used to fence at E7_EVAL_INSTRUMENT_BOUNDARY (2026-07-21) and stamp
-        # E7_EVAL_INSTRUMENT_ERA_ID. That constant stopped tracking the live era at the
-        # v8 eval boundary on 2026-07-25 and eval_quality is now at E16, so an unreadable
-        # registry silently UNDER-fenced by three weeks and several instrument changes —
-        # every cross-instrument observation in that span read as in-era and was admitted.
-        # Fail-open, in the guard whose job is to fail closed. Bumping the constant would
-        # only move the staleness to the next cutover.
+        # recorded, never to a code constant (a stale E7 constant once under-fenced here).
         last_known = last_known_eval_quality_era()
         fallback_epoch = last_known.get("boundary_epoch")
         if last_known.get("ok") and fallback_epoch is not None:
@@ -7945,15 +7935,6 @@ def _migrate_eval_quality_era(state: dict[str, Any]) -> bool:
                 last_known.get("status"),
             )
             return False
-
-    if boundary_epoch is None:
-        boundary_epoch = _parse_journal_timestamp(E7_EVAL_INSTRUMENT_BOUNDARY)
-    if boundary_epoch is None:
-        log.error(
-            "eval_quality era migration aborted — could not resolve a boundary epoch; "
-            "quality axis remains unfenced."
-        )
-        return False
 
     eras = state.get("active_instrument_eras")
     eras = dict(eras) if isinstance(eras, dict) else {}
