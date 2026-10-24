@@ -342,12 +342,11 @@ def test_prose_and_comparison_references_still_leak(text):
 # ── wiring ────────────────────────────────────────────────────────────────
 
 
-def test_autopilot_startup_wires_preflight_and_observer():
-    source = (ROOT / "scripts" / "autopilot" / "autopilot.py").read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    assert "EvalLeakageMonitor(" in body and ".install()" in body
-    assert "leakage_monitor.preflight()" in body
-    assert body.index("leakage_monitor.preflight()") < body.index("gate = SafetyGate(")
+def test_autopilot_startup_wires_preflight_and_observer(monkeypatch):
+    from tests.unit.autopilot_loop_harness import fresh_state, run_loop_inner
+
+    run = run_loop_inner(monkeypatch, state=fresh_state())
+    assert run.index("leakage_install") < run.index("leakage_preflight") < run.index("safety_gate")
 
 
 def test_dashboard_summary_exposes_guard_status(tmp_path):

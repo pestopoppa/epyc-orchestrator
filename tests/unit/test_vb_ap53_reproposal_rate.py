@@ -200,10 +200,15 @@ def test_backfill_stops_at_the_armed_boundary(tmp_path):
     assert report["windows_before_trial"] == 6 and report["retrospective_lines"] == 3
 
 
-def test_autopilot_trial_paths_call_the_hook():
-    src = (ROOT / "scripts" / "autopilot" / "autopilot.py").read_text()
-    assert src.count("_record_reproposal_rate_windows(journal)") == 2
+def test_autopilot_trial_paths_call_the_hook(monkeypatch):
+    from tests.unit.autopilot_loop_harness import fresh_state, measured_result, run_loop_inner
+
     autopilot = importlib.import_module("autopilot")
+    skip = autopilot.SkipOutcome("skipped", "handler no-op", "numeric_trial")
+    for outcome in (measured_result(), skip):  # the metric trial and the skip-trial paths
+        run = run_loop_inner(monkeypatch, state=fresh_state(), dispatch_results=[outcome])
+        assert run.names.count("reproposal_rate") == 1
+        assert run.index("record") < run.index("reproposal_rate")
 
     class Broken:
         journal_dir = None

@@ -335,11 +335,11 @@ def test_autopilot_installs_live_scope_from_state(monkeypatch):
     state["pareto_exclude_before_ts"] = 1790000000.0
     sg._promotion_guard_view()
     assert calls[-1]["exclude_before_ts"] == pytest.approx(1790000000.0)
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    assert body.index("_install_promotion_guard_scope(journal, state)") < body.index(
-        "gate = SafetyGate("
-    )
+    # The live loop installs that scope before it constructs the gate.
+    from tests.unit.autopilot_loop_harness import fresh_state, run_loop_inner
+
+    run = run_loop_inner(monkeypatch, state=fresh_state())
+    assert run.index("guard_scope") < run.index("safety_gate")
 
 
 # ── replay of the stored journal ──────────────────────────────────────────

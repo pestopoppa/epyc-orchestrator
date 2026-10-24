@@ -238,16 +238,22 @@ def test_killed_placeholder_carries_the_marker_manifest(journal, tmp_path, manif
     assert state["in_flight_trial"] is None
 
 
-def test_main_loop_row_passes_manifest_and_lineage():
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    call = body[body.index("journal_entry = JournalEntry(") :]
-    call = call[: call.index("journal.record(journal_entry)")]
-    assert "run_manifest=_in_flight_run_manifest(state, trial_counter)" in call
-    assert "lineage=trial_lineage" in call
+def test_main_loop_row_passes_manifest_and_lineage(monkeypatch):
+    from tests.unit.autopilot_loop_harness import fresh_state, run_loop_inner
+
+    run = run_loop_inner(monkeypatch, state=fresh_state(trial_counter=5))
+    [dispatch] = run.of("dispatch")
+    [lineage] = run.of("lineage")
+    [entry] = run.journal_entries
+    recorded = run.index("record")
+    # the row carries the in-flight marker's manifest and the selected lineage
+    assert dispatch["in_flight"] == entry.trial_id == 5
+    assert entry.run_manifest == dispatch["run_manifest"] and entry.run_manifest["sources"]
+    assert entry.lineage == lineage["lineage"] and lineage["before_trial_id"] == 5
     # the selection is computed before the row is journaled
-    assert body.index("select_lineage_parent(") < body.index("journal.record(journal_entry)")
-    # and the WAL marker is cleared only after the row is written
-    assert body.index("journal.record(journal_entry)") < body.index(
-        'state["in_flight_trial"] = None\n        _save_state_with_journal_archive_authority'
-    )
+    assert run.index("lineage") < recorded
+    # and the WAL marker is written before dispatch and cleared only after the row is written
+    saves = run.saves()
+    assert [p["in_flight"] for i, p in saves if i < run.index("dispatch")][-1] == 5
+    cleared = next(i for i, p in saves if i > run.index("dispatch") and p["in_flight"] is None)
+    assert cleared > recorded
