@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 import time
 from contextlib import contextmanager
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
