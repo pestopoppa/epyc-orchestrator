@@ -796,7 +796,7 @@ def run_loop_inner(
     )
     m(autopilot, "health_check", fake_health_check)
     m(autopilot, "should_generate_today", lambda _state: False)
-    m(autopilot.subprocess, "run", lambda *args, **kwargs: emit("subprocess_run"))
+    m(autopilot.subprocess, "run", lambda cmd, *a, **kw: emit("subprocess_run", cmd=list(cmd)))
     m(autopilot, "_git_tag", lambda *args, **kwargs: None)
     m(autopilot, "generate_self_criticism", lambda *args, **kwargs: FakeCriticism())
     m(autopilot, "classify_learning_exclusion", lambda *args, **kwargs: learning_exclusion)
