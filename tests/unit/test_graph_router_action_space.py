@@ -262,15 +262,18 @@ def test_extract_uses_requested_db_and_filters_update_counts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
     from orchestration.repl_memory.episodic_store import EpisodicStore
 
-    actions = ["frontdoor", "worker_general", "coder_escalation"]
+    actions = ["frontdoor", "coder_escalation", "worker_general"]
     priors = _write_stack_priors(
         tmp_path / "stack_priors.yaml",
         {role: _stack_prior_record(role) for role in actions},
     )
     db_path = tmp_path / "requested-db"
-    store = EpisodicStore(db_path=db_path, embedding_dim=1024)
+    store = EpisodicStore(db_path=db_path, embedding_dim=1024, use_faiss=True)
+    assert store.use_faiss is True
+    assert isinstance(store._embedding_store, FAISSEmbeddingStore)
     excluded_id = store.store_immediate(
         np.ones(1024, dtype=np.float32),
         "frontdoor",
@@ -313,7 +316,7 @@ def test_extract_uses_requested_db_and_filters_update_counts(
     assert [label_map[index] for index in sorted(label_map)] == actions
     assert out["y"].tolist() == [actions.index("worker_general")]
     assert out["q_weights"].tolist() == pytest.approx([0.8])
-    assert out["X"][0, :1024].tolist() == pytest.approx([2.0] * 1024)
+    assert out["X"][0, :1024].tolist() == pytest.approx([1.0 / 32.0] * 1024)
     assert out["X"][0, 1024:].tolist() == pytest.approx([0, 0, 1, 0, 0, 0, 0])
 
 
