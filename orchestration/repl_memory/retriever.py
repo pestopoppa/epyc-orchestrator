@@ -889,7 +889,7 @@ class SkillAugmentedRouter:
 
     Usage:
         router = SkillAugmentedRouter(hybrid_router, skill_retriever, embedder)
-        decision, strategy, skill_context = router.route_with_skills(task_ir)
+        decision, strategy, skill_context, skill_ids = router.route_with_skills(task_ir)
     """
 
     def __init__(
@@ -908,7 +908,7 @@ class SkillAugmentedRouter:
 
     def route_with_skills(
         self, task_ir: Dict[str, Any]
-    ) -> Tuple[List[str], str, str]:
+    ) -> Tuple[List[str], str, str, List[str]]:
         """
         Route with skill context for prompt injection.
 
@@ -916,23 +916,26 @@ class SkillAugmentedRouter:
             task_ir: TaskIR dictionary
 
         Returns:
-            (routing_decision, strategy, skill_context) tuple.
-            skill_context is a formatted markdown string (may be empty).
+            (routing_decision, strategy, skill_context, skill_ids) tuple.
+            skill_context is a formatted markdown string (may be empty);
+            skill_ids are the IDs of the skills retrieved for it.
         """
         routing_decision, strategy = self.hybrid_router.route(task_ir)
 
         # Retrieve skills for prompt augmentation
         skill_context = ""
+        skill_ids: List[str] = []
         try:
             embedding = self.embedder.embed_task_ir(task_ir)
             task_type = task_ir.get("task_type", "general")
             results = self.skill_retriever.retrieve_for_task(embedding, task_type)
             if results:
                 skill_context = self.skill_retriever.format_for_prompt(results)
+                skill_ids = [r.skill.id for r in results] if skill_context else []
         except Exception as e:
             logger.debug("Skill retrieval failed (non-fatal): %s", e)
 
-        return routing_decision, strategy, skill_context
+        return routing_decision, strategy, skill_context, skill_ids
 
     def route_with_mode(
         self, task_ir: Dict[str, Any]

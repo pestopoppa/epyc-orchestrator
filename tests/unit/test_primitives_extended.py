@@ -48,6 +48,7 @@ class TestRecursionDepthLimit:
             persona=None,
             json_schema=None,
             grammar=None,
+            **_kw,
         ):
             # Call llm_call again (which will check recursion depth)
             if prims._recursion_depth < 5:  # Try to exceed limit of 2
@@ -453,7 +454,7 @@ class TestDepthRoleOverrides:
 
                 calls: list[str] = []
 
-                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None):
+                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None, **_kw):
                     calls.append(role)
                     if prims._recursion_depth == 1:
                         return prims.llm_call("nested", role="worker_general")
@@ -476,7 +477,7 @@ class TestDepthRoleOverrides:
 
             calls: list[str] = []
 
-            def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None):
+            def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None, **_kw):
                 calls.append(role)
                 if prims._recursion_depth == 1:
                     return prims.llm_call("nested", role="worker_general")
@@ -502,7 +503,7 @@ class TestDepthRoleOverrides:
                     },
                 )
 
-                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None):
+                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None, **_kw):
                     if prims._recursion_depth == 1:
                         return prims.llm_call("nested", role="worker_general")
                     return "ok"
@@ -535,7 +536,7 @@ class TestDepthRoleOverrides:
                 )
                 calls: list[str] = []
 
-                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None):
+                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None, **_kw):
                     calls.append(role)
                     if prims._recursion_depth == 1:
                         return prims.llm_call("nested", role="worker_general")
@@ -569,7 +570,7 @@ class TestDepthRoleOverrides:
                 )
                 calls: list[str] = []
 
-                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None):
+                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None, **_kw):
                     calls.append(role)
                     if prims._recursion_depth == 1:
                         return prims.llm_call("nested-l1", role="worker_general")
@@ -608,7 +609,7 @@ class TestDepthRoleOverrides:
                 )
                 calls: list[str] = []
 
-                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None):
+                def _fake_real_call(prompt, role, n_tokens=-1, stop_sequences=None, json_schema=None, grammar=None, **_kw):
                     calls.append(role)
                     if prims._recursion_depth == 1:
                         return prims.llm_call("nested", role="worker_general")

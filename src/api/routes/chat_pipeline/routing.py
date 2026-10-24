@@ -28,7 +28,6 @@ from src.api.routes.chat_pipeline.routing_decision import (
     classify_trinity_role,
     derive_task_type_from_route,
     estimate_routing_cost,
-    extract_skill_ids,
     fence_nonserving_route,
     log_routing_start,
     resolve_timeout,
@@ -313,7 +312,7 @@ def _route_request(
 
     # Determine routing using HybridRouter if available, otherwise rules
     with routing_stage_timing.timed("route"):
-        routing_decision, routing_strategy, skill_context = select_initial_route(
+        routing_decision, routing_strategy, skill_context, skill_ids = select_initial_route(
             request,
             state,
             task_ir,
@@ -442,9 +441,6 @@ def _route_request(
 
     tool_required, tool_hint = detect_tool_requirement(request.prompt)
 
-    # Extract skill IDs from skill-augmented routing results
-    skill_ids = extract_skill_ids(skill_context, state)
-
     # WS-3: Derive task_type from routed role so cascading tool policy can deny
     # web tools for reasoning domains. Without this, task_type stays "chat" and
     # NO_WEB_TASK_TYPES never matches.
@@ -527,13 +523,9 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
         )
         request_specific_urls = bool(request.server_urls) or eval_batch_urls
 
-        if (
-            hasattr(state, "_real_primitives")
-            and state._real_primitives is not None
-            and not request_specific_urls
-        ):
-            primitives = state._real_primitives
-            primitives.reset_counters()
+        shared = getattr(state, "_real_primitives", None)
+        if shared is not None and not request_specific_urls:
+            primitives = shared
         else:
             try:
                 primitives = LLMPrimitives(
@@ -544,6 +536,7 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     admission_controller=getattr(state, "admission", None),
                     num_slots=get_config().server.num_slots,
                     server_urls_source=("request" if request_specific_urls else "config"),
+                    backend_pool=getattr(state, "backend_pool", None),
                 )
                 if not request_specific_urls:
                     state._real_primitives = primitives
@@ -553,7 +546,9 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     detail=f"Failed to initialize real mode backends: {e}",
                 )
 
-        primitives.cache_prompt = request.cache_prompt
+        # Per-request counters and cache_prompt live on a fresh RequestScope in this
+        # request's context, never on the shared instance (A1-02/A2-01).
+        primitives.begin_request(cache_prompt=request.cache_prompt)
 
         if not primitives._backends:
             raise HTTPException(

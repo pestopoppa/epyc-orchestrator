@@ -59,6 +59,9 @@ logger = logging.getLogger(__name__)
 # Slot save/restore timeout — KV state can be 2-16 GB for production conversations
 _SLOT_SAVE_TIMEOUT = 30.0  # seconds
 _SLOT_RESTORE_TIMEOUT = 30.0
+# Session-affinity maps live as long as the (pooled, A2-04) backend; past this many
+# tracked sessions the least recently seen half is forgotten (A2-12).
+_MAX_TRACKED_SESSIONS = 4096
 
 _STATE_UNASSIGNED = "unassigned"
 _STATE_ASSIGNED_FULL = "assigned_full"
@@ -1113,6 +1116,20 @@ class ConcurrencyAwareBackend:
             with self._lock:
                 self._reverse_migration_in_flight.pop(session_id, None)
 
+    def _forget_idle_sessions_locked(self) -> None:
+        """Drop the least recently seen half of tracked sessions. Caller holds ``self._lock``."""
+        seen = self._session_last_seen
+        for sid in sorted(seen, key=seen.__getitem__)[: len(seen) // 2]:
+            if (
+                sid == self._full_last_session
+                or self._reverse_migration_in_flight.get(sid)
+                or self._session_state.get(sid, {}).get("state") == _STATE_MIGRATION_PENDING
+            ):
+                continue
+            for per_session in (seen, self._session_quarter, self._session_state,
+                                self._reverse_migration_counts):
+                per_session.pop(sid, None)
+
     def clear_session(self, session_id: str) -> None:
         """Remove session affinity (call when session completes)."""
         with self._lock:
@@ -1396,6 +1413,8 @@ class ConcurrencyAwareBackend:
         if session_id:
             with self._lock:
                 self._session_last_seen[session_id] = time.monotonic()
+                if len(self._session_last_seen) > _MAX_TRACKED_SESSIONS:
+                    self._forget_idle_sessions_locked()
         if not self._per_region_locks_enabled():
             backend, idx, is_full = self._select(session_id=session_id)
             try:
@@ -1457,21 +1476,20 @@ class ConcurrencyAwareBackend:
                 shared=True,
                 capacity=self._native_batch_width,
             )
-            shared_ctx.__enter__()
-            with self._lock:
-                self._total_requests += 1
-                self._full_requests += 1
-                self._native_full_active += 1
-                self._full_active = True
-            try:
-                yield (self._full, -1, True)
-            finally:
+            with shared_ctx:
                 with self._lock:
-                    self._native_full_active = max(0, self._native_full_active - 1)
-                    self._full_active = self._native_full_active > 0
-                    if not self._full_active:
-                        self._full_idle_since = time.monotonic()
-                shared_ctx.__exit__(None, None, None)
+                    self._total_requests += 1
+                    self._full_requests += 1
+                    self._native_full_active += 1
+                    self._full_active = True
+                try:
+                    yield (self._full, -1, True)
+                finally:
+                    with self._lock:
+                        self._native_full_active = max(0, self._native_full_active - 1)
+                        self._full_active = self._native_full_active > 0
+                        if not self._full_active:
+                            self._full_idle_since = time.monotonic()
             return
 
         deadline_s = None  # caller's deadline carried in via request.timeout
@@ -1786,6 +1804,35 @@ class ConcurrencyAwareBackend:
                     blocking_ctx.__enter__()
                     chosen_idx = first_q
 
+        is_full = chosen_idx == -1
+        try:
+            # Inside the try: a failure here (e.g. a migration Thread that cannot
+            # start) must still release the region lock just taken (A2-13).
+            self._record_placement(chosen_idx, session_id, placement_policy, migration_budget_ms)
+            backend = self._full if is_full else self._quarters[chosen_idx]
+            yield (backend, chosen_idx, is_full)
+        finally:
+            # In-process release
+            self._release(chosen_idx, is_full)
+            # Region-lock release
+            try:
+                chosen_ctx.__exit__(None, None, None)
+            except Exception as exc:
+                logger.warning(
+                    "region-lock release failed (role=%s idx=%d): %s",
+                    self._role, chosen_idx, exc,
+                )
+
+    def _record_placement(
+        self,
+        chosen_idx: int,
+        session_id: str,
+        placement_policy: Any,
+        migration_budget_ms: Optional[int],
+    ) -> None:
+        """Per-region _dispatch: account the acquired instance and kick off any KV migration."""
+        from src.scheduling.placement_policy import RolePlacementPolicy
+
         # Update in-process telemetry (best-effort; not authoritative).
         # 2026-05-24 Phase E port: when full is acquired by a DIFFERENT session
         # than the previous holder AND legacy migration is enabled (via
@@ -1798,7 +1845,7 @@ class ConcurrencyAwareBackend:
         # WP-3 policy gate: FULL_DISABLED + QUEUE_ONLY skip migration; the
         # other two policies (SOLO_PREFER_FULL = default, BURST_PREFER_SPLIT)
         # leave the existing session-handover migration trigger active.
-        # Reuse the policy resolved during candidate construction (same scope).
+        # Reuses the policy _dispatch resolved during candidate construction.
         _migration_allowed_by_policy = placement_policy in (
             RolePlacementPolicy.SOLO_PREFER_FULL,
             RolePlacementPolicy.BURST_PREFER_SPLIT,
@@ -1881,23 +1928,6 @@ class ConcurrencyAwareBackend:
                     session_id,
                     state=_STATE_ASSIGNED_QUARTER,
                     quarter=chosen_idx,
-                )
-
-        backend = self._full if chosen_idx == -1 else self._quarters[chosen_idx]
-        is_full = (chosen_idx == -1)
-
-        try:
-            yield (backend, chosen_idx, is_full)
-        finally:
-            # In-process release
-            self._release(chosen_idx, is_full)
-            # Region-lock release
-            try:
-                chosen_ctx.__exit__(None, None, None)
-            except Exception as exc:
-                logger.warning(
-                    "region-lock release failed (role=%s idx=%d): %s",
-                    self._role, chosen_idx, exc,
                 )
 
     # === Dispatch log (WP-15.1 / HSF-3.1a; additive, failures swallowed) ===

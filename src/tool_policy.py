@@ -65,6 +65,11 @@ NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
 })
 
 
+def tool_context_for(task_type: str | None) -> dict[str, bool]:
+    """REPL ``tool_context`` for a request's task type: no web for NO_WEB_TASK_TYPES."""
+    return {"no_web": True} if str(task_type) in NO_WEB_TASK_TYPES else {}
+
+
 @dataclass(frozen=True)
 class PolicyLayer:
     """A single layer in the cascading policy chain.

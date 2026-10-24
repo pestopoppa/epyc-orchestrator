@@ -264,18 +264,19 @@ def select_initial_route(
     use_mock: bool,
     heuristic_priors: dict[str, float],
     classify_and_route=_classify_and_route,
-) -> tuple[list, str, str]:
+) -> tuple[list, str, str, list[str]]:
     """Select initial route before risk veto and telemetry enrichment."""
     skill_context = ""
+    skill_ids: list[str] = []
     if use_mock:
         role = normalize_ingress_role(request.role) if request.role else Role.FRONTDOOR
-        return [role], "mock", skill_context
+        return [role], "mock", skill_context, skill_ids
     if request.force_role:
-        return [normalize_ingress_role(request.force_role)], "forced", skill_context
+        return [normalize_ingress_role(request.force_role)], "forced", skill_context, skill_ids
     if request.role and request.role not in ("", "frontdoor"):
-        return [normalize_ingress_role(request.role)], "explicit", skill_context
+        return [normalize_ingress_role(request.role)], "explicit", skill_context, skill_ids
     if request.image_path or request.image_base64:
-        return ["worker_vision"], "vision_input", skill_context
+        return ["worker_vision"], "vision_input", skill_context, skill_ids
     # Capacity/specialist fence: learned routing only sees a bounded task-IR
     # objective and may therefore choose frontdoor for a request whose full
     # prompt is hundreds of thousands of characters.  That failure mode sends
@@ -296,7 +297,7 @@ def select_initial_route(
         if use_long:
             target = _long_context_target(effective_chars)
             log.info("Long-context routing guard → %s: %s", target, detail)
-            return [target], "long_context_guard", skill_context
+            return [target], "long_context_guard", skill_context, skill_ids
         if effective_chars > 0:
             log.debug("Long-context routing guard: stays on normal routing: %s", detail)
     # Below this point the request has NO image data and NO forced/explicit
@@ -305,13 +306,13 @@ def select_initial_route(
     # VL server rejects with HTTP 400 — fence text traffic off those roles.
     if state.hybrid_router and request.real_mode:
         if hasattr(state.hybrid_router, "route_with_skills") and features().skillbank:
-            routing_decision, routing_strategy, skill_context = (
+            routing_decision, routing_strategy, skill_context, skill_ids = (
                 state.hybrid_router.route_with_skills(task_ir)
             )
             routing_decision, routing_strategy = _fence_text_off_vision_roles(
                 routing_decision, routing_strategy
             )
-            return routing_decision, routing_strategy, skill_context
+            return routing_decision, routing_strategy, skill_context, skill_ids
         routing_decision, routing_strategy = state.hybrid_router.route(
             task_ir,
             priors=heuristic_priors,
@@ -319,7 +320,7 @@ def select_initial_route(
         routing_decision, routing_strategy = _fence_text_off_vision_roles(
             routing_decision, routing_strategy
         )
-        return routing_decision, routing_strategy, skill_context
+        return routing_decision, routing_strategy, skill_context, skill_ids
 
     classified_role, routing_strategy = classify_and_route(
         request.prompt,
@@ -329,7 +330,7 @@ def select_initial_route(
     routing_decision, routing_strategy = _fence_text_off_vision_roles(
         [classified_role], routing_strategy
     )
-    return routing_decision, routing_strategy, skill_context
+    return routing_decision, routing_strategy, skill_context, skill_ids
 
 
 def apply_failure_veto(
@@ -714,27 +715,21 @@ def resolve_timeout(request: ChatRequest, routing_decision: list) -> int:
     return timeout_s
 
 
-def extract_skill_ids(skill_context: str, state) -> list[str]:
-    """Extract skill IDs from skill-augmented routing state."""
-    if not (skill_context and hasattr(state, "hybrid_router") and state.hybrid_router):
-        return []
-    try:
-        if hasattr(state.hybrid_router, "_last_skill_ids"):
-            return list(state.hybrid_router._last_skill_ids)
-    except Exception:
-        pass
-    return []
+_ROLE_TASK_TYPES = {
+    "worker_math": "math",
+    "coder_escalation": "coder",
+    "coder_primary": "coder",
+}
+
+
+def task_type_for_role(role: object) -> str | None:
+    """Task type implied by a routed role (tool-policy checks), if any."""
+    return _ROLE_TASK_TYPES.get(str(role))
 
 
 def derive_task_type_from_route(task_ir: dict, routing_decision: list) -> None:
     """Mutate task_ir task_type from routed role for tool-policy checks."""
-    role_to_task_type = {
-        "worker_math": "math",
-        "coder_escalation": "coder",
-        "coder_primary": "coder",
-    }
-    routed_role = str(routing_decision[0]) if routing_decision else ""
-    derived_task_type = role_to_task_type.get(routed_role)
+    derived_task_type = task_type_for_role(routing_decision[0]) if routing_decision else None
     if derived_task_type:
         task_ir["task_type"] = derived_task_type
 

@@ -7,10 +7,13 @@ output quality heuristics, format enforcement, and shared constants.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.features import features
 from src.prompt_builders import (
@@ -26,6 +29,36 @@ if TYPE_CHECKING:
     from src.repl_environment.types import ExecutionResult
     from src.services.document_preprocessor import PreprocessingResult
 
+
+async def watch_disconnect(http_request: Any, cancel_event: threading.Event) -> None:
+    """Set ``cancel_event`` once the HTTP client disconnects (polled every 100 ms)."""
+    while not cancel_event.is_set():
+        try:
+            if await http_request.is_disconnected():
+                cancel_event.set()
+                return
+        except Exception:
+            # Best-effort disconnect tracking; ignore transient request state errors.
+            return
+        await asyncio.sleep(0.1)
+
+
+
+async def to_thread_keeping_context(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+    """``asyncio.to_thread`` that also keeps the ContextVars ``fn`` sets.
+
+    For request-setup work that is blocking (embedder HTTP, FAISS) but also binds
+    per-request ContextVars, e.g. routing-stage timing (A1-01).
+    """
+    ctx = contextvars.copy_context()
+    result = await asyncio.to_thread(ctx.run, fn, *args, **kwargs)
+    for var, value in ctx.items():
+        if var.get(_UNSET) is not value:
+            var.set(value)
+    return result
+
+
+_UNSET = object()
 
 # ── Role-specific timeouts (Phase 1b: KV cache bug mitigation) ──────────
 # Sourced from centralized config (src.config.TimeoutsConfig).

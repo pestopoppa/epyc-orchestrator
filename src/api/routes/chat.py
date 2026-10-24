@@ -82,6 +82,8 @@ from src.sse_utils import (
 # Decomposed modules (Phase 1 — extract-and-move, no behavior changes)
 from src.api.routes.chat_utils import (
     _resolve_answer,
+    to_thread_keeping_context,
+    watch_disconnect,
 )
 from src.api.routes.chat_review import (
     _plan_review_abort_message,
@@ -131,6 +133,8 @@ from src.api.routes.chat_pipeline import (
 from src.api.routes.chat_pipeline.vision_stage import _vision_roles
 from src.api.routes.chat_pipeline.script_interceptor import try_intercept
 from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
+from src.api.routes.chat_pipeline.routing_decision import task_type_for_role
+from src.tool_policy import tool_context_for
 
 
 _PROMPT_OVERRIDE_BASE = (
@@ -269,22 +273,14 @@ async def chat(
     # Track active requests for idle-time Q-scoring (thread-safe)
     state.increment_active()
     cancel_event = threading.Event()
-
-    async def _watch_disconnect() -> None:
-        while not cancel_event.is_set():
-            try:
-                if await http_request.is_disconnected():
-                    cancel_event.set()
-                    return
-            except Exception:
-                # Best-effort disconnect tracking; ignore transient request state errors.
-                return
-            await asyncio.sleep(0.1)
-
     use_disconnect_watcher = bool(
         request.real_mode and "PYTEST_CURRENT_TEST" not in os.environ
     )
-    watcher = asyncio.create_task(_watch_disconnect()) if use_disconnect_watcher else None
+    watcher = (
+        asyncio.create_task(watch_disconnect(http_request, cancel_event))
+        if use_disconnect_watcher
+        else None
+    )
     prompt_dir = _validated_prompt_dir_override(request.x_orchestrator_prompt_root)
     # BRIDGE RESIDUAL 1 — collect the contention verdict for THIS request. Both
     # exits below (the error JSONResponse and the plain return) are downstream of
@@ -576,7 +572,8 @@ async def _try_cheap_first(
         # QWEN_STOP only applies if the templated prompt is actually Qwen-
         # marked. For non-Qwen families, the marker won't appear in output;
         # for Qwen, leaving it in is safe.
-        answer = primitives.llm_call(
+        answer = await asyncio.to_thread(
+            primitives.llm_call,
             templated_prompt,
             role=cheap_role,
             n_tokens=cfg.try_cheap_first_max_tokens,
@@ -823,7 +820,7 @@ async def _handle_chat(
             )
 
     # Stage 1: Routing
-    routing = _route_request(request, state)
+    routing = await to_thread_keeping_context(_route_request, request, state)
 
     # Stage 2: Input formalization
     _preprocess(request, state, routing)
@@ -1476,6 +1473,7 @@ async def chat_stream(
                 registry=state.registry,
                 health_tracker=state.health_tracker,
                 admission_controller=getattr(state, "admission", None),
+                backend_pool=getattr(state, "backend_pool", None),
                 server_urls_source="request" if request.server_urls else "config",
             )
         except Exception as e:
@@ -1511,6 +1509,7 @@ async def chat_stream(
             # MemRL components for model self-routing
             retriever=state.hybrid_router.retriever if state.hybrid_router else None,
             hybrid_router=state.hybrid_router,
+            tool_context=tool_context_for(task_type_for_role(request.role)),
         )
 
         # Root LM loop with streaming + escalation support

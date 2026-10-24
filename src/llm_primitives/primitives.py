@@ -18,6 +18,7 @@ from .cost_tracking import CostTrackingMixin
 from .inference import InferenceMixin
 from .mock import MockMixin
 from .persona import PersonaMixin
+from .request_scope import RequestScope, ScopeField
 from .stats import StatsMixin
 from .tokens import TokensMixin
 from .teleport import TeleportDecision, TeleportInputs, TeleportPolicy, decide_teleport
@@ -147,6 +148,22 @@ class LLMPrimitives(
     _DEFAULT_DEPTH_ROLE_OVERRIDES = {1: str(Role.WORKER_GENERAL)}
     _DEFAULT_DEPTH_OVERRIDE_MAX_DEPTH = 3
 
+    # Per-request state, stored on the context's RequestScope (see request_scope.py).
+    call_log = ScopeField()
+    total_calls = ScopeField()
+    total_batch_calls = ScopeField()
+    total_tokens_generated = ScopeField()
+    total_prompt_tokens_reported = ScopeField()
+    total_prompt_eval_ms = ScopeField()
+    total_generation_ms = ScopeField()
+    total_http_overhead_ms = ScopeField()
+    _last_predicted_tps = ScopeField()
+    _max_recursion_depth_reached = ScopeField()
+    cache_prompt = ScopeField()
+    _current_query = ScopeField()
+    _completed_queries = ScopeField()
+    _budget_diagnostics = ScopeField()
+
     def __init__(
         self,
         model_server: Any | None = None,
@@ -163,6 +180,7 @@ class LLMPrimitives(
         gpu_lease_manager: Any | None = None,
         teleport_policy: TeleportPolicy | None = None,
         server_urls_source: str = "config",
+        backend_pool: dict | None = None,
     ):
         """Initialize LLM primitives.
 
@@ -181,7 +199,22 @@ class LLMPrimitives(
             admission_controller: Optional AdmissionController for per-backend queue limiting.
             gpu_lease_manager: Optional process-local lease manager for AXA-2 decisions.
             teleport_policy: Optional default-off AXA-2 teleport policy.
+            backend_pool: Optional shared pool of built backends (see
+                BackendMixin._init_caching_backends).
         """
+        # Unbound contexts (scripts, tests, /v1's per-request instance) share the
+        # instance-level default scope; begin_request() binds a fresh one.
+        self._default_scope = RequestScope()
+        self._request_scope_ctx: contextvars.ContextVar[RequestScope | None] = (
+            contextvars.ContextVar("llm_primitives_request_scope", default=None)
+        )
+        # Nesting depth follows the call stack, not the instance (A1-M2).
+        self._recursion_depth_ctx: contextvars.ContextVar[int] = contextvars.ContextVar(
+            "llm_primitives_recursion_depth", default=0
+        )
+        self._early_stop_ctx: contextvars.ContextVar[Callable[[str], bool] | None] = (
+            contextvars.ContextVar("llm_primitives_early_stop", default=None)
+        )
         self.model_server = model_server
         self.mock_mode = mock_mode
         self.health_tracker = health_tracker
@@ -206,7 +239,7 @@ class LLMPrimitives(
 
         # Initialize backends if server URLs provided and not mock mode
         if not mock_mode and server_urls:
-            self._init_caching_backends(server_urls, num_slots)
+            self._init_caching_backends(server_urls, num_slots, backend_pool)
 
         # Accurate token counting via llama-server /tokenize (C2)
         self._tokenizer = None
@@ -223,29 +256,6 @@ class LLMPrimitives(
         except Exception:
             self._tokenizer = None
 
-        # Call log for debugging and testing
-        self.call_log: list[CallLogEntry] = []
-
-        # Stats
-        self.total_calls = 0
-        self.total_batch_calls = 0
-        self.total_tokens_generated = 0
-        # Sum of server-REPORTED prompt tokens (never estimated; see inference.py).
-        self.total_prompt_tokens_reported = 0
-        # Clean timing accumulators from llama.cpp timings
-        self.total_prompt_eval_ms = 0.0
-        self.total_generation_ms = 0.0
-        self._last_predicted_tps = 0.0  # Most recent call's clean t/s
-
-        # Recursion depth tracking
-        self._recursion_depth = 0
-        self._max_recursion_depth_reached = 0
-
-        # HTTP overhead tracking (server-side overhead not captured in inference timings)
-        self.total_http_overhead_ms = 0.0
-
-        # Per-request cache_prompt override (None = backend default)
-        self.cache_prompt: bool | None = None
         # Per-request cancellation/deadline hooks (set by API layer).
         self._request_cancel_check = None
         self._request_deadline_s = None
@@ -331,18 +341,6 @@ class LLMPrimitives(
         # object per request and its streaming body runs in a different context
         # from the endpoint function.
         self._request_trace_keys: dict[str, Any] = {}
-        self._budget_diagnostics: dict[str, Any] = {
-            "deadline_present": False,
-            "budget_applied": False,
-            "deadline_remaining_ms_start": None,
-            "deadline_remaining_ms_end": None,
-            "timeout_clamp_events": 0,
-            "depth_override_enabled": False,
-            "depth_override_events": 0,
-            "depth_override_roles": [],
-            "depth_override_skip_events": 0,
-            "depth_override_skip_reasons": [],
-        }
         self._depth_model_overrides_enabled = False
         self._depth_role_overrides: dict[int, str] = {}
         self._depth_override_max_depth = self._DEFAULT_DEPTH_OVERRIDE_MAX_DEPTH
@@ -355,10 +353,6 @@ class LLMPrimitives(
         if self._depth_model_overrides_enabled:
             self._depth_role_overrides = self._load_depth_role_overrides()
             self._depth_override_max_depth = self._load_depth_override_max_depth()
-
-        # Per-query cost tracking
-        self._current_query = None
-        self._completed_queries: list = []
 
         # Concurrency policy (small workers only)
         from src.concurrency import get_role_max_concurrency
@@ -396,6 +390,32 @@ class LLMPrimitives(
                     },
                 )
         return decide_teleport(self.teleport_policy, effective_inputs)
+
+    def _request_scope(self) -> RequestScope:
+        return self._request_scope_ctx.get() or self._default_scope
+
+    def begin_request(self, *, cache_prompt: bool | None = None) -> RequestScope:
+        """Bind a fresh RequestScope to the calling context (one per API request).
+
+        Call it in the request's own task, before any `asyncio.to_thread` hop, so
+        every thread the request spawns inherits the scope.
+        """
+        scope = RequestScope(cache_prompt=cache_prompt)
+        self._request_scope_ctx.set(scope)
+        return scope
+
+    @property
+    def _recursion_depth(self) -> int:
+        return self._recursion_depth_ctx.get()
+
+    @property
+    def _early_stop_check(self) -> Callable[[str], bool] | None:
+        """Streaming early-stop predicate of the calling context (never another request's)."""
+        return self._early_stop_ctx.get()
+
+    @_early_stop_check.setter
+    def _early_stop_check(self, predicate: Callable[[str], bool] | None) -> None:
+        self._early_stop_ctx.set(predicate)
 
     def _get_role_limit(self, role: str) -> int:
         """Return per-role concurrency limit (defaults to 1)."""
@@ -888,17 +908,16 @@ class LLMPrimitives(
         Raises:
             RecursionError: If max recursion depth exceeded.
         """
-        # Check recursion depth
-        if self._recursion_depth >= self.config.max_recursion_depth:
+        depth = self._recursion_depth_ctx.get()
+        if depth >= self.config.max_recursion_depth:
             raise RecursionError(
                 f"Maximum recursion depth ({self.config.max_recursion_depth}) exceeded. "
                 f"Sub-LM calls cannot be nested more than {self.config.max_recursion_depth} levels deep."
             )
 
-        self._recursion_depth += 1
-        self._max_recursion_depth_reached = max(
-            self._max_recursion_depth_reached, self._recursion_depth
-        )
+        depth_token = self._recursion_depth_ctx.set(depth + 1)
+        scope = self._request_scope()
+        scope.max_recursion_depth_reached = max(scope.max_recursion_depth_reached, depth + 1)
 
         try:
             sampling_kwargs: dict[str, float | int | bool] = {}
@@ -920,7 +939,7 @@ class LLMPrimitives(
                 on_chunk=on_chunk,
             )
         finally:
-            self._recursion_depth -= 1
+            self._recursion_depth_ctx.reset(depth_token)
 
     def get_request_chat_payload(self) -> dict[str, Any] | None:
         """HS-4 P0.1: structured payload bound by ``chat_completion_call``."""

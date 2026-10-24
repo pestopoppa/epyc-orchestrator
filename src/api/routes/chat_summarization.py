@@ -7,6 +7,7 @@ context processing pipeline with worker digest → frontdoor synthesis.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -232,7 +233,9 @@ async def _run_two_stage_summarization(
     stats["synthesis_role"] = synthesis_role
 
     try:
-        digests = primitives.llm_batch(worker_prompts, role=worker_role, n_tokens=500)
+        digests = await asyncio.to_thread(
+            primitives.llm_batch, worker_prompts, role=worker_role, n_tokens=500
+        )
     except Exception as exc:
         log.warning(
             "llm_batch failed for role=%s, falling back to sequential: %s", worker_role, exc
@@ -242,7 +245,8 @@ async def _run_two_stage_summarization(
         digests = []
         for wp in worker_prompts:
             try:
-                d = _worker_digest_with_fallback(
+                d = await asyncio.to_thread(
+                    _worker_digest_with_fallback,
                     primitives,
                     wp,
                     worker_role=worker_role,
@@ -290,7 +294,8 @@ async def _run_two_stage_summarization(
 
     # Use frontdoor for synthesis (18 t/s) — much faster than architect
     try:
-        answer = primitives.llm_call(
+        answer = await asyncio.to_thread(
+            primitives.llm_call,
             synthesis_prompt,
             role=synthesis_role,
             n_tokens=4096,

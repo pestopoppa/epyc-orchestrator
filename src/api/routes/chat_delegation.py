@@ -97,6 +97,7 @@ def _run_architect_decision(
     primitives: "LLMPrimitives",
     architect_role: str,
     tool_registry: "Any | None",
+    tool_context: dict | None = None,
 ) -> tuple[str | None, int, int]:
     """Run architect's mini-REPL decision loop (Phase A).
 
@@ -112,6 +113,7 @@ def _run_architect_decision(
         llm_primitives=primitives,
         tool_registry=tool_registry,
         role=architect_role,
+        tool_context=tool_context,
     )
     arch_response = None
     arch_last_output = ""
@@ -314,6 +316,7 @@ def _run_specialist_loop(
     primitives: "LLMPrimitives",
     tool_registry: "Any | None",
     time_budget_s: float | None = None,
+    tool_context: dict | None = None,
 ) -> tuple[str, int, list[str], list[dict], bool, bool, dict[str, Any], list[dict]]:
     """Run specialist delegation execution loop (Phase B).
 
@@ -381,6 +384,7 @@ def _run_specialist_loop(
             tool_registry=tool_registry,
             role=delegate_to,
             structured_mode=structured,
+            tool_context=tool_context,
         )
         deleg_last_output = ""
         deleg_last_error = ""
@@ -703,6 +707,7 @@ def _architect_delegated_answer(
     architect_role: str = "architect_general",
     max_loops: int = 3,
     force_response_on_cap: bool = True,
+    tool_context: dict | None = None,
 ) -> tuple[str, dict]:
     """Multi-loop architect delegation: architect decides, specialist investigates.
 
@@ -721,6 +726,7 @@ def _architect_delegated_answer(
         max_loops: Maximum delegation loops.
         force_response_on_cap: If True, force architect to answer when cap reached.
             If False, return partial with needs_input flag (production mode).
+        tool_context: Cascading tool-policy context for both REPLs (WS-3 no_web).
 
     Returns:
         Tuple of (answer_text, stats_dict).
@@ -800,6 +806,7 @@ def _architect_delegated_answer(
             effective_max_loops, force_response_on_cap, toon_context,
             tool_registry, reports, previous_brief_keys, delegate_history,
             total_tools, all_tools_called, stats, interaction,
+            tool_context=tool_context,
         )
         interaction.complete()
         return answer, result_stats
@@ -827,6 +834,7 @@ def _architect_delegated_answer_inner(
     all_tools_called: list[str],
     stats: dict,
     interaction: "Any",
+    tool_context: dict | None = None,
 ) -> tuple[str, dict]:
     """Inner loop extracted to keep try/finally clean in the outer function."""
     from src.prompt_builders import (
@@ -875,6 +883,7 @@ def _architect_delegated_answer_inner(
 
         decision_result = _run_architect_decision(
             prompt_text, question, primitives, architect_role, tool_registry,
+            tool_context=tool_context,
         )
         if len(decision_result) == 3:
             # Backward-compatible path for tests/patches that still mock the legacy tuple.
@@ -1071,6 +1080,7 @@ def _architect_delegated_answer_inner(
                     primitives,
                     tool_registry,
                     time_budget_s=specialist_budget_s,
+                    tool_context=tool_context,
                 )
             total_tools += deleg_tools
             all_tools_called.extend(deleg_tools_called)

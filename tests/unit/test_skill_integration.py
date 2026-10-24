@@ -99,13 +99,14 @@ class TestSkillAugmentedRouter:
         embedder = self._make_mock_embedder()
         router = SkillAugmentedRouter(hybrid, skill_retriever, embedder)
 
-        decision, strategy, skill_context = router.route_with_skills(
+        decision, strategy, skill_context, skill_ids = router.route_with_skills(
             {"task_type": "code"}
         )
         assert decision == ["frontdoor"]
         assert strategy == "rules"
         assert "Test General Skill" in skill_context
         assert "Always test your code" in skill_context
+        assert skill_ids == [skill.id]
 
     def test_route_with_skills_empty_bank(self, skill_bank, skill_retriever):
         from orchestration.repl_memory.retriever import SkillAugmentedRouter
@@ -114,10 +115,11 @@ class TestSkillAugmentedRouter:
         embedder = self._make_mock_embedder()
         router = SkillAugmentedRouter(hybrid, skill_retriever, embedder)
 
-        decision, strategy, skill_context = router.route_with_skills(
+        decision, strategy, skill_context, skill_ids = router.route_with_skills(
             {"task_type": "chat"}
         )
         assert skill_context == ""
+        assert skill_ids == []
 
     def test_route_with_skills_embedder_failure_graceful(
         self, skill_bank, skill_retriever
@@ -132,11 +134,12 @@ class TestSkillAugmentedRouter:
         router = SkillAugmentedRouter(hybrid, skill_retriever, FailingEmbedder())
 
         # Should not raise — graceful degradation
-        decision, strategy, skill_context = router.route_with_skills(
+        decision, strategy, skill_context, skill_ids = router.route_with_skills(
             {"task_type": "code"}
         )
         assert decision == ["frontdoor"]
         assert skill_context == ""
+        assert skill_ids == []
 
     def test_route_with_mode_delegates(self, skill_bank, skill_retriever):
         from orchestration.repl_memory.retriever import SkillAugmentedRouter
@@ -284,3 +287,36 @@ class TestMemrlSkillBankImports:
         # These are None by default (no feature flags set in test env)
         # Just verify they exist as module-level attributes
         assert memrl.SkillBank is None or memrl.SkillBank is not None  # exists
+
+
+def test_route_request_reports_the_retrieved_skill_ids():
+    """A1-17: skill_ids came from an attribute nothing ever wrote, so it was always []."""
+    import dataclasses
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from orchestration.repl_memory.retriever import SkillAugmentedRouter
+    from src.api.models import ChatRequest
+    from src.api.routes.chat_pipeline.routing import _route_request
+    from src.features import get_features, reset_features, set_features
+
+    class FakeSkillRetriever:
+        def retrieve_for_task(self, embedding, task_type):
+            return [SimpleNamespace(skill=SimpleNamespace(id=i)) for i in ("gen_001", "route_002")]
+
+        def format_for_prompt(self, results):
+            return "## Skills\n- one\n- two"
+
+    hybrid = TestSkillAugmentedRouter._make_mock_hybrid_router(None)
+    embedder = TestSkillAugmentedRouter._make_mock_embedder(None)
+    state = MagicMock()
+    state.hybrid_router = SkillAugmentedRouter(hybrid, FakeSkillRetriever(), embedder)
+    state.failure_graph = None
+    state.progress_logger = None
+    set_features(dataclasses.replace(get_features(), skillbank=True))
+    try:
+        routing = _route_request(ChatRequest(prompt="hi", real_mode=True), state)
+    finally:
+        reset_features()
+    assert routing.skill_context
+    assert routing.skill_ids == ["gen_001", "route_002"]
