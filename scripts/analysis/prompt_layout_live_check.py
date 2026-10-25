@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from prompt_layout_reader import iter_records  # noqa: E402
 
 BLOCK_KEYS = ("kind", "start", "length", "sha256_12")
+REQUIRED_KINDS = ("dispatch", "serving_call")
 
 
 def _kind(rec: dict) -> str | None:
@@ -65,8 +66,13 @@ def check(paths: list[Path], min_records: int = 1) -> dict:
             if rec.get(f) is None and (rec.get("result") or {}).get(f) is None:
                 miss.append(f)
         if miss:
-            problems.append({"record": k, "ts": rec.get("ts_arrival") or rec.get("ts_start") or rec.get("ts"),
-                             "missing": miss})
+            problems.append(
+                {
+                    "record": k,
+                    "ts": rec.get("ts_arrival") or rec.get("ts_start") or rec.get("ts"),
+                    "missing": miss,
+                }
+            )
         src = rec.get("source")
         sources[src or "null"] += 1
         unlabelled += src is None
@@ -76,17 +82,27 @@ def check(paths: list[Path], min_records: int = 1) -> dict:
             repl["rebased"] += rec.get("rebased") is True
             repl["with_tool_output"] += "tool_output" in kinds
     total_blocks = sum(with_blocks.values())
-    ok = total_blocks >= min_records and not problems
+    shortfalls = {
+        k: min_records - with_blocks[k] for k in REQUIRED_KINDS if with_blocks[k] < min_records
+    }
+    ok = total_blocks > 0 and not shortfalls and not problems
     return {
         "verdict": "pass" if ok else ("no_records" if total_blocks == 0 else "fail"),
-        "records_seen": dict(seen), "records_with_blocks": dict(with_blocks),
-        "sources": dict(sources), "unlabelled_source": unlabelled,
-        "repl_blocks": dict(repl), "problems": problems[:50], "n_problems": len(problems),
+        "records_seen": dict(seen),
+        "records_with_blocks": dict(with_blocks),
+        "record_kind_shortfalls": shortfalls,
+        "sources": dict(sources),
+        "unlabelled_source": unlabelled,
+        "repl_blocks": dict(repl),
+        "problems": problems[:50],
+        "n_problems": len(problems),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("paths", nargs="+")
     ap.add_argument("--min-records", type=int, default=1)
     ap.add_argument("--json", action="store_true")
