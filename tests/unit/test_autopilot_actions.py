@@ -1165,6 +1165,40 @@ def test_seed_batch_handler_runs_eval_after_seed() -> None:
     assert calls == [("seed", 12, ["math"]), ("eval",)]
 
 
+def test_seed_batch_handler_does_not_grow_benchmark_sys_path(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setitem(
+        sys.modules,
+        "seeding_telemetry",
+        SimpleNamespace(
+            adaptive_batch_size=lambda requested: (requested, "test"),
+            record_batch_duration=lambda *_args: None,
+        ),
+    )
+
+    class FakeSeeder:
+        def run_batch(self, *, n_questions, suites, watcher=None):
+            calls.append(("seed", n_questions, suites))
+            return None
+
+    class FakeTower:
+        def hybrid_eval(self):
+            calls.append(("eval",))
+            return "EVAL_RESULT"
+
+    path = str(actions.ORCH_ROOT / "scripts" / "benchmark")
+    before = sys.path.count(path)
+    ctx = _ctx(seeder=FakeSeeder(), tower=FakeTower())
+    for _ in range(3):
+        result, species = actions._action_seed_batch(
+            {"type": "seed_batch", "n_questions": 12, "suites": ["math"]}, ctx
+        )
+        assert result == "EVAL_RESULT" and species == "seeder"
+
+    assert calls == [("seed", 12, ["math"]), ("eval",)] * 3
+    assert sys.path.count(path) == before
+
+
 def test_seed_batch_handler_does_not_inject_strategy_hints_into_prompts(monkeypatch) -> None:
     monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
     calls = []

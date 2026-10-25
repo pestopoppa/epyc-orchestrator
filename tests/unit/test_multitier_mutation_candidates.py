@@ -27,6 +27,7 @@ from src.autopilot_core.multitier_decision import (  # noqa: E402
     MULTITIER_POLICY_VERSION,
     build_tier_baseline_evidence,
 )
+from tests.unit.autopilot_loop_harness import autopilot_calls  # noqa: E402
 
 REL = "orchestration/prompts/frontdoor.md"
 PROMPT = {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"}
@@ -399,17 +400,17 @@ def test_numeric_and_structural_blocker_unchanged(action, expected):
 def test_seq_paths_still_block_mutations():
     """Only multitier staging passes an identity; seq fresh-eval / replay selection do not."""
     assert "no served-file identity" in autopilot._seq_promotion_replay_blocker(dict(PROMPT))
-    source = Path(autopilot.__file__).read_text()
-    assert "replay_blocker = _seq_promotion_replay_blocker(candidate_action)\n" in source
-    assert "if _seq_promotion_replay_blocker(action):\n" in source
+    calls = autopilot_calls("_seq_promotion_replay_blocker")
+    with_identity = {scope for scope, call in calls if len(call.args) + len(call.keywords) > 1}
+    assert with_identity == {"_multitier_candidate_is_eligible", "_maybe_force_multitier_due_action"}
+    seq_scopes = {scope for scope, _ in calls} - with_identity
+    assert {"_maybe_force_seq_promotion_fresh_eval", "_seq_candidate_replay_payload"} <= seq_scopes
 
 
 def test_no_new_promotion_call_site_for_the_ap55_hold_pattern():
     """Mutation candidates promote through the existing final_t1 call, which the AP-55
-    merge train guards; the loop still has exactly three update_baseline call sites."""
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    assert body.count("gate.update_baseline(\n") == 3
+    merge train guards; the module still has exactly three update_baseline call sites."""
+    assert len(autopilot_calls("update_baseline")) == 3
 
 
 # ── review of c12f17f5 ────────────────────────────────────────────────────

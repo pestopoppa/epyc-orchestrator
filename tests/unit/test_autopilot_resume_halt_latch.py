@@ -311,6 +311,39 @@ def test_cli_resume_halt_latch_survives_the_daemons_next_save(tmp_path: Path) ->
     assert "_dispatch_deficiency" not in on_disk
 
 
+def test_cli_resume_reports_relaunch_when_daemon_lock_is_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import autopilot
+
+    state_path, lock_path = _state_dir(tmp_path)
+    state_path.write_text(json.dumps(_halted_state()))
+    monkeypatch.setattr(autopilot, "STATE_PATH", state_path)
+    monkeypatch.setattr(autopilot, "LOCK_PATH", lock_path)
+
+    autopilot.cmd_resume(None)
+
+    output = capsys.readouterr().out.lower()
+    assert "daemon is not running" in output
+    assert "start_authority_daemon.py" in output
+    assert json.loads(state_path.read_text())["paused"] is False
+
+
+def test_singleton_probe_reports_live_lock_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import fcntl
+    import autopilot
+
+    _state_path, lock_path = _state_dir(tmp_path)
+    lock_path.touch()
+    monkeypatch.setattr(autopilot, "LOCK_PATH", lock_path)
+
+    with lock_path.open("r") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert autopilot._daemon_singleton_is_running() is True
+
+    assert autopilot._daemon_singleton_is_running() is False
+
+
 def test_meta_halt_latch_also_survives_the_daemons_next_save(tmp_path: Path) -> None:
     """The meta breaker must not regress while the skip breaker is being fixed.
 

@@ -116,6 +116,97 @@ def test_daemon_merge_does_not_clobber_daemon_internal_pause(
     assert out["trial_counter"] == 6
 
 
+def test_daemon_halt_supersedes_applicator_lease_and_survives_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later lease release must not resume a daemon-owned safety halt."""
+    sp = tmp_path / "autopilot_state.json"
+    monkeypatch.setattr(autopilot, "STATE_PATH", sp)
+    autopilot.save_state({"trial_counter": 5, "paused": False})
+
+    lease = config_applicator._pause_autopilot_dispatch(state_path=sp, grace_s=0)
+    assert lease["status"] == "ok" and lease["pause_token"]
+    daemon_state = autopilot.load_state()
+
+    autopilot._latch_daemon_halt(daemon_state, "critic_reject_loop")
+    restored = config_applicator._restore_autopilot_dispatch_pause(lease)
+
+    on_disk = json.loads(sp.read_text())
+    assert restored["status"] == "superseded"
+    assert on_disk["paused"] is True
+    assert on_disk["pause_owner"] == "autopilot_halt"
+    assert on_disk["pause_token"] != lease["pause_token"]
+    assert on_disk["_dispatch_deficiency"] == "critic_reject_loop"
+
+
+def test_daemon_halt_preserves_operator_pause_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    sp = tmp_path / "autopilot_state.json"
+    monkeypatch.setattr(autopilot, "STATE_PATH", sp)
+    autopilot.save_state({"trial_counter": 5, "paused": False})
+    autopilot.cmd_pause(argparse.Namespace())
+    operator_state = autopilot.load_state()
+    operator_token = operator_state["pause_token"]
+
+    autopilot._latch_daemon_halt(operator_state, "critic_reject_loop")
+
+    on_disk = json.loads(sp.read_text())
+    assert on_disk["paused"] is True
+    assert on_disk["pause_owner"] == state_lock.OPERATOR_PAUSE_OWNER
+    assert on_disk["pause_token"] == operator_token
+    assert on_disk["_dispatch_deficiency"] == "critic_reject_loop"
+    capsys.readouterr()
+
+
+def test_daemon_halt_stays_latched_across_next_merged_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The checkpoint failure path's follow-up merge cannot undo its halt."""
+    sp = tmp_path / "autopilot_state.json"
+    monkeypatch.setattr(autopilot, "STATE_PATH", sp)
+    autopilot.save_state({"trial_counter": 5, "paused": False})
+    daemon_state = autopilot.load_state()
+    daemon_state["pause_reason"] = "accepted candidate checkpoint failed"
+
+    autopilot._latch_daemon_halt(
+        daemon_state,
+        "multitier_checkpoint_failure",
+        multitier_checkpoint_failure={"candidate": "candidate-a"},
+    )
+    autopilot.save_state(daemon_state, merge_control=True)
+
+    on_disk = json.loads(sp.read_text())
+    assert on_disk["paused"] is True
+    assert on_disk["pause_reason"] == "accepted candidate checkpoint failed"
+    assert on_disk["_dispatch_deficiency"] == "multitier_checkpoint_failure"
+    assert on_disk["multitier_checkpoint_failure"] == {"candidate": "candidate-a"}
+
+
+def test_daemon_merge_save_preserves_active_pause_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ordinary daemon saves merge the complete pause control tuple."""
+    sp = tmp_path / "autopilot_state.json"
+    monkeypatch.setattr(autopilot, "STATE_PATH", sp)
+    autopilot.save_state({"trial_counter": 5, "paused": False})
+    with state_lock.state_write_lock(sp):
+        disk = json.loads(sp.read_text())
+        token = state_lock.claim_pause_lease(disk, config_applicator.DISPATCH_PAUSE_OWNER)
+        tmp = sp.with_suffix(sp.suffix + ".tmp")
+        tmp.write_text(json.dumps(disk))
+        os.replace(tmp, sp)
+
+    daemon_state = {"trial_counter": 6, "paused": False}
+    autopilot.save_state(daemon_state, merge_control=True)
+
+    on_disk = json.loads(sp.read_text())
+    assert on_disk["paused"] is True
+    assert on_disk["pause_owner"] == config_applicator.DISPATCH_PAUSE_OWNER
+    assert on_disk["pause_token"] == token
+    assert on_disk["trial_counter"] == 6
+
+
 # ───────── STEP 2: every wrapped writer serializes on the lock ──────────
 
 

@@ -1028,8 +1028,8 @@ def test_phase_tracker_publishes_escalation_fields_the_report_reads(tmp_path):
 
 # ── Loop wiring ─────────────────────────────────────────────────────────────
 # The tracker above is only useful if autopilot._run_loop_inner actually drives
-# it. That function is a ~2000-line loop that cannot be invoked in a unit test,
-# so the call sites are pinned by source inspection. Without these, deleting the
+# it. These run the real loop (tests/unit/autopilot_loop_harness.py) against a
+# scripted dead-then-alive orchestrator. Without them, deleting the
 # record_failure() call restores the original silent spin with every other test
 # in this file still green.
 
@@ -1061,33 +1061,40 @@ def test_autopilot_health_escalate_after_is_env_overridable(monkeypatch):
     assert autopilot._env_int("AUTOPILOT_HEALTH_ESCALATE_AFTER", 30) == 1
 
 
-def test_autopilot_retry_branch_drives_the_escalation_tracker():
-    import inspect
+def _dead_then_alive_loop(monkeypatch, failures: int):
+    from tests.unit.autopilot_loop_harness import fresh_state, run_loop_inner
 
+    return run_loop_inner(
+        monkeypatch, state=fresh_state(), health=[False] * failures + [True]
+    )
+
+
+def test_autopilot_retry_branch_drives_the_escalation_tracker(monkeypatch):
     autopilot = _autopilot_module()
-    source = inspect.getsource(autopilot._run_loop_inner)
+    monkeypatch.setattr(autopilot, "HEALTH_ESCALATE_AFTER", 2)
 
-    assert "HealthEscalationTracker(escalate_after=HEALTH_ESCALATE_AFTER)" in source
-    assert "health_escalation.record_failure()" in source
-    assert "health_escalation.record_success()" in source
+    run = _dead_then_alive_loop(monkeypatch, failures=3)
+
     # The escalation must reach the heartbeat, which is the only thing the
     # dashboard and the restart advisor can see.
-    assert "**_escalation.phase_fields" in source
-    assert "**_recovery.phase_fields" in source
+    backoffs = [p for p in run.of("phase") if p["name"] == "health_backoff"]
+    assert [p["health_consecutive_failures"] for p in backoffs] == [1, 2, 3]
+    assert [p["health_escalated"] for p in backoffs] == [False, True, True]
+    assert {p["health_escalate_after"] for p in backoffs} == {2}
+    [recovered] = [p for p in run.of("phase") if p["name"] == "health_recovered"]
+    assert recovered["health_recovered_after_failures"] == 3
+    assert recovered["health_escalation_cleared"] is True
 
 
-def test_autopilot_retry_branch_still_retries_forever():
+def test_autopilot_retry_branch_still_retries_forever(monkeypatch):
     """Operator ruling 2026-08-12: escalate loudly, do NOT latch off."""
-    import inspect
-
     autopilot = _autopilot_module()
-    source = inspect.getsource(autopilot._run_loop_inner)
-    branch = source.split("Orchestrator unhealthy")[1].split("# Check preflight")[0]
 
-    assert "time.sleep(HEALTH_BACKOFF_S)" in branch
-    assert "continue" in branch
-    # No halt latch, no self-pause, no exit on the health path.
-    assert 'state["paused"] = True' not in branch
-    assert "_dispatch_deficiency" not in branch
-    assert "break" not in branch
-    assert "sys.exit" not in branch
+    run = _dead_then_alive_loop(monkeypatch, failures=3)
+
+    assert [p["seconds"] for p in run.of("sleep")] == [autopilot.HEALTH_BACKOFF_S] * 3
+    # No halt latch, no self-pause, no exit on the health path: the loop came back
+    # and ran its trial once the orchestrator answered.
+    assert not run.state.get("paused") and "_dispatch_deficiency" not in run.state
+    assert not any(p["paused"] for _, p in run.saves())
+    assert len(run.dispatched) == 1

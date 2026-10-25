@@ -12,6 +12,7 @@ Every test uses the REAL autopilot provider (``_install_promotion_guard_scope``)
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from dataclasses import asdict
@@ -45,6 +46,13 @@ from src.autopilot_core.learning_exclusions import (  # noqa: E402
 )
 from src.autopilot_core.live_reproductions import live_reproductions  # noqa: E402
 from src.autopilot_core.tier_specs import RATE_4D_OBJECTIVE_POLICY  # noqa: E402
+from tests.unit.autopilot_loop_harness import (  # noqa: E402
+    autopilot_calls,
+    fresh_state,
+    measured_result,
+    multitier_final_t1_state,
+    run_loop_inner,
+)
 
 FENCE = datetime(2026, 9, 17, tzinfo=timezone.utc)
 FIXTURE = ROOT / "tests" / "fixtures" / "gate_frontier_replay.json"
@@ -59,7 +67,11 @@ def _reset(monkeypatch):
 
 
 class Loop:
-    """The slice of the trial loop around the promotion decision, with real components."""
+    """The slice of the trial loop around the promotion decision, with real components.
+
+    Admission and the provisional row come from autopilot's own functions; the loop itself
+    is pinned by the real-loop tests below (``_loop_trial``).
+    """
 
     def __init__(self, tmp_path, *, baseline=1.5):
         self.journal = ExperimentJournal(journal_dir=tmp_path / "journal")
@@ -107,9 +119,10 @@ class Loop:
             eval_wall_s=wall_s,
             question_results=[{"qid": f"q{i}", "correct": True} for i in range(50)],
         )
-        clean = (
-            not exclusion
-            and action_config_identity(action, infra_digest, served) is not None
+        clean = autopilot._is_clean_trial_representative(
+            action, learning_excluded_by=exclusion, verdict_passed=True,
+            rate_measured=autopilot.objectives_measurable(result), tier=result.tier,
+            regime_digest=infra_digest, served=served,
         )
         admission = FRONTIER_ADMISSION_REPRESENTATIVE if clean else ""
         comp = {"status": comparability}
@@ -212,20 +225,80 @@ def test_representative_predicate_shared_by_replay_and_snapshot():
     assert not row_is_representative_member({"eval_details": {}})
 
 
-def test_within_noise_reproduction_reaches_update_baseline_without_multitier():
-    source = Path(autopilot.__file__).read_text()
-    block = source[source.index("if not MULTITIER_PROMOTION_ENABLED and rate_measured and bool(verdict):"):]
-    block = block[: block.index("criticism = learning_exclusion_criticism")]
-    assert "pending_journal_rows=(provisional_row,)" in block
+# ── the real loop (tests/unit/autopilot_loop_harness.py) ─────────────────
+
+CANDIDATE = {"type": "numeric_trial", "surface": "s", "params": {"cfg": "A"}}
+WITHIN_NOISE = ("mad_noise", "within noise", "within_noise")
 
 
-def test_every_update_baseline_call_in_the_loop_passes_the_pending_row():
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    calls = body.split("gate.update_baseline(\n")[1:]
-    assert len(calls) == 3
-    for call in calls:
-        assert "pending_journal_rows=(provisional_row,)" in call[: call.index(")\n")]
+def _loop_trial(monkeypatch, *, multitier=False, **kwargs):
+    """One trial of ``_run_loop_inner`` on a rate-measured T1 candidate.
+
+    ``multitier`` runs the production configuration: a ratified bundle whose candidate is
+    due its final T1 confirmation, forced past the planner as in controller mode.
+    """
+    kwargs.setdefault("dispatch_results", [measured_result(tier=1, quality=1.8)])
+    if multitier:
+        return run_loop_inner(
+            monkeypatch, state=multitier_final_t1_state(CANDIDATE), multitier=True,
+            use_controller=True, higher_tier_probe=False, **kwargs,
+        )
+    kwargs.setdefault("auto_actions", [CANDIDATE])
+    return run_loop_inner(monkeypatch, state=fresh_state(), higher_tier_probe=False, **kwargs)
+
+
+def _assert_decided_on_the_journaled_row(run):
+    [call] = run.of("update_baseline")
+    [row] = call["pending_journal_rows"]
+    [entry] = run.journal_entries
+    assert row["trial_id"] == call["source_trial_id"] == entry.trial_id
+    assert autopilot._provisional_row_mismatch(row, asdict(entry)) == []
+
+
+# The three promotion sites: clean keep, within-noise reproduction (no multitier), and the
+# multitier final T1 confirmation (clean, or within noise via the post-branch fallback).
+PROMOTION_PATHS = [
+    {},
+    {"learning_exclusion": WITHIN_NOISE},
+    {"multitier": True},
+    {"multitier": True, "learning_exclusion": WITHIN_NOISE},
+]
+
+
+UNMEASURED_RATE = EvalResult(tier=1, quality=1.8, speed=10.0, cost=0.2, reliability=0.98)
+ADMISSION = {
+    "clean": ({}, True),
+    "within_noise": ({"learning_exclusion": WITHIN_NOISE}, False),
+    "measurement_action": ({"auto_actions": [{"type": "seed_batch", "n_questions": 3}]}, False),
+    "verdict_failed": ({"verdict_passed": False}, False),
+    "rate_unmeasured": ({"dispatch_results": [UNMEASURED_RATE]}, False),
+    "disabled": ({"env_off": True}, False),
+}
+
+
+@pytest.mark.parametrize("case", ADMISSION)
+def test_loop_admits_only_clean_passing_measured_config_trials(monkeypatch, case):
+    kwargs, admitted = ADMISSION[case]
+    kwargs = dict(kwargs)
+    if kwargs.pop("env_off", False):
+        monkeypatch.setenv(autopilot.CLEAN_TRIAL_REPRESENTATIVES_ENV, "0")
+    [entry] = _loop_trial(monkeypatch, **kwargs).journal_entries
+    expected = FRONTIER_ADMISSION_REPRESENTATIVE if admitted else None
+    assert entry.eval_details.get(FRONTIER_ADMISSION_KEY) == expected
+
+
+def test_within_noise_reproduction_reaches_update_baseline_without_multitier(monkeypatch):
+    _assert_decided_on_the_journaled_row(_loop_trial(monkeypatch, learning_exclusion=WITHIN_NOISE))
+
+
+def test_every_update_baseline_call_in_the_loop_passes_the_pending_row(monkeypatch):
+    calls = autopilot_calls("update_baseline")
+    assert calls
+    for scope, call in calls:
+        rows = {kw.arg: kw.value for kw in call.keywords}.get("pending_journal_rows")
+        assert rows is not None and ast.unparse(rows) == "(provisional_row,)", (scope, call.lineno)
+    for path in PROMOTION_PATHS:
+        _assert_decided_on_the_journaled_row(_loop_trial(monkeypatch, **path))
 
 
 # ── (b) ───────────────────────────────────────────────────────────────────
@@ -418,16 +491,14 @@ def sg_archive():
     return ParetoArchive.from_archive_payload({}, read_only=False)
 
 
-def test_loop_persists_nothing_between_decision_and_record():
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    first_decision = body.index("gate.update_baseline(")
-    record = body.index("journal.record(journal_entry)")
-    between = body[first_decision:record]
-    for forbidden in ("save_state(", "_save_state_with_journal_archive_authority(",
-                      "append_baseline_promotion_event", "_append_baseline_promotion_event("):
-        assert forbidden not in between, forbidden
-    assert body.index("_append_baseline_promotion_event(", record) > record
+def test_loop_persists_nothing_between_decision_and_record(monkeypatch):
+    for path in PROMOTION_PATHS:
+        run = _loop_trial(monkeypatch, **path)
+        decided = run.index("update_baseline")
+        recorded = run.index("record", decided)
+        between = set(run.names[decided:recorded])
+        assert not between & {"save_state", "save_authority", "promotion_event"}, path
+        assert run.index("promotion_event") > recorded
 
 
 def test_recovered_representative_is_not_raw_reimported(tmp_path):
@@ -566,29 +637,31 @@ def test_matching_row_keeps_the_promotion(tmp_path):
     assert result is update and loop.gate.baseline.baselines_by_tier[1] == pytest.approx(1.8)
 
 
-def test_loop_reconciles_before_any_persistence():
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    record = body.index("journal.record(journal_entry)")
-    reconcile = body.index("_reconcile_promotion_with_journal(", record)
-    event = body.index("_append_baseline_promotion_event(", record)
-    state_write = body.index('state["baseline_state"] = baseline_state', record)
-    assert record < reconcile < min(event, state_write)
-    assert body.index("baseline_before_decision = copy.deepcopy(gate.baseline)") < body.index(
-        "gate.update_baseline(\n"
-    )
+def test_loop_reconciles_before_any_persistence(monkeypatch):
+    promoted = _loop_trial(monkeypatch)
+    assert promoted.state["baseline_state"] == {"promoted_by_trial": 0}
+    # A journaled row that differs from the evaluated one rolls the decision back before
+    # anything persists: no committed ledger event and the PRE-decision baseline is saved.
+    monkeypatch.setattr(autopilot, "_provisional_row_mismatch", lambda provisional, recorded: ["x"])
+    run = _loop_trial(monkeypatch)
+    recorded = run.index("record")
+    reconciled = run.index("reconcile", recorded)
+    first_save = min(i for i, _ in run.saves() if i > recorded)
+    assert reconciled < min(run.index("promotion_event"), first_save)
+    assert run.of("reconcile") == [{"rolled_back": True}]
+    assert run.of("promotion_event")[0]["updated"] is False
+    assert run.state["baseline_state"] == {}
 
 
 # ── re-review B3: the row records a pending commit, confirmed by the ledger ─
 
 
-def test_row_stamps_pending_commit_and_ledger_is_the_commit_record():
-    source = Path(autopilot.__file__).read_text()
-    assert '"pending_commit" if getattr(baseline_update, "updated", False) else "refused"' in source
-    body = source[source.index("def _run_loop_inner(") :]
-    assert body.index('eval_details_dict["promotion_status"]') < body.index(
-        "journal.record(journal_entry)"
-    ) < body.index("_append_baseline_promotion_event(")
+def test_row_stamps_pending_commit_and_ledger_is_the_commit_record(monkeypatch):
+    for updated, status in ((True, "pending_commit"), (False, "refused")):
+        run = _loop_trial(monkeypatch, baseline_updated=updated)
+        [recorded] = run.of("record")
+        assert recorded["eval_details"]["promotion_status"] == status
+        assert run.index("record") < run.index("promotion_event")
 
 
 # ── operator decision 2026-09-16: mutated-file sha is the content identity ─
@@ -765,13 +838,24 @@ def test_handlers_hash_after_apply_and_before_eval_without_touching_the_action()
         assert 'action["served_content"]' not in body
 
 
-def test_loop_clears_and_pops_the_served_content_around_dispatch():
-    source = Path(autopilot.__file__).read_text()
-    body = source[source.index("def _run_loop_inner(") :]
-    clear = body.index("state.pop(SERVED_CONTENT_STATE_KEY, None)")
-    dispatch = body.index("eval_result, species_name = dispatch_action(")
-    take = body.index("trial_served_content = state.pop(SERVED_CONTENT_STATE_KEY, None)")
-    assert clear < dispatch < take
+def test_loop_clears_and_pops_the_served_content_around_dispatch(monkeypatch):
+    import actions
+
+    served = {"files": {"orchestration/prompts/frontdoor.md": _sha("v2")}, "captured_at": "t"}
+
+    def handler(action, state):
+        state[actions.SERVED_CONTENT_STATE_KEY] = served
+        return measured_result(tier=1)
+
+    state = fresh_state(**{actions.SERVED_CONTENT_STATE_KEY: {"files": {"stale.md": _sha("v1")}}})
+    run = run_loop_inner(
+        monkeypatch, state=state, higher_tier_probe=False, dispatch_results=[handler],
+        auto_actions=[{"type": "prompt_mutation", "target_file": "frontdoor.md"}],
+    )
+    assert [d["served_content_present"] for d in run.of("dispatch")] == [False]
+    assert actions.SERVED_CONTENT_STATE_KEY not in state
+    [entry] = run.journal_entries
+    assert entry.eval_details["served_content"] == autopilot._served_content_for_row(served)
 
 
 def test_record_served_content_on_state(tmp_path):

@@ -137,6 +137,9 @@ PAUSE_COLLISION_FIELD = "pause_collision"
 #: this owner holds.
 OPERATOR_PAUSE_OWNER = "operator"
 
+#: Daemon safety halts outrank automated pause leases, but never operator pauses.
+DAEMON_HALT_PAUSE_OWNER = "autopilot_halt"
+
 PAUSE_LEASE_FIELDS = (PAUSE_OWNER_FIELD, PAUSE_TOKEN_FIELD, PAUSE_COLLISION_FIELD)
 
 
