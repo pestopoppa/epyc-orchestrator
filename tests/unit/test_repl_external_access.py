@@ -5,28 +5,52 @@ import subprocess
 from unittest.mock import patch, MagicMock
 
 from src.repl_environment import REPLEnvironment
+from src.registry.tool_registry import ToolRegistry, load_from_yaml
+
+
+def _make_web_registry_repl(role="frontdoor"):
+    from pathlib import Path
+
+    root = Path(__file__).parents[2]
+    registry = ToolRegistry()
+    load_from_yaml(registry, root / "orchestration" / "tool_registry.yaml")
+    registry.load_permissions_from_registry(root / "orchestration" / "model_registry.yaml")
+    return REPLEnvironment(context="test", tool_registry=registry, role=role)
 
 
 class TestWebFetchTool:
     """Test the web_fetch() tool (_web_fetch)."""
 
-    @patch("requests.get")
-    def test_web_fetch_successful_response(self, mock_get):
+    @patch("src.repl_environment.web_guard.fetch")
+    def test_web_fetch_obeys_role_permission_and_is_recorded(self, mock_fetch):
+        """The REPL builtin must not bypass a role's no-web permission."""
+        repl = _make_web_registry_repl(role="worker_general")
+
+        result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
+
+        assert result.error is None
+        assert not mock_fetch.called
+        assert len(repl._invoked_tools) == 1
+        assert repl._invoked_tools[0].tool_name == "web_fetch"
+        assert repl._invoked_tools[0].success is False
+
+    @patch("src.repl_environment.web_guard.fetch")
+    def test_web_fetch_successful_response(self, mock_fetch):
         """Test web_fetch with successful response."""
         mock_response = MagicMock()
         mock_response.text = "This is the fetched content"
         mock_response.headers = {"Content-Type": "text/plain"}
         mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+        mock_fetch.return_value = mock_response
 
-        repl = REPLEnvironment(context="test")
+        repl = _make_web_registry_repl()
         result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
 
         assert result.error is None
         assert "This is the fetched content" in repl.artifacts["result"]
 
-    @patch("requests.get")
-    def test_web_fetch_html_content(self, mock_get):
+    @patch("src.repl_environment.web_guard.fetch")
+    def test_web_fetch_html_content(self, mock_fetch):
         """Test web_fetch handles HTML content (extracts text)."""
         html_content = """
         <html>
@@ -43,60 +67,64 @@ class TestWebFetchTool:
         mock_response.text = html_content
         mock_response.headers = {"Content-Type": "text/html"}
         mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+        mock_fetch.return_value = mock_response
 
-        repl = REPLEnvironment(context="test")
+        repl = _make_web_registry_repl()
         result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
 
         assert result.error is None
         # Should extract main content - BeautifulSoup may or may not strip scripts depending on availability
         assert "Main content here" in repl.artifacts["result"]
 
-    def test_web_fetch_rejects_non_http_urls(self):
+    @patch("src.repl_environment.web_guard._session_get")
+    @patch("src.repl_environment.web_guard.socket.getaddrinfo")
+    def test_web_fetch_rejects_non_http_urls(self, mock_dns, mock_http):
         """Test web_fetch rejects non-http URLs."""
-        repl = REPLEnvironment(context="test")
+        repl = _make_web_registry_repl()
         result = repl.execute('artifacts["result"] = web_fetch("file:///etc/passwd")')
 
         assert result.error is None
-        assert "[ERROR: Only http/https URLs are allowed]" in repl.artifacts["result"]
+        assert "WEB_FETCH DENIED" in repl.artifacts["result"]
+        mock_http.assert_not_called()
+        mock_dns.assert_not_called()
 
-    @patch("requests.get")
-    def test_web_fetch_handles_timeout(self, mock_get):
+    @patch("src.repl_environment.web_guard.fetch")
+    def test_web_fetch_handles_timeout(self, mock_fetch):
         """Test web_fetch handles timeout error."""
         import requests
 
-        mock_get.side_effect = requests.exceptions.Timeout("Timeout")
+        mock_fetch.side_effect = requests.exceptions.Timeout("Timeout")
 
-        repl = REPLEnvironment(context="test")
+        repl = _make_web_registry_repl()
         result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
 
         assert result.error is None
-        assert "[ERROR: Request timed out after 30s]" in repl.artifacts["result"]
+        assert "[ERROR: web_fetch failed: Tool execution failed: Timeout]" in repl.artifacts["result"]
 
-    @patch("requests.get")
-    def test_web_fetch_handles_request_error(self, mock_get):
+    @patch("src.repl_environment.web_guard.fetch")
+    def test_web_fetch_handles_request_error(self, mock_fetch):
         """Test web_fetch handles request error."""
         import requests
 
-        mock_get.side_effect = requests.exceptions.RequestException("Connection error")
+        mock_fetch.side_effect = requests.exceptions.RequestException("Connection error")
 
-        repl = REPLEnvironment(context="test")
+        repl = _make_web_registry_repl()
         result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
 
         assert result.error is None
-        assert "[ERROR: Request failed:" in repl.artifacts["result"]
+        assert "[ERROR: web_fetch failed: Tool execution failed: Connection error]" in repl.artifacts["result"]
 
-    @patch("requests.get")
-    def test_web_fetch_truncates_at_max_chars(self, mock_get):
+    @patch("src.repl_environment.web_guard.fetch")
+    def test_web_fetch_truncates_at_max_chars(self, mock_fetch):
         """Test web_fetch truncates at max_chars."""
         long_content = "X" * 15000
         mock_response = MagicMock()
         mock_response.text = long_content
         mock_response.headers = {"Content-Type": "text/plain"}
         mock_response.raise_for_status = MagicMock()
-        mock_get.return_value = mock_response
+        mock_fetch.return_value = mock_response
 
-        repl = REPLEnvironment(context="test")
+        repl = _make_web_registry_repl()
         result = repl.execute(
             'artifacts["result"] = web_fetch("https://example.com", max_chars=10000)'
         )

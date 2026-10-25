@@ -558,24 +558,8 @@ class _ContextMixin:
             pass
 
     def _registry_invoke_observed(self, tool_name: str, **kwargs) -> Any:
-        """``tool_registry.invoke(name, role, caller_type="direct", **kwargs)`` for the combined ops.
-
-        Identical to the bare call when step events are off. When on, the call is recorded as a
-        step (these sites bypass ``_invoke_tool``).
-        """
-        steps = getattr(self, "_step_events", None)
-        if steps is None:
-            return self.tool_registry.invoke(tool_name, self.role, caller_type="direct", **kwargs)
-        import time as _time
-
-        t0 = _time.perf_counter()
-        result: Any = None
-        steps.enter()
-        try:
-            result = self.tool_registry.invoke(tool_name, self.role, caller_type="direct", **kwargs)
-            return result
-        finally:
-            self._observe_step(steps, tool_name, kwargs, result, t0)
+        """Dispatch combined-op tools through the normal policy and telemetry path."""
+        return self._invoke_tool(tool_name, **kwargs)
 
     def _dispatch_tool(self, tool_name: str, **kwargs) -> Any:
         """Dispatch a tool call. Telemetry is captured by _invoke_tool."""

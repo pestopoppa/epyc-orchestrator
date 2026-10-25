@@ -14,10 +14,18 @@ import pytest
 
 from src.features import reset_features
 from src.repl_environment import REPLEnvironment, write_audit
+from src.registry.tool_registry import ToolRegistry, load_from_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "security"))
 import tool_audit_summary as S  # noqa: E402
+
+
+def _make_web_repl():
+    registry = ToolRegistry()
+    load_from_yaml(registry, ROOT / "orchestration" / "tool_registry.yaml")
+    registry.load_permissions_from_registry(ROOT / "orchestration" / "model_registry.yaml")
+    return REPLEnvironment(context="t", tool_registry=registry, role="frontdoor")
 
 
 @pytest.fixture
@@ -219,8 +227,8 @@ def test_first_seen_host_persists_only_successful_fetches(tmp_path):
 def test_repl_web_fetch_marks_first_seen_then_not(audit):
     resp = MagicMock(text="x", headers={"Content-Type": "text/plain"})
     resp.raise_for_status = MagicMock()
-    repl = REPLEnvironment(context="t")
-    with patch("requests.get", return_value=resp):
+    repl = _make_web_repl()
+    with patch("src.repl_environment.web_guard.fetch", return_value=resp):
         repl._web_fetch("https://Docs.Example.com/a")
         repl._web_fetch("https://docs.example.com/b")
         repl._web_fetch("https://other.example.com/")
@@ -228,7 +236,7 @@ def test_repl_web_fetch_marks_first_seen_then_not(audit):
     assert [(r["host"], r["first_seen_host"]) for r in recs] == [
         ("docs.example.com", True), ("docs.example.com", False), ("other.example.com", True),
     ]
-    with patch("requests.get", side_effect=RuntimeError("down")):
+    with patch("src.repl_environment.web_guard.fetch", side_effect=RuntimeError("down")):
         repl._web_fetch("https://flaky.example.com/")
         repl._web_fetch("https://flaky.example.com/")
     errs = _records(audit)[-2:]

@@ -8,9 +8,45 @@ import re
 import time
 import urllib.parse
 import urllib.request
-from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def web_fetch(url: str, max_chars: int = 10000) -> str:
+    """Fetch public HTTP(S) content and return readable text.
+
+    The tool registry authorizes the role before this handler runs. The
+    destination guard is unconditional so this tool cannot become an SSRF path
+    when the older REPL-only guard feature flag is off.
+    """
+    from src.repl_environment import web_guard
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)"}
+    try:
+        response = web_guard.fetch(url, headers, timeout=30)
+    except web_guard.WebGuardRefusal as refusal:
+        web_guard.log_refusal("web_fetch", url, str(refusal))
+        raise PermissionError(f"WEB_FETCH DENIED: {refusal}") from refusal
+
+    response.raise_for_status()
+    content_type = response.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        try:
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            for elem in soup(("script", "style", "nav", "footer")):
+                elem.decompose()
+            text = soup.get_text(separator="\n", strip=True)
+        except ImportError:
+            text = re.sub(r"<[^>]+>", "", response.text)
+    else:
+        text = response.text
+
+    result = text[:max_chars]
+    if len(text) > max_chars:
+        result += f"\n[... truncated at {max_chars} chars, total: {len(text)}]"
+    return result
 
 
 def http_get(url: str, headers: dict | None = None, timeout: int = 30) -> dict:

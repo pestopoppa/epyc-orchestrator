@@ -1,5 +1,10 @@
 """Tests for ResearchContext tracker."""
 
+import pickle
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
+
 import numpy as np
 import pytest
 
@@ -20,6 +25,35 @@ class TestNodeCreation:
         assert node.tool == "grep"
         assert node.query == "error"
         assert "Found 3 matches" in node.summary
+
+    def test_parallel_add_assigns_unique_ids(self):
+        """Parallel read-only tool results must not overwrite each other's IDs."""
+        ctx = ResearchContext(use_semantic=False)
+
+        class YieldingCounters(dict):
+            def get(self, key, default=None):
+                value = super().get(key, default)
+                time.sleep(0.001)  # Let parallel callers overlap the read-modify-write.
+                return value
+
+        ctx._counters = YieldingCounters()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            ids = list(pool.map(
+                lambda i: ctx.add("peek", str(i), f"content {i}"),
+                range(64),
+            ))
+
+        assert len(ids) == len(set(ids))
+        assert len(ctx.nodes) == len(ids)
+
+    def test_context_lock_stays_out_of_serialized_state(self):
+        ctx = ResearchContext(use_semantic=False)
+        ctx.add("peek", "query", "content")
+
+        assert "_nodes_lock" not in asdict(ctx)
+        assert "_nodes_lock" not in ctx.to_dict()
+        restored = pickle.loads(pickle.dumps(ctx))
+        assert restored.add("peek", "next", "content") == "P2"
 
     def test_id_generation_prefixes(self):
         """Test that different tools get different prefixes."""

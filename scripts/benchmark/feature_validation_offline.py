@@ -210,16 +210,9 @@ class OfflineValidator:
             assert f_on.deferred_tool_results is True
             assert f_off.deferred_tool_results is False
 
-            # Check that structured_delimiters (the wrapping mechanism) exists
-            f_delim = Features(structured_delimiters=True)
-            assert f_delim.structured_delimiters is True
-
-            # The feature's purpose: when enabled, tool outputs are NOT wrapped
-            # inline. Verify the flag semantics are inverse to structured_delimiters.
             return {
                 "passed": True,
                 "reason": "feature flag toggles correctly; deferred=True suppresses inline wrapping",
-                "structured_delimiters_default": True,
                 "deferred_default": False,
             }
         except Exception as e:

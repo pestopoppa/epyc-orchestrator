@@ -33,6 +33,40 @@ def test_structured_blocks_non_chainable_multi_tool():
     assert "Blocked tools: delegate" in result.error
 
 
+def test_structured_counts_web_search_before_chain_gate():
+    from unittest.mock import Mock
+
+    repl = REPLEnvironment(context="x", config=REPLConfig(structured_mode=True))
+    web_search = Mock(return_value="results")
+    run_shell = Mock(return_value="done")
+    repl._globals["web_search"] = web_search
+    repl._globals["run_shell"] = run_shell
+
+    result = repl.execute('web_search("q")\nrun_shell("echo hi")')
+
+    assert result.error is not None
+    assert "Blocked tools: web_search" in result.error
+    web_search.assert_not_called()
+    run_shell.assert_not_called()
+
+
+def test_structured_counts_read_only_searches_for_parallel_dispatch():
+    from unittest.mock import Mock
+
+    repl = REPLEnvironment(context="x", config=REPLConfig(structured_mode=True))
+    code_search = Mock(return_value="code")
+    doc_search = Mock(return_value="docs")
+    repl._globals["code_search"] = code_search
+    repl._globals["doc_search"] = doc_search
+
+    result = repl.execute('a = code_search("q")\nb = doc_search("q")')
+
+    assert result.error is None
+    chain = repl.get_chain_execution_log()[-1]
+    assert chain["mode_used"] == "parallel_read_only"
+    assert code_search.call_count == doc_search.call_count == 1
+
+
 def test_structured_chain_sets_invocation_chain_metadata():
     registry = _DummyRegistry()
     repl = REPLEnvironment(
@@ -90,10 +124,13 @@ def test_dependency_mode_falls_back_to_seq_exec_on_non_call_stmt(monkeypatch):
 
 
 def test_dependency_mode_parallel_mutations_reduce_latency(monkeypatch):
-    code = (
-        'a = run_shell("python3 -c \\"import time; time.sleep(0.2); print(1)\\"")\n'
-        'b = run_shell("python3 -c \\"import time; time.sleep(0.2); print(2)\\"")'
-    )
+    # Exercise the dispatcher, independent of the shell command allowlist.
+    def delayed_shell(cmd, **kwargs):
+        time.sleep(0.2)
+        return cmd
+
+    monkeypatch.setattr(REPLEnvironment, "_run_shell", staticmethod(delayed_shell))
+    code = 'a = run_shell("echo 1")\nb = run_shell("echo 2")'
 
     monkeypatch.setenv("ORCHESTRATOR_TOOL_CHAIN_MODE", "dep")
     monkeypatch.setenv("ORCHESTRATOR_TOOL_CHAIN_PARALLEL_MUTATIONS", "0")

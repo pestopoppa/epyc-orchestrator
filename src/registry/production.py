@@ -52,8 +52,8 @@ def build_tool_registry(
         # Load role permissions from model registry
         registry.load_permissions_from_registry(str(_paths.registry_path))
 
-        # Register built-in tools (programmatic tools)
-        # These may overlap with YAML tools - duplicates are skipped
+        # Keep YAML authoritative for overlapping lint_python/read_file handlers;
+        # register programmatic compatibility tools when their names are absent.
         try:
             from src.builtin_tools import register_builtin_tools
 

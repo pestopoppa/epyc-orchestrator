@@ -11,6 +11,17 @@ import pytest
 
 from src.features import reset_features
 from src.repl_environment import REPLEnvironment, web_guard
+from src.registry.tool_registry import ToolRegistry, load_from_yaml
+
+
+def _make_web_repl():
+    from pathlib import Path
+
+    root = Path(__file__).parents[2]
+    registry = ToolRegistry()
+    load_from_yaml(registry, root / "orchestration" / "tool_registry.yaml")
+    registry.load_permissions_from_registry(root / "orchestration" / "model_registry.yaml")
+    return REPLEnvironment(context="t", tool_registry=registry, role="frontdoor")
 
 PUBLIC4 = "93.184.216.34"
 PUBLIC6 = "2606:2800:220:1:248:1893:25c8:1946"
@@ -258,11 +269,11 @@ def test_connect_time_denial_surfaces_as_a_refusal(dns, monkeypatch):
 
 
 def test_repl_web_fetch_denies_and_audits(dns, audit, flags, monkeypatch, caplog):
-    flags(web_fetch_guard=True)
+    flags(web_fetch_guard=False)
     with patch("requests.get") as legacy:
         with caplog.at_level("WARNING"):
-            out = REPLEnvironment(context="t")._web_fetch("http://169.254.169.254/latest/meta-data/")
-    assert out.startswith("[ERROR: WEB_FETCH DENIED")
+            out = _make_web_repl()._web_fetch("http://169.254.169.254/latest/meta-data/")
+    assert "WEB_FETCH DENIED" in out
     legacy.assert_not_called()
     assert any("web_fetch DENIED" in r.getMessage() for r in caplog.records)
     rec = _records(audit)[-1]
@@ -274,7 +285,7 @@ def test_repl_web_fetch_denies_and_audits(dns, audit, flags, monkeypatch, caplog
 def test_repl_web_fetch_public_url_works_with_guard_on(dns, audit, flags, monkeypatch):
     flags(web_fetch_guard=True)
     _hops(monkeypatch, _Resp(200, text="hello world"))
-    out = REPLEnvironment(context="t")._web_fetch(f"http://{PUBLIC4}/")
+    out = _make_web_repl()._web_fetch(f"http://{PUBLIC4}/")
     assert out == "hello world"
     assert _records(audit)[-1]["outcome"] == "ok"
 
@@ -282,19 +293,17 @@ def test_repl_web_fetch_public_url_works_with_guard_on(dns, audit, flags, monkey
 def test_repl_web_fetch_redirect_to_private_is_refused(dns, audit, flags, monkeypatch):
     flags(web_fetch_guard=True)
     _hops(monkeypatch, _Resp(302, {"Location": "http://127.0.0.1:8000/"}))
-    out = REPLEnvironment(context="t")._web_fetch(f"http://{PUBLIC4}/r")
-    assert out.startswith("[ERROR: WEB_FETCH DENIED") and "redirect hop 1" in out
+    out = _make_web_repl()._web_fetch(f"http://{PUBLIC4}/r")
+    assert "WEB_FETCH DENIED" in out and "redirect hop 1" in out
     assert _records(audit)[-1]["outcome"] == "refused"
 
 
-def test_repl_web_fetch_flag_off_is_legacy_behaviour(audit, flags):
+def test_repl_web_fetch_guard_is_unconditional_even_when_flag_off(dns, audit, flags, monkeypatch):
     flags(web_fetch_guard=False)
-    resp = MagicMock(text="legacy", headers={"Content-Type": "text/plain"})
-    resp.raise_for_status = MagicMock()
-    with patch("requests.get", return_value=resp) as legacy:
-        out = REPLEnvironment(context="t")._web_fetch("http://127.0.0.1:1/")
-    assert out == "legacy"
-    legacy.assert_called_once()
+    calls = _hops(monkeypatch, _Resp(text="should not fetch"))
+    out = _make_web_repl()._web_fetch("http://127.0.0.1:1/")
+    assert "WEB_FETCH DENIED" in out
+    assert calls == []
 
 
 # ── fetch_docs (the curl path) ──────────────────────────────────────────────

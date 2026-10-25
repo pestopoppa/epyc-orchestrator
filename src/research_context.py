@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -90,11 +91,26 @@ class ResearchContext:
     _embedder_initialized: bool = field(default=False, repr=False)
     _embedder_failed: bool = field(default=False, repr=False)
 
+    def __post_init__(self) -> None:
+        # Dynamic (non-dataclass) state keeps asdict()/to_dict() free of locks.
+        self._nodes_lock = threading.Lock()
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Exclude the unpicklable synchronization primitive from snapshots."""
+        state = self.__dict__.copy()
+        state.pop("_nodes_lock", None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._nodes_lock = threading.Lock()
+
     def _get_next_id(self, tool: str) -> str:
         """Generate the next ID for a tool type."""
         prefix = TOOL_PREFIXES.get(tool, DEFAULT_PREFIX)
-        count = self._counters.get(prefix, 0) + 1
-        self._counters[prefix] = count
+        with self._nodes_lock:
+            count = self._counters.get(prefix, 0) + 1
+            self._counters[prefix] = count
         return f"{prefix}{count}"
 
     def _extract_summary(self, content: str, max_len: int = 200) -> str:
@@ -126,7 +142,8 @@ class ResearchContext:
         if not self.nodes:
             return refs
 
-        node_ids = list(self.nodes.keys())
+        with self._nodes_lock:
+            node_ids = list(self.nodes.keys())
         # Pattern: word boundary + node ID
         for node_id in node_ids:
             pattern = rf"\b{re.escape(node_id)}\b"
@@ -174,11 +191,13 @@ class ResearchContext:
         self, embedding: Optional[np.ndarray], exclude_id: Optional[str] = None
     ) -> list[str]:
         """Find semantically similar nodes via embedding similarity."""
-        if embedding is None or not self.nodes:
+        if embedding is None:
             return []
 
         refs = []
-        for node_id, node in self.nodes.items():
+        with self._nodes_lock:
+            nodes = list(self.nodes.items())
+        for node_id, node in nodes:
             if node_id == exclude_id:
                 continue
             if node.embedding is None:
@@ -240,7 +259,8 @@ class ResearchContext:
             embedding=embedding,
         )
 
-        self.nodes[node_id] = node
+        with self._nodes_lock:
+            self.nodes[node_id] = node
         return node_id
 
     def mark_analyzed(self, node_id: str) -> bool:
@@ -252,9 +272,11 @@ class ResearchContext:
         Returns:
             True if node exists and was marked, False otherwise
         """
-        if node_id not in self.nodes:
-            return False
-        self.nodes[node_id].status = "analyzed"
+        with self._nodes_lock:
+            node = self.nodes.get(node_id)
+            if node is None:
+                return False
+            node.status = "analyzed"
         return True
 
     def mark_stale(self, node_id: str) -> bool:
@@ -266,9 +288,11 @@ class ResearchContext:
         Returns:
             True if node exists and was marked, False otherwise
         """
-        if node_id not in self.nodes:
-            return False
-        self.nodes[node_id].status = "stale"
+        with self._nodes_lock:
+            node = self.nodes.get(node_id)
+            if node is None:
+                return False
+            node.status = "stale"
         return True
 
     def get_unanalyzed(self) -> list[str]:
@@ -277,7 +301,9 @@ class ResearchContext:
         Returns:
             List of node IDs with status='unanalyzed'
         """
-        return [nid for nid, node in self.nodes.items() if node.status == "unanalyzed"]
+        with self._nodes_lock:
+            nodes = list(self.nodes.items())
+        return [nid for nid, node in nodes if node.status == "unanalyzed"]
 
     def get_node(self, node_id: str) -> Optional[ResearchNode]:
         """Get a node by ID.
@@ -288,7 +314,8 @@ class ResearchContext:
         Returns:
             ResearchNode or None if not found
         """
-        return self.nodes.get(node_id)
+        with self._nodes_lock:
+            return self.nodes.get(node_id)
 
     def get_lineage(self, node_id: str) -> list[str]:
         """Get the lineage (ancestor chain) for a node.
@@ -299,13 +326,16 @@ class ResearchContext:
         Returns:
             List of node IDs from root to the given node
         """
+        with self._nodes_lock:
+            nodes = dict(self.nodes)
+
         lineage = []
         current_id = node_id
         seen = set()
 
         while current_id and current_id not in seen:
             seen.add(current_id)
-            node = self.nodes.get(current_id)
+            node = nodes.get(current_id)
             if node is None:
                 break
             lineage.append(current_id)
@@ -320,32 +350,35 @@ class ResearchContext:
         Returns:
             Formatted string showing nodes, relationships, and status
         """
-        if not self.nodes:
+        with self._nodes_lock:
+            nodes = dict(self.nodes)
+
+        if not nodes:
             return "[No research nodes]"
 
         lines = ["## Research Context"]
 
         # Count by status
-        unanalyzed = sum(1 for n in self.nodes.values() if n.status == "unanalyzed")
-        analyzed = sum(1 for n in self.nodes.values() if n.status == "analyzed")
-        stale = sum(1 for n in self.nodes.values() if n.status == "stale")
+        unanalyzed = sum(1 for n in nodes.values() if n.status == "unanalyzed")
+        analyzed = sum(1 for n in nodes.values() if n.status == "analyzed")
+        stale = sum(1 for n in nodes.values() if n.status == "stale")
 
         lines.append(f"Progress: {analyzed} analyzed, {unanalyzed} pending, {stale} stale")
         lines.append("")
 
         # Build tree structure
         # Find root nodes (no parent)
-        roots = [nid for nid, node in self.nodes.items() if node.parent_id is None]
+        roots = [nid for nid, node in nodes.items() if node.parent_id is None]
 
         # Find children for each node
-        children: dict[str, list[str]] = {nid: [] for nid in self.nodes}
-        for nid, node in self.nodes.items():
+        children: dict[str, list[str]] = {nid: [] for nid in nodes}
+        for nid, node in nodes.items():
             if node.parent_id and node.parent_id in children:
                 children[node.parent_id].append(nid)
 
         def render_node(node_id: str, indent: int = 0) -> list[str]:
             """Render a node and its children recursively."""
-            node = self.nodes[node_id]
+            node = nodes[node_id]
             prefix = "  " * indent
 
             # Status indicator
@@ -376,8 +409,8 @@ class ResearchContext:
         # Render orphans (parent_id set but parent not found)
         orphans = [
             nid
-            for nid, node in self.nodes.items()
-            if node.parent_id and node.parent_id not in self.nodes and nid not in roots
+            for nid, node in nodes.items()
+            if node.parent_id and node.parent_id not in nodes and nid not in roots
         ]
         if orphans:
             lines.append("")
@@ -393,8 +426,12 @@ class ResearchContext:
         Returns:
             JSON-serializable dict for persistence
         """
+        with self._nodes_lock:
+            nodes = list(self.nodes.items())
+            counters = dict(self._counters)
+
         nodes_data = {}
-        for nid, node in self.nodes.items():
+        for nid, node in nodes:
             nodes_data[nid] = {
                 "id": node.id,
                 "tool": node.tool,
@@ -411,7 +448,7 @@ class ResearchContext:
         return {
             "version": 1,
             "nodes": nodes_data,
-            "counters": self._counters,
+            "counters": counters,
         }
 
     @classmethod
