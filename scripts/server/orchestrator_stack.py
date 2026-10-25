@@ -130,9 +130,7 @@ from scripts.server.stack_paths import (
     _HEALTH_VISION_SERVER,
     _HEALTH_WORKER_SERVER,
     _PATHS,
-    _V2_ROLES,
     LLAMA_SERVER,
-    LLAMA_SERVER_V2,
     LOG_DIR,
     SLOT_SAVE_DIR,
     STATE_FILE,
@@ -219,9 +217,9 @@ def _has_any_flag(cmd: list[str], flags: tuple[str, ...]) -> bool:
 def _append_device_args(cmd: list[str], flags: dict[str, Any] | None = None) -> None:
     """Pin a role to its DECLARED device, defaulting to CPU when nothing is declared.
 
-    Was ``_append_cpu_only_device_args``, whose premise — "the production stack's
-    text roles are CPU roles" — was true when it landed and stopped being true at
-    the 2026-07-31 W1 cutover. It ASSUMED CPU rather than reading the declaration,
+    The former helper name's premise — "the production stack's text roles are
+    CPU roles" — was true when it landed and stopped being true at the 2026-07-31
+    W1 cutover. The helper ASSUMED CPU rather than reading the declaration,
     and because it runs last and unconditionally over every builder's argv, it
     overwrote the answer for any builder that had not emitted a device itself.
     ``_build_role_command`` was such a builder, so architect_general — declared
@@ -257,11 +255,6 @@ def _append_device_args(cmd: list[str], flags: dict[str, Any] | None = None) -> 
         and not _has_any_flag(cmd, _CPU_ONLY_DRAFT_DEVICE_FLAGS)
     ):
         cmd.extend(["--device-draft", declared_draft or declared or "none"])
-
-
-# Pre-2026-08-01 name. Kept as an alias because the old name asserts a CPU-only
-# premise that is no longer true; new call sites should use _append_device_args.
-_append_cpu_only_device_args = _append_device_args
 
 
 def _repo_short_sha(path: Path | None = None) -> str | None:
@@ -1434,23 +1427,16 @@ def _resolve_thread_count(role_name: str, numa_instance: int = 0) -> str:
 
 
 def _resolve_binary_for_role(role_name: str) -> Path:
-    """Pick LLAMA_SERVER_V2 if the role is on the v2 binary allow-list and the binary exists."""
-    if role_name in _V2_ROLES and LLAMA_SERVER_V2.exists():
-        return LLAMA_SERVER_V2
+    """Return the single production server binary for every role."""
     return LLAMA_SERVER
 
 
 def _append_kv_quant_args(cmd: list[str], role_name: str) -> None:
-    """Emit -ctk/-ctv (and --kv-hadamard for v2 binary) for roles with a KV quant config."""
+    """Emit -ctk/-ctv for roles with a KV quant config."""
     kv_quant = _KV_QUANT_CONFIGS.get(role_name)
     if not kv_quant:
         return
     cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
-    # --kv-hadamard: v3 auto-enables (upstream #21038), v2 needs explicit flag
-    if role_name in _V2_ROLES and LLAMA_SERVER_V2.exists():
-        # 2026-06-26 v6 cutover: --kv-hadamard removed in v6 (would crash); no role on v2 today
-        # cmd.append("--kv-hadamard")
-        pass
 
 
 def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_path: str) -> None:

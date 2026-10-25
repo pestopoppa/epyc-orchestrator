@@ -39,7 +39,7 @@ from scripts.server.stack_numa import (
     _parse_cpus,
     instance_shape_class,
 )
-from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _V2_ROLES, _PATHS
+from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _PATHS
 
 
 # =============================================================================
@@ -762,7 +762,6 @@ LAUNCH_CONTEXT_TOKENS = _derived_context_tokens()
 # capability metadata; this table witnesses the actual llama-server CLI path.
 LAUNCH_KV_QUANT_CONFIGS = _derived_kv_quant_configs()
 NO_SPEC_DECODE_ROLES: set[str] = set(_LAUNCH_SHAPE["no_spec_decode_roles"])
-KV_HADAMARD_ROLES = set(_V2_ROLES)
 
 
 # =============================================================================

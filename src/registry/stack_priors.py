@@ -2055,10 +2055,8 @@ def _launch_runtime_record(
         from scripts.server.stack_numa import MLOCK_ROLES
         from scripts.server.stack_paths import (
             LLAMA_SERVER,
-            LLAMA_SERVER_V2,
             SLOT_SAVE_DIR,
             _PATHS,
-            _V2_ROLES,
         )
         from src.roles import Role
     except Exception:
@@ -2139,13 +2137,8 @@ def _launch_runtime_record(
     binary_family = (
         str(descriptor_serving.get("binary"))
         if isinstance(descriptor_serving.get("binary"), str)
-        else "llama.cpp-v2"
-        if primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists()
         else "llama.cpp"
     )
-    if not binary_dir and primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists():
-        binary_path = str(LLAMA_SERVER_V2)
-
     lane_shape: dict[str, int] | None = None
     if mode == "gpu_shadow_lane":
         # gpu-serving-tie-in P2-6 (P0-1c): lane serving shape is DATA from the
@@ -2486,7 +2479,7 @@ def _launch_runtime_record(
             **({"batch": default_batch} if default_batch is not None else {}),
             "kv_type_k": kv_types[0] if kv_types else None,
             "kv_type_v": kv_types[1] if kv_types else None,
-            "kv_hadamard": bool(primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists()),
+            "kv_hadamard": False,
             # Unified KV pool (llama-server -kvu / --no-kv-unified). None when
             # undeclared -> the launcher emits nothing and the kernel default
             # applies (split KV whenever -np is explicit, which it always is).

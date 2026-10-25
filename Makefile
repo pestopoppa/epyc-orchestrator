@@ -213,6 +213,7 @@ coverage-orchestrator-slice:
 		tests/unit/test_seeding_infra_branching.py \
 		tests/unit/test_seeding_injection.py \
 		tests/unit/test_seeding_injection_additional.py \
+		tests/unit/test_seeding_coverage_contracts.py \
 		tests/unit/test_seeding_orchestrator.py \
 		tests/unit/test_seeding_scoring.py \
 		tests/unit/test_seeding_eval.py \

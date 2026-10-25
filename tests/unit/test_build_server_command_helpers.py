@@ -934,7 +934,7 @@ def test_resolve_thread_count_fallback_for_unknown_role() -> None:
 
 
 def test_resolve_binary_for_role_defaults_to_llama_server() -> None:
-    # _V2_ROLES is currently empty, so every role gets LLAMA_SERVER
+    # Every role resolves to the single production server binary.
     assert oss._resolve_binary_for_role("frontdoor") == oss.LLAMA_SERVER
     assert oss._resolve_binary_for_role("architect_general") == oss.LLAMA_SERVER
 
