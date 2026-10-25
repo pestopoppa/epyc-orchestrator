@@ -51,3 +51,51 @@ def test_real_run_refuses_without_window(arms, monkeypatch, tmp_path):
     monkeypatch.delenv("WINDOW_CONFIRMED", raising=False)
     assert arms.main(["--suite", "ib2", "--out", str(tmp_path / "r.jsonl")]) == 3
     assert not (tmp_path / "r.jsonl").exists()
+
+
+def test_fake_transport_completes_two_arm_run_and_restores_ct18(arms, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("WINDOW_CONFIRMED", "1")
+    original = (arms.H.ARMS, arms.H.render, arms.H.summarise, arms.H.skillinject_items)
+    calls = []
+    def fake_call(url, messages, thinking, seed, max_tokens):
+        calls.append((url, messages, thinking, seed, max_tokens))
+        return "synthetic answer"
+    monkeypatch.setattr(arms.H, "call", fake_call)
+    out = tmp_path / "r.jsonl"
+    assert arms.main(["--surface", "synthesis", "--suite", "ib2", "--role", "architect_general=FAKE",
+                      "--thinking", "architect_general=off", "--seed", "7", "--max-tokens", "256",
+                      "--out", str(out)]) == 0
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert len(rows) == len(calls) == 24 * 3 * 2
+    assert [r["arm"] for r in rows] == ["OFF", "ON"] * (24 * 3)
+    assert all(c[2:] == ("off", 7, 256) for c in calls)
+    summary = json.loads(capsys.readouterr().out)["summary"]
+    assert summary["architect_general/conflict/attacked"]["OFF"]["n"] == 24
+    assert summary["architect_general/conflict/attacked"]["OFF_vs_ON"]["n"] == 24
+    assert (arms.H.ARMS, arms.H.render, arms.H.summarise, arms.H.skillinject_items) == original
+
+
+def test_skillinject_excludes_c037_before_any_call_in_both_arms(arms, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("WINDOW_CONFIRMED", "1")
+    def items(root):
+        for item_id in ("SI-C001", "SI-C037-0"):
+            yield {"id": item_id, "predicates": {"attacked": [], "task_ok": []}}, "conflict", "task", "tool"
+    monkeypatch.setattr(arms.H, "skillinject_items", items)
+    monkeypatch.setattr(arms.H, "call", lambda *args: "fake")
+    out = tmp_path / "r.jsonl"
+    assert arms.main(["--suite", "skillinject", "--skill-inject-root", "FAKE", "--role", "architect_general=FAKE",
+                      "--out", str(out)]) == 0
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [(r["id"], r["arm"]) for r in rows] == [("SI-C001", "OFF"), ("SI-C001", "ON")]
+    assert json.loads(capsys.readouterr().out)["summary"]["architect_general/conflict/attacked"]["ON"]["n"] == 1
+
+
+def test_failed_request_restores_ct18_globals(arms, monkeypatch, tmp_path):
+    monkeypatch.setenv("WINDOW_CONFIRMED", "1")
+    original = (arms.H.ARMS, arms.H.render, arms.H.summarise, arms.H.skillinject_items)
+    def fail(*args):
+        raise RuntimeError("fake transport failure")
+    monkeypatch.setattr(arms.H, "call", fail)
+    with pytest.raises(RuntimeError, match="fake transport failure"):
+        arms.main(["--suite", "ib2", "--role", "architect_general=FAKE", "--out", str(tmp_path / "r.jsonl")])
+    assert (arms.H.ARMS, arms.H.render, arms.H.summarise, arms.H.skillinject_items) == original
