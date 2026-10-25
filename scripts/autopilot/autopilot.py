@@ -157,6 +157,7 @@ from operator_hypotheses import (
 from vidya_planner_bridge import build_settled_ground_block as _build_vidya_settled_ground_block
 from vidya_planner_bridge import build_kvq_context as _build_vidya_kvq_context
 from state_lock import (
+    DAEMON_HALT_PAUSE_OWNER,
     OPERATOR_PAUSE_OWNER,
     PAUSE_COLLISION_FIELD,
     PAUSE_LEASE_FIELDS,
@@ -5502,6 +5503,28 @@ def _record_baseline_infra_fingerprint(
     state[BASELINE_INFRA_FINGERPRINTS_STATE_KEY] = refs
 
 
+def _selection_rationale_for_journal(
+    rationale: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project only small, explicitly-owned selection annotations into journal rows."""
+    if not isinstance(rationale, Mapping):
+        return {}
+    allowed = ("frontier_rerun_", "p0_3_blacklist_reexploration_")
+    selected: dict[str, Any] = {}
+    for key, value in rationale.items():
+        if not isinstance(key, str):
+            continue
+        if key != "p0_3_blacklist_reexploration" and not key.startswith(allowed):
+            continue
+        try:
+            encoded = json.dumps(value, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            continue
+        if len(key) <= 96 and len(encoded.encode("utf-8")) <= 2048:
+            selected[key] = value
+    return selected
+
+
 def _record_skip_trial(
     journal: Any,
     trial_id: int,
@@ -5514,6 +5537,7 @@ def _record_skip_trial(
     bug_corrupted_by: str = "",
     bug_corrupted_reason: str = "",
     run_manifest: dict[str, Any] | None = None,
+    rationale: Mapping[str, Any] | None = None,
 ) -> None:
     """Journal a non-executing trial so it leaves durable residue (audit + planner).
 
@@ -5548,6 +5572,11 @@ def _record_skip_trial(
         bug_corrupted_by=bug_corrupted_by,
         bug_corrupted_reason=bug_corrupted_reason,
         run_manifest=dict(run_manifest or {}),  # AP-63(a)
+        eval_details=(
+            {"selection_rationale": selected_rationale}
+            if (selected_rationale := _selection_rationale_for_journal(rationale))
+            else {}
+        ),
     )
     journal.record(entry)
     _record_reproposal_rate_windows(journal)
@@ -7144,9 +7173,7 @@ def _reject_in_flight_manifest_drift(state: dict[str, Any]) -> None:
     if not reasons:
         return
     detail = ",".join(reasons)
-    state["paused"] = True
-    state["_dispatch_deficiency"] = f"run_manifest_drift:{detail}"
-    save_state(state)
+    _latch_daemon_halt(state, f"run_manifest_drift:{detail}")
     raise RuntimeError("Refusing in-flight trial recovery after run-manifest drift: " + detail)
 
 
@@ -7371,6 +7398,25 @@ def save_state(
         _write()
 
 
+def _latch_daemon_halt(
+    state: dict[str, Any], deficiency: str, **fields: Any
+) -> None:
+    """Persist a daemon halt without retaining a releasable automated pause lease.
+
+    The lock covers merge, lease supersession, latch mutation and write as one H4
+    read-modify-write. An operator-owned pause keeps ownership; config-applicator
+    and host-health leases lose the right to clear a daemon safety halt.
+    """
+    with state_write_lock(STATE_PATH):
+        _merge_external_control_fields(state)
+        if state.get(PAUSE_OWNER_FIELD) != OPERATOR_PAUSE_OWNER:
+            supersede_pause_lease(state, DAEMON_HALT_PAUSE_OWNER)
+        state["paused"] = True
+        state["_dispatch_deficiency"] = deficiency
+        state.update(fields)
+        save_state(state, _lock=False)
+
+
 # Control-plane fields owned OUT-OF-BAND of the autopilot daemon: a dashboard
 # pause click, the host_health / config_applicator cache-flush pause, and the
 # operator `autopilot.py pause` all write these directly to disk while the
@@ -7452,7 +7498,7 @@ def clear_halt_latch_on_resume_edge(state: dict[str, Any]) -> dict[str, Any]:
             latch.get("deficiency") or "unattributed",
             ", ".join(latch["fields"]),
         )
-        save_state(state)
+        save_state(state, merge_control=True)
     return latch
 
 
@@ -8665,7 +8711,7 @@ def _run_loop_inner(
     # boundary opened (code-path migration, never a hand-edit of the human-owned registry).
     # Persist immediately so a crash before the first save cannot lose the fence.
     if _migrate_eval_quality_era(state):
-        save_state(state)
+        save_state(state, merge_control=True)
     # Fail-closed startup check (mirrors the speed axis): raise NOW if the quality fence is
     # half-declared (era present, exclude timestamp missing/invalid) rather than silently
     # running unfenced mid-loop.
@@ -8696,14 +8742,14 @@ def _run_loop_inner(
         journal=journal, state=state, prompt_forge_module=_prompt_forge_module
     ).install()
     if not leakage_monitor.preflight():
-        save_state(state)
+        save_state(state, merge_control=True)
     # Clear the deliberate-rebase bypass ONLY once the frontier has actually rebuilt
     # (a prior run admitted >=1 point). Clearing it at startup while the frontier is
     # still empty would re-arm the frontier-lost guard before the bootstrap lands —
     # crash-looping any restart that happens before the first trial is admitted. Once
     # a point exists the guard never fires anyway, so this safely re-arms it.
     if rebase_completed:
-        save_state(state)
+        save_state(state, merge_control=True)
         log.info(
             "Rebase complete (frontier rebuilt) — cleared _allow_empty_frontier_rebase; guard re-armed."
         )
@@ -8830,14 +8876,16 @@ def _run_loop_inner(
     # normal startup) so downstream watchers can detect autopilot
     # restarts the same way they detect orchestrator/llama restarts.
     state["autopilot_fleet_started_at"] = time.time()
-    save_state(state)
+    save_state(state, merge_control=True)
 
     # Graceful shutdown handler
     shutdown_requested = False
+    exit_trigger: str | None = None
 
     def signal_handler(signum, frame):
         nonlocal shutdown_requested
         if breadcrumb is not None:
+            breadcrumb.set_context(trial_id=trial_counter)
             breadcrumb.write(
                 "signal_received",
                 signal_number=signum,
@@ -8940,6 +8988,8 @@ def _run_loop_inner(
 
     while not shutdown_requested:
         async_tasks.reap(logger=log)
+        if breadcrumb is not None:
+            breadcrumb.set_context(trial_id=trial_counter)
         phase.set("loop_start", trial_id=trial_counter)
         if trial_stop_at is not None and trial_counter >= trial_stop_at:
             log.info(
@@ -8955,6 +9005,7 @@ def _run_loop_inner(
                 max_trials=max_trials,
                 ran=trial_counter - trial_budget_start,
             )
+            exit_trigger = "max_trials"
             break
 
         # 2026-05-24 pause-bug fix: re-read state from disk at the top of
@@ -8969,13 +9020,7 @@ def _run_loop_inner(
         # externally-set fields (paused, _in_cache_flush) without losing the
         # in-memory trial counters that get written back at end of iteration.
         was_paused = bool(state.get("paused"))
-        try:
-            disk_state = load_state()
-            for key in _EXTERNAL_CONTROL_FIELDS:
-                if key in disk_state:
-                    state[key] = disk_state[key]
-        except Exception as _exc:
-            log.warning("Failed to reload state at iteration top: %s", _exc)
+        _merge_external_control_fields(state)
 
         # Operator resumed (paused True→False): clear the halt latch here, in the
         # daemon, because this is the only process whose write of it lasts.
@@ -9262,6 +9307,7 @@ def _run_loop_inner(
                     "than planning against unknown models: %s",
                     exc,
                 )
+                exit_trigger = "model_signatures_unavailable"
                 break
             model_signatures_text = format_model_signatures(model_sigs)
 
@@ -9271,12 +9317,6 @@ def _run_loop_inner(
             # rather than asking for 10 every time and getting silently
             # scaled to 3 by _action_seed_batch's adaptive_batch_size().
             try:
-                import sys as _sys
-
-                _sys.path.insert(
-                    0,
-                    str(_REPO_ROOT / "scripts/benchmark"),
-                )
                 from seeding_telemetry import (
                     batch_summary as _batch_summary,
                     adaptive_batch_size as _adaptive_n,
@@ -9635,6 +9675,18 @@ def _run_loop_inner(
                 vidya_kvq_context=vidya_kvq_context,
                 belief_context=belief_ready,
             )
+            state["session_id"] = planner_decision.session_id
+            if shutdown_requested:
+                log.info("Shutdown requested during selection; discarding selected action")
+                exit_trigger = "signal"
+                break
+            if _merge_external_control_fields(state) and state.get("paused"):
+                log.info(
+                    "Pause landed during planner turn %d; discarding selection before dispatch",
+                    trial_counter,
+                )
+                save_state(state, merge_control=True)
+                continue
             if isinstance(planner_decision.action, dict):
                 belief_premise_action = dict(planner_decision.action)
                 belief_premise_ids = _loop_beliefs.declared_premises(planner_decision.rationale)
@@ -9662,7 +9714,6 @@ def _run_loop_inner(
                     planner_decision.critique.confidence,
                     planner_decision.critique.issues,
                 )
-            state["session_id"] = planner_decision.session_id
             action = planner_decision.action
             predicted_objectives = planner_decision.predicted_objectives
             rationale = planner_decision.rationale
@@ -9702,9 +9753,8 @@ def _run_loop_inner(
                 is_repeated=_gate_is_rep,
             )
             if _uncritiqued_block:
-                state["paused"] = True
-                state["_dispatch_deficiency"] = _uncritiqued_block
-                save_state(state)
+                _latch_daemon_halt(state, _uncritiqued_block)
+                exit_trigger = _uncritiqued_block
                 log.error(
                     "Planner ran degraded with NO critic verdict and drafted a "
                     "non-observational action %r — pausing (%s) for operator review "
@@ -9744,12 +9794,14 @@ def _run_loop_inner(
                     )
                 )
                 if critic_fallback_skip is not None:
-                    state["paused"] = True
-                    state["_dispatch_deficiency"] = "critic_reject_no_safe_fallback"
-                    state["last_invalid_action"] = action
-                    state["last_invalid_reason"] = critic_fallback_skip.reason
-                    state["last_invalid_status"] = "critic_reject_no_safe_fallback"
-                    save_state(state)
+                    _latch_daemon_halt(
+                        state,
+                        "critic_reject_no_safe_fallback",
+                        last_invalid_action=action,
+                        last_invalid_reason=critic_fallback_skip.reason,
+                        last_invalid_status="critic_reject_no_safe_fallback",
+                    )
+                    exit_trigger = "critic_reject_no_safe_fallback"
                     log.error(
                         "Critic rejected/revised planner draft but the safe fallback "
                         "is unavailable — pausing before dispatch instead of "
@@ -9769,9 +9821,8 @@ def _run_loop_inner(
                 ):
                     # Durable halt mirroring the meta/skip breakers: the planner
                     # keeps drafting actions the critic overrides — operator call.
-                    state["paused"] = True
-                    state["_dispatch_deficiency"] = "critic_reject_loop"
-                    save_state(state)
+                    _latch_daemon_halt(state, "critic_reject_loop")
+                    exit_trigger = "critic_reject_loop"
                     log.error(
                         "Critic rejected/revised %d consecutive planner drafts — "
                         "pausing for operator review (stuck planner the critic "
@@ -9787,7 +9838,7 @@ def _run_loop_inner(
                 # dispatch clears it — otherwise isolated blocks spread across unrelated
                 # trials would eventually halt a perfectly healthy planner.
                 state["consecutive_planner_deterministic_blocks"] = 0
-        elif not use_controller:
+        elif not use_controller and action is None:
             # Autonomous mode: species selection by budget
             phase.set("autonomous_select", trial_id=trial_counter)
             species = meta.select_species()
@@ -9863,9 +9914,10 @@ def _run_loop_inner(
                         _det_surface,
                     )
                 else:
-                    state["paused"] = True
-                    state["_dispatch_deficiency"] = "planners_offline_no_deterministic_fallback"
-                    save_state(state)
+                    _latch_daemon_halt(
+                        state, "planners_offline_no_deterministic_fallback"
+                    )
+                    exit_trigger = "planners_offline_no_deterministic_fallback"
                     log.error(
                         "Both planner models offline and no deterministic fallback "
                         "available — pausing for operator."
@@ -9880,9 +9932,8 @@ def _run_loop_inner(
                 if decision == "halt":
                     # A RUN of these is a genuinely stuck planner — halt for the operator,
                     # mirroring the critic-reject-loop breaker.
-                    state["paused"] = True
-                    state["_dispatch_deficiency"] = "planner_deterministic_guard"
-                    save_state(state)
+                    _latch_daemon_halt(state, "planner_deterministic_guard")
+                    exit_trigger = "planner_deterministic_guard"
                     log.error(
                         "Planner action blocked deterministically %d consecutive times "
                         "— pausing for operator review. Last reason: %s",
@@ -9891,7 +9942,7 @@ def _run_loop_inner(
                     )
                     phase.set("planner_deterministic_guard_halt", trial_id=trial_counter)
                     break
-                save_state(state)
+                save_state(state, merge_control=True)
                 log.warning(
                     "Planner action blocked deterministically (%d/%d consecutive): %s "
                     "— substituting seed_batch and continuing. The rejected draft still "
@@ -10039,15 +10090,14 @@ def _run_loop_inner(
                     seq_gate_preflight
                 )
                 if seq_gate_block_reason:
-                    state["paused"] = True
-                    state["_dispatch_deficiency"] = "seq_gate_preflight_blocked"
-                    state["last_invalid_action"] = seq_gate_preflight.get(
-                        "original_action",
-                        action,
+                    _latch_daemon_halt(
+                        state,
+                        "seq_gate_preflight_blocked",
+                        last_invalid_action=seq_gate_preflight.get("original_action", action),
+                        last_invalid_reason=seq_gate_block_reason,
+                        last_invalid_status="seq_gate_preflight_blocked",
                     )
-                    state["last_invalid_reason"] = seq_gate_block_reason
-                    state["last_invalid_status"] = "seq_gate_preflight_blocked"
-                    save_state(state)
+                    exit_trigger = "seq_gate_preflight_blocked"
                     log.error(
                         "Seq gate preflight blocked trial %d before dispatch (%s): %s",
                         trial_counter,
@@ -10148,6 +10198,21 @@ def _run_loop_inner(
                 prompt_preview = json.dumps(action, indent=2)[:500]
             tui.set_prompt(prompt_preview)
 
+        # Selection can include autonomous and forced-action paths that never
+        # enter the planner branch above. Recheck stop and external pause after
+        # every selector/forcer, immediately before creating a dispatch WAL row.
+        if shutdown_requested:
+            log.info("Shutdown requested during action selection; not dispatching")
+            exit_trigger = "signal"
+            break
+        if _merge_external_control_fields(state) and state.get("paused"):
+            log.info(
+                "Pause landed during action selection for trial %d; discarding selection",
+                trial_counter,
+            )
+            save_state(state, merge_control=True)
+            continue
+
         # Phase 6b — write in_flight_trial marker BEFORE dispatch_action.
         # Atomic save_state (Phase 6a) guarantees this either lands fully
         # or not at all. The marker is cleared after the final save_state
@@ -10161,7 +10226,7 @@ def _run_loop_inner(
         trial_prompt_lint: list[str] | None = None  # MHS-15 warn-only lint findings
         if pre_dispatch_skip is None:
             dispatch_infra_fingerprint = _infra_fingerprint_for_trial()  # AP-55
-            state["in_flight_trial"] = {
+            wal_marker = {
                 "trial_id": trial_counter,
                 "action": action,
                 "run_manifest": build_run_manifest(
@@ -10173,7 +10238,27 @@ def _run_loop_inner(
                 "host_pid": os.getpid(),
                 "host_started_at": state.get("autopilot_fleet_started_at"),
             }
-            save_state(state)
+            # Admission is one H4 transaction: a pause that wins the lock before
+            # this point prevents the WAL marker and dispatch; one that arrives
+            # after the marker is durably committed applies at the next boundary.
+            admitted = False
+            with state_write_lock(STATE_PATH):
+                _merge_external_control_fields(state)
+                if shutdown_requested:
+                    exit_trigger = "signal"
+                elif state.get("paused"):
+                    log.info(
+                        "Pause landed before dispatch admission for trial %d; discarding selection",
+                        trial_counter,
+                    )
+                else:
+                    state["in_flight_trial"] = wal_marker
+                    admitted = True
+                save_state(state, _lock=False)
+            if shutdown_requested:
+                break
+            if not admitted:
+                continue
 
         if pre_dispatch_skip is not None:
             phase.set(
@@ -10250,7 +10335,7 @@ def _run_loop_inner(
                 meta_streak = int(state.get("consecutive_meta_actions", 0)) + 1
                 state["consecutive_meta_actions"] = meta_streak
                 state["in_flight_trial"] = None
-                save_state(state)
+                save_state(state, merge_control=True)
                 log.info(
                     "Meta action '%s' executed (no eval, no metrics) — not counted "
                     "as a trial (consecutive meta=%d, trial stays at %d)",
@@ -10264,16 +10349,14 @@ def _run_loop_inner(
                     # then restarted the process straight back into the same
                     # gate-locked state (consecutive_meta_actions persisted on
                     # disk), so it re-halted on meta action #1 (2026-05-31).
-                    # Setting paused=True LATCHES the halt: the iteration-top
-                    # paused gate idles this process AND any restart until the
-                    # operator explicitly resumes (clearing paused resets the
-                    # counter — see top of loop), so a supervisor cannot re-enter
-                    # the no-op loop.
+                    # The durable pause latch makes the next launch idle until the
+                    # operator resumes. This process exits after shutdown cleanup;
+                    # a clean supervisor exit does not restart it.
                     halt_reason = _classify_meta_halt(journal)
-                    state["paused"] = True
-                    state["_dispatch_deficiency"] = "meta_action_loop"
-                    state["_meta_halt_reason"] = halt_reason
-                    save_state(state)
+                    _latch_daemon_halt(
+                        state, "meta_action_loop", _meta_halt_reason=halt_reason
+                    )
+                    exit_trigger = "meta_action_loop"
                     if halt_reason == "converged":
                         log.warning(
                             "Planner emitted %d consecutive metric-free meta actions; "
@@ -10343,9 +10426,16 @@ def _run_loop_inner(
                     bug_corrupted_by=skip_bug_corrupted_by,
                     bug_corrupted_reason=skip_bug_corrupted_reason,
                     run_manifest=_in_flight_run_manifest(state, trial_counter),  # AP-63(a)
+                    rationale=rationale,
                 )
             except Exception:
-                log.debug("skip-trial journal write failed", exc_info=True)
+                log.error(
+                    "skip-trial journal write failed for trial %d; preserving in-flight "
+                    "marker for startup recovery",
+                    trial_counter,
+                    exc_info=True,
+                )
+                raise
 
             if skip_bug_corrupted_by:
                 log.warning(
@@ -10394,16 +10484,15 @@ def _run_loop_inner(
             trial_counter += 1
             state["trial_counter"] = trial_counter
             state["in_flight_trial"] = None
-            save_state(state)
+            save_state(state, merge_control=True)
 
             # Hard circuit-breaker mirroring MAX_CONSECUTIVE_META: a run of
             # non-executing actions means a stuck planner / impossible action
             # space. Latch paused=True so a supervisor restart cannot re-enter
             # the loop (same durable-halt semantics as the meta-action guard).
             if not skip_bug_corrupted_by and skip_streak >= MAX_CONSECUTIVE_SKIP:
-                state["paused"] = True
-                state["_dispatch_deficiency"] = "skip_action_loop"
-                save_state(state)
+                _latch_daemon_halt(state, "skip_action_loop")
+                exit_trigger = "skip_action_loop"
                 log.error(
                     "Planner emitted %d consecutive non-executing actions "
                     "(last: %s — %s); pausing for operator review (stuck planner "
@@ -11254,6 +11343,9 @@ def _run_loop_inner(
             "tool_helpfulness": getattr(eval_result, "tool_helpfulness", float("nan")),
             "per_suite_tool_helpfulness": getattr(eval_result, "per_suite_tool_helpfulness", {}),
         }
+        selection_rationale = _selection_rationale_for_journal(rationale)
+        if selection_rationale:
+            eval_details_dict["selection_rationale"] = selection_rationale
         # D6 / FIELD-1 journal leg: persist the documented diversity_* / rubric_* /
         # reviewer_* / branching_density / instruction_token_* / avg_prompt_tokens /
         # compaction_events families that were previously dropped from the journal
@@ -11580,15 +11672,18 @@ def _run_loop_inner(
                 }
                 state.pop("multitier_production_checkpoint_due", None)
             except Exception as exc:  # noqa: BLE001 - promotion must fail closed
-                state["paused"] = True
-                state["pause_reason"] = (
-                    "accepted multitier candidate could not advance production checkpoint: "
-                    f"{type(exc).__name__}: {exc}"
+                _latch_daemon_halt(
+                    state,
+                    "multitier_checkpoint_failure",
+                    pause_reason=(
+                        "accepted multitier candidate could not advance production checkpoint: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    multitier_checkpoint_failure={
+                        **checkpoint_due,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
                 )
-                state["multitier_checkpoint_failure"] = {
-                    **checkpoint_due,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
                 log.exception("Multitier production checkpoint advancement failed")
             _save_state_with_journal_archive_authority(
                 state,
@@ -11613,7 +11708,7 @@ def _run_loop_inner(
         if should_generate_today(state):
             try:
                 state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                save_state(state)
+                save_state(state, merge_control=True)
                 async_tasks.submit_subprocess(
                     f"digest-{state['last_digest_date']}",
                     [
@@ -11635,7 +11730,8 @@ def _run_loop_inner(
                 log.warning("Daily digest generation failed: %s", e)
 
     # Shutdown: checkpoint + save
-    phase.set("shutting_down", trial_id=trial_counter)
+    exit_trigger = exit_trigger or ("signal" if shutdown_requested else "loop_completed")
+    phase.set("shutting_down", trial_id=trial_counter, exit_trigger=exit_trigger)
     async_tasks.reap(logger=log)
     async_tasks.shutdown()
     log.info("AutoPilot shutting down (trial=%d)", trial_counter)
@@ -11656,11 +11752,11 @@ def _run_loop_inner(
         strategy_store.close()
     if not dry_run:
         lab.checkpoint_state(trial_id=trial_counter, notes="Shutdown checkpoint")
-    phase.clear("autopilot process exiting")
+    phase.clear(f"autopilot process exiting: {exit_trigger}")
     if breadcrumb is not None:
         breadcrumb.mark_terminal(
             "loop_exit",
-            exit_trigger="signal" if shutdown_requested else "loop_completed",
+            exit_trigger=exit_trigger,
             trial_id=trial_counter,
         )
 
@@ -12070,6 +12166,29 @@ def cmd_pause(args: argparse.Namespace) -> None:
         )
 
 
+def _daemon_singleton_is_running() -> bool | None:
+    """Probe the daemon's singleton flock without creating or truncating its file."""
+    try:
+        fd = os.open(LOCK_PATH, os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log.warning("Could not inspect AutoPilot singleton lock %s: %s", LOCK_PATH, exc)
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        except OSError as exc:
+            log.warning("Could not claim AutoPilot singleton lock %s: %s", LOCK_PATH, exc)
+            return None
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
 def cmd_resume(args: argparse.Namespace) -> None:
     # Operator control write — same single-writer discipline as cmd_pause: the
     # read-modify-write is one locked critical section; we own the control fields.
@@ -12091,6 +12210,14 @@ def cmd_resume(args: argparse.Namespace) -> None:
     message = halt_latch_message(latch)
     if message:
         print(message)
+    daemon_running = _daemon_singleton_is_running()
+    if daemon_running is False:
+        print(
+            "AutoPilot daemon is not running; relaunch it with "
+            "scripts/autopilot/start_authority_daemon.py."
+        )
+    elif daemon_running is None:
+        print("AutoPilot daemon status could not be checked; verify its process before relying on resume.")
 
 
 def cmd_report(args: argparse.Namespace) -> None:

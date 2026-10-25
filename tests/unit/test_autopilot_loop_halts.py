@@ -8,6 +8,11 @@ line in turn: exactly the matching case goes red.
 
 from __future__ import annotations
 
+import json
+import logging
+import signal
+import sys
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -23,6 +28,294 @@ from tests.unit.autopilot_loop_harness import (
 
 SEED = {"type": "seed_batch", "n_questions": 3}
 NUMERIC = {"type": "numeric_trial", "surface": "s", "params": {"x": 1}}
+
+
+def test_pause_during_planner_turn_is_merged_before_wal_or_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    def pause_during_plan(_decision: Any, _handlers: dict[int, Any]) -> None:
+        autopilot.cmd_pause(None)
+
+    run = run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=True,
+        higher_tier_probe=False,
+        planner_decisions=[planner_decision(SEED)],
+        planner_hook=pause_during_plan,
+        real_state_io=True,
+        stop_after_sleeps=1,
+        tmp_path=tmp_path,
+        dispatch_actions_out=[],
+    )
+
+    on_disk = json.loads((tmp_path / "autopilot_state.json").read_text())
+    assert run.dispatched == []
+    assert on_disk["paused"] is True
+    assert on_disk.get("in_flight_trial") is None
+
+
+def test_sigterm_during_planner_turn_does_not_dispatch_selected_action(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    breadcrumb = autopilot.ExitBreadcrumb(tmp_path / "exit.jsonl")
+
+    def terminate_during_plan(_decision: Any, handlers: dict[int, Any]) -> None:
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    run = run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=True,
+        higher_tier_probe=False,
+        planner_decisions=[planner_decision(SEED)],
+        planner_hook=terminate_during_plan,
+        real_state_io=True,
+        breadcrumb=breadcrumb,
+        tmp_path=tmp_path,
+        dispatch_actions_out=[],
+    )
+
+    on_disk = json.loads((tmp_path / "autopilot_state.json").read_text())
+    assert run.dispatched == []
+    assert on_disk.get("in_flight_trial") is None
+    assert run.names.count("plan") == 1
+
+
+@pytest.mark.parametrize("use_controller", [False, True], ids=["no-controller", "forced-controller"])
+def test_sigterm_during_final_selection_does_not_write_wal_or_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, use_controller: bool
+) -> None:
+    def terminate_after_selection(_action: dict[str, Any], handlers: dict[int, Any]) -> None:
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    run = run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=use_controller,
+        higher_tier_probe=False,
+        planner_decisions=[planner_decision(SEED)] if use_controller else None,
+        auto_actions=[SEED],
+        force_fresh_eval_context=(
+            {"candidate": "candidate-a", "source_trial_id": 11}
+            if use_controller
+            else None
+        ),
+        selection_hook=terminate_after_selection,
+        real_state_io=True,
+        tmp_path=tmp_path,
+        dispatch_actions_out=[],
+    )
+
+    on_disk = json.loads((tmp_path / "autopilot_state.json").read_text())
+    assert run.dispatched == []
+    assert on_disk.get("in_flight_trial") is None
+    assert "dispatch" not in run.names
+
+
+def test_late_pause_during_no_controller_selection_is_merged_before_wal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    def pause_after_selection(_action: dict[str, Any], _handlers: dict[int, Any]) -> None:
+        autopilot.cmd_pause(None)
+
+    run = run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=False,
+        higher_tier_probe=False,
+        auto_actions=[SEED],
+        selection_hook=pause_after_selection,
+        real_state_io=True,
+        stop_after_sleeps=1,
+        tmp_path=tmp_path,
+        dispatch_actions_out=[],
+    )
+
+    on_disk = json.loads((tmp_path / "autopilot_state.json").read_text())
+    assert run.dispatched == []
+    assert on_disk["paused"] is True
+    assert on_disk.get("in_flight_trial") is None
+
+
+def test_pause_winning_admission_lock_prevents_wal_and_dispatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    original_lock = autopilot.state_write_lock
+    armed = {"value": False}
+    injected = {"value": False}
+
+    @contextmanager
+    def pause_before_admission_lock(path: Any):
+        if armed["value"] and not injected["value"]:
+            injected["value"] = True
+            # cmd_pause is the competing writer. It acquires and releases the
+            # real lock before the loop gets its admission lock.
+            autopilot.cmd_pause(None)
+        with original_lock(path):
+            yield
+
+    monkeypatch.setattr(autopilot, "state_write_lock", pause_before_admission_lock)
+
+    def arm_before_admission(_action: dict[str, Any], _handlers: dict[int, Any]) -> None:
+        armed["value"] = True
+
+    run = run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=False,
+        higher_tier_probe=False,
+        auto_actions=[SEED],
+        selection_hook=arm_before_admission,
+        real_state_io=True,
+        stop_after_sleeps=1,
+        tmp_path=tmp_path,
+        dispatch_actions_out=[],
+    )
+
+    on_disk = json.loads((tmp_path / "autopilot_state.json").read_text())
+    assert injected["value"] is True
+    assert run.dispatched == []
+    assert on_disk["paused"] is True
+    assert on_disk.get("in_flight_trial") is None
+
+
+def test_no_controller_keeps_preplanner_multitier_forced_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forced = {"type": "deep_eval", "tier": 2}
+    context = {
+        "stage": "tier_2",
+        "candidate": "candidate-a",
+        "candidate_action": {"type": "numeric_trial", "surface": "candidate-a"},
+    }
+    monkeypatch.setattr(
+        autopilot,
+        "_maybe_force_multitier_due_action",
+        lambda **_kwargs: (forced, {"multitier_validation": True}, context),
+    )
+
+    run = run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=False,
+        higher_tier_probe=False,
+        auto_actions=[SEED],
+    )
+
+    assert run.dispatched == [forced]
+    assert "auto_action" not in run.names
+
+
+def test_skip_journal_failure_keeps_wal_for_startup_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    def fail_skip_record(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("journal unavailable")
+
+    monkeypatch.setattr(autopilot, "_record_skip_trial", fail_skip_record)
+    with caplog.at_level(logging.ERROR, logger="autopilot"):
+        with pytest.raises(OSError, match="journal unavailable"):
+            run_loop_inner(
+                monkeypatch,
+                state=fresh_state(),
+                use_controller=True,
+                higher_tier_probe=False,
+                planner_decisions=[planner_decision(SEED)],
+                dispatch_results=[autopilot.SkipOutcome("skipped", "validator rejected", "seed_batch")],
+                real_state_io=True,
+                tmp_path=tmp_path,
+            )
+
+    on_disk = json.loads((tmp_path / "autopilot_state.json").read_text())
+    assert on_disk["in_flight_trial"]["trial_id"] == 0
+    assert "skip-trial journal write failed" in caplog.text
+
+
+def test_loop_persists_only_allowlisted_selection_rationale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rationale = {
+        "falsifier": "not selection metadata",
+        "p0_3_blacklist_reexploration": True,
+        "p0_3_blacklist_reexploration_target": "target-a",
+        "p0_3_blacklist_reexploration_source_trial": 42,
+        "p0_3_blacklist_reexploration_reason": "new instrument era",
+        "p0_3_blacklist_reexploration_scope": "audit-only",
+        "private_planner_note": "do not persist",
+    }
+    monkeypatch.setattr(
+        autopilot,
+        "_p0_3_retryable_blacklist_match",
+        lambda *_args, **_kwargs: {
+            "target_key": "target-a",
+            "source_trial": 42,
+            "reason": "new instrument era",
+            "retry_scope": "audit-only",
+        },
+    )
+    entries: list[Any] = []
+
+    run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=True,
+        higher_tier_probe=False,
+        planner_decisions=[planner_decision(SEED, rationale=rationale)],
+        blacklisted="matching blacklist row",
+        journal_entries_out=entries,
+    )
+
+    persisted = entries[-1].eval_details["selection_rationale"]
+    assert persisted["p0_3_blacklist_reexploration_target"] == "target-a"
+    assert persisted["p0_3_blacklist_reexploration_source_trial"] == 42
+    assert "private_planner_note" not in persisted
+    assert "falsifier" not in persisted
+
+
+def test_skip_trial_persists_allowlisted_selection_rationale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rationale = {
+        "frontier_rerun_forced": True,
+        "frontier_rerun_reason": "new measurement era",
+        "frontier_rerun_completed_numeric_trials": 2,
+        "frontier_rerun_min_numeric_trials": 4,
+        "planner_private": {"large": "not persisted"},
+    }
+    entries: list[Any] = []
+
+    run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=True,
+        higher_tier_probe=False,
+        planner_decisions=[planner_decision(SEED, rationale=rationale)],
+        dispatch_results=[autopilot.SkipOutcome("skipped", "blocked by validator", "seed_batch")],
+        journal_entries_out=entries,
+    )
+
+    persisted = entries[-1].eval_details["selection_rationale"]
+    assert persisted["frontier_rerun_reason"] == "new measurement era"
+    assert "planner_private" not in persisted
+
+
+def test_controller_iterations_do_not_duplicate_benchmark_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    benchmark_path = str(autopilot.ORCH_ROOT / "scripts" / "benchmark")
+    before = sys.path.count(benchmark_path)
+
+    run_loop_inner(
+        monkeypatch,
+        state=fresh_state(),
+        use_controller=True,
+        higher_tier_probe=False,
+        planner_decisions=[planner_decision(SEED)],
+        max_trials=3,
+    )
+
+    assert sys.path.count(benchmark_path) == before
 
 
 def _reject(action: dict[str, Any], draft: dict[str, Any]) -> Any:

@@ -299,6 +299,10 @@ def run_loop_inner(
     dispatch_actions_out: list[dict[str, Any]] | None = None,
     gate_check_raises_on_seq: bool = False,
     tmp_path: Path | None = None,
+    real_state_io: bool = False,
+    planner_hook: Callable[[PlannerDecision, dict[int, Any]], None] | None = None,
+    selection_hook: Callable[[dict[str, Any], dict[int, Any]], None] | None = None,
+    breadcrumb: Any | None = None,
 ) -> LoopRun:
     """Drive ``_run_loop_inner`` with scripted collaborators.
 
@@ -666,6 +670,8 @@ def run_loop_inner(
         if decision is None:
             raise AssertionError("controller turn reached the planner without planner_decisions")
         emit("plan", belief_context=kwargs.get("belief_context"))
+        if planner_hook is not None:
+            planner_hook(copy.deepcopy(decision), handlers)
         return copy.deepcopy(decision)
 
     def fake_prepare(settings: Any, targets: Any = None, **kwargs: Any) -> Any:
@@ -710,8 +716,11 @@ def run_loop_inner(
     ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
         if force_fresh_eval_context is None:
             return action, rationale, None
+        forced_action = {"type": "deep_eval", "tier": 2}
+        if selection_hook is not None:
+            selection_hook(copy.deepcopy(forced_action), handlers)
         return (
-            {"type": "deep_eval", "tier": 2},
+            forced_action,
             (rationale or {}) | {"seq_promotion_fresh_eval": True},
             dict(force_fresh_eval_context),
         )
@@ -728,8 +737,9 @@ def run_loop_inner(
         return action, kwargs.get("rationale"), None
 
     m = monkeypatch.setattr
-    m(autopilot, "load_state", lambda: state)
-    m(autopilot, "save_state", fake_save_state)
+    if not real_state_io:
+        m(autopilot, "load_state", lambda: state)
+        m(autopilot, "save_state", fake_save_state)
     m(autopilot, "_save_state_with_journal_archive_authority", fake_save_authority)
     m(autopilot, "ExperimentJournal", lambda: fake_journal)
     m(autopilot, "ParetoArchive", FakeParetoArchive)
@@ -774,7 +784,14 @@ def run_loop_inner(
         "_force_metric_action_after_meta",
         lambda action, state, rationale, blacklist: (action, rationale),
     )
-    m(autopilot, "_auto_action", lambda *args, **kwargs: dict(next_auto_action()))
+    def fake_auto_action(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        emit("auto_action")
+        action = dict(next_auto_action())
+        if selection_hook is not None:
+            selection_hook(copy.deepcopy(action), handlers)
+        return action
+
+    m(autopilot, "_auto_action", fake_auto_action)
     m(autopilot, "_maybe_force_seq_promotion_fresh_eval", fake_maybe_force_seq_promotion_fresh_eval)
     m(autopilot, "_maybe_force_seq_baseline_draw", no_seq_context)
     if seq_gate_preflight_payload is not None:
@@ -796,7 +813,17 @@ def run_loop_inner(
     )
     m(autopilot, "health_check", fake_health_check)
     m(autopilot, "should_generate_today", lambda _state: False)
-    m(autopilot.subprocess, "run", lambda cmd, *a, **kw: emit("subprocess_run", cmd=list(cmd)))
+    def fake_subprocess_run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
+        emit("subprocess_run", cmd=list(cmd))
+        # subprocess is a shared module object, so returning None here also breaks
+        # newly-added read-only planner bridges that consume CompletedProcess output.
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="subprocesses disabled by the loop harness",
+        )
+
+    m(autopilot.subprocess, "run", fake_subprocess_run)
     m(autopilot, "_git_tag", lambda *args, **kwargs: None)
     m(autopilot, "generate_self_criticism", lambda *args, **kwargs: FakeCriticism())
     m(autopilot, "classify_learning_exclusion", lambda *args, **kwargs: learning_exclusion)
@@ -821,12 +848,16 @@ def run_loop_inner(
                 ("BLACKLIST_PATH", "failure_blacklist.yaml"),
             ):
                 m(autopilot, name, sandbox / filename)
+            if real_state_io:
+                autopilot.save_state(state)
             belief_settings = lb.BeliefSettings(
                 root_repo=sandbox / "root",
                 degraded_log=sandbox / "degraded.jsonl",
                 review_flags=sandbox / "review.jsonl",
             )
-            autopilot._run_loop_inner(max_trials, False, use_controller, None, None, belief_settings)
+            autopilot._run_loop_inner(
+                max_trials, False, use_controller, None, breadcrumb, belief_settings
+            )
     finally:
         for monitor in installed:
             monitor.uninstall()

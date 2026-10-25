@@ -770,9 +770,6 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
     # asks for 10 questions every time and a 240s/question rate gives
     # ~40-min batches that crowd out other trials.
     try:
-        import sys
-
-        sys.path.insert(0, str(ORCH_ROOT / "scripts/benchmark"))
         from seeding_telemetry import (
             adaptive_batch_size as _adaptive_n,
             record_batch_duration as _record_batch,
