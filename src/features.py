@@ -109,7 +109,6 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("repl", True, True, "REPL", "REPL execution environment"),
     FeatureSpec("caching", False, True, "CACHING", "Response caching with prefix routing"),
     # Phase 2: Structured Delimiters
-    FeatureSpec("structured_delimiters", True, True, "STRUCTURED_DELIMITERS", "Wrap tool outputs with delimiters"),
     FeatureSpec("react_mode", False, True, "REACT_MODE", "ReAct-style tool loop"),
     FeatureSpec("output_formalizer", False, True, "OUTPUT_FORMALIZER", "Format constraint enforcement"),
     FeatureSpec("parallel_tools", True, True, "PARALLEL_TOOLS", "Parallel read-only tool dispatch"),
@@ -137,7 +136,6 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Unified streaming
     FeatureSpec("unified_streaming", False, True, "UNIFIED_STREAMING", "Route streaming through pipeline stages"),
     # Semantic classifiers
-    FeatureSpec("semantic_classifiers", True, True, "SEMANTIC_CLASSIFIERS", "Config-driven classifiers"),
     # Generation Monitoring
     FeatureSpec("generation_monitor", False, True, "GENERATION_MONITOR", "Early failure detection"),
     # OpenClaw/Lobster concepts
@@ -180,7 +178,6 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Output spill
     FeatureSpec("output_spill_to_file", False, True, "OUTPUT_SPILL_TO_FILE", "Spill truncated output to file"),
     # Pipeline monitoring
-    FeatureSpec("model_grading", False, False, "MODEL_GRADING", "Post-hoc model-graded evals"),
     # P-BENCH-3 A7: eval-batch serving-class switch. Metadata/shadow support may
     # land separately, but execution routing remains off until this flag is set.
     FeatureSpec("eval_batch_serving", False, False, "EVAL_BATCH_SERVING", "Route eval batches through an evidence-gated batch-serving class"),
@@ -297,7 +294,6 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("session_compaction_llm_index", False, False, "SESSION_COMPACTION_LLM_INDEX", "UFH14-B1: LLM-written compaction index (worker_general, input capped to its window); off = deterministic index, since TaskState.context is not rendered into turn prompts"),
     FeatureSpec("repl_answer_force", False, False, "REPL_ANSWER_FORCE", "UFH14-B1 F2: wall-time forced-answer turn (FINAL now at a fraction of the request budget; no compaction on that turn)"),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
-    FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
     FeatureSpec("deepconf", False, False, "DEEPCONF", "DeepConf offline confidence-filtered self-consistency"),
     # RD-5 Reviewer decision plane (shadow/enforce split; intake-849 P2). Both default-off
@@ -318,7 +314,6 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # decisions over the llm_call seam. Default-off in BOTH test and prod;
     # TD-1 ships the core only and is NOT wired into any live route — TD-5
     # performs the wiring under this flag.
-    FeatureSpec("typed_decisions", False, False, "TYPED_DECISIONS", "TD-1: one-pass typed decision plane (choice/score/noul)"),
     # TD-5: observability-only shadow of the incumbent routing decision. The
     # flag alone is not enough — a log path must also be configured via
     # ORCHESTRATOR_TYPED_DECISIONS_SHADOW_LOG, otherwise submit_shadow no-ops.
@@ -505,6 +500,19 @@ def write_runtime_flag_overrides(
     return path
 
 
+# Direct ``Features()`` construction is used by tests and offline tools. Keep
+# its posture anchored to the registry's explicit test default instead of a
+# second set of literals.
+_FEATURE_TEST_DEFAULTS = {spec.name: spec.default_test for spec in _FEATURE_REGISTRY}
+
+
+def _feature_test_default(name: str) -> bool:
+    try:
+        return _FEATURE_TEST_DEFAULTS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown feature: {name}") from exc
+
+
 @dataclass
 class Features:
     """Feature flags for optional orchestration modules.
@@ -560,215 +568,211 @@ class Features:
     """
 
     # Phase 4: MemRL (Memory-based Reinforcement Learning)
-    memrl: bool = False
+    memrl: bool = _feature_test_default("memrl")
 
     # Tool and Script Registries
-    tools: bool = True  # Enable TOOL() in REPL
-    scripts: bool = False  # Scripts require script_registry.yaml to exist
+    tools: bool = _feature_test_default("tools")  # Enable TOOL() in REPL
+    scripts: bool = _feature_test_default("scripts")  # Scripts require script_registry.yaml to exist
 
     # API Features
-    streaming: bool = False
-    openai_compat: bool = False
-    voice_turn: bool = False  # First-party voice-turn route; opt-in pending integrated acceptance.
+    streaming: bool = _feature_test_default("streaming")
+    openai_compat: bool = _feature_test_default("openai_compat")
+    voice_turn: bool = _feature_test_default("voice_turn")  # First-party voice-turn route; opt-in pending integrated acceptance.
 
-    tts_it_normalize: bool = True  # CS-8.L4: Italian-only TTS number/unit/acronym normalizer, live path.
-    tts_it_respell: bool = True  # CS-8.L4: Italian-only stress/proper-noun respelling, live path.
+    tts_it_normalize: bool = _feature_test_default("tts_it_normalize")  # CS-8.L4: Italian-only TTS number/unit/acronym normalizer, live path.
+    tts_it_respell: bool = _feature_test_default("tts_it_respell")  # CS-8.L4: Italian-only stress/proper-noun respelling, live path.
 
     # Core Features (usually enabled)
-    repl: bool = True
-    caching: bool = True
+    repl: bool = _feature_test_default("repl")
+    caching: bool = _feature_test_default("caching")
 
     # Phase 2: Structured Delimiters for tool output isolation
-    structured_delimiters: bool = True  # Wrap tool outputs with <<<TOOL_OUTPUT>>> delimiters
 
     # Phase 2: ReAct-style tool loop (direct mode with tool access)
-    react_mode: bool = False  # Enable ReAct tool loop for direct-mode prompts
+    react_mode: bool = _feature_test_default("react_mode")  # Enable ReAct tool loop for direct-mode prompts
 
     # Phase 2: Output formalizer (format constraint enforcement)
-    output_formalizer: bool = False  # Post-process answers to satisfy format constraints
+    output_formalizer: bool = _feature_test_default("output_formalizer")  # Post-process answers to satisfy format constraints
 
     # Parallel read-only tool dispatch (ThreadPoolExecutor for independent REPL tools)
-    parallel_tools: bool = True  # Dispatch independent read-only tools in parallel
+    parallel_tools: bool = _feature_test_default("parallel_tools")  # Dispatch independent read-only tools in parallel
 
     # Deferred tool result wrapping (keep mixin tool outputs out of prompt-by-default)
-    deferred_tool_results: bool = False
+    deferred_tool_results: bool = _feature_test_default("deferred_tool_results")
 
     # Escalation prompt compression (LLMLingua-2 BERT for large prompts)
-    escalation_compression: bool = False  # Compress prompts on architect escalation
+    escalation_compression: bool = _feature_test_default("escalation_compression")  # Compress prompts on architect escalation
 
     # Pre-routing optimization
-    script_interception: bool = False  # Resolve trivial queries locally without LLM call
+    script_interception: bool = _feature_test_default("script_interception")  # Resolve trivial queries locally without LLM call
 
     # Security Features
-    credential_redaction: bool = True  # Scan tool/REPL output for leaked credentials
-    cascading_tool_policy: bool = True  # Layered tool permission chain (Global→Role→Task)
-    restricted_python: bool = False  # Use RestrictedPython for REPL (requires library)
+    credential_redaction: bool = _feature_test_default("credential_redaction")  # Scan tool/REPL output for leaked credentials
+    cascading_tool_policy: bool = _feature_test_default("cascading_tool_policy")  # Layered tool permission chain (Global→Role→Task)
+    restricted_python: bool = _feature_test_default("restricted_python")  # Use RestrictedPython for REPL (requires library)
 
     # Phase 3: Specialist routing (MemRL-driven intelligent orchestration)
-    specialist_routing: bool = False  # Enable specialist routing (coder, architect) via Q-values
+    specialist_routing: bool = _feature_test_default("specialist_routing")  # Enable specialist routing (coder, architect) via Q-values
 
     # Phase 3+: GraphRouter (GNN-based parallel routing signal for cold-start optimization)
-    graph_router: bool = False  # Enable bipartite GAT routing predictor
+    graph_router: bool = _feature_test_default("graph_router")  # Enable bipartite GAT routing predictor
 
     # Ingest-triviality guard: keep trivially-easy short prompts off the 80B
     # accuracy/long-context specialist (opt-in; requires specialist_routing)
-    ingest_triviality_guard: bool = False  # Demote easy short prompts off ingest_long_context
+    ingest_triviality_guard: bool = _feature_test_default("ingest_triviality_guard")  # Demote easy short prompts off ingest_long_context
 
     # Phase 3: Architect plan review (pre-execution plan vetting)
-    plan_review: bool = False  # Enable architect review of frontdoor plans before execution
+    plan_review: bool = _feature_test_default("plan_review")  # Enable architect review of frontdoor plans before execution
 
     # Phase 5: Architect delegation (investigate via specialist tools)
-    architect_delegation: bool = False  # Architect delegates tool work to faster specialists
+    architect_delegation: bool = _feature_test_default("architect_delegation")  # Architect delegates tool work to faster specialists
 
     # Phase 7: Parallel step execution (wave-based dependency ordering)
-    parallel_execution: bool = False  # Enable wave-based step execution in ProactiveDelegator
+    parallel_execution: bool = _feature_test_default("parallel_execution")  # Enable wave-based step execution in ProactiveDelegator
 
     # Phase 8: Persona registry (dynamic prompt specialization)
-    personas: bool = False  # Enable persona-based system prompt overlays
+    personas: bool = _feature_test_default("personas")  # Enable persona-based system prompt overlays
 
     # Phase 9: Staged reward shaping (PARL-inspired explore→exploit annealing)
-    staged_rewards: bool = False  # Anneal exploration bonus in Q-value updates
+    staged_rewards: bool = _feature_test_default("staged_rewards")  # Anneal exploration bonus in Q-value updates
 
     # MemRL Distillation: offline-trained routing classifier (ColBERT-Zero inspired)
-    routing_classifier: bool = False  # Fast MLP routing before FAISS retrieval
+    routing_classifier: bool = _feature_test_default("routing_classifier")  # Fast MLP routing before FAISS retrieval
 
     # SkillBank: Experience distillation into structured skills (SkillRL §3.1)
-    skillbank: bool = False  # Enable SkillBank skill retrieval + prompt injection
+    skillbank: bool = _feature_test_default("skillbank")  # Enable SkillBank skill retrieval + prompt injection
 
     # Phase 4: Input formalizer (extract formal specs before specialist execution)
-    input_formalizer: bool = False  # Preprocess complex prompts via MathSmith-8B
+    input_formalizer: bool = _feature_test_default("input_formalizer")  # Preprocess complex prompts via MathSmith-8B
 
     # Unified streaming: route streaming endpoint through pipeline stages
-    unified_streaming: bool = False  # Use stream_adapter.py instead of inline generator
+    unified_streaming: bool = _feature_test_default("unified_streaming")  # Use stream_adapter.py instead of inline generator
 
     # Phase 10: Semantic classifiers (externalized keyword matching + MemRL routing)
-    semantic_classifiers: bool = True  # Use config-driven classifiers from classifier_config.yaml
 
     # Generation Monitoring (Phase 6)
-    generation_monitor: bool = True  # Enable early failure detection (post-hoc quality check)
+    generation_monitor: bool = _feature_test_default("generation_monitor")  # Enable early failure detection (post-hoc quality check)
 
     # OpenClaw/Lobster concept integration
-    side_effect_tracking: bool = False  # Declare tool side effects for safety reasoning
-    structured_tool_output: bool = False  # ToolOutput envelope (human + machine modes)
-    observed_dependency_logging: bool = False  # HIL-15: per-call read/write resource edges (default off)
-    step_event_logging: bool = False  # HIL-13a: per-step tool events for the L2 scan (default off)
-    replay_recording: bool = False  # HIL-16: content-addressed per-turn recording for replay (default off)
-    exec_containment: bool = False  # SEC-EXEC-3/5: Landlock+seccomp for model-exec children (default off)
-    web_fetch_guard: bool = False  # SEC-EXEC-3: private-range/link-local/metadata deny for web_fetch + fetch_docs (default off)
-    exec_write_flags: bool = False  # SEC-EXEC-7: write_outside_root flag in tool-call audit records (default off)
-    model_fallback: bool = False  # Try same-tier alternatives on circuit-open
-    content_cache: bool = False  # SHA-256 keyed response cache for LLM calls
-    session_compaction: bool = False  # Summarize old context on long conversations
-    session_log: bool = False  # Append-only processing journal across REPL turns
-    session_scratchpad: bool = False  # Model-extracted semantic insights from session log
-    depth_model_overrides: bool = False  # Map nested llm_call depth to cheaper roles
-    resume_tokens: bool = False  # Base64url continuation tokens for crash recovery
-    approval_gates: bool = False  # Human approval at escalation boundaries
-    binding_routing: bool = False  # Priority-ordered routing overrides
+    side_effect_tracking: bool = _feature_test_default("side_effect_tracking")  # Declare tool side effects for safety reasoning
+    structured_tool_output: bool = _feature_test_default("structured_tool_output")  # ToolOutput envelope (human + machine modes)
+    observed_dependency_logging: bool = _feature_test_default("observed_dependency_logging")  # HIL-15: per-call read/write resource edges (default off)
+    step_event_logging: bool = _feature_test_default("step_event_logging")  # HIL-13a: per-step tool events for the L2 scan (default off)
+    replay_recording: bool = _feature_test_default("replay_recording")  # HIL-16: content-addressed per-turn recording for replay (default off)
+    exec_containment: bool = _feature_test_default("exec_containment")  # SEC-EXEC-3/5: Landlock+seccomp for model-exec children (default off)
+    web_fetch_guard: bool = _feature_test_default("web_fetch_guard")  # SEC-EXEC-3: private-range/link-local/metadata deny for web_fetch + fetch_docs (default off)
+    exec_write_flags: bool = _feature_test_default("exec_write_flags")  # SEC-EXEC-7: write_outside_root flag in tool-call audit records (default off)
+    model_fallback: bool = _feature_test_default("model_fallback")  # Try same-tier alternatives on circuit-open
+    content_cache: bool = _feature_test_default("content_cache")  # SHA-256 keyed response cache for LLM calls
+    session_compaction: bool = _feature_test_default("session_compaction")  # Summarize old context on long conversations
+    session_log: bool = _feature_test_default("session_log")  # Append-only processing journal across REPL turns
+    session_scratchpad: bool = _feature_test_default("session_scratchpad")  # Model-extracted semantic insights from session log
+    depth_model_overrides: bool = _feature_test_default("depth_model_overrides")  # Map nested llm_call depth to cheaper roles
+    resume_tokens: bool = _feature_test_default("resume_tokens")  # Base64url continuation tokens for crash recovery
+    approval_gates: bool = _feature_test_default("approval_gates")  # Human approval at escalation boundaries
+    binding_routing: bool = _feature_test_default("binding_routing")  # Priority-ordered routing overrides
 
     # LangGraph pre-migration: full state snapshots + generalized interrupts
-    state_history_snapshots: bool = False  # Full TaskState snapshots each turn
-    generalized_interrupts: bool = False  # Pluggable interrupt conditions before REPL
+    state_history_snapshots: bool = _feature_test_default("state_history_snapshots")  # Full TaskState snapshots each turn
+    generalized_interrupts: bool = _feature_test_default("generalized_interrupts")  # Pluggable interrupt conditions before REPL
 
     # LangGraph migration Phase 1: hybrid bridge (run_task dispatches to LG backend)
-    langgraph_bridge: bool = False  # Route orchestration through LangGraph instead of pydantic_graph
+    langgraph_bridge: bool = _feature_test_default("langgraph_bridge")  # Route orchestration through LangGraph instead of pydantic_graph
 
     # LangGraph migration Phase 3: per-node migration flags
-    langgraph_ingest: bool = False             # Migrate IngestNode to LangGraph backend
-    langgraph_architect: bool = False          # Migrate ArchitectNode to LangGraph backend
-    langgraph_worker: bool = False             # Migrate WorkerNode to LangGraph backend
-    langgraph_frontdoor: bool = False          # Migrate FrontdoorNode to LangGraph backend
-    langgraph_coder: bool = False              # Migrate CoderNode to LangGraph backend
-    langgraph_coder_escalation: bool = False   # Migrate CoderEscalationNode to LangGraph backend
+    langgraph_ingest: bool = _feature_test_default("langgraph_ingest")             # Migrate IngestNode to LangGraph backend
+    langgraph_architect: bool = _feature_test_default("langgraph_architect")          # Migrate ArchitectNode to LangGraph backend
+    langgraph_worker: bool = _feature_test_default("langgraph_worker")             # Migrate WorkerNode to LangGraph backend
+    langgraph_frontdoor: bool = _feature_test_default("langgraph_frontdoor")          # Migrate FrontdoorNode to LangGraph backend
+    langgraph_coder: bool = _feature_test_default("langgraph_coder")              # Migrate CoderNode to LangGraph backend
+    langgraph_coder_escalation: bool = _feature_test_default("langgraph_coder_escalation")   # Migrate CoderEscalationNode to LangGraph backend
 
     # Budget controls (Fast-RLM)
-    worker_call_budget: bool = False  # Cap total REPL executions per task
-    task_token_budget: bool = False   # Cap cumulative tokens across all turns
-    final_schema_validation: bool = False  # Validate FINAL() value against caller JSON Schema
+    worker_call_budget: bool = _feature_test_default("worker_call_budget")  # Cap total REPL executions per task
+    task_token_budget: bool = _feature_test_default("task_token_budget")   # Cap cumulative tokens across all turns
+    final_schema_validation: bool = _feature_test_default("final_schema_validation")  # Validate FINAL() value against caller JSON Schema
 
     # Pipeline monitoring: model-graded subjective evals
-    model_grading: bool = False  # Post-hoc model-graded evals via the live worker-general path
 
     # P-BENCH-3 A7: opt-in eval-batch serving-class switch.
-    eval_batch_serving: bool = False
+    eval_batch_serving: bool = _feature_test_default("eval_batch_serving")
 
     # HSD: Hierarchical Self-Speculation
-    self_speculation: bool = False  # Self-speculation with layer-exit draft
-    hierarchical_speculation: bool = False  # Hierarchical intermediate verification
+    self_speculation: bool = _feature_test_default("self_speculation")  # Self-speculation with layer-exit draft
+    hierarchical_speculation: bool = _feature_test_default("hierarchical_speculation")  # Hierarchical intermediate verification
 
     # Two-level condensation (Context-Folding Phase 1)
-    two_level_condensation: bool = False  # Granular + deep consolidation instead of per-2-turn re-summarization
+    two_level_condensation: bool = _feature_test_default("two_level_condensation")  # Granular + deep consolidation instead of per-2-turn re-summarization
 
     # Context-Folding Phase 1+: segment hash dedup cache
-    segment_cache_dedup: bool = False  # Hash-based dedup to skip LLM consolidation on repeated blocks
+    segment_cache_dedup: bool = _feature_test_default("segment_cache_dedup")  # Hash-based dedup to skip LLM consolidation on repeated blocks
 
     # Context-Folding Phase 2c: heuristic helpfulness scoring
-    helpfulness_scoring: bool = False  # Score segments by recency/overlap/outcome for compaction priority
+    helpfulness_scoring: bool = _feature_test_default("helpfulness_scoring")  # Score segments by recency/overlap/outcome for compaction priority
 
     # Context-Folding Phase 3a: process reward telemetry
-    process_reward_telemetry: bool = False  # Log token_budget_ratio, on_scope, tool_success per turn
+    process_reward_telemetry: bool = _feature_test_default("process_reward_telemetry")  # Log token_budget_ratio, on_scope, tool_success per turn
 
     # Context-Folding Phase 3b: role-aware compaction profiles
-    role_aware_compaction: bool = False  # Per-role compaction aggressiveness (architect conservative, worker aggressive)
+    role_aware_compaction: bool = _feature_test_default("role_aware_compaction")  # Per-role compaction aggressiveness (architect conservative, worker aggressive)
 
     # Context window management (C2/C3/C1)
-    accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
-    tool_result_clearing: bool = False  # Clear stale <<<TOOL_OUTPUT>>> blocks from last_output
+    accurate_token_counting: bool = _feature_test_default("accurate_token_counting")  # Use llama-server /tokenize for exact token counts
+    tool_result_clearing: bool = _feature_test_default("tool_result_clearing")  # Clear stale <<<TOOL_OUTPUT>>> blocks from last_output
 
     # Reasoning length alarm (short-m@k Action 9): retry with conciseness nudge
-    reasoning_length_alarm: bool = False  # Cancel + retry when <think> exceeds 1.5× band budget
+    reasoning_length_alarm: bool = _feature_test_default("reasoning_length_alarm")  # Cancel + retry when <think> exceeds 1.5× band budget
 
     # Tool output compression (Phase 2 native): compress verbose output before prompt injection
-    tool_output_compression: bool = False  # Compress pytest/git/build output to preserve actionable info only
+    tool_output_compression: bool = _feature_test_default("tool_output_compression")  # Compress pytest/git/build output to preserve actionable info only
 
     # CMV-style output spill (Action 11): write truncated output/error to temp file with peek() pointer
-    output_spill_to_file: bool = False  # Spill long REPL output/error to file + retrieval pointer
-    trajectory_artifact: bool = False  # TOC-SP-6: per-task trajectory-artifact JSONL writer (needs ORCHESTRATOR_TRAJECTORY_ARTIFACT_DIR)
+    output_spill_to_file: bool = _feature_test_default("output_spill_to_file")  # Spill long REPL output/error to file + retrieval pointer
+    trajectory_artifact: bool = _feature_test_default("trajectory_artifact")  # TOC-SP-6: per-task trajectory-artifact JSONL writer (needs ORCHESTRATOR_TRAJECTORY_ARTIFACT_DIR)
 
     # Conversation Management (B-series cherry-picks from Hermes/OpenGauss)
-    injection_scanning: bool = False  # B7: Prompt injection scanning on loaded context
-    skill_injection_scan: bool = False  # CT-19b: warn-only scan at skill store / PromptForge failure_context
-    context_compression: bool = False  # B2: Protected-zone context compression
-    user_modeling: bool = False  # B1: Cross-session user preference modeling
-    session_token_budget: bool = False  # B5: Per-session token budget with compact/stop signals
+    injection_scanning: bool = _feature_test_default("injection_scanning")  # B7: Prompt injection scanning on loaded context
+    skill_injection_scan: bool = _feature_test_default("skill_injection_scan")  # CT-19b: warn-only scan at skill store / PromptForge failure_context
+    context_compression: bool = _feature_test_default("context_compression")  # B2: Protected-zone context compression
+    user_modeling: bool = _feature_test_default("user_modeling")  # B1: Cross-session user preference modeling
+    session_token_budget: bool = _feature_test_default("session_token_budget")  # B5: Per-session token budget with compact/stop signals
 
     # Claude Code Local Integration (CC Local)
-    claude_code_mcp_chat: bool = False  # MCP tools for delegating chat to running orchestrator
-    v1_client_session_guard: bool = False  # HS-4: 422 on OpenCode/client-mode /v1 requests without x_session_id
-    v1_subagent_link: bool = False  # HS-19a stage 1: record /v1 subagent parent links (tap + session log); default off
-    v1_escalation: bool = False  # TE-1: opt-in /v1 frontdoor escalation via /chat's post-answer hooks (explicit x_escalation); default off
-    thinking_roles_chat_lane: bool = False  # RI-23: thinking-on roles on /v1/chat/completions (kwargs + reasoning_content); default off
-    repl_think_fence_continue: bool = False  # UFH14-LB11.1: continue a turn cut inside an unclosed <think> by the fence stop; default off
-    spec_off_bitwise_roles: bool = False  # Q38-T10: bitwise-required roles send per-request speculative.n_max=0; prod default ON (registry), Q38-T10.1 control arm passed 2026-10-20
+    claude_code_mcp_chat: bool = _feature_test_default("claude_code_mcp_chat")  # MCP tools for delegating chat to running orchestrator
+    v1_client_session_guard: bool = _feature_test_default("v1_client_session_guard")  # HS-4: 422 on OpenCode/client-mode /v1 requests without x_session_id
+    v1_subagent_link: bool = _feature_test_default("v1_subagent_link")  # HS-19a stage 1: record /v1 subagent parent links (tap + session log); default off
+    v1_escalation: bool = _feature_test_default("v1_escalation")  # TE-1: opt-in /v1 frontdoor escalation via /chat's post-answer hooks (explicit x_escalation); default off
+    thinking_roles_chat_lane: bool = _feature_test_default("thinking_roles_chat_lane")  # RI-23: thinking-on roles on /v1/chat/completions (kwargs + reasoning_content); default off
+    repl_think_fence_continue: bool = _feature_test_default("repl_think_fence_continue")  # UFH14-LB11.1: continue a turn cut inside an unclosed <think> by the fence stop; default off
+    spec_off_bitwise_roles: bool = _feature_test_default("spec_off_bitwise_roles")  # Q38-T10: bitwise-required roles send per-request speculative.n_max=0; prod default ON (registry), Q38-T10.1 control arm passed 2026-10-20
 
     # Web research reranking (ColBERT snippet pre-fetch filtering)
-    web_research_rerank: bool = False  # Rerank DDG snippets via ColBERT before page fetch
+    web_research_rerank: bool = _feature_test_default("web_research_rerank")  # Rerank DDG snippets via ColBERT before page fetch
 
     # Routing telemetry: capture first-token logprobs for learned routing P1.5
-    logit_probe: bool = False  # Log top-64 first-token logprobs from frontdoor to JSONL
+    logit_probe: bool = _feature_test_default("logit_probe")  # Log top-64 first-token logprobs from frontdoor to JSONL
 
     # NIB2-45 MindDR: feature-flag-gated three-agent research pipeline (Planning → DeepSearch → Report).
     # When on, research-like queries (per classifier.is_research_like) route through the MindDR subgraph
     # instead of the direct flow. Phase 1 is prompt-level only; Phase 2 training is GPU-gated.
-    deep_research_mode: bool = False
+    deep_research_mode: bool = _feature_test_default("deep_research_mode")
 
     # intake-607 harness cluster (default-off; shadow/observe only)
-    ure_uncertainty_shadow_log: bool = False  # URE-1 (J10): shadow-log routing uncertainty; no behavior change
-    batch_edit_mode: bool = False  # BEP-1 (J8): coder emits one structured patch set after reasoning
-    interleaved_edit_rider: bool = False  # BEP-2 baseline: per-turn interleaved-edit rider (experiment-only)
-    dcp_pre_assembly: bool = False  # DCP-4 (J7): advisory delegation context pre-assembly (seed bundle)
-    dcp_for_consult: bool = False  # P2 consult may reuse DCP seed context; requires dcp_pre_assembly
-    review_before_commit_consult: bool = False  # P2 edit-transaction consult seam; default-off
-    review_before_commit_targeted_gate: bool = False  # J17 targeted high-risk edit-shape consult gate
+    ure_uncertainty_shadow_log: bool = _feature_test_default("ure_uncertainty_shadow_log")  # URE-1 (J10): shadow-log routing uncertainty; no behavior change
+    batch_edit_mode: bool = _feature_test_default("batch_edit_mode")  # BEP-1 (J8): coder emits one structured patch set after reasoning
+    interleaved_edit_rider: bool = _feature_test_default("interleaved_edit_rider")  # BEP-2 baseline: per-turn interleaved-edit rider (experiment-only)
+    dcp_pre_assembly: bool = _feature_test_default("dcp_pre_assembly")  # DCP-4 (J7): advisory delegation context pre-assembly (seed bundle)
+    dcp_for_consult: bool = _feature_test_default("dcp_for_consult")  # P2 consult may reuse DCP seed context; requires dcp_pre_assembly
+    review_before_commit_consult: bool = _feature_test_default("review_before_commit_consult")  # P2 edit-transaction consult seam; default-off
+    review_before_commit_targeted_gate: bool = _feature_test_default("review_before_commit_targeted_gate")  # J17 targeted high-risk edit-shape consult gate
 
     # intake-614/615 DAR-6 (default-off; scaffolding only — no production routing until DAR-6.5 A/B clears)
-    swarm_fanout: bool = False  # DAR-6.1: fan high-injection-risk prompts to N≥2 concurrent serves + BT-aggregate (J14)
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603).
     # When on, the caller filters low-confidence reasoning traces (bottom-10% group confidence
     # from per-token top-k logprobs) and takes a confidence-weighted majority vote. Default OFF;
     # build + scoring logic in src/test_time/deepconf.py. Wiring onto N parallel llama-server
     # completions (payload n_probs=K) is P21.A3, gated on the A2 live-server sanity check.
-    deepconf: bool = False
+    deepconf: bool = _feature_test_default("deepconf")
 
     # RD-5 Reviewer decision plane (shadow/enforce split).
     # review_decision_shadow: emit + trace review decisions (verifier precedence,
@@ -777,54 +781,53 @@ class Features:
     #   data flows without flipping plan_review (which requires memrl).
     # review_decision_enforce: act on review decisions. Default OFF and BLOCKED on
     #   the H-LB LB-6 latency/sampling budget gate — do not enable until it passes.
-    review_decision_shadow: bool = False
-    review_decision_enforce: bool = False
+    review_decision_shadow: bool = _feature_test_default("review_decision_shadow")
+    review_decision_enforce: bool = _feature_test_default("review_decision_enforce")
 
     # GPU shadow lane (gpu-serving-tie-in-program P0-7): default OFF everywhere.
     # Gates the np_ceiling policy loader + preflight scaffolding only; no
     # production routing or launch path reads this flag (D3 shadow-only).
-    gpu_shadow_lane: bool = False
+    gpu_shadow_lane: bool = _feature_test_default("gpu_shadow_lane")
 
     # Typed decision plane (TD-1, intake-1473): default OFF everywhere. TD-1
     # ships the core (types/confidence/schema/runner) only; no route reads
     # this flag yet — TD-5 wires the plane in under it.
-    typed_decisions: bool = False
 
     # TD-5: observability-only shadow of the incumbent routing decision.
     # Default OFF; also requires ORCHESTRATOR_TYPED_DECISIONS_SHADOW_LOG to be
     # set — with no configured sink the shadow no-ops even when on.
-    typed_decisions_shadow: bool = False
+    typed_decisions_shadow: bool = _feature_test_default("typed_decisions_shadow")
 
     # TD-4: closed-set typed selection of tool-call arguments at the REPL tool
     # dispatch chokepoint. Default OFF in both test and prod; fail-open — any
     # decline keeps the model-provided arguments.
-    typed_decisions_tool_args: bool = False
+    typed_decisions_tool_args: bool = _feature_test_default("typed_decisions_tool_args")
 
     # UFH-12 REPL-EMB-1.1/1.4: pooled embedding client (src/embedding_pool/).
     # Default OFF in both test and prod; get_pooled_embedder()/get_sync_embedder()
     # return None while off, so no live path changes until a consumer migrates.
-    repl_embedding_pool: bool = False
+    repl_embedding_pool: bool = _feature_test_default("repl_embedding_pool")
 
     # RTE-Prefix (repl-turn-efficiency): render fixed prompt sections (task,
     # instruction) BEFORE per-turn-mutating ones (state, context,
     # reference_code) in RootLMPrompt.to_string(), so successive REPL turns
     # share a longer llama-server KV-cache prefix. Default OFF — prompt
     # behavioral change, pending A/B validation.
-    prefix_stable_order: bool = False
+    prefix_stable_order: bool = _feature_test_default("prefix_stable_order")
     # RTE-PFX-3: root-LM Turn N counter at the prompt tail (default off).
-    repl_turn_counter_tail: bool = False
+    repl_turn_counter_tail: bool = _feature_test_default("repl_turn_counter_tail")
     # CT-21: architect-only untrusted-boundary sentence (default off; trial).
-    architect_untrusted_boundary_sentence: bool = False
+    architect_untrusted_boundary_sentence: bool = _feature_test_default("architect_untrusted_boundary_sentence")
 
     # UFH14-B1 F1: derived silent-prefill allowance on long-prompt call timeouts.
-    derived_prefill_timeout: bool = False
+    derived_prefill_timeout: bool = _feature_test_default("derived_prefill_timeout")
     # UFH14-B1: LLM-written session-compaction index (off = deterministic).
-    session_compaction_llm_index: bool = False
+    session_compaction_llm_index: bool = _feature_test_default("session_compaction_llm_index")
     # UFH14-B1 F2: wall-time forced-answer turn in the REPL graph.
-    repl_answer_force: bool = False
+    repl_answer_force: bool = _feature_test_default("repl_answer_force")
 
     # Debug/Development
-    mock_mode: bool = True  # Default to mock mode for safety
+    mock_mode: bool = _feature_test_default("mock_mode")  # Default to mock mode for safety
 
     def validate(self) -> list[str]:
         """Validate feature dependencies.
@@ -834,39 +837,13 @@ class Features:
         """
         errors = []
 
-        # Scripts require tools
-        if self.scripts and not self.tools:
-            errors.append("scripts feature requires tools feature")
-
-        # MemRL-dependent features
-        if self.specialist_routing and not self.memrl:
-            errors.append("specialist_routing feature requires memrl feature")
-        if self.graph_router and not self.specialist_routing:
-            errors.append("graph_router feature requires specialist_routing feature")
-        if self.plan_review and not self.memrl:
-            errors.append("plan_review feature requires memrl feature")
-        if self.architect_delegation and not self.memrl:
-            errors.append("architect_delegation feature requires memrl feature")
-        if self.parallel_execution and not self.architect_delegation:
-            errors.append("parallel_execution feature requires architect_delegation feature")
-        if self.personas and not self.memrl:
-            errors.append("personas feature requires memrl feature")
-        if self.staged_rewards and not self.memrl:
-            errors.append("staged_rewards feature requires memrl feature")
-        if self.skillbank and not self.memrl:
-            errors.append("skillbank feature requires memrl feature")
-
-        # Approval gates require resume tokens and side effect tracking
-        if self.approval_gates and not self.resume_tokens:
-            errors.append("approval_gates feature requires resume_tokens feature")
-        if self.approval_gates and not self.side_effect_tracking:
-            errors.append("approval_gates feature requires side_effect_tracking feature")
-
-        # Generalized interrupts depend on approval gates and resume tokens
-        if self.generalized_interrupts and not self.approval_gates:
-            errors.append("generalized_interrupts requires approval_gates")
-        if self.generalized_interrupts and not self.resume_tokens:
-            errors.append("generalized_interrupts requires resume_tokens")
+        for spec in _FEATURE_REGISTRY:
+            if getattr(self, spec.name):
+                for dependency in spec.dependencies:
+                    if not getattr(self, dependency):
+                        errors.append(
+                            f"{spec.name} feature requires {dependency} feature"
+                        )
 
         # User modeling requires injection scanning for write safety
         if self.user_modeling and not self.injection_scanning:

@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
 from src.mcp_server import (
+    _is_mcp_chat_enabled,
     _format_chat_response,
     _post_chat,
     orchestrator_chat,
@@ -26,6 +27,18 @@ _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def test_mcp_chat_gate_uses_feature_registry_env_name(monkeypatch):
+    from src.features import reset_features
+
+    monkeypatch.delenv("ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT", raising=False)
+    monkeypatch.setenv("ORCHESTRATOR_FEATURE_CLAUDE_CODE_MCP_CHAT", "1")
+    reset_features()
+    try:
+        assert _is_mcp_chat_enabled() is True
+    finally:
+        reset_features()
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +120,14 @@ class TestPostChat:
 
 
 class TestOrchestratorChat:
-    @patch.dict(os.environ, {"ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT": "0"}, clear=False)
+    @patch.dict(
+        os.environ,
+        {
+            "ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT": "0",
+            "ORCHESTRATOR_FEATURE_CLAUDE_CODE_MCP_CHAT": "0",
+        },
+        clear=False,
+    )
     def test_feature_disabled(self):
         result = _run(orchestrator_chat("Hello"))
         assert "disabled" in result.lower()

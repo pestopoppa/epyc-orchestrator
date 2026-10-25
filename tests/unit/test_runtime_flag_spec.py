@@ -13,6 +13,7 @@ cases below supply their own temp file.
 
 from __future__ import annotations
 
+import ast
 import json
 
 import pytest
@@ -100,6 +101,82 @@ def test_every_flag_read_off_a_features_object_is_registered():
     assert not unregistered, (
         f"attributes read off a Features object with no FeatureSpec: {sorted(unregistered)}"
     )
+
+
+def _runtime_flag_consumer_names():
+    """Audit literal runtime consumer forms, including aliases and injected objects.
+
+    The production scanner checks typed factory bindings for *unregistered*
+    reads. This audit checks the other direction and includes attribute reads,
+    literal getattr, and literal flag_enabled calls. Registry declarations and
+    offline feature self-checks cannot count as consumers.
+    """
+    found = set()
+    for root in rfs.CODE_ROOTS:
+        for path in root.rglob("*.py"):
+            if path == rfs.REPO_ROOT / "src/features.py" or path.name.startswith("feature_validation"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute):
+                    found.add(node.attr)
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    index = 1 if node.func.id == "getattr" else 0
+                    if node.func.id in {"getattr", "_flag", "flag_enabled"} and len(node.args) > index:
+                        arg = node.args[index]
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            found.add(arg.value)
+    return found
+
+
+def test_unreferenced_registry_flags_are_explicitly_allowlisted():
+    # Existing dynamic consumers and legacy flags outside this retirement's
+    # scope are explicit debt, never proof of a live runtime read.
+    intentional_dynamic_or_legacy = {
+        "gpu_shadow_lane",  # getattr(feats, LANE_FEATURE), scripts/server/gpu_shadow_lane.py
+        "repl_embedding_pool",  # embedding pool configuration, external runtime setup
+        "review_decision_shadow",  # external inference-batch manifest
+        "review_decision_enforce",  # external inference-batch manifest, default off
+        "deep_research_mode",  # legacy: MindDR pipeline documentation only
+        "deepconf",  # legacy: offline runner has no Features gate
+        "react_mode",  # legacy: current routing chooses mode directly
+        "hierarchical_speculation",  # legacy: launcher acceleration enum
+        "self_speculation",  # legacy: launcher acceleration enum
+        "staged_rewards",  # legacy: autopilot tunable registry only
+    }
+    unreferenced = set(registry_flag_names()) - _runtime_flag_consumer_names()
+    assert unreferenced <= intentional_dynamic_or_legacy, (
+        "new feature flag lacks a statically visible consumer or explicit dynamic-use "
+        f"allowlist entry: {sorted(unreferenced - intentional_dynamic_or_legacy)}"
+    )
+
+
+def test_runtime_consumer_audit_detects_unconsumed_flag(tmp_path, monkeypatch):
+    (tmp_path / "consumer.py").write_text(
+        'from src.features import features as alias_factory\n'
+        'alias = alias_factory()\nalias.repl\n'
+        'getattr(injected, "tts_it_normalize", False)\nflag_enabled("web_fetch_guard")\n'
+    )
+    monkeypatch.setattr(rfs, "CODE_ROOTS", (tmp_path,))
+    found = _runtime_flag_consumer_names()
+    assert {"repl", "tts_it_normalize", "web_fetch_guard"} <= found
+    assert "brand_new_unspecced_flag" not in found
+    monkeypatch.setitem(
+        globals(),
+        "registry_flag_names",
+        lambda: ["repl", "tts_it_normalize", "web_fetch_guard", "brand_new_unspecced_flag"],
+    )
+    with pytest.raises(AssertionError, match="brand_new_unspecced_flag"):
+        test_unreferenced_registry_flags_are_explicitly_allowlisted()
+
+
+def test_retired_flags_are_absent_from_registry_and_spec():
+    retired = {
+        "semantic_classifiers", "structured_delimiters", "model_grading",
+        "swarm_fanout", "typed_decisions",
+    }
+    assert retired.isdisjoint(registry_flag_names())
+    assert retired.isdisjoint(load_spec().flags)
 
 
 def test_reference_scan_finds_real_flags():

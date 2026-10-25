@@ -10,6 +10,7 @@ import pytest
 
 from src.features import (
     Features,
+    _FEATURE_REGISTRY,
     _feature_flag_bool,
     features,
     get_features,
@@ -64,19 +65,29 @@ class TestFeaturesDefaults:
         assert f.review_before_commit_targeted_gate is False
 
         # Explicitly True by default
-        assert f.tools is True
+        assert f.tools is False
         assert f.repl is True
-        assert f.caching is True
-        assert f.structured_delimiters is True
-        assert f.semantic_classifiers is True
-        assert f.generation_monitor is True
+        assert f.caching is False
+        assert f.generation_monitor is False
         assert f.mock_mode is True
+        assert f.cascading_tool_policy is False
+        assert f.v1_client_session_guard is True
 
 
 # ---------------------------------------------------------------------------
 # 2-6. Features.validate() dependency checks
 # ---------------------------------------------------------------------------
+def test_direct_constructor_defaults_match_registry_test_posture():
+    defaults = {spec.name: spec.default_test for spec in _FEATURE_REGISTRY}
+    for name, expected in defaults.items():
+        assert getattr(Features(), name) is expected, name
+
+
 class TestFeaturesValidate:
+    def test_direct_constructor_defaults_match_registry(self):
+        defaults = {spec.name: spec.default_test for spec in _FEATURE_REGISTRY}
+        assert Features().summary() == defaults
+
     def test_scripts_without_tools_error(self):
         """scripts=True without tools=True is a dependency violation."""
         f = Features(scripts=True, tools=False)
@@ -209,11 +220,17 @@ class TestFeaturesSummary:
 # 8. Features.enabled_features()
 # ---------------------------------------------------------------------------
 class TestEnabledFeatures:
+    def test_retired_flags_are_not_in_feature_surface(self):
+        retired = {
+            "semantic_classifiers", "structured_delimiters", "model_grading",
+            "swarm_fanout", "typed_decisions",
+        }
+        assert retired.isdisjoint(Features().summary())
+
     def test_enabled_features_returns_only_true(self):
         """enabled_features() should list exactly the flags that are True."""
         f = Features(memrl=True, tools=True, scripts=False, streaming=False,
-                     repl=False, caching=False, structured_delimiters=False,
-                     semantic_classifiers=False, generation_monitor=False,
+                     repl=False, caching=False, generation_monitor=False,
                      mock_mode=False)
         enabled = f.enabled_features()
         assert "memrl" in enabled
@@ -449,3 +466,8 @@ class TestRegistryConsistency:
 
         names = [spec.name for spec in _FEATURE_REGISTRY]
         assert len(names) == len(set(names)), f"Duplicate names: {[n for n in names if names.count(n) > 1]}"
+def test_registry_dependencies_are_all_enforced():
+    for spec in _FEATURE_REGISTRY:
+        for dependency in spec.dependencies:
+            errors = Features(**{spec.name: True, dependency: False}).validate()
+            assert f"{spec.name} feature requires {dependency} feature" in errors

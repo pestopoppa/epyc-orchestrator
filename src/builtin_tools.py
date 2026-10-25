@@ -48,6 +48,15 @@ def _tool_registered(registry: ToolRegistry, name: str) -> bool:
     return name in getattr(registry, "_tools", {})
 
 
+def _register_builtin_handler(registry: ToolRegistry, **options):
+    """Register a compatibility handler only when YAML did not provide one."""
+    if _tool_registered(registry, options["name"]):
+        # Preserve the handler loaded from tool_registry.yaml and, with it, its
+        # permission and input-safety checks.
+        return lambda handler: handler
+    return registry.register_handler(**options)
+
+
 def _register_eval_tools(registry: ToolRegistry) -> None:
     """Register the eval-only get_eval_secret tool (gated by AUTOPILOT_TOOL_SENTINELS).
 
@@ -84,7 +93,8 @@ def _register_eval_tools(registry: ToolRegistry) -> None:
 def _register_code_tools(registry: ToolRegistry) -> None:
     """Register code-related tools."""
 
-    @registry.register_handler(
+    @_register_builtin_handler(
+        registry,
         name="lint_python",
         description="Run Python linting on code or file",
         category=ToolCategory.CODE,
@@ -277,7 +287,8 @@ def _register_data_tools(registry: ToolRegistry) -> None:
 def _register_file_tools(registry: ToolRegistry) -> None:
     """Register file-related tools."""
 
-    @registry.register_handler(
+    @_register_builtin_handler(
+        registry,
         name="read_file",
         description="Read contents of a file",
         category=ToolCategory.FILE,

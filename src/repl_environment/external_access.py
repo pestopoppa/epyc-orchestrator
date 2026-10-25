@@ -68,86 +68,31 @@ class _ExternalAccessMixin:
         started = _t.time()
         aud: dict = {}
         result = ""
+        self._exploration_calls += 1
         try:
-            result = _ExternalAccessMixin._web_fetch_inner(self, url, max_chars, aud)
+            if self.tool_registry is None:
+                result = "[ERROR: No tool registry configured — cannot invoke web_fetch]"
+                aud["outcome"] = "error"
+            else:
+                try:
+                    result = self._invoke_tool("web_fetch", url=url, max_chars=max_chars)
+                except Exception as exc:
+                    result = f"[ERROR: web_fetch failed: {exc}]"
+                    if "WEB_FETCH DENIED" in str(exc):
+                        aud["outcome"] = "refused"
+                        aud["refusal"] = str(exc)
+                    elif isinstance(exc, PermissionError):
+                        aud["outcome"] = "refused"
+                        aud["refusal"] = str(exc)
+                    else:
+                        aud["outcome"] = "error"
+                if hasattr(result, "to_human"):
+                    result = result.to_human()
+                result = str(result)
+            self._exploration_log.add_event("web_fetch", {"url": url}, result)
             return result
         finally:
             _ExternalAccessMixin._audit(self, "web_fetch", url, None, started, aud, result)
-
-    def _web_fetch_inner(self, url: str, max_chars: int, aud: dict) -> str:
-        """Fetch content from a URL.
-
-        Args:
-            url: URL to fetch (must be http or https).
-            max_chars: Maximum characters to return (default 10000).
-
-        Returns:
-            Plain text content from the URL, truncated to max_chars.
-        """
-        self._exploration_calls += 1
-        import requests
-
-        # Validate URL
-        if not url.startswith(("http://", "https://")):
-            return "[ERROR: Only http/https URLs are allowed]"
-
-        try:
-            _headers = {"User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)"}
-            from src.repl_environment.exec_containment import flag_enabled
-
-            if flag_enabled("web_fetch_guard"):
-                # SEC-EXEC-3: private/loopback/link-local/metadata deny, re-checked per redirect
-                # hop and at connect time. Refusals are logged and audited with their reason.
-                from src.repl_environment import web_guard
-
-                try:
-                    resp = web_guard.fetch(url, _headers, 30)
-                except web_guard.WebGuardRefusal as refusal:
-                    web_guard.log_refusal("web_fetch", url, str(refusal))
-                    aud["outcome"] = "refused"
-                    aud["refusal"] = str(refusal)
-                    return f"[ERROR: WEB_FETCH DENIED: {refusal}]"
-            else:
-                resp = requests.get(url, timeout=30, headers=_headers)
-            resp.raise_for_status()
-
-            content_type = resp.headers.get("Content-Type", "")
-
-            # Handle HTML - extract text
-            if "text/html" in content_type:
-                try:
-                    from bs4 import BeautifulSoup
-
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    # Remove script and style elements
-                    for elem in soup(["script", "style", "nav", "footer"]):
-                        elem.decompose()
-                    text = soup.get_text(separator="\n", strip=True)
-                except ImportError:
-                    # Fallback: basic tag stripping
-                    import re
-
-                    text = re.sub(r"<[^>]+>", "", resp.text)
-            else:
-                text = resp.text
-
-            result = text[:max_chars]
-            if len(text) > max_chars:
-                result += f"\n[... truncated at {max_chars} chars, total: {len(text)}]"
-
-            self._exploration_log.add_event("web_fetch", {"url": url}, result)
-            return result
-
-        except requests.exceptions.Timeout:
-            aud["outcome"] = "timeout"
-            return "[ERROR: Request timed out after 30s]"
-        except requests.exceptions.RequestException as e:
-            aud["outcome"] = "error"
-            return f"[ERROR: Request failed: {e}]"
-        except Exception as e:
-            logger.debug("web_fetch failed", exc_info=True)
-            aud["outcome"] = "error"
-            return f"[ERROR: {type(e).__name__}: {e}]"
 
     def _run_shell(self, cmd: str, timeout: int = _SHELL_TIMEOUT) -> str:
         import time as _t

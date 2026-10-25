@@ -157,6 +157,20 @@ class TestBatchWebSearchEnabled:
         assert '--- "test query" ---' in result
 
 
+def test_web_search_uses_task_policy_and_request_telemetry():
+    repl, registry = _make_repl_with_registry()
+    repl.tool_context = {"no_web": True}
+    registry.invoke.side_effect = PermissionError("web tools disabled by task policy")
+
+    result = repl._web_search("query")
+
+    assert "web_search failed" in result
+    assert registry.invoke.call_args.kwargs["context"] == {"no_web": True}
+    assert len(repl._invoked_tools) == 1
+    assert repl._invoked_tools[0].tool_name == "web_search"
+    assert repl._invoked_tools[0].success is False
+
+
 class TestSearchAndVerify:
     """Tests for search_and_verify."""
 

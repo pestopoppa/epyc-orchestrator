@@ -29,10 +29,11 @@ from src.tools.eval_secret import (  # noqa: E402
     SECRETS_PATH,
     _SECRETS,
 )
+from orchestration.tools.system import ALLOWED_PATHS as _READ_FILE_ALLOWED_PATHS  # noqa: E402
 
-# read_file's allowed roots (src/tools/file/read.py). The runtime secret file
-# must be OUTSIDE these so the model-under-test can't read it.
-READ_FILE_ROOTS = ("/mnt/raid0/llm/", "/tmp/")
+# The production YAML registry serves orchestration.tools.system.read_file.
+# Keep this isolation assertion anchored to that implementation's policy.
+READ_FILE_ROOTS = tuple(_READ_FILE_ALLOWED_PATHS)
 _NAME_RE = re.compile(r'name=\\?"([a-zA-Z0-9_]+)\\?"')
 
 

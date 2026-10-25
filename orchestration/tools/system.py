@@ -5,10 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-import subprocess
-import time
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +15,19 @@ ALLOWED_PATHS = ["/mnt/raid0/llm/", "/tmp/"]
 
 def _is_path_allowed(path: str) -> bool:
     """Check if path is in allowed directories."""
-    abs_path = os.path.abspath(path)
-    return any(abs_path.startswith(allowed) for allowed in ALLOWED_PATHS)
+    from src.repl_environment._fence_rules import is_under
+
+    real_path = os.path.realpath(path)
+    return any(
+        is_under(real_path, os.path.realpath(allowed))
+        for allowed in ALLOWED_PATHS
+    )
 
 
 def read_file(path: str, encoding: str = "utf-8", max_bytes: int = 1000000) -> dict:
     """Read file contents safely."""
+    if max_bytes < 0:
+        return {"error": "max_bytes must be non-negative"}
     if not _is_path_allowed(path):
         return {"error": f"Path not allowed: {path}"}
 
@@ -33,11 +37,15 @@ def read_file(path: str, encoding: str = "utf-8", max_bytes: int = 1000000) -> d
             return {"error": f"File not found: {path}"}
 
         stat = p.stat()
-        if stat.st_size > max_bytes:
-            content = p.read_bytes()[:max_bytes].decode(encoding, errors="replace")
+        # Read at most one byte past the cap to detect concurrent growth without
+        # allocating the whole file. The extra byte is never included in output.
+        with p.open("rb") as stream:
+            raw = stream.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            content = raw[:max_bytes].decode(encoding, errors="replace")
             content += f"\n... [truncated at {max_bytes} bytes]"
         else:
-            content = p.read_text(encoding=encoding)
+            content = raw.decode(encoding)
 
         return {
             "content": content,

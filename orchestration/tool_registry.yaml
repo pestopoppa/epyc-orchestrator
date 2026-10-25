@@ -69,6 +69,21 @@ tools:
       - input: {query: "Python asyncio tutorial", max_results: 5}
         description: "Search for Python tutorials"
 
+  web_fetch:
+    category: web
+    description: "Fetch a public HTTP(S) page and return readable text"
+    parameters:
+      url: {type: string, required: true, description: "Public HTTP(S) URL to fetch"}
+      max_chars: {type: integer, required: false, default: 10000, description: "Maximum characters to return"}
+    returns: {type: string}
+    implementation:
+      type: python
+      module: orchestration.tools.web
+      function: web_fetch
+    side_effects: [read_only]
+    permissions: [network]
+    allowed_callers: [direct, chain]
+
   web_research:
     category: web
     description: "Deep web research: search, fetch top pages, and synthesize with worker models. Returns dense summaries instead of bare snippets."

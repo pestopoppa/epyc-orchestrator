@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for the REPL environment."""
 
+import pytest
+
 from src.repl_environment import (
     REPLConfig,
     REPLEnvironment,
@@ -242,13 +244,64 @@ class TestStructuredFinalExtraction:
         repl = REPLEnvironment(context="test", structured_mode=True)
         result = repl.execute('FINAL("""line1\\nline2""")')
         assert result.is_final is True
-        assert result.final_answer == "line1\\nline2"
+        assert result.final_answer == "line1\nline2"
 
     def test_structured_final_single_quotes(self):
         repl = REPLEnvironment(context="test", structured_mode=True)
         result = repl.execute("FINAL('answer')")
         assert result.is_final is True
         assert result.final_answer == "answer"
+
+
+    def test_final_text_in_comment_does_not_finish_turn(self):
+        from unittest.mock import Mock
+
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        peek = Mock(return_value="peeked")
+        repl._globals["peek"] = peek
+        result = repl.execute('# do not FINAL("draft") yet\nr = peek(100)\nprint(r)')
+        assert result.is_final is False
+        assert "peeked" in result.output
+        peek.assert_called_once_with(100)
+
+    def test_final_text_in_string_does_not_finish_turn(self):
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        result = repl.execute('print("call FINAL(\'x\') when done")')
+        assert result.is_final is False
+        assert "FINAL('x')" in result.output
+
+    def test_tool_call_before_final_executes(self):
+        from unittest.mock import Mock
+
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        run_shell = Mock(return_value="done")
+        repl._globals["run_shell"] = run_shell
+        result = repl.execute('x = run_shell("ls")\nFINAL("done")')
+        assert result.is_final is True
+        assert result.final_answer == "done"
+        run_shell.assert_called_once_with("ls")
+
+    def test_runtime_syntax_error_does_not_trigger_final_fallback(self):
+        from unittest.mock import Mock
+
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        failing_tool = Mock(side_effect=SyntaxError("runtime tool failure"))
+        repl._globals["failing_tool"] = failing_tool
+        result = repl.execute('failing_tool()\nFINAL("must not be final")')
+        assert result.is_final is False
+        assert "SyntaxError" in (result.error or "")
+        failing_tool.assert_called_once_with()
+
+    def test_malformed_triple_quoted_final_keeps_legacy_fallback(self):
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        code = "FINAL('''prefix ''' delimiter suffix''')\nthis is invalid Python!"
+        import ast
+
+        with pytest.raises(SyntaxError):
+            ast.parse(code)
+        result = repl.execute(code)
+        assert result.is_final is True
+        assert result.final_answer == "prefix ''' delimiter suffix"
 
 
 class TestSecuritySandbox:

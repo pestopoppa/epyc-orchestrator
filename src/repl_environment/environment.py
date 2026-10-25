@@ -988,35 +988,37 @@ class REPLEnvironment(
                 elapsed_seconds=time.perf_counter() - start_time,
             )
 
-        # Check for FINAL() call - treat as completion.
-        # Try triple-quoted strings first (models wrap multi-line code in
-        # FINAL('''...''') or FINAL(\"\"\"...\"\"\") — auto_wrap_final
-        # also generates this form), then fall back to single-quoted.
-        final_match = (
-            re.search(r"""\bFINAL\s*\(\s*'{3}(.+?)'{3}\s*\)""", code, re.DOTALL)
-            or re.search(r'''\bFINAL\s*\(\s*"{3}(.+?)"{3}\s*\)''', code, re.DOTALL)
-            or re.search(r'\bFINAL\s*\(\s*["\'](.+?)["\']\s*\)', code, re.DOTALL)
-        )
-        final_var_match = re.search(r'\bFINAL_VAR\s*\(\s*["\'](\w+)["\']\s*\)', code)
-
-        if final_match:
-            answer = next((g for g in final_match.groups() if g is not None), "")
-            return ExecutionResult(
-                output="",
-                is_final=True,
-                final_answer=answer,
-                elapsed_seconds=time.perf_counter() - start_time,
+        # A raw-text FINAL fallback is only valid when the source itself cannot
+        # compile. Valid Python must execute normally so quoted/comment text and
+        # calls before FINAL retain their semantics. Keep this parse separate
+        # from the execution try/except: a tool/user raising SyntaxError at
+        # runtime must remain an execution error, never become a final answer.
+        try:
+            compile(code, "<repl>", "exec")
+        except SyntaxError:
+            final_match = (
+                re.search(r"\bFINAL\s*\(\s*'{3}(.+?)'{3}\s*\)", code, re.DOTALL)
+                or re.search(r"\bFINAL\s*\(\s*\"{3}(.+?)\"{3}\s*\)", code, re.DOTALL)
+                or re.search(r"\bFINAL\s*\(\s*[\"'](.+?)[\"']\s*\)", code, re.DOTALL)
             )
-
-        if final_var_match:
-            var_name = final_var_match.group(1)
-            answer = str(self._globals.get(var_name, f"[Variable '{var_name}' not found]"))
-            return ExecutionResult(
-                output="",
-                is_final=True,
-                final_answer=answer,
-                elapsed_seconds=time.perf_counter() - start_time,
-            )
+            final_var_match = re.search(r"\bFINAL_VAR\s*\(\s*[\"'](\w+)[\"']\s*\)", code)
+            if final_match:
+                answer = next((g for g in final_match.groups() if g is not None), "")
+                return ExecutionResult(
+                    output="",
+                    is_final=True,
+                    final_answer=answer,
+                    elapsed_seconds=time.perf_counter() - start_time,
+                )
+            if final_var_match:
+                var_name = final_var_match.group(1)
+                answer = str(self._globals.get(var_name, f"[Variable '{var_name}' not found]"))
+                return ExecutionResult(
+                    output="",
+                    is_final=True,
+                    final_answer=answer,
+                    elapsed_seconds=time.perf_counter() - start_time,
+                )
 
         # List of known tool functions in the REPL environment
         tool_functions = {
@@ -1038,7 +1040,17 @@ class REPLEnvironment(
             "archive_extract",
             "archive_file",
             "archive_search",
+            "web_search",
             "web_fetch",
+            "code_search",
+            "doc_search",
+            "batch_web_search",
+            "search_and_verify",
+            "peek_grep",
+            "batch_llm_query",
+            "workspace_scan",
+            "remember",
+            "STUCK",
             "recall",
             "mark_finding",
             "list_findings",

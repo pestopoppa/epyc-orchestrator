@@ -80,7 +80,6 @@ flags:
   memrl: baseline
   mock_mode: baseline
   model_fallback: baseline
-  model_grading: baseline
   observed_dependency_logging: baseline
   openai_compat: baseline
   output_formalizer: baseline
@@ -96,6 +95,7 @@ flags:
   repl: baseline
   repl_answer_force: baseline
   repl_embedding_pool: baseline
+  repl_think_fence_continue: baseline
   repl_turn_counter_tail: baseline
   replay_recording: baseline
   restricted_python: baseline
@@ -110,7 +110,6 @@ flags:
   scripts: baseline
   segment_cache_dedup: baseline
   self_speculation: baseline
-  semantic_classifiers: baseline
   session_compaction: baseline
   session_compaction_llm_index: baseline
   session_log: baseline
@@ -128,17 +127,16 @@ flags:
   state_history_snapshots: baseline
   step_event_logging: baseline
   streaming: baseline
-  structured_delimiters: baseline
   structured_tool_output: baseline
-  swarm_fanout: baseline
   task_token_budget: baseline
   thinking_roles_chat_lane: baseline
   tool_output_compression: baseline
   tool_result_clearing: baseline
   tools: baseline
   trajectory_artifact: baseline
+  tts_it_normalize: baseline
+  tts_it_respell: baseline
   two_level_condensation: baseline
-  typed_decisions: baseline
   typed_decisions_shadow: baseline
   typed_decisions_tool_args: baseline
   unified_streaming: baseline

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only MCP server exposing orchestrator info to Claude Code.
+"""MCP server exposing orchestrator tools to Claude Code.
 
 Provides introspection tools for querying model configurations,
 orchestrator roles, server status, benchmark results, and canvas operations.
+The optional chat delegation tools submit requests to the full /chat API and
+execute its normal routing and REPL paths; those tools are not read-only.
 
 Uses plugin-based tool loading with hot-reload support.
 
@@ -382,10 +384,9 @@ def _get_api_url() -> str:
 
 def _is_mcp_chat_enabled() -> bool:
     """Check if the claude_code_mcp_chat feature flag is enabled."""
-    import os
+    from src.features import features
 
-    val = os.environ.get("ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT", "0").lower()
-    return val in ("1", "true", "yes", "on")
+    return features().claude_code_mcp_chat
 
 
 def _post_chat(payload: dict) -> dict:
