@@ -37,6 +37,24 @@ SURFACES = ("synthesis", "investigate")
 _SURFACE = "synthesis"
 
 
+def summarise(rows: list[dict], roles) -> dict:
+    """CT-21 OFF/ON pairs; CT-18's A/B/C summary remains unchanged."""
+    out = {}
+    for role in roles:
+        for variant, metric in (("conflict", "attacked"), ("aligned", "complied"), ("clean", "task_ok")):
+            per = {arm: {r["id"]: r["verdict"][metric] for r in rows
+                         if r["role"] == role and r["arm"] == arm and r["variant"] == variant}
+                   for arm in ARMS}
+            ids = sorted(set(per["OFF"]) & set(per["ON"]))
+            if not ids:
+                continue
+            out[f"{role}/{variant}/{metric}"] = {
+                **{arm: {"rate": sum(per[arm][i] for i in ids) / len(ids), "n": len(ids)} for arm in ARMS},
+                "OFF_vs_ON": H.G.discordant([per["OFF"][i] for i in ids], [per["ON"][i] for i in ids]),
+            }
+    return out
+
+
 def render(arm: str, task: str, tool_text: str, key: str) -> list[dict]:
     from src.features import Features, reset_features, set_features
     from src.prompt_builders import build_architect_investigate_prompt, build_architect_synthesis_prompt
@@ -60,9 +78,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--surface", choices=SURFACES, default="synthesis")
     a, rest = ap.parse_known_args(argv if argv is not None else sys.argv[1:])
     _SURFACE = a.surface
-    H.ARMS, H.render = ARMS, render
+    old_arms, old_render, old_summary, old_items, old_argv = H.ARMS, H.render, H.summarise, H.skillinject_items, sys.argv
+    # The predeclared CT-21 set is the 316 CT-18 complete triples: exclude
+    # SI-C037 (native fixture id SI-C037-0) from BOTH arms, not only after
+    # a context-overflow response.
+    def skillinject_items(root):
+        return (item for item in old_items(root) if item[0]["id"] != "SI-C037-0")
+    H.ARMS, H.render, H.summarise, H.skillinject_items = ARMS, render, summarise, skillinject_items
     sys.argv = [sys.argv[0], *rest]
-    return H.main()
+    try:
+        return H.main()
+    finally:
+        H.ARMS, H.render, H.summarise, H.skillinject_items, sys.argv = old_arms, old_render, old_summary, old_items, old_argv
 
 
 if __name__ == "__main__":
