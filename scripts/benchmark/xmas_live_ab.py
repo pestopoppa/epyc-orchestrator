@@ -43,7 +43,6 @@ QUIET_WINDOW_PROCESS_PATTERNS: tuple[tuple[str, str], ...] = (
     ("DS-E1 KV measurement", "ds_e1_kv_measurements.sh"),
     ("benchmark runner", "run_benchmark.py"),
     ("seeding runner", "seed_specialist_routing.py"),
-    ("seeding runner v2", "seed_specialist_routing_v2.py"),
     ("migration probe", "migration_probe.py"),
     ("placement fanout probe", "placement_fanout_probe.py"),
 )

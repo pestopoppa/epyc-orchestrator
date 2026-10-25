@@ -92,7 +92,19 @@ def test_attest_default_path_with_monkeypatched_probes(monkeypatch):
     assert any("contention_matrix" in r and "STALE" in r for r in att["fail_reasons"])
 
 
+def _set_primary_role_topology(monkeypatch):
+    """Pin the current alias layout: worker_general shares frontdoor, no ports of its own."""
+    from scripts.server import stack_numa
+
+    monkeypatch.setattr(
+        stack_numa,
+        "NUMA_CONFIG",
+        {"frontdoor": {"instances": [(0, 8070), (1, 8080), (2, 8180)]}},
+    )
+
+
 def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
+    _set_primary_role_topology(monkeypatch)
     seen = {}
 
     monkeypatch.setattr(pg, "check_live_affinity",
@@ -112,23 +124,21 @@ def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
 
     assert att["overall"] == "PASS"
     assert seen["require_servers"] is True
-    assert seen["ports"] == [
-        8070,
-        8080,
-        8180,
-        8072,
-        8082,
-        8182,
-    ]
+    assert seen["ports"] == [8070, 8080, 8180]
 
 
 def test_role_scoped_live_only_ports_skip_nonlive_configured_ports(monkeypatch):
-    monkeypatch.setattr(pg, "_pid_on_port", lambda port: "123" if port in {8080, 8082} else None)
+    _set_primary_role_topology(monkeypatch)
+    probed = []
 
-    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [
-        8080,
-        8082,
-    ]
+    def fake_pid_on_port(port):
+        probed.append(port)
+        return "123" if port == 8080 else None
+
+    monkeypatch.setattr(pg, "_pid_on_port", fake_pid_on_port)
+
+    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [8080]
+    assert probed == [8070, 8080, 8180]
 
 
 def test_server_health_only_skips_structural_health(monkeypatch):
@@ -252,7 +262,7 @@ def test_topology_hash_recorded_without_expected(tmp_path):
 def test_topology_hash_match_and_drift(tmp_path, monkeypatch):
     reg = tmp_path / "reg.yaml"
     reg.write_text("roles: {a: 1}\n")
-    monkeypatch.setattr(pg, "_live_topology_hash", lambda matrix_path: "8c8cfcbb13d2611d")
+    monkeypatch.setattr(pg, "_topology_hash_or_cause", lambda matrix_path: ("8c8cfcbb13d2611d", None))
     good = pg.check_topology_hashes(expected_topology_hash="8c8cfcbb13d2611d",
                                     live_registry=reg)
     assert good["ok"] is True and good["topology_match"] is True
@@ -263,8 +273,19 @@ def test_topology_hash_match_and_drift(tmp_path, monkeypatch):
     assert "drift" in bad["error"]
 
 
+def test_corrupt_matrix_is_reported_unreadable_not_drift(tmp_path):
+    """A5-22: a corrupt matrix used to fall back to the full-topology hash -> 'drift'."""
+    reg = tmp_path / "reg.yaml"
+    reg.write_text("roles: {}\n")
+    matrix = tmp_path / "matrix.yaml"
+    matrix.write_text("pairs:\n  - roles: [frontdoor]\n")
+    res = pg.check_topology_hashes(expected_topology_hash="x", live_registry=reg, matrix_path=matrix)
+    assert res["ok"] is False and res["topology_hash"] is None
+    assert "matrix unreadable" in res["error"] and "drift" not in res["error"]
+
+
 def test_topology_hash_missing_live_topology(tmp_path, monkeypatch):
-    monkeypatch.setattr(pg, "_live_topology_hash", lambda matrix_path: None)
+    monkeypatch.setattr(pg, "_topology_hash_or_cause", lambda matrix_path: (None, "x"))
     missing = tmp_path / "does_not_exist.yaml"
     res = pg.check_topology_hashes(live_registry=missing, matrix_path=missing)
     assert res["ok"] is False

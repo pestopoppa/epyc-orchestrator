@@ -49,11 +49,9 @@ slot:
     # `/mnt/raid0/llm/kernels/production/gpu` — silently. An explicit `dir:` is
     # still honoured by the loader as a deliberate override; absent one, the
     # backend resolves through src/registry/kernel_paths.py and a dangling store
-    # raises rather than substituting a path.
+    # raises rather than substituting a path. No version pin: the preflight
+    # records the identity the store binary reports.
     backend: gpu
-    version: "10107"
-    commit: 67a433bf4
-    freeze: production-consolidated-v8 (2026-07-25 final freeze)
   # ══════════════════════════════════════════════════════════════════════════
   # PROGRAM CONSTRAINT (operator-accepted 2026-07-28): AN IDLE MI210 DOES NOT
   # IMPLY A STARTABLE LANE.

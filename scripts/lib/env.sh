@@ -97,31 +97,21 @@ if [[ -n "${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN:-}" ]]; then
   export LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER}"
 fi
 
-if [[ -z "${ORCHESTRATOR_PATHS_LLAMA_MTMD:-}" ]]; then
-  # -x IS NOT A RUNNABILITY CHECK. Build trees here carry executables that die at
-  # startup on a missing libomp.so, and each tree needs its OWN dir on
-  # LD_LIBRARY_PATH (different ggml generations). Probe --version the way the
-  # binary is actually launched. Production builds first: the old order listed
-  # only legacy trees, so a missing primary silently selected llama.cpp 8219
-  # against current models with nothing logged.
-  for mtmd_candidate in \
-    "${LLAMA_CPP_BIN}/llama-mtmd-cli" \
-    "${LLM_ROOT}/llama.cpp/build/bin/llama-mtmd-cli" \
-    "${LLM_ROOT}/llama.cpp/build-hip/bin/llama-mtmd-cli" \
-    "${LLM_ROOT}/llama.cpp/build-v2/bin/llama-mtmd-cli" \
-    "${LLM_ROOT}/llama.cpp/build_libomp_pgo_bolt/bin/llama-mtmd-cli"; do
-    [[ -x "${mtmd_candidate}" ]] || continue
-    if mtmd_probe_output="$("${_ENV_SH_DIR}/mtmd_probe.sh" "${mtmd_candidate}")"; then
-      if [[ "${mtmd_probe_output}" == *version:* ]]; then
-        export ORCHESTRATOR_PATHS_LLAMA_MTMD="${mtmd_candidate}"
-        break
-      fi
-    fi
-  done
-  unset mtmd_candidate mtmd_probe_output
+# llama-mtmd-cli comes from the same kernel-store dir as llama-server, never from a
+# llama.cpp/build* tree (those hold retired kernels). -x is not a runnability check:
+# probe --version with the binary's own dir on LD_LIBRARY_PATH, and say so on failure.
+if [[ -z "${ORCHESTRATOR_PATHS_LLAMA_MTMD:-}" && -n "${LLAMA_CPP_BIN:-}" ]]; then
+  export ORCHESTRATOR_PATHS_LLAMA_MTMD="${LLAMA_CPP_BIN}/llama-mtmd-cli"
+  if ! mtmd_probe_output="$("${_ENV_SH_DIR}/mtmd_probe.sh" "${ORCHESTRATOR_PATHS_LLAMA_MTMD}")" ||
+    [[ "${mtmd_probe_output}" != *version:* ]]; then
+    echo "env.sh: ${ORCHESTRATOR_PATHS_LLAMA_MTMD} does not run (--version failed);" >&2
+    echo "        NOT substituting a llama.cpp/build* binary." >&2
+  fi
+  unset mtmd_probe_output
 fi
-export ORCHESTRATOR_PATHS_LLAMA_MTMD="${ORCHESTRATOR_PATHS_LLAMA_MTMD:-${LLAMA_CPP_BIN}/llama-mtmd-cli}"
-export LLAMA_MTMD="${ORCHESTRATOR_PATHS_LLAMA_MTMD}"
+if [[ -n "${ORCHESTRATOR_PATHS_LLAMA_MTMD:-}" ]]; then
+  export LLAMA_MTMD="${ORCHESTRATOR_PATHS_LLAMA_MTMD}"
+fi
 
 # Cache and temp directories
 export ORCHESTRATOR_PATHS_CACHE_DIR="${ORCHESTRATOR_PATHS_CACHE_DIR:-${LLM_ROOT}/cache}"

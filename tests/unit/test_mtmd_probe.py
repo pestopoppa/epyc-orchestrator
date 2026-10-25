@@ -98,26 +98,47 @@ def test_shared_probe_reports_nonexecutable_candidate(tmp_path):
     assert proc.stdout == ""
 
 
-def test_vl_resolver_keeps_configured_then_production_candidate_order(monkeypatch, tmp_path):
-    # Hosted CI supplies an intentionally absent configured executable before eager
-    # config imports; remove that override locally so this test exercises fallback order.
-    monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_MTMD", raising=False)
-    monkeypatch.delenv("LLAMA_MTMD_CLI", raising=False)
-    root = tmp_path / "llama.cpp"
-    configured = root / "configured/bin/llama-mtmd-cli"
-    successful = root / "build-hip/bin/llama-mtmd-cli"
+def test_vl_resolver_never_falls_back_to_a_build_tree(monkeypatch, tmp_path, caplog):
+    """A5-M2: llama.cpp/build* trees hold retired kernels; a broken store binary is an error."""
+    configured = tmp_path / "llama.cpp/configured/bin/llama-mtmd-cli"
     monkeypatch.setattr(vl_describe, "LLAMA_MTMD_CLI", configured)
     seen = []
 
     def probe(candidate):
         seen.append(candidate)
-        return "version: 10303 (abc123)" if candidate == successful else None
+        return None if candidate == configured else "version: 10125 (0db32c06e)"
 
     monkeypatch.setattr(VLDescribeAnalyzer, "_mtmd_runs", staticmethod(probe))
     analyzer = object.__new__(VLDescribeAnalyzer)
 
-    assert analyzer._resolve_mtmd_cli() == successful
-    assert seen == [configured, root / "build/bin/llama-mtmd-cli", successful]
+    with caplog.at_level("ERROR"):
+        assert analyzer._resolve_mtmd_cli() is None
+    assert seen == [configured]
+    assert "not runnable" in caplog.text
+
+    monkeypatch.setattr(VLDescribeAnalyzer, "_mtmd_runs", staticmethod(lambda c: "version: 1 (a)"))
+    assert analyzer._resolve_mtmd_cli() == configured
+
+
+def test_vl_cli_run_leads_ld_library_path_with_the_binary_dir(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    cli = _candidate(tmp_path / "store/llama-mtmd-cli", "")
+    analyzer = object.__new__(VLDescribeAnalyzer)
+    analyzer.model_path, analyzer.mmproj_path = tmp_path / "m.gguf", tmp_path / "p.gguf"
+    analyzer.prompt, analyzer.max_tokens, analyzer.threads = "describe", 8, 4
+    monkeypatch.setattr(analyzer, "_resolve_mtmd_cli", lambda: cli, raising=False)
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=1, stderr="boom", stdout="")
+
+    monkeypatch.setattr(vl_describe.subprocess, "run", fake_run)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/ambient/lib")
+    analyzer._analyze_with_cli(tmp_path / "img.jpg", 0.0)
+
+    assert captured["env"]["LD_LIBRARY_PATH"].split(":") == [str(cli.parent.resolve()), "/ambient/lib"]
 
 
 def test_shared_probe_captures_timeout_status_and_output(tmp_path, monkeypatch):
@@ -238,17 +259,21 @@ def _source_env(env_sh: Path, env: dict[str, str]) -> subprocess.CompletedProces
     )
 
 
-def test_env_sh_rejects_nonzero_version_output_then_selects_next_candidate(tmp_path):
+@pytest.mark.parametrize("store_body, warned", [
+    ('printf "version: bad but nonzero\\n"\nexit 7\n', True),
+    ('printf "version: 10303 (abc123)\\n"\n', False),
+])
+def test_env_sh_resolves_mtmd_only_from_the_store(tmp_path, store_body, warned):
+    """A5-M2: never substitute a llama.cpp/build* binary; a broken store binary warns."""
     env_sh = _copy_env_library(tmp_path)
-    app_cli = _candidate(tmp_path / "project/llama.cpp/build/llama-mtmd-cli",
-                         'printf "version: bad but nonzero\\n"\nexit 7\n')
-    fallback = _candidate(tmp_path / "llm/llama.cpp/build/bin/llama-mtmd-cli",
-                          'printf "version: 10303 (abc123)\\n"\n')
+    store_cli = _candidate(tmp_path / "llm/kernels/production/cpu/llama-mtmd-cli", store_body)
+    _candidate(tmp_path / "llm/llama.cpp/build/bin/llama-mtmd-cli",
+               'printf "version: 10125 (0db32c06e)\\n"\n')
     env = dict(os.environ)
     env.update({
         "ORCHESTRATOR_PATHS_LLM_ROOT": str(tmp_path / "llm"),
         "ORCHESTRATOR_PATHS_PROJECT_ROOT": str(tmp_path / "project"),
-        "ORCHESTRATOR_PATHS_LLAMA_CPP_BIN": str(app_cli.parent),
+        "ORCHESTRATOR_PATHS_LLAMA_CPP_BIN": str(store_cli.parent),
         "LD_LIBRARY_PATH": "/prior/lib",
     })
     env.pop("ORCHESTRATOR_PATHS_LLAMA_MTMD", None)
@@ -256,7 +281,8 @@ def test_env_sh_rejects_nonzero_version_output_then_selects_next_candidate(tmp_p
     result = _source_env(env_sh, env)
 
     assert result.returncode == 0
-    assert result.stdout.strip() == str(fallback)
+    assert result.stdout.strip() == str(store_cli)
+    assert ("does not run" in result.stderr) is warned
 
 
 def test_env_sh_preserves_explicit_mtmd_override_without_probing(tmp_path):

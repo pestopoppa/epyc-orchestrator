@@ -445,7 +445,6 @@ _ALLOWED_OPT_IN = {
     "scripts/benchmark/debug_scorer.py",
     "scripts/autopilot/eval_tower.py",
     "scripts/benchmark/q38_t10_1_control_arm.py",  # control script (not run here)
-    "scripts/lib/executor.py",  # pre-existing speculative_n_max param (not a bitwise opt-in)
 }
 _NEEDLE = re.compile(r"bitwise_scope|bitwise_n_max|bitwise_call_kwargs|_bitwise_spec|speculative_n_max|spec_off_bitwise_roles")
 

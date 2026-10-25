@@ -261,6 +261,63 @@ def sample_unseen_questions(
 # ── 3-Way Batch Runner ───────────────────────────────────────────────
 
 
+def _diagnostic_kwargs(rr: RoleResult, prompt_info: dict, config_key: str) -> dict[str, Any]:
+    """build_diagnostic kwargs for one role result, shared by first-pass and retry.
+
+    One list: the retry copy once silently dropped tool_chains (A5-04).
+    """
+    return dict(
+        question_id=f"{prompt_info['suite']}/{prompt_info['id']}",
+        suite=prompt_info["suite"],
+        config=config_key,
+        role=rr.role,
+        mode=rr.mode,
+        passed=rr.passed,
+        answer=rr.answer,
+        expected=prompt_info.get("expected", ""),
+        scoring_method=prompt_info.get("scoring_method", "exact_match"),
+        error=rr.error,
+        error_type=rr.error_type,
+        tokens_generated=rr.tokens_generated,
+        tool_output_tokens=rr.tool_output_tokens,
+        elapsed_s=rr.elapsed_seconds,
+        role_history=rr.role_history,
+        delegation_events=rr.delegation_events,
+        delegation_diagnostics=rr.delegation_diagnostics,
+        tools_used=rr.tools_used,
+        tools_called=rr.tools_called,
+        tool_chains=rr.tool_chains,
+        tap_offset_bytes=rr.tap_offset_bytes,
+        tap_length_bytes=rr.tap_length_bytes,
+        repl_tap_offset_bytes=rr.repl_tap_offset_bytes,
+        repl_tap_length_bytes=rr.repl_tap_length_bytes,
+        cost_dimensions=rr.cost_dimensions,
+        think_harder_attempted=rr.think_harder_attempted,
+        think_harder_succeeded=rr.think_harder_succeeded,
+        cheap_first_attempted=rr.cheap_first_attempted,
+        cheap_first_passed=rr.cheap_first_passed,
+        grammar_enforced=rr.grammar_enforced,
+        parallel_tools_used=rr.parallel_tools_used,
+        cache_affinity_bonus=rr.cache_affinity_bonus,
+        # SkillBank retrieval data
+        skills_retrieved=rr.skills_retrieved,
+        skill_types=[sid.split("_")[0] for sid in rr.skill_ids] if rr.skill_ids else [],
+        skill_context_tokens=0,
+        # Context window management and budget tracking
+        budget_diagnostics=rr.budget_diagnostics,
+        tool_results_cleared=rr.tool_results_cleared,
+        compaction_triggered=rr.compaction_triggered,
+        compaction_tokens_saved=rr.compaction_tokens_saved,
+        think_harder_expected_roi=rr.think_harder_expected_roi,
+        compression_metrics=rr.compression_metrics,
+        # Shadow routing telemetry (NIB2-35)
+        difficulty_score=rr.difficulty_score,
+        difficulty_band=rr.difficulty_band,
+        factual_risk_score=rr.factual_risk_score,
+        factual_risk_band=rr.factual_risk_band,
+    )
+
+
 def run_batch_3way(
     suites: list[str],
     sample_per_suite: int,
@@ -426,56 +483,7 @@ def run_batch_3way(
                     from src.pipeline_monitor.diagnostic import build_diagnostic, append_diagnostic
 
                     for config_key, rr in role_results.items():
-                        diag = build_diagnostic(
-                            question_id=f"{suite}/{qid}",
-                            suite=suite,
-                            config=config_key,
-                            role=rr.role,
-                            mode=rr.mode,
-                            passed=rr.passed,
-                            answer=rr.answer,
-                            expected=prompt_info.get("expected", ""),
-                            scoring_method=prompt_info.get("scoring_method", "exact_match"),
-                            error=rr.error,
-                            error_type=rr.error_type,
-                            tokens_generated=rr.tokens_generated,
-                            tool_output_tokens=rr.tool_output_tokens,
-                            elapsed_s=rr.elapsed_seconds,
-                            role_history=rr.role_history,
-                            delegation_events=rr.delegation_events,
-                            delegation_diagnostics=rr.delegation_diagnostics,
-                            tools_used=rr.tools_used,
-                            tools_called=rr.tools_called,
-                            tool_chains=rr.tool_chains,
-                            tap_offset_bytes=rr.tap_offset_bytes,
-                            tap_length_bytes=rr.tap_length_bytes,
-                            repl_tap_offset_bytes=rr.repl_tap_offset_bytes,
-                            repl_tap_length_bytes=rr.repl_tap_length_bytes,
-                            cost_dimensions=rr.cost_dimensions,
-                            think_harder_attempted=rr.think_harder_attempted,
-                            think_harder_succeeded=rr.think_harder_succeeded,
-                            cheap_first_attempted=rr.cheap_first_attempted,
-                            cheap_first_passed=rr.cheap_first_passed,
-                            grammar_enforced=rr.grammar_enforced,
-                            parallel_tools_used=rr.parallel_tools_used,
-                            cache_affinity_bonus=rr.cache_affinity_bonus,
-                            # SkillBank retrieval data
-                            skills_retrieved=rr.skills_retrieved,
-                            skill_types=[sid.split("_")[0] for sid in rr.skill_ids] if rr.skill_ids else [],
-                            skill_context_tokens=0,
-                            # Context window management and budget tracking
-                            budget_diagnostics=rr.budget_diagnostics,
-                            tool_results_cleared=rr.tool_results_cleared,
-                            compaction_triggered=rr.compaction_triggered,
-                            compaction_tokens_saved=rr.compaction_tokens_saved,
-                            think_harder_expected_roi=rr.think_harder_expected_roi,
-                            compression_metrics=rr.compression_metrics,
-                            # Shadow routing telemetry (NIB2-35)
-                            difficulty_score=rr.difficulty_score,
-                            difficulty_band=rr.difficulty_band,
-                            factual_risk_score=rr.factual_risk_score,
-                            factual_risk_band=rr.factual_risk_band,
-                        )
+                        diag = build_diagnostic(**_diagnostic_kwargs(rr, prompt_info, config_key))
                         append_diagnostic(diag)
                         debugger.add_diagnostic(diag)
                     debugger.end_question()
@@ -577,55 +585,7 @@ def run_batch_3way(
 
                             # Feed diagnostics back to debugger
                             for ck, rr_diag in rr_retry.items():
-                                retry_diag = build_diagnostic(
-                                    question_id=f"{rpi['suite']}/{rpi['id']}",
-                                    suite=rpi["suite"],
-                                    config=ck,
-                                    role=rr_diag.role,
-                                    mode=rr_diag.mode,
-                                    passed=rr_diag.passed,
-                                    answer=rr_diag.answer,
-                                    expected=rpi.get("expected", ""),
-                                    scoring_method=rpi.get(
-                                        "scoring_method", "exact_match",
-                                    ),
-                                    error=rr_diag.error,
-                                    error_type=rr_diag.error_type,
-                                    tokens_generated=rr_diag.tokens_generated,
-                                    tool_output_tokens=rr_diag.tool_output_tokens,
-                                    elapsed_s=rr_diag.elapsed_seconds,
-                                    role_history=rr_diag.role_history,
-                                    delegation_events=rr_diag.delegation_events,
-                                    delegation_diagnostics=rr_diag.delegation_diagnostics,
-                                    tools_used=rr_diag.tools_used,
-                                    tools_called=rr_diag.tools_called,
-                                    tap_offset_bytes=rr_diag.tap_offset_bytes,
-                                    tap_length_bytes=rr_diag.tap_length_bytes,
-                                    repl_tap_offset_bytes=rr_diag.repl_tap_offset_bytes,
-                                    repl_tap_length_bytes=rr_diag.repl_tap_length_bytes,
-                                    cost_dimensions=rr_diag.cost_dimensions,
-                                    think_harder_attempted=rr_diag.think_harder_attempted,
-                                    think_harder_succeeded=rr_diag.think_harder_succeeded,
-                                    cheap_first_attempted=rr_diag.cheap_first_attempted,
-                                    cheap_first_passed=rr_diag.cheap_first_passed,
-                                    grammar_enforced=rr_diag.grammar_enforced,
-                                    parallel_tools_used=rr_diag.parallel_tools_used,
-                                    cache_affinity_bonus=rr_diag.cache_affinity_bonus,
-                                    skills_retrieved=rr_diag.skills_retrieved,
-                                    skill_types=[sid.split("_")[0] for sid in rr_diag.skill_ids] if rr_diag.skill_ids else [],
-                                    skill_context_tokens=0,
-                                    budget_diagnostics=rr_diag.budget_diagnostics,
-                                    tool_results_cleared=rr_diag.tool_results_cleared,
-                                    compaction_triggered=rr_diag.compaction_triggered,
-                                    compaction_tokens_saved=rr_diag.compaction_tokens_saved,
-                                    think_harder_expected_roi=rr_diag.think_harder_expected_roi,
-                                    compression_metrics=rr_diag.compression_metrics,
-                                    # Shadow routing telemetry (NIB2-35)
-                                    difficulty_score=rr_diag.difficulty_score,
-                                    difficulty_band=rr_diag.difficulty_band,
-                                    factual_risk_score=rr_diag.factual_risk_score,
-                                    factual_risk_band=rr_diag.factual_risk_band,
-                                )
+                                retry_diag = build_diagnostic(**_diagnostic_kwargs(rr_diag, rpi, ck))
                                 retry_diag["is_retry"] = True
                                 retry_diag["retry_tag"] = tag
                                 append_diagnostic(retry_diag)

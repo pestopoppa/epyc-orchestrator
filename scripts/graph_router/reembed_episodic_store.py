@@ -41,9 +41,10 @@ logger = logging.getLogger("reembed")
 DEFAULT_DB = PROJECT_ROOT / "orchestration/repl_memory/sessions/episodic.db"
 DEFAULT_MODEL = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
 DEFAULT_OUTPUT = PROJECT_ROOT / "orchestration/repl_memory/sessions/reembedded.npz"
-LLAMA_SERVER = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
 
 from scripts.graph_router.extract_training_data import normalize_action
+from scripts.server.stack_env import compose_ld_library_path
+from src.registry import kernel_paths
 from orchestration.repl_memory.indexed_memory_policy import indexed_memory_predicate
 
 TEXT_FIELDS = (
@@ -166,9 +167,9 @@ def probe_existing_server(port: int, timeout: float = 1.0) -> bool:
 
 
 def start_embedding_server(model_path: Path, port: int, threads: int) -> subprocess.Popen:
-    """Launch temporary llama-server for embedding."""
+    """Launch temporary llama-server for embedding from the kernel store."""
     cmd = [
-        str(LLAMA_SERVER),
+        str(kernel_paths.server_binary("cpu")),
         "-m", str(model_path),
         "--host", "127.0.0.1",
         "--port", str(port),
@@ -178,17 +179,27 @@ def start_embedding_server(model_path: Path, port: int, threads: int) -> subproc
         "--embeddings",
         "--pooling", "cls",
         "--flash-attn", "on",
-        "--log-disable",
     ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid,
-    )
+    env = os.environ.copy()
+    ld_paths = kernel_paths.backend_ld_library_path("cpu")
+    if ld_paths:
+        env["LD_LIBRARY_PATH"] = compose_ld_library_path(ld_paths, env.get("LD_LIBRARY_PATH", ""))
+    log_dir = Path(os.environ.get("ORCHESTRATOR_PATHS_LOG_DIR", str(PROJECT_ROOT / "logs")))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"reembed_{port}.log"
+    with open(log_path, "ab") as log:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            preexec_fn=os.setsid,
+        )
 
     url = f"http://127.0.0.1:{port}/health"
     for i in range(60):
+        if proc.poll() is not None:
+            raise RuntimeError(f"BGE server on port {port} exited rc={proc.returncode}; see {log_path}")
         try:
             r = requests.get(url, timeout=2)
             if r.status_code == 200:
@@ -199,7 +210,7 @@ def start_embedding_server(model_path: Path, port: int, threads: int) -> subproc
         time.sleep(1)
 
     proc.kill()
-    raise RuntimeError(f"BGE server on port {port} failed to start within 60s")
+    raise RuntimeError(f"BGE server on port {port} failed to start within 60s; see {log_path}")
 
 
 def embed_batch(texts: list[str], port: int) -> np.ndarray:
@@ -321,14 +332,14 @@ def main():
         spawned_ports.append(port)
     if reused_ports:
         logger.info("Reusing %d stack-owned server(s): %s", len(reused_ports), reused_ports)
-    if spawned_ports:
-        logger.info("Launching %d new BGE server(s) on ports %s", len(spawned_ports), spawned_ports)
-        # Launch sequentially to avoid concurrent mlock
-        for port in spawned_ports:
-            proc = start_embedding_server(Path(args.model), port, args.threads_per_server)
-            server_procs.append(proc)
-
     try:
+        if spawned_ports:
+            logger.info("Launching %d new BGE server(s) on ports %s", len(spawned_ports), spawned_ports)
+            # Launch sequentially to avoid concurrent mlock; inside try so a failed
+            # launch still stops the servers already spawned.
+            for port in spawned_ports:
+                server_procs.append(start_embedding_server(Path(args.model), port, args.threads_per_server))
+
         # ── Build batches ──
         batches = []
         for start in range(0, total, args.batch_size):

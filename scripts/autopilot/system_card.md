@@ -55,7 +55,7 @@ These files are measurement/trust-boundary surfaces, not autonomous experiment k
 - `scripts/benchmark/seed_specialist_routing.py`
 - `scripts/benchmark/debug_scorer.py`
 - `scripts/benchmark/dataset_adapters.py`
-- `scripts/benchmark/question_pool.py`
+- `/mnt/raid0/llm/epyc-inference-research/scripts/benchmark/question_pool.py`
 - `benchmarks/prompts/question_pool.jsonl`
 - `scripts/autopilot/safety_gate.py`
 - `scripts/autopilot/eval_tower.py`

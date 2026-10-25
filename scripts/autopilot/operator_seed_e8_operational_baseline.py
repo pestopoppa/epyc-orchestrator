@@ -34,7 +34,7 @@ It is NOT the ratification-grade E8 protocol baseline. There is no operator
 receipt, no `run_seal.json`, no three-repetition replay, no T2 vector. Do not
 cite a number derived from this baseline in an external claim. The heavyweight
 path (`run_e8_quality_baseline_reseed.py` + `apply_e8_quality_baseline_state.py`)
-remains available and is unaffected by this.
+was retired by operator ruling OP-19 (2026-08-27) and its scripts deleted.
 
 WHY IT IS AN OPERATOR ACTION
 ----------------------------

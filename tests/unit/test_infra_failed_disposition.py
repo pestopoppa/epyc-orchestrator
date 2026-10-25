@@ -527,8 +527,9 @@ def test_self_labelled_error_text_reports_its_exact_reason():
 def test_compact_row_and_aggregate_accept_duck_typed_rows():
     """The recovery path does NOT pass QuestionResult instances.
 
-    `run_e8_quality_baseline_v5._merged_retry_sidecar` rebuilds a row from JSONL
-    as a `types.SimpleNamespace` and hands it to `_compact_question_result`. A
+    The since-retired `run_e8_quality_baseline_v5._merged_retry_sidecar` rebuilt
+    a row from JSONL as a `types.SimpleNamespace` and handed it to
+    `_compact_question_result`. A
     bare `r.disposition` raises AttributeError there — caught by the full suite
     as a real regression, not by any targeted run. Rows without a disposition
     must be treated as `scored`, so an old row keeps its previous accounting.

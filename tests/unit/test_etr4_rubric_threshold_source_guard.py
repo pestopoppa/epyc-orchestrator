@@ -1,8 +1,8 @@
 """ETR-4: `_compact_question_result` must not assume `rubric_threshold_source`.
 
 The field was added by RC-12 after the duck-typed recovery path existed
-(`run_e8_quality_baseline_v5._merged_retry_sidecar` hands this function a
-`types.SimpleNamespace` rebuilt from a journal row). A legacy or foreign row
+(the since-retired `run_e8_quality_baseline_v5._merged_retry_sidecar` handed
+this function a `types.SimpleNamespace` rebuilt from a journal row). A legacy or foreign row
 has no such attribute, so a bare `r.rubric_threshold_source` raised
 AttributeError and broke recovery. The guard is a `getattr`; these tests pin
 the behaviour and the structure.

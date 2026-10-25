@@ -877,7 +877,7 @@ def main() -> int:
             return 0
         except Exception as e:
             logger.error("Server test failed: %s", e)
-            logger.info("Make sure llama-server is running: scripts/server/start_servers.sh")
+            logger.info("Make sure llama-server is running: python3 scripts/server/orchestrator_stack.py start")
             return 1
 
     server = ModelServer()

@@ -37,7 +37,7 @@ sampling, duty bindings — is **registry data**:
 | Drain, never force | Lane teardown/swap happens by quiesce + drain at a request boundary (fabric axiom 4). No mid-decode preemption. |
 | np policy as data | Slot-count admission (`-np` × per-slot context) is governed by `orchestration/gpu_shadow_lane_np_ceiling.yaml` (§6). A null ceiling means refuse, never extrapolate. |
 | Host threads | Host-side threads pin to SMT siblings **184-191** (`-t 8 -tb 8`), never physical cores 88-95 — the GPU host-thread rule, and the shape every v8 np×context grid actually measured. |
-| Production kernel only | The lane serves off the frozen production HIP tree `/mnt/raid0/llm/llama.cpp/build-hip/bin` (`llama-server --version` = `10107 (67a433bf4)`). Serving off any experimental tree violates production-kernel discipline. |
+| Production kernel only | The lane serves off the kernel store's `production/gpu` backend (`src/registry/kernel_paths.py`); the preflight records its `llama-server --version` identity rather than pinning one. Serving off any experimental tree violates production-kernel discipline. |
 
 ## 2. Registry states (the State-A/B choreography)
 
@@ -263,7 +263,7 @@ promotion/rebind decision alone.
 | P2 | **MI210 free** — no foreign compute PIDs (operator-owned external processes are never killed; wait for vacate) | `rocm-smi --showmemuse --showpids`; preflight probe |
 | P3 | **Quiet window** — no AutoPilot, no EvalTower batch in flight (SIGSTOP/SIGCONT an in-flight eval runner around reload points) | `pgrep -af autopilot.py`; reports dir quiet |
 | P4 | **Tenant artifacts on disk, hash-known** — stock 27B: 28,665,067,072 B, sha256 `5927dc06c2b19f732fb6e2a6546dff4c130b552f2ab5f91feb3daafe43897b2a` | `ls -l` + `sha256sum` |
-| P5 | **Production v8 HIP binary healthy** — `10107 (67a433bf4)` | preflight probe (binary check) |
+| P5 | **Production HIP binary healthy** — store `production/gpu` reports a version | preflight probe (binary check) |
 | P6 | **Clean git baselines** in both repos (rollback anchor is a git revert) | `git status` / `git log @{u}..` |
 | P7 | **Realized fleet is the terminal lineup**; three-gates discipline applies | `orchestrator_stack.py status` + runtime-facts manifest |
 | P8 | **Preflight probe clean**: `uv run python scripts/server/gpu_shadow_lane_preflight.py` exits 0 (plan-only), then `--apply` writes `preflight_attestation.json` | probe report under `orchestration/reports/gpu_shadow_lane_preflight_<ts>/` |

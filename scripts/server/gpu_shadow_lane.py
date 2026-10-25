@@ -51,10 +51,9 @@ LANE_HOST_THREADS = 8
 # kernel after a promotion repoints the store — silently, because a stale-but-
 # present binary launches and serves. Resolution is deliberately fatal: an
 # unresolvable backend raises KernelPathError instead of substituting a path.
+# Its version is not pinned here either: the preflight records what it reports.
 LANE_BINARY_DIR = backend_dir("gpu")
 LANE_BINARY = LANE_BINARY_DIR / "llama-server"
-LANE_BINARY_VERSION = "10107"
-LANE_BINARY_COMMIT = "67a433bf4"
 
 # First tenant candidate (program D2). Proposal default only: at activation the
 # master-registry role block (tenancy as data) is the source of truth.

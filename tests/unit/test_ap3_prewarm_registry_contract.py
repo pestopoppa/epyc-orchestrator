@@ -1,31 +1,11 @@
-"""`_ap3_prewarm_role_targets` must build a registry whose `get_role` satisfies
-the access pattern `build_server_command` actually performs.
+"""Pin the RegistryLoader contract consumed by AP3 prewarm.
 
-ORIGIN. Routed by `mainD` on 2026-08-12 as a latent defect, re-derived at HEAD by
-`mainC` and CONFIRMED at runtime: `config_applicator.py` imported `load_registry`
-from `scripts.lib.registry`, whose `ModelRegistry` has **no `get_role` method at
-all** (`hasattr(reg, "get_role") is False`, verified against the live registry).
-Every execution of that branch raised `AttributeError`. The row's line anchor had
-rotted 1634 -> 1648; the finding underneath had not.
+The consumer reads `role_config.model.full_path`, `role_config.acceleration`,
+and `role_config.name`. RegistryLoader returns the required RoleConfig object;
+a mapping or a registry without `get_role` cannot satisfy that contract.
 
-WHY THE OBVIOUS FIX IS WRONG, which is why this test checks a CONTRACT and not a
-spelling. `ModelRegistry` does expose `get_role_config()`, so `get_role` ->
-`get_role_config` reads like the natural repair. It is not:
-`build_server_command` consumes the value by NESTED ATTRIBUTE access —
-`role_config.model.full_path`, `role_config.acceleration`, `role_config.name`
-(orchestrator_stack.py:1353-1355) — and `get_role_config()` returns a plain
-`dict`. That swap trades an `AttributeError` on `registry.get_role` for an
-`AttributeError` on `dict.model`, one frame deeper and later. The correct object
-is the `RoleConfig` dataclass returned by `RegistryLoader.get_role()`, which is
-what `orchestrator_stack` itself uses (it imports `RegistryLoader`, never
-`load_registry`).
-
-WHAT THIS PINS. Not the import line — a source-string assertion would pass for the
-wrong reason the moment someone reformats it, and would false-FAIL on a harmless
-rename. This resolves the callee actually used inside the function via AST, looks
-it up in the module's real namespace, and asserts the object it produces supports
-the attribute chain the consumer performs. Swap in any registry that does not, and
-this fails.
+The test resolves the actual constructor from the function AST and verifies its
+returned object, rather than pinning an import spelling.
 """
 from __future__ import annotations
 
@@ -131,19 +111,3 @@ def test_get_role_returns_an_object_the_consumer_can_actually_read() -> None:
                 f"A plain dict from get_role_config() fails here — that is the trap."
             )
             obj = getattr(obj, attr)
-
-
-def test_the_rejected_registry_still_fails_the_contract() -> None:
-    """Guards the REASON, not just the symptom.
-
-    If `ModelRegistry` ever grows a `get_role`, the comment in config_applicator
-    explaining why it is unsuitable becomes stale and this fires so someone
-    re-derives the choice rather than inheriting a stale rationale.
-    """
-    from scripts.lib.registry import ModelRegistry
-
-    assert not hasattr(ModelRegistry, "get_role"), (
-        "ModelRegistry now has `get_role`. Re-derive the config_applicator "
-        "choice: verify what it RETURNS supports role_config.model.full_path "
-        "before treating the two registries as interchangeable."
-    )

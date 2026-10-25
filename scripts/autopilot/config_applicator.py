@@ -1632,7 +1632,7 @@ def _ap3_prewarm_role_targets(
         "targets": [],
     }
     try:
-        # RegistryLoader, NOT scripts.lib.registry.load_registry. `build_server_command`
+        # RegistryLoader. `build_server_command`
         # consumes role_config by nested ATTRIBUTE access (`role_config.model.full_path`,
         # `.acceleration`, `.name` — orchestrator_stack.py:1353-1355), which is the
         # RoleConfig dataclass RegistryLoader.get_role() returns. ModelRegistry, what

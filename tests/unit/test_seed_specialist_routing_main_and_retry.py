@@ -21,10 +21,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_BENCH))
 
 
-_ROUTING_FILES = (
-    "seed_specialist_routing.py",
-    "seed_specialist_routing_v2.py",
-)
+_ROUTING_FILES = ("seed_specialist_routing.py",)
 
 _RETRIEVAL_OVERRIDE_KEYS = (
     "cost_lambda",
@@ -1616,3 +1613,54 @@ def test_run_batch_3way_debugger_exception_is_non_fatal(file_name, monkeypatch):
     assert len(out) == 1
     joined = " ".join(str(c.args[0]) for c in warning_mock.call_args_list if c.args)
     assert "Debugger error" in joined
+
+
+def test_run_batch_3way_retry_diagnostic_carries_same_fields_as_first_pass(monkeypatch):
+    """A5-04: the post-fix retry diagnostic dropped tool_chains (kwargs were hand-copied)."""
+    mod = _load_module("routing_retry_diag_fields", "seed_specialist_routing.py")
+    question = {"id": "q1", "suite": "suite_a", "prompt": "p1", "expected": "e1"}
+    rr = _role_result(passed=True)
+    rr.tool_chains = [{"tool": "x"}]
+    eval_tuple = ({"SELF:direct": rr}, {mod.ACTION_SELF_DIRECT: 1.0}, {})
+    diags: list[dict] = []
+
+    class _Debugger:
+        batch_count = 1
+        add_diagnostic = staticmethod(diags.append)
+
+        def end_question(self) -> None:
+            pass
+
+        def pop_retries(self):
+            return ([("suite_a", "q1")], set()) if not any(d.get("is_retry") for d in diags) else ([], set())
+
+        def flush(self) -> None:
+            pass
+
+    diag_mod = ModuleType("src.pipeline_monitor.diagnostic")
+    diag_mod.build_diagnostic = lambda **kwargs: dict(kwargs)
+    diag_mod.append_diagnostic = Mock()
+    monkeypatch.setitem(sys.modules, "src.pipeline_monitor.diagnostic", diag_mod)
+
+    with (
+        patch.object(mod, "_check_server_health", return_value=True),
+        patch.object(mod, "load_seen_questions", return_value=set()),
+        patch.object(mod, "sample_unseen_questions", return_value=[]),
+        patch.object(mod, "evaluate_question_3way", side_effect=[eval_tuple, eval_tuple]),
+        patch.object(mod, "_inject_3way_rewards_http", return_value={"acknowledged": 1}),
+        patch.object(mod, "checkpoint_result"),
+        patch.object(mod, "record_seen"),
+        patch("httpx.Client", return_value=MagicMock()),
+        patch.object(mod.time, "sleep"),
+    ):
+        mod.state.shutdown = False
+        mod.run_batch_3way(
+            suites=["suite_a"], sample_per_suite=1, seed=1, url="http://localhost:8000",
+            timeout=30, session_id="sess", dry_run=True, cooldown=0.0, debugger=_Debugger(),
+            questions_override=[question],
+        )
+
+    first, retry = diags
+    assert retry["is_retry"] is True
+    assert retry["tool_chains"] == [{"tool": "x"}]
+    assert set(retry) - {"is_retry", "retry_tag"} == set(first)

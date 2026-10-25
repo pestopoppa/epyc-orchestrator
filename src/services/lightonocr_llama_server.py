@@ -37,7 +37,7 @@ logger = logging.getLogger("lightonocr-llama-server")
 
 # Configuration — centralized defaults, env vars take priority
 from src.config import get_config as _get_config
-from src.services.mtmd_probe import run_mtmd_probe
+from src.services.mtmd_probe import mtmd_subprocess_env, run_mtmd_probe
 
 _svc = _get_config().services
 _vis = _get_config().vision
@@ -66,56 +66,17 @@ def _probe_mtmd_cli(path: Path) -> str | None:
 
 
 def _resolve_mtmd_cli(configured: str) -> str:
-    """Return a RUNNABLE llama-mtmd-cli path without overriding explicit config."""
-    if os.environ.get("LLAMA_MTMD_CLI") or os.environ.get("ORCHESTRATOR_PATHS_LLAMA_MTMD"):
-        return configured
+    """Return the configured (kernel-store) llama-mtmd-cli; log loudly if it does not run.
 
-    configured_path = Path(configured)
-    configured_version = _probe_mtmd_cli(configured_path)
-    if configured_version is not None:
-        return configured
-
-    llama_root = configured_path.parents[2] if len(configured_path.parents) >= 3 else None
-    if llama_root is None:
-        return configured
-
-    # PRODUCTION BUILDS FIRST. The previous list contained only legacy trees, so a
-    # missing configured path would silently fall back to llama.cpp 8219 -- three
-    # release generations behind the frozen production build -- against current
-    # models, with nothing logged. Version skew that large is not a fallback, it is a
-    # different program.
-    for candidate in (
-        llama_root / "build/bin/llama-mtmd-cli",
-        llama_root / "build-hip/bin/llama-mtmd-cli",
-        llama_root / "build-v2/bin/llama-mtmd-cli",
-        llama_root / "build_libomp_pgo_bolt/bin/llama-mtmd-cli",
-    ):
-        version = _probe_mtmd_cli(candidate)
-        if version is None:
-            continue
-        # Falling back is never silent: a different binary than the one configured is
-        # a fact the operator needs at startup, not a surprise in a later diff.
-        logger.warning(
-            "configured llama-mtmd-cli %s is not runnable; falling back to %s (%s)",
-            configured, candidate, version,
+    No fallback to llama.cpp/build* trees: they hold retired kernels (A5-M2).
+    """
+    explicit = os.environ.get("LLAMA_MTMD_CLI") or os.environ.get("ORCHESTRATOR_PATHS_LLAMA_MTMD")
+    if not explicit and _probe_mtmd_cli(Path(configured)) is None:
+        logger.error(
+            "configured llama-mtmd-cli %s is not runnable; keeping it so the failure "
+            "surfaces at launch rather than as a wrong-binary result", configured,
         )
-        return str(candidate)
-
-    logger.error(
-        "no runnable llama-mtmd-cli found under %s; keeping configured path %s so the "
-        "failure surfaces at launch rather than as a wrong-binary result",
-        llama_root, configured,
-    )
     return configured
-
-
-def _mtmd_subprocess_env(cli_path: str, threads: int) -> dict[str, str]:
-    env = {**os.environ, "OMP_NUM_THREADS": str(threads)}
-    cli_dir = str(Path(cli_path).resolve().parent)
-    ld_parts = [part for part in env.get("LD_LIBRARY_PATH", "").split(":") if part]
-    if cli_dir not in ld_parts:
-        env["LD_LIBRARY_PATH"] = ":".join([cli_dir, *ld_parts])
-    return env
 
 
 CLI_PATH = _resolve_mtmd_cli(_CONFIGURED_CLI_PATH)
@@ -215,7 +176,7 @@ class LlamaOCRWorker:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,  # Separate stderr from stdout
-                env=_mtmd_subprocess_env(CLI_PATH, self.threads),
+                env=mtmd_subprocess_env(CLI_PATH, self.threads),
             )
 
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT_SEC)

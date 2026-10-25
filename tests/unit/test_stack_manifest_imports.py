@@ -99,8 +99,6 @@ def test_gate3_tool_telemetry_profile_sets_required_api_env() -> None:
         "STATE_FILE",
         "LLAMA_SERVER",
         "LLAMA_MATH_TOOLS",
-        "LLAMA_SERVER_V2",
-        "_V2_ROLES",
         "LOG_DIR",
         "SLOT_SAVE_DIR",
         "_get_paths",

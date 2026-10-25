@@ -96,7 +96,7 @@ CAN MODIFY (with git versioning)     │  CANNOT MODIFY (eval trust boundary)
 orchestration/prompts/*.md            │  scripts/benchmark/seed_specialist_routing.py
 orchestration/*.yaml (all config)     │  scripts/benchmark/debug_scorer.py
 src/**/*.py (all orchestrator code)   │  scripts/benchmark/dataset_adapters.py
-scripts/autopilot/species/*.py        │  scripts/benchmark/question_pool.py
+scripts/autopilot/species/*.py        │  epyc-inference-research/scripts/benchmark/question_pool.py
 scripts/server/orchestrator_stack.py  │  benchmarks/prompts/question_pool.jsonl
                                       │  scripts/autopilot/safety_gate.py
                                       │  scripts/autopilot/eval_tower.py

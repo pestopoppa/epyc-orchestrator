@@ -11,10 +11,11 @@ tenant-sha checks, the P2-7 card-0 pin, and the P2-8 expected-PID allowlist.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts.server import gpu_shadow_lane_preflight as probe
-from scripts.server.gpu_shadow_lane import LANE_BINARY_COMMIT, LANE_BINARY_VERSION
 
 STOCK_SHA = "5927dc06c2b19f732fb6e2a6546dff4c130b552f2ab5f91feb3daafe43897b2a"
 
@@ -82,7 +83,7 @@ def make_facts(**overrides) -> probe.PreflightFacts:
     base = dict(
         flag_enabled=False,
         binary_exists=True,
-        binary_version_output=f"version: {LANE_BINARY_VERSION} ({LANE_BINARY_COMMIT})",
+        binary_version_output="version: 10303 (ffc1bac82)\nbuilt with GNU 13.3.0",
         kfd_dev_present=True,
         kfd_topology_present=True,
         vram_total_gib=64.0,
@@ -330,10 +331,23 @@ class TestEvaluate:
         blockers, _, _ = evaluate(require_enabled=True)
         assert any("feature flag" in b for b in blockers)
 
-    def test_binary_version_mismatch_blocks(self):
-        facts = make_facts(binary_version_output="version: 9999 (deadbeef)")
+    def test_store_binary_identity_is_recorded_not_pinned(self):
+        """A5-07: the lane serves whatever production/gpu is (v10 here), not a v8 pin."""
+        blockers, _, infos = evaluate()
+        assert not any("version" in b for b in blockers)
+        assert any("10303 (ffc1bac82)" in i for i in infos)
+
+    def test_binary_without_version_blocks(self):
+        facts = make_facts(binary_version_output="error while loading shared libraries")
         blockers, _, _ = evaluate(facts)
-        assert any("version mismatch" in b for b in blockers)
+        assert any("did not report a version" in b for b in blockers)
+
+    def test_lane_sources_carry_no_kernel_identity_pin(self):
+        root = Path(probe.__file__).resolve().parents[2]
+        sources = [*root.glob("scripts/server/gpu_shadow_lane*.py"),
+                   root / "orchestration/gpu_shadow_lane_tenancy.yaml"]
+        hits = [str(path) for path in sources if "10107" in path.read_text() or "67a433bf" in path.read_text()]
+        assert hits == []
 
     def test_binary_missing_blocks(self):
         blockers, _, _ = evaluate(make_facts(binary_exists=False))

@@ -109,3 +109,33 @@ def test_load_only_ids_reads_newline_allowlist(tmp_path) -> None:
     ids_path.write_text("m1\n\nm2\n")
 
     assert reembed.load_only_ids(ids_path) == {"m1", "m2"}
+
+
+def test_start_embedding_server_launches_kernel_store_binary_with_a_log(
+    tmp_path, monkeypatch
+) -> None:
+    """A5-06: not the v9 in-tree build/bin binary, and not stdout/stderr to DEVNULL."""
+    import subprocess
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from src.registry import kernel_paths
+
+    captured = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured.update(kwargs, cmd=cmd)
+        return SimpleNamespace(poll=lambda: None, kill=lambda: None)
+
+    monkeypatch.setattr(reembed.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(reembed.requests, "get", lambda *a, **k: SimpleNamespace(status_code=200))
+    monkeypatch.setattr(kernel_paths, "backend_ld_library_path", lambda backend: [f"/store/{backend}"])
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/ambient/lib")
+
+    reembed.start_embedding_server(Path("/m.gguf"), 8199, 2)
+
+    assert captured["cmd"][0] == str(kernel_paths.server_binary("cpu"))
+    assert captured["env"]["LD_LIBRARY_PATH"] == "/store/cpu:/ambient/lib"
+    assert Path(captured["stdout"].name) == tmp_path / "reembed_8199.log"
+    assert captured["stderr"] is subprocess.STDOUT

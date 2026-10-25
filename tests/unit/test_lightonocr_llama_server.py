@@ -4,33 +4,33 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.services.lightonocr_llama_server import (
-    _mtmd_subprocess_env,
-    _resolve_mtmd_cli,
-)
+from src.services.lightonocr_llama_server import _resolve_mtmd_cli
+from src.services.mtmd_probe import mtmd_subprocess_env
 
 
 # `_resolve_mtmd_cli` selects a candidate by RUNNING it (`--version`) and
 # matching `version: <build> (<commit>)` — exists()+X_OK is deliberately NOT a
 # runnability check, because several build trees on this host carry an
 # executable llama-mtmd-cli that dies at startup on a missing libomp.so. A
-# fixture binary therefore has to answer the probe. This is the ratified
-# production-consolidated-v8 identity.
-_RUNNABLE_STUB = '#!/bin/sh\necho "version: 10107 (67a433bf)"\n'
+# fixture binary therefore has to answer the probe.
+_RUNNABLE_STUB = '#!/bin/sh\necho "version: 10303 (ffc1bac82)"\n'
 
 
-def test_resolve_mtmd_cli_falls_back_when_default_missing(tmp_path, monkeypatch):
+def test_resolve_mtmd_cli_never_falls_back_to_a_build_tree(tmp_path, monkeypatch, caplog):
+    """A5-M2: llama.cpp/build* trees hold retired kernels; keep the configured store path."""
     monkeypatch.delenv("LLAMA_MTMD_CLI", raising=False)
     monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_MTMD", raising=False)
 
     llama_root = tmp_path / "llama.cpp"
-    configured = llama_root / "build/bin/llama-mtmd-cli"
-    fallback = llama_root / "build-v2/bin/llama-mtmd-cli"
-    fallback.parent.mkdir(parents=True)
-    fallback.write_text(_RUNNABLE_STUB)
-    fallback.chmod(0o755)
+    configured = llama_root / "configured/bin/llama-mtmd-cli"
+    legacy = llama_root / "build-v2/bin/llama-mtmd-cli"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(_RUNNABLE_STUB)
+    legacy.chmod(0o755)
 
-    assert _resolve_mtmd_cli(str(configured)) == str(fallback)
+    with caplog.at_level("ERROR"):
+        assert _resolve_mtmd_cli(str(configured)) == str(configured)
+    assert "not runnable" in caplog.text
 
 
 def test_resolve_mtmd_cli_rejects_present_but_unrunnable_candidate(tmp_path, monkeypatch):
@@ -68,7 +68,7 @@ def test_mtmd_subprocess_env_prepends_cli_library_path(tmp_path, monkeypatch):
     cli.write_text("#!/bin/sh\n")
     monkeypatch.setenv("LD_LIBRARY_PATH", "/old/lib:/older/lib")
 
-    env = _mtmd_subprocess_env(str(cli), threads=12)
+    env = mtmd_subprocess_env(str(cli), threads=12)
 
     assert env["OMP_NUM_THREADS"] == "12"
     assert env["LD_LIBRARY_PATH"].split(":")[:3] == [
@@ -86,6 +86,6 @@ def test_mtmd_subprocess_env_does_not_duplicate_cli_library_path(tmp_path, monke
     resolved_dir = str(Path(cli_dir).resolve())
     monkeypatch.setenv("LD_LIBRARY_PATH", f"{resolved_dir}:/old/lib")
 
-    env = _mtmd_subprocess_env(str(cli), threads=8)
+    env = mtmd_subprocess_env(str(cli), threads=8)
 
     assert env["LD_LIBRARY_PATH"].split(":").count(resolved_dir) == 1
