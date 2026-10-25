@@ -177,7 +177,8 @@ file facts marked [v] were re-checked by hand, the rest are the survey's and unv
       specialist_routing are ON and are what the migrated stores serve.
     NOT affected: q-values / rewards (they stay on the rows and survive re-embedding),
     bilinear_scorer.py (8 heuristic features), factual_risk calibration (prompt text),
-    classifier_config.yaml, the IRT scorers (offline only), kb_rag/ColBERT, src/vision (CLIP).
+    classifier_config.yaml, kb_rag/ColBERT, src/vision (CLIP). The offline embedding IRT
+    projector IS affected: its fitted ridge uses the BGE prompt embeddings (REPL-EMB-R1).
  B. Cosine-distribution thresholds tuned on BGE (no documented sweep found; EG2@256's cosine
     distribution has NOT been measured -- measure it before trusting any of these):
     min_similarity 0.3 / semantic_k 20 (src/config/models.py:1376, env ORCHESTRATOR_MEMRL_RETRIEVAL_
@@ -221,6 +222,17 @@ file facts marked [v] were re-checked by hand, the rest are the survey's and unv
     (the harness arm says so) and the repo has no EG2 GGUF path yet (/mnt/raid0/llm/models has none),
     so the production recipe is still to be written. orchestration/model_registry.yaml:170 pins
     ``dim: 1024``.
+
+Owned follow-ups (epyc-root ``handoffs/active/repl-embedding-retrieval.md``; none run here):
+ REPL-EMB-R1: rebuild prompt embeddings and refit the embedding IRT projector; preserve its
+              held-out rank correlation baseline and refuse a mismatched fitted dimension.
+ REPL-EMB-R2: regenerate soft-label / training / offline-reward datasets, retrain routing
+              classifier and verifier weights, then recalibrate against frozen BGE accuracy.
+ REPL-EMB-R3: derive lightweight_gat input_dim from the adopted seam, check stored weight
+              dimensions, and perform its first EG2 training.
+ REPL-EMB-R4: migrate routing_graph fixed-size Kuzu/DuckDB node arrays and repopulate them;
+              CREATE IF NOT EXISTS does not change an existing array dimension.
+ REPL-EMB-R5: sweep and recalibrate similarity thresholds, recording each old BGE value.
 """
 
 from __future__ import annotations
@@ -271,6 +283,7 @@ MODEL_NAME_MARKERS = ("embeddinggemma-2", "egemma2")
 EG2_MODEL_FILE = "embeddinggemma-2-BF16.gguf"
 EG2_GGUF_SHA256 = "68bae29d62fb8c7d23e98d21fd4662753ddd636e6b62b8a70dfe059a9844f216"
 MIN_NORM = 1e-6
+SEMANTIC_MIN_COSINE = 0.99999  # REPL-EMB-2.10 owner acceptance, not retrieval quality
 SQL_CHUNK = 500
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -553,7 +566,13 @@ def read_marker(store_dir: Path) -> dict[str, Any] | None:
 
 
 def marker_matches(marker: dict[str, Any], identity: dict[str, Any]) -> bool:
-    return all(marker.get(k) == identity.get(k) for k in CORE_KEYS)
+    if not all(marker.get(k) == identity.get(k) for k in CORE_KEYS):
+        return False
+    # Pre-B-3 markers remain readable. A key that IS present must name the adopted GGUF.
+    return all(
+        key not in marker or marker[key] == want
+        for key, want in (("model_file", EG2_MODEL_FILE), ("gguf_sha256", EG2_GGUF_SHA256))
+    )
 
 
 def verify_store_marker(
@@ -687,10 +706,16 @@ class EmbedClient:
             rows = payload["data"]
             if not isinstance(rows, list):
                 raise TypeError("data is not a list")
-            if rows and all(isinstance(r, dict) and "index" in r for r in rows):
-                rows = sorted(rows, key=lambda r: r["index"])
             if len(rows) != n:
                 raise EmbedError(f"server returned {len(rows)} rows for {n} texts")
+            if any(isinstance(r, dict) and "index" in r for r in rows):
+                indices = [r.get("index") if isinstance(r, dict) else None for r in rows]
+                if any(type(i) is not int for i in indices) or sorted(indices) != list(range(n)):
+                    raise EmbedError(
+                        "server response indices must be a complete, unique permutation "
+                        f"of 0..{n - 1}"
+                    )
+                rows = sorted(rows, key=lambda r: r["index"])
             raw = np.asarray([r["embedding"] for r in rows], dtype=np.float32)
         except EmbedError:
             raise
@@ -1727,7 +1752,12 @@ def rewrite_sessions(
     out = migrating / "session_embeddings.npy"
     np.save(out, np.zeros((rows, TARGET_DIM), dtype=np.float32))
     fsync_path(out)
-    info: dict[str, Any] = {"vectors": 0, "dim": TARGET_DIM, "file": out.name, "capacity_rows": rows}
+    info: dict[str, Any] = {
+        "vectors": 0,
+        "dim": TARGET_DIM,
+        "file": out.name,
+        "capacity_rows": rows,
+    }
     if rep.detail.get("archive_only"):
         src = comp.dir / "session_embeddings.npy"
         info.update(
@@ -1872,9 +1902,10 @@ def validate_unit(
                 "sampled": len(sem_pos),
                 "min_cosine": round(min(cos), 6),
             }
-            if min(cos) < 0.999:
+            if min(cos) < SEMANTIC_MIN_COSINE:
                 failures.append(
-                    f"{comp.kind}: semantic self-check failed (min cosine {min(cos):.4f} < 0.999): "
+                    f"{comp.kind}: semantic self-check failed (min cosine {min(cos):.8f} "
+                    f"< {SEMANTIC_MIN_COSINE}): "
                     "stored vectors do not belong to their rows"
                 )
     if failures:
