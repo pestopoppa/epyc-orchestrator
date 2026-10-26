@@ -6,12 +6,13 @@ The separate granted real-Node fixture is required before owner acceptance.
 import importlib.util
 import json
 import os
+import errno
 from pathlib import Path
 import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -100,7 +101,9 @@ class NodePlacement(unittest.TestCase):
         self.env.update(GITNEXUS_WORKER_POOL_SIZE="4", NODE_OPTIONS="--max-old-space-size=8192", GITNEXUS_LBUG_EXTENSION_INSTALL="never")
         self.argv = [G.NODE, "--v8-pool-size=1", str(G.HERE / "gitnexus-quarter.cjs"),
                      "app", str(G.GNX / "dist/cli/index.js"), "analyze", "--workers", "4"]
-        self.tids = [Path(f"/proc/{NODE_PID}/task/{NODE_PID}"), Path(f"/proc/{NODE_PID}/task/{NODE_PID + 1}")]
+        # Synthetic task entries expose only the procfs fields this guard uses.
+        self.tids = [SimpleNamespace(name=str(NODE_PID), stat=lambda: None),
+                     SimpleNamespace(name=str(NODE_PID + 1), stat=lambda: None)]
         self.affinity = CPUS
         self.patches = [
             patch.object(G, "installed_source"),
@@ -128,6 +131,48 @@ class NodePlacement(unittest.TestCase):
         with patch.object(G.os, "sched_getaffinity", side_effect=[CPUS, frozenset({0})]):
             with self.assertRaises(G.Refusal):
                 G.node_admission(CURRENT, NODE_PID)
+
+    def test_exited_thread_esrch_and_missing_task_entry_is_skipped(self):
+        self.tids[1].stat = Mock(side_effect=FileNotFoundError)
+        with patch.object(G.os, "sched_getaffinity",
+                          side_effect=[CPUS, OSError(errno.ESRCH, "thread exited")]):
+            G.node_admission(CURRENT, NODE_PID)
+
+    def test_esrch_with_task_entry_still_present_refuses(self):
+        with patch.object(G.os, "sched_getaffinity",
+                          side_effect=[CPUS, OSError(errno.ESRCH, "thread exited")]):
+            with self.assertRaises(G.Refusal):
+                G.node_admission(CURRENT, NODE_PID)
+
+    def test_non_esrch_affinity_errors_propagate(self):
+        for error in (errno.EPERM, errno.EIO):
+            with self.subTest(errno=error):
+                with patch.object(G.os, "sched_getaffinity",
+                                  side_effect=OSError(error, "affinity read failed")):
+                    with self.assertRaises(OSError) as raised:
+                        G.node_admission(CURRENT, NODE_PID)
+                    self.assertEqual(raised.exception.errno, error)
+
+    def test_task_entry_permission_or_io_errors_propagate(self):
+        failures = (PermissionError(errno.EPERM, "task stat denied"),
+                    OSError(errno.EIO, "task stat failed"))
+        for failure in failures:
+            with self.subTest(errno=failure.errno):
+                self.tids[1].stat = Mock(side_effect=failure)
+                with patch.object(G.os, "sched_getaffinity",
+                                  side_effect=[CPUS, OSError(errno.ESRCH, "thread exited")]):
+                    with self.assertRaises(type(failure)) as raised:
+                        G.node_admission(CURRENT, NODE_PID)
+                    self.assertEqual(raised.exception.errno, failure.errno)
+
+    def test_node_identity_disappearance_after_esrch_refuses(self):
+        self.tids[1].stat = Mock(side_effect=FileNotFoundError)
+        with patch.object(G.os, "sched_getaffinity",
+                          side_effect=[CPUS, OSError(errno.ESRCH, "thread exited")]):
+            with patch.object(G, "proc_stat",
+                              side_effect=[(OWNER, 101, UID), FileNotFoundError()]):
+                with self.assertRaises(FileNotFoundError):
+                    G.node_admission(CURRENT, NODE_PID)
 
     def test_oversized_uv_refuses(self):
         self.env["UV_THREADPOOL_SIZE"] = "192"
