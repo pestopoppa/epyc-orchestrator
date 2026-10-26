@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from collections import deque
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -39,6 +40,43 @@ def _ctx(**overrides):
     )
     defaults.update(overrides)
     return actions._ActionContext(**defaults)
+
+
+def _isolate_seed_batch_telemetry(monkeypatch, tmp_path):
+    """Keep the real recorder enabled while isolating its persisted history."""
+    monkeypatch.syspath_prepend(str(ROOT / "scripts" / "benchmark"))
+    telemetry = importlib.import_module("seeding_telemetry")
+    history_path = tmp_path / "seeding_batch_telemetry.jsonl"
+
+    # actions imports this cached module by name, so patch its live path and
+    # only this test's in-memory history rather than relying on import-time env.
+    monkeypatch.setattr(telemetry, "_BATCH_HISTORY_PATH", str(history_path))
+    monkeypatch.setattr(telemetry, "_PERSIST_BATCH_HISTORY", True)
+    monkeypatch.setattr(telemetry, "_recent_batches", deque(maxlen=20))
+    monkeypatch.setattr(telemetry, "_loaded_persisted_batches", False)
+
+    canonical_path = Path("/mnt/raid0/llm/tmp/seeding_batch_telemetry.jsonl")
+    canonical_write_attempts = []
+    original_open = Path.open
+
+    def guarded_open(path, mode="r", *args, **kwargs):
+        if path == canonical_path and any(flag in mode for flag in ("w", "a", "x", "+")):
+            canonical_write_attempts.append((str(path), mode))
+            raise AssertionError(f"test attempted canonical telemetry write: {path}")
+        return original_open(path, mode, *args, **kwargs)
+
+    # Path.open is guarded only for the canonical path; all other paths and
+    # modes retain their original behavior for this test's duration.
+    monkeypatch.setattr(Path, "open", guarded_open)
+    return history_path, canonical_write_attempts
+
+
+def _assert_isolated_seed_batch_record(history_path, canonical_write_attempts):
+    records = [json.loads(line) for line in history_path.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["n_questions"] == 12
+    assert records[0]["duration_s"] > 0
+    assert canonical_write_attempts == []
 
 
 # ----- dispatcher routing -----
@@ -1142,8 +1180,9 @@ def test_bsv2_payload_uses_avg_prompt_tokens_not_instruction_tokens() -> None:
 # ----- individual action handler unit (seed_batch is the simplest) -----
 
 
-def test_seed_batch_handler_runs_eval_after_seed() -> None:
+def test_seed_batch_handler_runs_eval_after_seed(monkeypatch, tmp_path) -> None:
     """seed_batch must call seeder.run_batch then tower.hybrid_eval."""
+    history_path, canonical_write_attempts = _isolate_seed_batch_telemetry(monkeypatch, tmp_path)
     calls = []
 
     class FakeSeeder:
@@ -1163,9 +1202,11 @@ def test_seed_batch_handler_runs_eval_after_seed() -> None:
     assert result == "EVAL_RESULT"
     assert species == "seeder"
     assert calls == [("seed", 12, ["math"]), ("eval",)]
+    _assert_isolated_seed_batch_record(history_path, canonical_write_attempts)
 
 
-def test_seed_batch_handler_does_not_inject_strategy_hints_into_prompts(monkeypatch) -> None:
+def test_seed_batch_handler_does_not_inject_strategy_hints_into_prompts(monkeypatch, tmp_path) -> None:
+    history_path, canonical_write_attempts = _isolate_seed_batch_telemetry(monkeypatch, tmp_path)
     monkeypatch.setattr(actions, "_PLANNER_HINTS_ENABLED", True)
     calls = []
 
@@ -1210,6 +1251,7 @@ def test_seed_batch_handler_does_not_inject_strategy_hints_into_prompts(monkeypa
     assert calls[0] == ("retrieve", "seed_batch seeder math n_questions=12", journal, 5, "seeder")
     assert calls[1] == ("seed", 12, ["math"])
     assert calls[2] == ("eval",)
+    _assert_isolated_seed_batch_record(history_path, canonical_write_attempts)
 
 
 def test_deep_eval_handler_calls_tower_evaluate_with_tier() -> None:
