@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "source_sha256": "4e64dcd9aa5ff1b2dff6b7dfb0cc9a79641e0333593c96792872fbc8c03ab29b",
+  "native_sha256": "85b101251f07b052927443a994c69c23621f7c10159687145fa15b06decf7b49",
+  "max_num_threads": 1,
+  "shim_sha256": "194f0e3ac638ffb70000faec959ced1ce5d152c1d9240567b7f5d0ba5416e2e4"
+}

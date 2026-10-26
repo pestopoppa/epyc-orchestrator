@@ -1,0 +1,50 @@
+test_claim_tag_mismatch_refuses (test_gitnexus_quarter.CanonicalResource.test_claim_tag_mismatch_refuses) ... ok
+test_expired_grant_refuses (test_gitnexus_quarter.CanonicalResource.test_expired_grant_refuses) ... ok
+test_grant_payload_cpu_mismatch_refuses (test_gitnexus_quarter.CanonicalResource.test_grant_payload_cpu_mismatch_refuses) ... ok
+test_literal_resource_cpus_are_authority (test_gitnexus_quarter.CanonicalResource.test_literal_resource_cpus_are_authority) ... ok
+test_mixed_24_cpus_do_not_constitute_one_quarter (test_gitnexus_quarter.CanonicalResource.test_mixed_24_cpus_do_not_constitute_one_quarter) ... ok
+test_q_shorthand_refuses_instead_of_inventing_smt_map (test_gitnexus_quarter.CanonicalResource.test_q_shorthand_refuses_instead_of_inventing_smt_map) ... ok
+test_real_grant_cpus_must_belong_to_locked_region (test_gitnexus_quarter.CanonicalResource.test_real_grant_cpus_must_belong_to_locked_region) ... ok
+test_cli_quarter_needs_actual_node_parent (test_gitnexus_quarter.Claims.test_cli_quarter_needs_actual_node_parent) ... ok
+test_flock_missing_refuses (test_gitnexus_quarter.Claims.test_flock_missing_refuses) ... ok
+test_payload_single_region_must_match (test_gitnexus_quarter.Claims.test_payload_single_region_must_match) ... ok
+test_single_quarter_claim_admits (test_gitnexus_quarter.Claims.test_single_quarter_claim_admits) ... ok
+test_two_quarter_claims_refuse (test_gitnexus_quarter.Claims.test_two_quarter_claims_refuse) ... ok
+test_whole_host_remains_valid (test_gitnexus_quarter.Claims.test_whole_host_remains_valid) ... ok
+test_actual_node_quarter_admits (test_gitnexus_quarter.NodePlacement.test_actual_node_quarter_admits) ... ok
+test_actual_non_node_executable_refuses (test_gitnexus_quarter.NodePlacement.test_actual_non_node_executable_refuses) ... ok
+test_extension_installer_node_child_refuses (test_gitnexus_quarter.NodePlacement.test_extension_installer_node_child_refuses) ... ok
+test_one_worker_thread_off_quarter_refuses (test_gitnexus_quarter.NodePlacement.test_one_worker_thread_off_quarter_refuses) ... ok
+test_oversized_cli_override_refuses (test_gitnexus_quarter.NodePlacement.test_oversized_cli_override_refuses) ... ok
+test_oversized_gnx_env_refuses (test_gitnexus_quarter.NodePlacement.test_oversized_gnx_env_refuses) ... ok
+test_oversized_uv_refuses (test_gitnexus_quarter.NodePlacement.test_oversized_uv_refuses) ... ok
+test_too_many_actual_threads_refuses (test_gitnexus_quarter.NodePlacement.test_too_many_actual_threads_refuses) ... ok
+test_unpinned_node_refuses (test_gitnexus_quarter.NodePlacement.test_unpinned_node_refuses) ... ok
+test_whole_host_does_not_acquire_quarter_restrictions (test_gitnexus_quarter.NodePlacement.test_whole_host_does_not_acquire_quarter_restrictions) ... ok
+test_parent_death_signal_is_kill_then_parent_race_check (test_gitnexus_quarter.SupervisorSafety.test_parent_death_signal_is_kill_then_parent_race_check) ... ok
+test_parent_fork_race_exits_before_unblocking (test_gitnexus_quarter.SupervisorSafety.test_parent_fork_race_exits_before_unblocking) ... ok
+test_term_int_hup_reap_captured_child_and_restore_handlers (test_gitnexus_quarter.SupervisorSafety.test_term_int_hup_reap_captured_child_and_restore_handlers) ... ok
+test_oversized_workers_refuse_before_node (test_gitnexus_quarter.WriterArguments.test_oversized_workers_refuse_before_node) ... ok
+test_secondary_workload_refuses (test_gitnexus_quarter.WriterArguments.test_secondary_workload_refuses) ... ok
+test_valid_workers_normalize_to_bounded_cli (test_gitnexus_quarter.WriterArguments.test_valid_workers_normalize_to_bounded_cli) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 0.020s
+
+OK
+test_bootstrap_requires_actual_mapping (test_gitnexus_native_cap.NativeArtifact.test_bootstrap_requires_actual_mapping) ... ok
+test_changed_binary_refuses (test_gitnexus_native_cap.NativeArtifact.test_changed_binary_refuses) ... ok
+test_changed_native_pin_refuses (test_gitnexus_native_cap.NativeArtifact.test_changed_native_pin_refuses) ... ok
+test_changed_source_refuses (test_gitnexus_native_cap.NativeArtifact.test_changed_source_refuses) ... ok
+test_exact_artifact_admits (test_gitnexus_native_cap.NativeArtifact.test_exact_artifact_admits) ... ok
+test_exact_mapping_and_explicit_memory_admit (test_gitnexus_native_cap.NativeArtifact.test_exact_mapping_and_explicit_memory_admit) ... ok
+test_mapping_different_inode_refuses (test_gitnexus_native_cap.NativeArtifact.test_mapping_different_inode_refuses) ... ok
+test_missing_or_ambient_preload_refuses (test_gitnexus_native_cap.NativeArtifact.test_missing_or_ambient_preload_refuses) ... ok
+test_missing_or_zero_memory_refuses (test_gitnexus_native_cap.NativeArtifact.test_missing_or_zero_memory_refuses) ... ok
+test_oversized_or_boolean_native_cap_refuses (test_gitnexus_native_cap.NativeArtifact.test_oversized_or_boolean_native_cap_refuses) ... ok
+test_symlink_refuses (test_gitnexus_native_cap.NativeArtifact.test_symlink_refuses) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.004s
+
+OK

@@ -1,0 +1,10 @@
+AssertionError [ERR_ASSERTION]: native DB exceeded granted CPU thread count
+    at placement (/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/grant-fixtures/native-db.cjs:21:3)
+    at main (/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/grant-fixtures/native-db.cjs:54:19) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}

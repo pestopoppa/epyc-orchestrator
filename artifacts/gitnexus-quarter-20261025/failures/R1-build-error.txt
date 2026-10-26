@@ -1,0 +1,50 @@
+evidence/installed-source.sha256: OK
+evidence/native-call-chain.objdump.txt: OK
+evidence/native-elf-notes.txt: OK
+evidence/native-exported-symbols.nm.txt: OK
+evidence/preserved-v2.sha256: OK
+grant-fixtures/build-native.sh: OK
+grant-fixtures/graph-gate.py: OK
+grant-fixtures/lifetime.py: OK
+grant-fixtures/native-db.cjs: OK
+grant-fixtures/node-hold.cjs: OK
+grant-fixtures/query.cjs: OK
+grant-fixtures/run-node.py: OK
+grant-fixtures/runtime-controls.cjs: OK
+grant-fixtures/test_packet_gate.py: OK
+proposal/scripts/gitnexus-guard.py: OK
+proposal/scripts/gitnexus-lbug-cap.c: OK
+proposal/scripts/gitnexus-quarter-runtime.cjs: OK
+proposal/scripts/gitnexus-quarter.cjs: OK
+proposal/scripts/gitnexus-writer.py: OK
+proposal/tests/unit/test_gitnexus_native_cap.py: OK
+proposal/tests/unit/test_gitnexus_quarter.py: OK
+body.sh: OK
+job.sh: OK
+launch.sh: OK
+preflight.sh: OK
+preflight-checks.sh: OK
+PROPOSED.patch: OK
+V2-TO-NATIVE-CAP.PROPOSED.patch: OK
+PROPOSAL.sha256: OK
+PROPOSAL.md: OK
+REVIEW.md: OK
+BASE-CALLERS.txt: OK
+ROWS-FOR-OWNER.md: OK
+preflight-3.log: OK
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/PROPOSED.patch: OK
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/result/RESULT.json: OK
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/result/native-db.log: OK
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/result/python-fixtures.log: OK
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-quarter-guard/v2/result/GRAPH-GATE.json: OK
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/database.js: OK
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/connection.js: OK
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbug.d.ts: OK
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node: OK
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbug_native.js: OK
+/usr/local/share/npm-global/lib/node_modules/gitnexus/dist/core/lbug/lbug-config.js: OK
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-native-cap-fix/proposal/scripts/gitnexus-lbug-cap.c: In function ‘refuse’:
+/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-native-cap-fix/proposal/scripts/gitnexus-lbug-cap.c:26:11: error: ignoring return value of ‘write’ declared with attribute ‘warn_unused_result’ [-Werror=unused-result]
+   26 |     (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors

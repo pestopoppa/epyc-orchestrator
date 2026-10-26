@@ -1,0 +1,9 @@
+{
+  "stage": "grant-only-private-native-resource-control-build",
+  "rc": 1,
+  "cpus": "48-71",
+  "status": "FAIL",
+  "index_run": false,
+  "installed_package_write": false,
+  "published": false
+}

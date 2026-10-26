@@ -1,0 +1,2 @@
+0x1430 T _ZN4lbug4main12SystemConfigC1Emmbbmbmbbbbb
+0x1490 T _ZN4lbug4main12SystemConfigC2Emmbbmbmbbbbb

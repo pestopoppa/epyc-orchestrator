@@ -1,0 +1,1 @@
+PASS JS resource-bound controls only; native proof is separate

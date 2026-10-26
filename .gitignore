@@ -60,6 +60,10 @@ Thumbs.db
 # Environment
 .env
 
+# Rebuilt, source/native-pinned quarter-only GitNexus runtime artifacts.
+/scripts/gitnexus-lbug-cap.so
+/scripts/gitnexus-lbug-cap.manifest.json
+
 # Orchestration transient files
 orchestration/last_task_ir.json
 orchestration/last_architecture_ir.json

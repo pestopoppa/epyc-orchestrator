@@ -1,0 +1,2 @@
+GNX_NATIVE_CAP pid=507383 requested=0 applied=1 observed=1
+GNX_NATIVE_CAP pid=507383 requested=0 applied=1 observed=1

@@ -1,0 +1,8 @@
+{
+  "status": "ALLOW_PRIVATE_GUARD_FIXTURE_ONLY",
+  "high": [],
+  "unknown": [
+    "private snapshot is stale or freshness is unproven"
+  ],
+  "scope": "guard proposal only; no USAGE validation or index"
+}

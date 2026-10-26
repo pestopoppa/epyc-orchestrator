@@ -1,0 +1,312 @@
+
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+000000000027d530 <NodeDatabase::InitCppDatabase()>:
+  27d530:	f3 0f 1e fa          	endbr64
+  27d534:	55                   	push   %rbp
+  27d535:	41 b9 ff ff ff ff    	mov    $0xffffffff,%r9d
+  27d53b:	45 31 c0             	xor    %r8d,%r8d
+  27d53e:	b9 01 00 00 00       	mov    $0x1,%ecx
+  27d543:	31 d2                	xor    %edx,%edx
+  27d545:	4c 89 ce             	mov    %r9,%rsi
+  27d548:	48 89 e5             	mov    %rsp,%rbp
+  27d54b:	41 56                	push   %r14
+  27d54d:	41 54                	push   %r12
+  27d54f:	53                   	push   %rbx
+  27d550:	48 89 fb             	mov    %rdi,%rbx
+  27d553:	48 8d 7d a0          	lea    -0x60(%rbp),%rdi
+  27d557:	48 83 ec 50          	sub    $0x50,%rsp
+  27d55b:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
+  27d562:	00 00 
+  27d564:	48 89 45 d8          	mov    %rax,-0x28(%rbp)
+  27d568:	31 c0                	xor    %eax,%eax
+  27d56a:	6a 01                	push   $0x1
+  27d56c:	6a 00                	push   $0x0
+  27d56e:	6a 01                	push   $0x1
+  27d570:	6a 01                	push   $0x1
+  27d572:	6a 01                	push   $0x1
+  27d574:	68 00 00 00 01       	push   $0x1000000
+  27d579:	6a 01                	push   $0x1
+  27d57b:	e8 d0 1e f3 ff       	call   1af450 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)@plt>
+  27d580:	48 8b 43 40          	mov    0x40(%rbx),%rax
+  27d584:	48 83 c4 40          	add    $0x40,%rsp
+  27d588:	48 85 c0             	test   %rax,%rax
+  27d58b:	74 04                	je     27d591 <NodeDatabase::InitCppDatabase()+0x61>
+  27d58d:	48 89 45 a0          	mov    %rax,-0x60(%rbp)
+  27d591:	80 7b 48 00          	cmpb   $0x0,0x48(%rbx)
+  27d595:	75 04                	jne    27d59b <NodeDatabase::InitCppDatabase()+0x6b>
+  27d597:	c6 45 b0 00          	movb   $0x0,-0x50(%rbp)
+  27d59b:	0f b6 43 49          	movzbl 0x49(%rbx),%eax
+  27d59f:	88 45 b1             	mov    %al,-0x4f(%rbp)
+  27d5a2:	48 8b 43 50          	mov    0x50(%rbx),%rax
+  27d5a6:	48 85 c0             	test   %rax,%rax
+  27d5a9:	74 04                	je     27d5af <NodeDatabase::InitCppDatabase()+0x7f>
+  27d5ab:	48 89 45 b8          	mov    %rax,-0x48(%rbp)
+  27d5af:	0f b6 43 58          	movzbl 0x58(%rbx),%eax
+  27d5b3:	88 45 c0             	mov    %al,-0x40(%rbp)
+  27d5b6:	0f b7 43 68          	movzwl 0x68(%rbx),%eax
+  27d5ba:	66 89 45 d1          	mov    %ax,-0x2f(%rbp)
+  27d5be:	0f b6 43 6a          	movzbl 0x6a(%rbx),%eax
+  27d5c2:	88 45 d4             	mov    %al,-0x2c(%rbp)
+  27d5c5:	48 8b 43 60          	mov    0x60(%rbx),%rax
+  27d5c9:	48 85 c0             	test   %rax,%rax
+  27d5cc:	78 04                	js     27d5d2 <NodeDatabase::InitCppDatabase()+0xa2>
+  27d5ce:	48 89 45 c8          	mov    %rax,-0x38(%rbp)
+  27d5d2:	bf 28 01 00 00       	mov    $0x128,%edi
+  27d5d7:	e8 c4 7f f2 ff       	call   1a55a0 <operator new(unsigned long)@plt>
+  27d5dc:	66 0f 6f 45 a0       	movdqa -0x60(%rbp),%xmm0
+  27d5e1:	48 83 ec 40          	sub    $0x40,%rsp
+  27d5e5:	48 8b 53 20          	mov    0x20(%rbx),%rdx
+  27d5e9:	49 89 c6             	mov    %rax,%r14
+  27d5ec:	48 8b 05 ad a4 f8 00 	mov    0xf8a4ad(%rip),%rax        # 1207aa0 <std::_Sp_make_shared_tag::_S_ti()::__tag+0xe8>
+  27d5f3:	48 8b 73 28          	mov    0x28(%rbx),%rsi
+  27d5f7:	4d 8d 66 10          	lea    0x10(%r14),%r12
+  27d5fb:	49 89 46 08          	mov    %rax,0x8(%r14)
+  27d5ff:	48 8d 05 f2 d3 36 01 	lea    0x136d3f2(%rip),%rax        # 15ea9f8 <vtable for std::_Sp_counted_ptr_inplace<lbug::main::Database, std::allocator<void>, (__gnu_cxx::_Lock_policy)2>+0x10>
+  27d606:	4c 89 e7             	mov    %r12,%rdi
+  27d609:	49 89 06             	mov    %rax,(%r14)
+  27d60c:	0f 11 04 24          	movups %xmm0,(%rsp)
+  27d610:	66 0f 6f 4d b0       	movdqa -0x50(%rbp),%xmm1
+  27d615:	0f 11 4c 24 10       	movups %xmm1,0x10(%rsp)
+  27d61a:	66 0f 6f 55 c0       	movdqa -0x40(%rbp),%xmm2
+  27d61f:	0f 11 54 24 20       	movups %xmm2,0x20(%rsp)
+  27d624:	48 8b 45 d0          	mov    -0x30(%rbp),%rax
+  27d628:	48 89 44 24 30       	mov    %rax,0x30(%rsp)
+  27d62d:	e8 ee c2 f2 ff       	call   1a9920 <lbug::main::Database::Database(std::basic_string_view<char, std::char_traits<char> >, lbug::main::SystemConfig)@plt>
+
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000002bc3d0 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)>:
+  2bc3d0:	41 55                	push   %r13
+  2bc3d2:	41 54                	push   %r12
+  2bc3d4:	49 89 d4             	mov    %rdx,%r12
+  2bc3d7:	55                   	push   %rbp
+  2bc3d8:	4c 89 cd             	mov    %r9,%rbp
+  2bc3db:	53                   	push   %rbx
+  2bc3dc:	48 89 fb             	mov    %rdi,%rbx
+  2bc3df:	48 83 ec 08          	sub    $0x8,%rsp
+  2bc3e3:	88 4f 10             	mov    %cl,0x10(%rdi)
+  2bc3e6:	44 88 47 11          	mov    %r8b,0x11(%rdi)
+  2bc3ea:	8b 44 24 30          	mov    0x30(%rsp),%eax
+  2bc3ee:	48 89 57 08          	mov    %rdx,0x8(%rdi)
+  2bc3f2:	0f b6 54 24 50       	movzbl 0x50(%rsp),%edx
+  2bc3f7:	88 47 20             	mov    %al,0x20(%rdi)
+  2bc3fa:	48 8b 44 24 38       	mov    0x38(%rsp),%rax
+  2bc3ff:	48 89 47 28          	mov    %rax,0x28(%rdi)
+  2bc403:	0f b6 44 24 58       	movzbl 0x58(%rsp),%eax
+  2bc408:	c1 e0 08             	shl    $0x8,%eax
+  2bc40b:	09 d0                	or     %edx,%eax
+  2bc40d:	0f b6 54 24 48       	movzbl 0x48(%rsp),%edx
+  2bc412:	c1 e0 08             	shl    $0x8,%eax
+  2bc415:	09 d0                	or     %edx,%eax
+  2bc417:	0f b6 54 24 40       	movzbl 0x40(%rsp),%edx
+  2bc41c:	c1 e0 08             	shl    $0x8,%eax
+  2bc41f:	09 d0                	or     %edx,%eax
+  2bc421:	89 47 30             	mov    %eax,0x30(%rdi)
+  2bc424:	8b 44 24 60          	mov    0x60(%rsp),%eax
+  2bc428:	88 47 34             	mov    %al,0x34(%rdi)
+  2bc42b:	b8 ff ff ff ff       	mov    $0xffffffff,%eax
+  2bc430:	48 39 c6             	cmp    %rax,%rsi
+  2bc433:	74 3b                	je     2bc470 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0xa0>
+  2bc435:	48 85 f6             	test   %rsi,%rsi
+  2bc438:	74 36                	je     2bc470 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0xa0>
+  2bc43a:	48 89 33             	mov    %rsi,(%rbx)
+  2bc43d:	4d 85 e4             	test   %r12,%r12
+  2bc440:	0f 84 ba 00 00 00    	je     2bc500 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x130>
+  2bc446:	b8 ff ff ff ff       	mov    $0xffffffff,%eax
+  2bc44b:	48 39 c5             	cmp    %rax,%rbp
+  2bc44e:	48 b8 00 00 00 00 00 	movabs $0x80000000000,%rax
+  2bc455:	08 00 00 
+  2bc458:	48 0f 44 e8          	cmove  %rax,%rbp
+  2bc45c:	48 89 6b 18          	mov    %rbp,0x18(%rbx)
+  2bc460:	48 83 c4 08          	add    $0x8,%rsp
+  2bc464:	5b                   	pop    %rbx
+  2bc465:	5d                   	pop    %rbp
+  2bc466:	41 5c                	pop    %r12
+  2bc468:	41 5d                	pop    %r13
+  2bc46a:	c3                   	ret
+  2bc46b:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  2bc470:	bf 55 00 00 00       	mov    $0x55,%edi
+  2bc475:	e8 c6 9e ee ff       	call   1a6340 <sysconf@plt>
+  2bc47a:	bf 1e 00 00 00       	mov    $0x1e,%edi
+  2bc47f:	49 89 c5             	mov    %rax,%r13
+  2bc482:	e8 b9 9e ee ff       	call   1a6340 <sysconf@plt>
+  2bc487:	49 0f af c5          	imul   %r13,%rax
+  2bc48b:	48 85 c0             	test   %rax,%rax
+  2bc48e:	0f 88 7c 00 00 00    	js     2bc510 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x140>
+  2bc494:	66 0f ef c0          	pxor   %xmm0,%xmm0
+  2bc498:	f2 48 0f 2a c0       	cvtsi2sd %rax,%xmm0
+  2bc49d:	f2 0f 59 05 0b db f4 	mulsd  0xf4db0b(%rip),%xmm0        # 1209fb0 <lbug::common::StorageConstants::TEMP_FILE_SUFFIX+0x8>
+  2bc4a4:	00 
+  2bc4a5:	f2 0f 10 0d 0b db f4 	movsd  0xf4db0b(%rip),%xmm1        # 1209fb8 <lbug::common::StorageConstants::TEMP_FILE_SUFFIX+0x10>
+  2bc4ac:	00 
+  2bc4ad:	66 0f 2f c1          	comisd %xmm1,%xmm0
+  2bc4b1:	73 7d                	jae    2bc530 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x160>
+  2bc4b3:	f2 48 0f 2c c0       	cvttsd2si %xmm0,%rax
+  2bc4b8:	48 85 c0             	test   %rax,%rax
+  2bc4bb:	0f 88 86 00 00 00    	js     2bc547 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x177>
+  2bc4c1:	66 0f ef c0          	pxor   %xmm0,%xmm0
+  2bc4c5:	f2 48 0f 2a c0       	cvtsi2sd %rax,%xmm0
+  2bc4ca:	66 0f 2f 05 ee da f4 	comisd 0xf4daee(%rip),%xmm0        # 1209fc0 <lbug::common::StorageConstants::TEMP_FILE_SUFFIX+0x18>
+  2bc4d1:	00 
+  2bc4d2:	48 be 66 66 66 66 66 	movabs $0x66666666666,%rsi
+  2bc4d9:	06 00 00 
+  2bc4dc:	0f 87 58 ff ff ff    	ja     2bc43a <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x6a>
+  2bc4e2:	66 0f 2f c1          	comisd %xmm1,%xmm0
+  2bc4e6:	0f 83 7c 00 00 00    	jae    2bc568 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x198>
+  2bc4ec:	f2 48 0f 2c f0       	cvttsd2si %xmm0,%rsi
+  2bc4f1:	48 89 33             	mov    %rsi,(%rbx)
+  2bc4f4:	4d 85 e4             	test   %r12,%r12
+  2bc4f7:	0f 85 49 ff ff ff    	jne    2bc446 <lbug::main::SystemConfig::SystemConfig(unsigned long, unsigned long, bool, bool, unsigned long, bool, unsigned long, bool, bool, bool, bool, bool)+0x76>
+  2bc4fd:	0f 1f 00             	nopl   (%rax)
+  2bc500:	e8 fb 68 ee ff       	call   1a2e00 <std::thread::hardware_concurrency()@plt>
+  2bc505:	89 c0                	mov    %eax,%eax
+  2bc507:	48 89 43 08          	mov    %rax,0x8(%rbx)
+  2bc50b:	e9                   	.byte 0xe9
+
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000011b07d0 <std::thread::hardware_concurrency()>:
+ 11b07d0:	f3 0f 1e fa          	endbr64
+ 11b07d4:	48 83 ec 08          	sub    $0x8,%rsp
+ 11b07d8:	e8 63 22 ff fe       	call   1a2a40 <get_nprocs@plt>
+ 11b07dd:	31 d2                	xor    %edx,%edx
+ 11b07df:	85 c0                	test   %eax,%eax
+ 11b07e1:	0f 48 c2             	cmovs  %edx,%eax
+ 11b07e4:	48 83 c4 08          	add    $0x8,%rsp
+ 11b07e8:	c3                   	ret
+
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000002bec88 <lbug::main::Database::initMembers(std::basic_string_view<char, std::char_traits<char> >, std::function<std::unique_ptr<lbug::storage::BufferManager, std::default_delete<lbug::storage::BufferManager> > (lbug::main::Database const&)>)+0x2d8>:
+  2bec88:	4c 8b bd 48 fd ff ff 	mov    -0x2b8(%rbp),%r15
+  2bec8f:	bf 08 00 00 00       	mov    $0x8,%edi
+  2bec94:	4d 8b 67 20          	mov    0x20(%r15),%r12
+  2bec98:	e8 03 69 ee ff       	call   1a55a0 <operator new(unsigned long)@plt>
+  2bec9d:	49 8b 74 24 08       	mov    0x8(%r12),%rsi
+  2beca2:	48 89 c7             	mov    %rax,%rdi
+  2beca5:	48 89 c3             	mov    %rax,%rbx
+  2beca8:	e8 53 34 30 00       	call   5c2100 <lbug::processor::QueryProcessor::QueryProcessor(unsigned long)>
+
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+00000000005c2100 <lbug::processor::QueryProcessor::QueryProcessor(unsigned long)>:
+  5c2100:	41 54                	push   %r12
+  5c2102:	49 89 f4             	mov    %rsi,%r12
+  5c2105:	55                   	push   %rbp
+  5c2106:	53                   	push   %rbx
+  5c2107:	48 89 fb             	mov    %rdi,%rbx
+  5c210a:	48 c7 07 00 00 00 00 	movq   $0x0,(%rdi)
+  5c2111:	bf d0 00 00 00       	mov    $0xd0,%edi
+  5c2116:	e8 85 34 be ff       	call   1a55a0 <operator new(unsigned long)@plt>
+  5c211b:	4c 89 e6             	mov    %r12,%rsi
+  5c211e:	48 89 c7             	mov    %rax,%rdi
+  5c2121:	48 89 c5             	mov    %rax,%rbp
+  5c2124:	e8 77 3a be ff       	call   1a5ba0 <lbug::common::TaskScheduler::TaskScheduler(unsigned long)@plt>
+
+/usr/local/share/npm-global/lib/node_modules/gitnexus/node_modules/@ladybugdb/core/lbugjs.node:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000311dd0 <lbug::common::TaskScheduler::TaskScheduler(unsigned long)>:
+  311dd0:	41 57                	push   %r15
+  311dd2:	66 0f ef c0          	pxor   %xmm0,%xmm0
+  311dd6:	49 89 f7             	mov    %rsi,%r15
+  311dd9:	41 56                	push   %r14
+  311ddb:	41 55                	push   %r13
+  311ddd:	41 54                	push   %r12
+  311ddf:	55                   	push   %rbp
+  311de0:	48 89 fd             	mov    %rdi,%rbp
+  311de3:	53                   	push   %rbx
+  311de4:	48 83 ec 38          	sub    $0x38,%rsp
+  311de8:	48 c7 07 00 00 00 00 	movq   $0x0,(%rdi)
+  311def:	48 c7 47 08 08 00 00 	movq   $0x8,0x8(%rdi)
+  311df6:	00 
+  311df7:	0f 11 47 10          	movups %xmm0,0x10(%rdi)
+  311dfb:	0f 11 47 20          	movups %xmm0,0x20(%rdi)
+  311dff:	0f 11 47 30          	movups %xmm0,0x30(%rdi)
+  311e03:	0f 11 47 40          	movups %xmm0,0x40(%rdi)
+  311e07:	bf 40 00 00 00       	mov    $0x40,%edi
+  311e0c:	e8 8f 37 e9 ff       	call   1a55a0 <operator new(unsigned long)@plt>
+  311e11:	48 8b 55 08          	mov    0x8(%rbp),%rdx
+  311e15:	bf 00 02 00 00       	mov    $0x200,%edi
+  311e1a:	48 89 45 00          	mov    %rax,0x0(%rbp)
+  311e1e:	48 8d 14 95 fc ff ff 	lea    -0x4(,%rdx,4),%rdx
+  311e25:	ff 
+  311e26:	48 83 e2 f8          	and    $0xfffffffffffffff8,%rdx
+  311e2a:	48 8d 1c 10          	lea    (%rax,%rdx,1),%rbx
+  311e2e:	e8 6d 37 e9 ff       	call   1a55a0 <operator new(unsigned long)@plt>
+  311e33:	48 89 03             	mov    %rax,(%rbx)
+  311e36:	66 48 0f 6e c8       	movq   %rax,%xmm1
+  311e3b:	48 05 00 02 00 00    	add    $0x200,%rax
+  311e41:	66 48 0f 6e d3       	movq   %rbx,%xmm2
+  311e46:	66 48 0f 6e c0       	movq   %rax,%xmm0
+  311e4b:	c6 45 50 00          	movb   $0x0,0x50(%rbp)
+  311e4f:	66 0f 6c c9          	punpcklqdq %xmm1,%xmm1
+  311e53:	48 8d 85 98 00 00 00 	lea    0x98(%rbp),%rax
+  311e5a:	66 0f 6c c2          	punpcklqdq %xmm2,%xmm0
+  311e5e:	48 c7 45 68 00 00 00 	movq   $0x0,0x68(%rbp)
+  311e65:	00 
+  311e66:	48 89 c7             	mov    %rax,%rdi
+  311e69:	0f 11 45 20          	movups %xmm0,0x20(%rbp)
+  311e6d:	0f 11 45 40          	movups %xmm0,0x40(%rbp)
+  311e71:	66 0f ef c0          	pxor   %xmm0,%xmm0
+  311e75:	48 c7 85 90 00 00 00 	movq   $0x0,0x90(%rbp)
+  311e7c:	00 00 00 00 
+  311e80:	0f 11 45 58          	movups %xmm0,0x58(%rbp)
+  311e84:	66 0f ef c0          	pxor   %xmm0,%xmm0
+  311e88:	0f 11 4d 10          	movups %xmm1,0x10(%rbp)
+  311e8c:	0f 11 4d 30          	movups %xmm1,0x30(%rbp)
+  311e90:	0f 11 45 70          	movups %xmm0,0x70(%rbp)
+  311e94:	0f 11 85 80 00 00 00 	movups %xmm0,0x80(%rbp)
+  311e9b:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
+  311ea0:	e8 4b 45 e9 ff       	call   1a63f0 <std::condition_variable::condition_variable()@plt>
+  311ea5:	48 c7 85 c8 00 00 00 	movq   $0x0,0xc8(%rbp)
+  311eac:	00 00 00 00 
+  311eb0:	4d 85 ff             	test   %r15,%r15
+  311eb3:	0f 84 97 01 00 00    	je     312050 <lbug::common::TaskScheduler::TaskScheduler(unsigned long)+0x280>
+  311eb9:	48 8d 44 24 28       	lea    0x28(%rsp),%rax
+  311ebe:	48 8b 5d 60          	mov    0x60(%rbp),%rbx
+  311ec2:	45 31 e4             	xor    %r12d,%r12d
+  311ec5:	48 89 04 24          	mov    %rax,(%rsp)
+  311ec9:	eb 69                	jmp    311f34 <lbug::common::TaskScheduler::TaskScheduler(unsigned long)+0x164>
+  311ecb:	0f 1f 44 00 00       	nopl   0x0(%rax,%rax,1)
+  311ed0:	48 c7 03 00 00 00 00 	movq   $0x0,(%rbx)
+  311ed7:	bf 10 00 00 00       	mov    $0x10,%edi
+  311edc:	e8 bf 36 e9 ff       	call   1a55a0 <operator new(unsigned long)@plt>
+  311ee1:	48 8d 35 f8 90 2d 01 	lea    0x12d90f8(%rip),%rsi        # 15eafe0 <vtable for std::thread::_State_impl<std::thread::_Invoker<std::tuple<lbug::common::TaskScheduler::TaskScheduler(unsigned long)::{lambda()#1}> > >+0x10>
+  311ee8:	48 89 68 08          	mov    %rbp,0x8(%rax)
+  311eec:	48 8d 15 8d 0f 00 00 	lea    0xf8d(%rip),%rdx        # 312e80 <std::thread::_M_thread_deps_never_run()>
+  311ef3:	48 89 df             	mov    %rbx,%rdi
+  311ef6:	48 89 30             	mov    %rsi,(%rax)
+  311ef9:	48 8b 34 24          	mov    (%rsp),%rsi
+  311efd:	48 89 44 24 28       	mov    %rax,0x28(%rsp)
+  311f02:	e8 29 8a e9 ff       	call   1aa930 <std::thread::_M_start_thread(std::unique_ptr<std::thread::_State, std::default_delete<std::thread::_State> >, void (*)())@plt>
+  311f07:	48 8b 7c 24 28       	mov    0x28(%rsp),%rdi
+  311f0c:	48 85 ff             	test   %rdi,%rdi
+  311f0f:	74 06                	je     311f17 <lbug::common::TaskScheduler::TaskScheduler(unsigned long)+0x147>
+  311f11:	48 8b 07             	mov    (%rdi),%rax
+  311f14:	ff 50 08             	call   *0x8(%rax)
+  311f17:	48 8b 45 60          	mov    0x60(%rbp),%rax
+  311f1b:	48 8d 58 08          	lea    0x8(%rax),%rbx
+  311f1f:	41 8d 44 24 01       	lea    0x1(%r12),%eax
+  311f24:	48 89 5d 60          	mov    %rbx,0x60(%rbp)
+  311f28:	49 89 c4             	mov    %rax,%r12
+  311f2b:	4c 39 f8             	cmp    %r15,%rax
+  311f2e:	0f 83 1c 01 00 00    	jae    312050 <lbug::common::TaskScheduler::TaskScheduler(unsigned long)+0x280>

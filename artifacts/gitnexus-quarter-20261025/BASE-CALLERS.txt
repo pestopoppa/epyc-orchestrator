@@ -1,0 +1,12 @@
+BASE49c1f749 scripts/gitnexus-analyze.sh execs scripts/gitnexus-writer.py --repo app.
+BASE49c1f749 scripts/gitnexus-writer.py guard() invokes scripts/gitnexus-guard.py.
+V2 quarter_run() invokes installed_source(), claim(), node_admission(); main() owns this route.
+NEW quarter_run() invokes native_artifact() and supplies exact child-only LD_PRELOAD plus fixed DB bounds.
+NEW node_admission() invokes native_environment(), which invokes native_artifact().
+NEW admit() invokes node_admission(require_native_mapping=True) from the actual Node bootstrap.
+NEW gitnexus-quarter-runtime.cjs wraps Database before any GNX CLI import, preserves class name and sets supported buffer/maxDB args.
+ELF85b10125 NodeDatabase::InitCppDatabase at0x27d57b calls SystemConfig C1 through PLT with maxNumThreads0.
+ELF85b10125 SystemConfig C1/C2 symbols alias0x2bc3d0; maxNumThreads is the second uint64 at config offset8.
+NEW gitnexus-lbug-cap.c exports only exact C1/C2 and forwards every argument except maxNumThreads=1.
+NEW source is a resource boundary shim; the exact installed caller image/ELF SHA, mapped shim inode, native config readback and actual<=24 task masks remain required.
+No new whole-host caller; whole-host route does not call native_artifact/native_environment and never receives this preload.

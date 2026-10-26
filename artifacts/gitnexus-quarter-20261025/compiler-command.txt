@@ -1,0 +1,1 @@
+compiler_first_gate=begin source=/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-native-cap-fix/r2/proposal/scripts/gitnexus-lbug-cap.c output=/mnt/raid0/llm/tmp/codex-ni-20261025-gnx-native-cap-fix/r2/proposal/scripts/gitnexus-lbug-cap.so flags=-std=c11,-O2,-fPIC,-shared,-Wall,-Wextra,-Werror,--no-undefined,-z,relro,-z,now,-ldl wall_cap=60
