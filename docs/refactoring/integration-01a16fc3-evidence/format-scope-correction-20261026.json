@@ -1,0 +1,22 @@
+{
+  "kind": "existing-evidence-scope-correction",
+  "fresh_formatter_or_test_run": false,
+  "historical_run2_exit": 1,
+  "historical_run2_status": "FAIL, preserved",
+  "accepted_base": "84f6f6f15f713d21098dbad2b153d32f8cc13624",
+  "candidate_head": "3ee8eea2ab514e8fac4c15c839d4ad1644e0ba38",
+  "actual_run2_mutable_base": "d825274d7078501f7dcc03fd253ba3b422dda0b4",
+  "baseline_log_mtime_utc": "2026-10-25T07:59:03.341135317Z",
+  "run2_comparison_mtime_utc": "2026-10-25T21:46:10.533106382Z",
+  "accepted_scope_paths": 182,
+  "reconstructed_run2_scope_paths": 232,
+  "scope_added_paths": 50,
+  "scope_removed_paths": 0,
+  "additional_failures_outside_accepted_scope": 44,
+  "additional_failure_blobs_exactly_identical_to_accepted_base": 44,
+  "stored_baseline_failing_blobs_exactly_identical_to_accepted_base": 133,
+  "existing_run2_failures_within_accepted_scope": 133,
+  "accepted_scope_failure_path_list_exactly_equals_stored_baseline": true,
+  "introduced_formatter_failure_paths_within_accepted_scope": [],
+  "acceptance": "Owning main review required; historical runner failure remains recorded. This corrects validation bookkeeping and claims no application change or new run."
+}

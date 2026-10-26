@@ -95,7 +95,12 @@ def test_cheap_first_call_runs_off_the_event_loop():
 
     coro = _try_cheap_first(
         ChatRequest(prompt="write a haiku about the sea", real_mode=True),
-        routing, primitives, state, time.perf_counter(), "frontdoor", "direct",
+        routing,
+        primitives,
+        state,
+        time.perf_counter(),
+        "frontdoor",
+        "direct",
     )
     lag = asyncio.run(_loop_lag_during(call, coro))
     assert lag < 0.5

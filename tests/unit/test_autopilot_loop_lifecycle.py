@@ -30,9 +30,7 @@ def _sync_plot_renders(run) -> int:
 
 def _autonomous(monkeypatch: pytest.MonkeyPatch, **kwargs):
     kwargs.setdefault("state", fresh_state())
-    return run_loop_inner(
-        monkeypatch, auto_actions=[NUMERIC], higher_tier_probe=False, **kwargs
-    )
+    return run_loop_inner(monkeypatch, auto_actions=[NUMERIC], higher_tier_probe=False, **kwargs)
 
 
 def test_three_trials_carry_state_and_fire_the_cadence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,8 +38,11 @@ def test_three_trials_carry_state_and_fire_the_cadence(monkeypatch: pytest.Monke
     results = [measured_result(quality=q) for q in (2.1, 2.2, 2.3)]
 
     run = _autonomous(
-        monkeypatch, state=fresh_state(trial_counter=24), max_trials=3,
-        dispatch_results=results, verdict_passed=False,
+        monkeypatch,
+        state=fresh_state(trial_counter=24),
+        max_trials=3,
+        dispatch_results=results,
+        verdict_passed=False,
     )
 
     assert [e.trial_id for e in run.journal_entries] == [24, 25, 26]
@@ -69,7 +70,9 @@ def test_paused_loop_polls_without_dispatching(monkeypatch: pytest.MonkeyPatch) 
 
 def test_consecutive_failure_limit_rolls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     run = _autonomous(
-        monkeypatch, dispatch_results=[measured_result()], verdict_passed=False,
+        monkeypatch,
+        dispatch_results=[measured_result()],
+        verdict_passed=False,
         should_rollback=True,
     )
 
@@ -77,7 +80,9 @@ def test_consecutive_failure_limit_rolls_back(monkeypatch: pytest.MonkeyPatch) -
     assert blacklisted["reason_class"] == "safety_failure"
     assert run.index("append_blacklist") < run.index("restore_checkpoint") < run.index("record")
     [entry] = run.journal_entries
-    assert entry.deficiency_category == "consecutive_failures"  # AP-14, via the dispatch side channel
+    assert (
+        entry.deficiency_category == "consecutive_failures"
+    )  # AP-14, via the dispatch side channel
     assert run.state["consecutive_failures"] == 0  # gate.reset_failures() after the restore
     assert run.state["paused"] is False
 

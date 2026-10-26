@@ -56,6 +56,11 @@ _TEST_TRACE_DB_PATHS: set[Path] = set()
 _RUNTIME_STORE_ENVS = {
     "ORCHESTRATOR_DELEGATION_REPORT_DIR": "delegation_reports",
     "AUTOPILOT_EVAL_INSTRUMENT_LEDGER": "eval_instrument_ledger.json",
+    # Successful tool audits may persist first-seen hosts beside this log.
+    # Keep both writes under the per-process pytest temp root, never the checkout.
+    "ORCHESTRATOR_TOOL_AUDIT_LOG": "tool_call_audit.jsonl",
+    # Ruff is invoked by some subprocess tests; keep its cache out of the checkout too.
+    "RUFF_CACHE_DIR": "ruff-cache",
 }
 _PREVIOUS_RUNTIME_STORE_ENVS = {key: os.environ.get(key) for key in _RUNTIME_STORE_ENVS}
 for _env, _name in _RUNTIME_STORE_ENVS.items():
@@ -104,6 +109,7 @@ def _import_stack_manifest_off_serving_host() -> None:
     """
     try:
         import scripts.server.stack_manifest  # noqa: F401
+
         return
     except ValueError as exc:
         message = str(exc)
@@ -221,7 +227,10 @@ def pytest_configure(config):
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CHECKOUT_LEAK_EXEMPT = (
-    "*__pycache__/*", ".pytest_cache/*", ".hypothesis/*", ".coverage*",  # tool caches
+    "*__pycache__/*",
+    ".pytest_cache/*",
+    ".hypothesis/*",
+    ".coverage*",  # tool caches
     # Leaks seen in a full run with no fix yet; shrink this list, never grow it.
     "logs/.bg_cleanup.lock",
     "logs/dispatch/*",
@@ -237,9 +246,20 @@ def _checkout_untracked() -> set[str] | None:
     """Untracked and ignored paths in this checkout; None when git cannot say."""
     try:
         out = subprocess.run(
-            ["git", "-C", str(_REPO_ROOT), "status", "--porcelain", "--ignored",
-             "--untracked-files=all", "-z"],
-            capture_output=True, text=True, timeout=120, check=True,
+            [
+                "git",
+                "-C",
+                str(_REPO_ROOT),
+                "status",
+                "--porcelain",
+                "--ignored",
+                "--untracked-files=all",
+                "-z",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
@@ -561,7 +581,9 @@ def pytest_collection_modifyitems(config, items):
         pass
 
     if not config.getoption("--run-materialized-trace"):
-        skip_trace = pytest.mark.skip(reason="Need --run-materialized-trace to read host trace data")
+        skip_trace = pytest.mark.skip(
+            reason="Need --run-materialized-trace to read host trace data"
+        )
         for item in items:
             if "requires_materialized_trace" in item.keywords:
                 item.add_marker(skip_trace)

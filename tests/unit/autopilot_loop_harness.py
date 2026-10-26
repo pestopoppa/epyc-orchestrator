@@ -55,7 +55,11 @@ _REAL = SimpleNamespace(
     signal=signal.signal,
     time=autopilot.time,
 )
-DEFAULT_SEQ: dict[str, Any] = {"candidate": "candidate-a", "confirmed": False, "state": "accumulating"}
+DEFAULT_SEQ: dict[str, Any] = {
+    "candidate": "candidate-a",
+    "confirmed": False,
+    "state": "accumulating",
+}
 HARNESS_TARGETS = [{"kind": "harness", "id": "t"}]
 lb = autopilot._loop_beliefs
 
@@ -101,9 +105,14 @@ def multitier_final_t1_state(candidate_action: dict[str, Any], **extra: Any) -> 
         rows = [{"qid": f"t{tier}q{i}", "correct": True} for i in range(10)]
         return build_tier_baseline_evidence(
             SimpleNamespace(
-                tier=tier, quality=3.0, reliability=1.0, core_id=f"core-t{tier}",
-                dataset_content_sha256=f"dataset-t{tier}", test_profile=f"profile-t{tier}",
-                question_results=rows, details={},
+                tier=tier,
+                quality=3.0,
+                reliability=1.0,
+                core_id=f"core-t{tier}",
+                dataset_content_sha256=f"dataset-t{tier}",
+                test_profile=f"profile-t{tier}",
+                question_results=rows,
+                details={},
             )
         )
 
@@ -153,7 +162,9 @@ def autopilot_calls(name: str) -> list[tuple[str, ast.Call]]:
 
     def visit(node: ast.AST, scope: str) -> None:
         for child in ast.iter_child_nodes(node):
-            inner = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+            inner = (
+                child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+            )
             if isinstance(child, ast.Call):
                 func = child.func
                 callee = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
@@ -199,7 +210,9 @@ class LoopRun:
 
     def saves(self) -> list[tuple[int, dict[str, Any]]]:
         """``(event index, payload)`` of every state persistence, plain or journal-authority."""
-        return [(i, p) for i, (n, p) in enumerate(self.events) if n in ("save_state", "save_authority")]
+        return [
+            (i, p) for i, (n, p) in enumerate(self.events) if n in ("save_state", "save_authority")
+        ]
 
 
 def _scripted(items: Iterable[Any] | None, default: Any) -> Callable[[], Any]:
@@ -627,7 +640,9 @@ def run_loop_inner(
         )
 
     def fake_save_authority(*args: Any, context: str = "", **kwargs: Any) -> None:
-        emit("save_authority", context=context, in_flight=marker(), paused=bool(state.get("paused")))
+        emit(
+            "save_authority", context=context, in_flight=marker(), paused=bool(state.get("paused"))
+        )
 
     def fake_dispatch_action(action: dict[str, Any], *args: Any, **kwargs: Any) -> tuple[Any, str]:
         if dispatch_actions_out is not None:
@@ -637,7 +652,9 @@ def run_loop_inner(
             "dispatch",
             action=dict(action),
             in_flight=marker(),
-            run_manifest=copy.deepcopy(flight.get("run_manifest")) if isinstance(flight, dict) else None,
+            run_manifest=copy.deepcopy(flight.get("run_manifest"))
+            if isinstance(flight, dict)
+            else None,
             served_content_present=autopilot.SERVED_CONTENT_STATE_KEY in state,
         )
         result = next_result()
@@ -784,6 +801,7 @@ def run_loop_inner(
         "_force_metric_action_after_meta",
         lambda action, state, rationale, blacklist: (action, rationale),
     )
+
     def fake_auto_action(*args: Any, **kwargs: Any) -> dict[str, Any]:
         emit("auto_action")
         action = dict(next_auto_action())
@@ -813,6 +831,7 @@ def run_loop_inner(
     )
     m(autopilot, "health_check", fake_health_check)
     m(autopilot, "should_generate_today", lambda _state: False)
+
     def fake_subprocess_run(cmd: Any, *args: Any, **kwargs: Any) -> Any:
         emit("subprocess_run", cmd=list(cmd))
         # subprocess is a shared module object, so returning None here also breaks
