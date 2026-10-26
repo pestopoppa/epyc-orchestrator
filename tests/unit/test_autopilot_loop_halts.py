@@ -82,7 +82,9 @@ def test_sigterm_during_planner_turn_does_not_dispatch_selected_action(
     assert run.names.count("plan") == 1
 
 
-@pytest.mark.parametrize("use_controller", [False, True], ids=["no-controller", "forced-controller"])
+@pytest.mark.parametrize(
+    "use_controller", [False, True], ids=["no-controller", "forced-controller"]
+)
 def test_sigterm_during_final_selection_does_not_write_wal_or_dispatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any, use_controller: bool
 ) -> None:
@@ -97,9 +99,7 @@ def test_sigterm_during_final_selection_does_not_write_wal_or_dispatch(
         planner_decisions=[planner_decision(SEED)] if use_controller else None,
         auto_actions=[SEED],
         force_fresh_eval_context=(
-            {"candidate": "candidate-a", "source_trial_id": 11}
-            if use_controller
-            else None
+            {"candidate": "candidate-a", "source_trial_id": 11} if use_controller else None
         ),
         selection_hook=terminate_after_selection,
         real_state_io=True,
@@ -222,7 +222,9 @@ def test_skip_journal_failure_keeps_wal_for_startup_recovery(
                 use_controller=True,
                 higher_tier_probe=False,
                 planner_decisions=[planner_decision(SEED)],
-                dispatch_results=[autopilot.SkipOutcome("skipped", "validator rejected", "seed_batch")],
+                dispatch_results=[
+                    autopilot.SkipOutcome("skipped", "validator rejected", "seed_batch")
+                ],
                 real_state_io=True,
                 tmp_path=tmp_path,
             )
@@ -415,7 +417,12 @@ HALTS = [
         _planners_offline,
         0,
     ),
-    ("planner_deterministic_guard", "planner_deterministic_guard_halt", _planner_deterministic_guard, 0),
+    (
+        "planner_deterministic_guard",
+        "planner_deterministic_guard_halt",
+        _planner_deterministic_guard,
+        0,
+    ),
     ("seq_gate_preflight_blocked", "seq_gate_preflight_halt", _seq_gate_preflight, 0),
     ("meta_action_loop", "meta_loop_halt", _meta_loop, 1),
     ("skip_action_loop", "skip_loop_halt", _skip_loop, 1),
@@ -426,7 +433,11 @@ HALTS = [
     "deficiency, halt_phase, scenario, dispatches", HALTS, ids=[h[1] for h in HALTS]
 )
 def test_halt_latches_pause_persists_it_and_exits(
-    monkeypatch: pytest.MonkeyPatch, deficiency: str, halt_phase: str, scenario: Any, dispatches: int
+    monkeypatch: pytest.MonkeyPatch,
+    deficiency: str,
+    halt_phase: str,
+    scenario: Any,
+    dispatches: int,
 ) -> None:
     kwargs = {"use_controller": True, "higher_tier_probe": False, **scenario(monkeypatch)}
     state = fresh_state(**kwargs.pop("state", {}))

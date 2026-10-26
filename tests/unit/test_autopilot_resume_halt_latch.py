@@ -327,7 +327,9 @@ def test_cli_resume_reports_relaunch_when_daemon_lock_is_free(
     assert json.loads(state_path.read_text())["paused"] is False
 
 
-def test_singleton_probe_reports_live_lock_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_singleton_probe_reports_live_lock_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import fcntl
     import autopilot
 

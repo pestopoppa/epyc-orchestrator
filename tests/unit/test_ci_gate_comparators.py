@@ -101,7 +101,7 @@ def test_pytest_baseline_enforces_collection_floor(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert "Collection floor failed: 2 < 3" in result.stdout
+    assert "Collection floor failed: 1 < 3." in result.stdout
 
 
 def test_pytest_baseline_preserves_nested_class_and_parameter_identity(tmp_path: Path) -> None:

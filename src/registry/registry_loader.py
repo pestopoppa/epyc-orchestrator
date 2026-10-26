@@ -977,7 +977,9 @@ def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
                     _CTK_RETRY_AT = time.monotonic() + _CTK_RETRY_AFTER_S
                     logger.warning(
                         "registry load failed; per-role chat_template_kwargs are dropped "
-                        "(retry in %.0f s): %s", _CTK_RETRY_AFTER_S, exc,
+                        "(retry in %.0f s): %s",
+                        _CTK_RETRY_AFTER_S,
+                        exc,
                     )
                     return None
     try:

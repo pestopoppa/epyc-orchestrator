@@ -99,7 +99,9 @@ class TestWebFetchTool:
         result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
 
         assert result.error is None
-        assert "[ERROR: web_fetch failed: Tool execution failed: Timeout]" in repl.artifacts["result"]
+        assert (
+            "[ERROR: web_fetch failed: Tool execution failed: Timeout]" in repl.artifacts["result"]
+        )
 
     @patch("src.repl_environment.web_guard.fetch")
     def test_web_fetch_handles_request_error(self, mock_fetch):
@@ -112,7 +114,10 @@ class TestWebFetchTool:
         result = repl.execute('artifacts["result"] = web_fetch("https://example.com")')
 
         assert result.error is None
-        assert "[ERROR: web_fetch failed: Tool execution failed: Connection error]" in repl.artifacts["result"]
+        assert (
+            "[ERROR: web_fetch failed: Tool execution failed: Connection error]"
+            in repl.artifacts["result"]
+        )
 
     @patch("src.repl_environment.web_guard.fetch")
     def test_web_fetch_truncates_at_max_chars(self, mock_fetch):

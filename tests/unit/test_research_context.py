@@ -38,10 +38,12 @@ class TestNodeCreation:
 
         ctx._counters = YieldingCounters()
         with ThreadPoolExecutor(max_workers=8) as pool:
-            ids = list(pool.map(
-                lambda i: ctx.add("peek", str(i), f"content {i}"),
-                range(64),
-            ))
+            ids = list(
+                pool.map(
+                    lambda i: ctx.add("peek", str(i), f"content {i}"),
+                    range(64),
+                )
+            )
 
         assert len(ids) == len(set(ids))
         assert len(ctx.nodes) == len(ids)
