@@ -132,7 +132,6 @@ def multitier_final_t1_state(candidate_action: dict[str, Any], **extra: Any) -> 
 def planner_decision(action: dict[str, Any] | None, **fields: Any) -> PlannerDecision:
     values: dict[str, Any] = {
         "rationale": {"falsifier": "f"},
-        "session_id": "s",
         "canonical_text": "",
         "draft_text": "",
         "draft_provider": "local",

@@ -897,7 +897,11 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
                 "numeric_swarm",
             )
         # Apply explicit params
-        apply_result = _apply_params(explicit_params)
+        apply_result = _apply_params(
+            explicit_params,
+            journal=ctx.journal,
+            trial_id=ctx.state.get("trial_counter"),
+        )
         if _numeric_apply_no_changes(apply_result):
             return (
                 _numeric_no_change_skip(surface=surface, params=explicit_params),
@@ -931,7 +935,11 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
             reason = f"exact numeric restore preimage unavailable: {preimage}"
             ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
             return SkipOutcome("skipped", reason, "numeric_trial"), "numeric_swarm"
-        apply_result = _apply_params(trial["params"])
+        apply_result = _apply_params(
+            trial["params"],
+            journal=ctx.journal,
+            trial_id=ctx.state.get("trial_counter"),
+        )
         if _numeric_apply_no_changes(apply_result):
             reason = "suggested params produced no live config changes"
             ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
@@ -3082,10 +3090,6 @@ def _pathspec_pending_change_report(pathspec: Path) -> tuple[bool, str]:
     return False, f"pathspec={path_text}; git status clean"
 
 
-def _pathspec_has_pending_changes(pathspec: Path) -> bool:
-    """True if ``git status --porcelain`` reports any change (modified, staged,
-    or untracked) under ``pathspec``. Fail-closed: returns True on git error."""
-    return _pathspec_pending_change_report(pathspec)[0]
 
 
 def _mutation_dirty_target_reason(action: dict[str, Any]) -> str | None:

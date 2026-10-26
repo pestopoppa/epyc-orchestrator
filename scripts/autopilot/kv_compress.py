@@ -49,19 +49,6 @@ class CompressResult:
     slot_id: int = 0
     error: str = ""
 
-    def to_journal_dict(self) -> dict[str, Any]:
-        """Format for experiment journal eval_details."""
-        return {
-            "kv_compress": {
-                "n_evicted": self.n_evicted,
-                "keep_ratio": self.keep_ratio,
-                "scorer": self.scorer,
-                "pos_max_after": self.pos_max_after,
-                "elapsed_ms": self.elapsed_ms,
-                "port": self.port,
-                "slot_id": self.slot_id,
-            }
-        }
 
 
 def compress_slot(
@@ -142,15 +129,15 @@ def compress_slot(
         )
 
 
-def get_slot_utilization(port: int, slot_id: int = 0, timeout: float = 5.0) -> float:
+def get_slot_utilization(port: int, slot_id: int = 0, timeout: float = 5.0) -> float | None:
     """Query slot KV utilization as a fraction of context window.
 
-    Returns 0.0 on error or if no tokens are cached.
+    Returns None when the slot probe fails, and 0.0 when the slot is empty.
     """
     try:
         resp = httpx.get(f"http://localhost:{port}/slots", timeout=timeout)
         if resp.status_code != 200:
-            return 0.0
+            return None
         slots = resp.json()
         for slot in slots:
             if slot.get("id") == slot_id:
@@ -158,44 +145,10 @@ def get_slot_utilization(port: int, slot_id: int = 0, timeout: float = 5.0) -> f
                 n_past = slot.get("n_past", 0)
                 return n_past / n_ctx if n_ctx > 0 else 0.0
     except Exception:
-        pass
-    return 0.0
+        return None
+    return None
 
 
-def check_gap_ratio(port: int, slot_id: int = 0, timeout: float = 5.0) -> dict[str, Any]:
-    """Check the gap ratio in a slot's KV cache.
-
-    After EA eviction without gap compaction, position gaps accumulate.
-    A high gap ratio (>50%) means over half the context window is wasted on gaps.
-
-    Returns:
-        {"gap_ratio": float, "pos_max": int, "n_past": int, "n_ctx": int, "warning": str}
-    """
-    try:
-        resp = httpx.get(f"http://localhost:{port}/slots", timeout=timeout)
-        if resp.status_code != 200:
-            return {"gap_ratio": 0.0, "warning": ""}
-        slots = resp.json()
-        for slot in slots:
-            if slot.get("id") == slot_id:
-                n_ctx = slot.get("n_ctx", 1)
-                n_past = slot.get("n_past", 0)  # actual KV entries
-                # pos_max would tell us the highest position, but /slots doesn't expose it.
-                # n_past is the server's tracked token count; after eviction without gap
-                # compaction, the KV cache has fewer entries than pos_max suggests.
-                # We can't compute the exact gap ratio from /slots alone, but we can
-                # detect the symptom: if n_past / n_ctx is high and we've done compressions,
-                # gaps are likely accumulating.
-                return {
-                    "gap_ratio": 0.0,  # Can't compute without pos_max from KV cache
-                    "n_past": n_past,
-                    "n_ctx": n_ctx,
-                    "utilization": n_past / n_ctx if n_ctx > 0 else 0.0,
-                    "warning": "",
-                }
-    except Exception:
-        pass
-    return {"gap_ratio": 0.0, "warning": ""}
 
 
 GAP_WARN_THRESHOLD = 0.70  # Warn when context utilization > 70% after compression
@@ -228,6 +181,13 @@ def auto_compress_if_needed(
         CompressResult if compression was triggered, None if below threshold
     """
     utilization = get_slot_utilization(port, slot_id)
+    if utilization is None:
+        return CompressResult(
+            success=False,
+            port=port,
+            slot_id=slot_id,
+            error="slot utilization probe failed",
+        )
     if utilization < threshold:
         return None
 
@@ -250,7 +210,9 @@ def auto_compress_if_needed(
     # gaps are consuming the context window. Recommend slot erase + re-prefill.
     if result.success:
         post_util = get_slot_utilization(port, slot_id)
-        if post_util > gap_warn_threshold:
+        if post_util is None:
+            result.error = "post-compress slot utilization probe failed"
+        elif post_util > gap_warn_threshold:
             msg = (
                 f"GAP ACCUMULATION WARNING: port={port} slot={slot_id} "
                 f"post-compress util={post_util:.1%} > {gap_warn_threshold:.0%}. "

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -20,6 +21,7 @@ from controller_io import (
     _append_planner_archive,
     _loads_json_payload,
     planner_archive_tags,
+    planner_archive_write_failure_count,
     _open_planner_tap,
     action_repair_completer,
     extract_action,
@@ -51,7 +53,7 @@ from src.structured_output.repair import CompleteFn, parse_with_repair
 
 log = logging.getLogger("autopilot")
 
-KNOWN_ACTION_TYPES = {
+PLANNER_ACTION_TYPES: tuple[str, ...] = (
     "seed_batch",
     "numeric_trial",
     "prompt_mutation",
@@ -67,7 +69,9 @@ KNOWN_ACTION_TYPES = {
     "deep_eval",
     "rollback",
     "distill_knowledge",
-}
+)
+KNOWN_ACTION_TYPES = frozenset(PLANNER_ACTION_TYPES)
+NON_PLANNER_ACTIONS = frozenset({"review_policy_trial", "screening_tier_driver"})
 
 LOW_RISK_ACTIONS = {"seed_batch", "deep_eval", "distill_knowledge"}
 MEDIUM_RISK_ACTIONS = {
@@ -161,7 +165,6 @@ class PlannerCritique:
 class PlannerDecision:
     action: dict[str, Any] | None
     rationale: dict[str, Any]
-    session_id: str | None
     canonical_text: str
     draft_text: str
     draft_provider: str
@@ -223,6 +226,8 @@ def _apply_planner_spend_breaker(
     settings: PlannerSettings,
     planner_state: dict[str, Any],
 ) -> tuple[PlannerSettings, bool]:
+    archive_errors = planner_archive_write_failure_count()
+    planner_state["_archive_errors"] = archive_errors
     if not _env_bool("AUTOPILOT_PLANNER_SPEND_BREAKER", False):
         planner_state.pop("_spend_breaker", None)
         return settings, False
@@ -236,6 +241,7 @@ def _apply_planner_spend_breaker(
         planner_state["_spend_breaker"] = {
             "active": False,
             "error": str(exc),
+            "archive_write_failures": archive_errors,
         }
         return settings, False
 
@@ -251,6 +257,7 @@ def _apply_planner_spend_breaker(
         "threshold_usd": round(rules.planner_monthly_spend_threshold_usd, 6),
         "planner_spend_usd": round(ledger.planner.total_usd, 6),
         "days": ledger.days,
+        "archive_write_failures": archive_errors,
     }
     planner_state["_spend_breaker"] = state
     if not active:
@@ -324,7 +331,6 @@ def _write_trial_planning_banner(trial_id: int | None) -> None:
 def plan_with_providers(
     prompt: str,
     *,
-    session_id: str | None,
     timeout: int = DEFAULT_PLANNER_TIMEOUT,
     cwd: Path | str | None = None,
     planner_state: dict[str, Any] | None = None,
@@ -351,7 +357,6 @@ def plan_with_providers(
     planner_state = planner_state if planner_state is not None else {}
     action_feedback_state = action_feedback_state if action_feedback_state is not None else {}
     settings, spend_breaker_active = _apply_planner_spend_breaker(settings, planner_state)
-    session_update = None
     allowed_actions = (
         frozenset(str(item) for item in allowed_action_types)
         if allowed_action_types is not None
@@ -379,16 +384,12 @@ def plan_with_providers(
         fallback_reason = f"{primary_name} circuit open"
 
     draft_provider = provider_factory(draft_provider_name)
-    draft_resume_id = session_id if draft_provider.supports_resume else None
     draft = draft_provider.invoke(
         prompt,
         role="draft",
-        session_id=draft_resume_id,
         timeout=timeout,
         cwd=cwd,
     )
-    if draft_provider.supports_resume:
-        session_update = draft.session_id
 
     # Track whether ANY attempted model produced a usable RESPONSE (result.ok),
     # regardless of whether its content parsed. Distinguishes "both planner models
@@ -440,7 +441,6 @@ def plan_with_providers(
             fallback = fallback_provider.invoke(
                 prompt,
                 role="draft",
-                session_id=session_update if fallback_provider.supports_resume else None,
                 timeout=timeout,
                 cwd=cwd,
             )
@@ -466,7 +466,6 @@ def plan_with_providers(
                 )
             )
             if not fallback_unusable:
-                session_update = fallback.session_id if fallback_provider.supports_resume else None
                 fallback_reason = (
                     fallback_reason or f"{draft.provider} draft failed: {draft_unusable}"
                 )
@@ -510,7 +509,6 @@ def plan_with_providers(
         decision = PlannerDecision(
             action=None,
             rationale=rationale,
-            session_id=session_update,
             canonical_text=canonical_text,
             draft_text=draft.text,
             draft_provider=draft.provider,
@@ -593,7 +591,6 @@ def plan_with_providers(
                 critique_result = critic_provider.invoke(
                     critique_prompt,
                     role="critique",
-                    session_id=None,
                     timeout=timeout,
                     cwd=cwd,
                 )
@@ -735,7 +732,6 @@ def plan_with_providers(
     decision = PlannerDecision(
         action=action,
         rationale=rationale,
-        session_id=session_update,
         canonical_text=canonical_text,
         draft_text=draft.text,
         draft_provider=draft.provider,
@@ -825,7 +821,7 @@ def _run_shadow_draft(
         # prompt hash so a reader can also correlate by hash (providers log sha256(prompt)[:16]).
         base["shadow_prompt_sha256_16"] = hashlib.sha256(blanked.encode()).hexdigest()[:16]
         with planner_archive_tags(shadow=True, purpose=SHADOW_PURPOSE):
-            result = provider.invoke(blanked, role="draft", session_id=None, timeout=bound,
+            result = provider.invoke(blanked, role="draft", timeout=bound,
                                      cwd=cwd)
         base["seconds"] = round(time.time() - started, 3)
         if not result.ok:
@@ -911,7 +907,7 @@ def review_preseeded_seed(
             repair_complete = action_repair_completer()
             critique_prompt = build_critique_prompt(review_context, draft_text, action, rationale)
             result = provider_factory(critic_name).invoke(
-                critique_prompt, role="critique", session_id=None, timeout=timeout, cwd=cwd,
+                critique_prompt, role="critique", timeout=timeout, cwd=cwd,
             )
             if result.ok:
                 critique = extract_critique_with_repair(result.text, complete=repair_complete)
@@ -947,7 +943,6 @@ def review_preseeded_seed(
     decision = PlannerDecision(
         action=action if approved else None,
         rationale=rationale,
-        session_id=None,
         canonical_text=draft_text,
         draft_text=draft_text,
         draft_provider=SEED_REVIEW_PROVIDER,
@@ -1183,7 +1178,6 @@ def _try_fallback_critic(
     fallback_result = fallback_provider.invoke(
         critique_prompt,
         role="critique",
-        session_id=None,
         timeout=timeout,
         cwd=cwd,
     )
@@ -1612,11 +1606,6 @@ def _canonical_text_from_parts(
     )
 
 
-def _draft_is_usable(
-    result: PlannerProviderResult,
-    action: dict[str, Any] | None,
-) -> bool:
-    return not _draft_unusable_reason(result, action)
 
 
 def _draft_unusable_reason(
@@ -1745,6 +1734,8 @@ def _numeric_param_validation_error(action: dict[str, Any]) -> str | None:
             return f"numeric_trial param {key_s!r} must be int; got {value!r}"
     elif not isinstance(value, (int, float)) or isinstance(value, bool):
         return f"numeric_trial param {key_s!r} must be numeric; got {value!r}"
+    elif isinstance(value, float) and not math.isfinite(value):
+        return f"numeric_trial param {key_s!r} must be finite; got {value!r}"
 
     if low is not None and value < low:
         return f"numeric_trial param {key_s!r} must be >= {low}; got {value!r}"

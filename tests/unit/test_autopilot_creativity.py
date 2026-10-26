@@ -1598,3 +1598,21 @@ def test_build_exploration_block_resilient_to_archive_errors(tmp_path: Path) -> 
     # Should still return a usable lean block (no other stagnation signals).
     assert "alternatives" in block
     assert signal == "none (lean prompt)"
+
+
+def test_digest_exposes_action_diversity_by_gate() -> None:
+    from scripts.autopilot.digest import _action_diversity_section
+
+    class Journal:
+        def action_diversity_by_gate(self):
+            return {
+                "rich": {"count": 12, "distinct_action_types": 5, "entropy_bits": 1.75},
+                "lean": {"count": 8, "distinct_action_types": 2, "entropy_bits": 0.5},
+            }
+
+    section = _action_diversity_section(Journal())
+    assert section == [
+        "### Action diversity by prompt gate",
+        "- rich: count=12, distinct=5, entropy=1.75 bits",
+        "- lean: count=8, distinct=2, entropy=0.5 bits",
+    ]

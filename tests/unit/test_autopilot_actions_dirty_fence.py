@@ -162,7 +162,7 @@ def test_non_mutating_actions_never_blocked(
     def boom(_pathspec):  # pragma: no cover - must not be called
         raise AssertionError("git checked for a non-mutating action")
 
-    monkeypatch.setattr(actions, "_pathspec_has_pending_changes", boom)
+    monkeypatch.setattr(actions, "_pathspec_pending_change_report", boom)
     assert actions._mutation_dirty_target_reason({"type": action_type}) is None
 
 
@@ -174,7 +174,6 @@ def test_pathspec_helper_fails_closed_on_git_error(
 
     monkeypatch.setattr(actions.subprocess, "run", raising_run)
     # Fail closed: an error must read as "dirty" so the mutation is skipped.
-    assert actions._pathspec_has_pending_changes(Path("/whatever")) is True
     dirty, evidence = actions._pathspec_pending_change_report(Path("/whatever"))
     assert dirty is True
     assert "git status raised OSError" in evidence
@@ -189,7 +188,6 @@ def test_pathspec_helper_nonzero_returncode_fails_closed(
         stderr = "fatal: bad pathspec"
 
     monkeypatch.setattr(actions.subprocess, "run", lambda *a, **k: _R())
-    assert actions._pathspec_has_pending_changes(Path("/whatever")) is True
     dirty, evidence = actions._pathspec_pending_change_report(Path("/whatever"))
     assert dirty is True
     assert "rc=128" in evidence
@@ -203,7 +201,6 @@ def test_pathspec_helper_clean_returns_false(monkeypatch: pytest.MonkeyPatch) ->
         stderr = ""
 
     monkeypatch.setattr(actions.subprocess, "run", lambda *a, **k: _R())
-    assert actions._pathspec_has_pending_changes(Path("/whatever")) is False
     dirty, evidence = actions._pathspec_pending_change_report(Path("/whatever"))
     assert dirty is False
     assert "git status clean" in evidence

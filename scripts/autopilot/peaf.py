@@ -6,7 +6,7 @@ then logs (predicted, actual, surprise) alongside the trial in the
 experiment journal. No training, no Pareto-scoring change yet.
 
 ON by default. The addendum + forecast cost ~150 input tokens (cached
-after trial 1 via `claude --resume`) + ~50-100 output tokens per trial,
+after trial 1 via a new planner process) + ~50-100 output tokens per trial,
 and never feeds back into scoring or Pareto decisions. Disable with
 EPYC_AUTOPILOT_PEAF=0 if you want a clean baseline A/B period; when
 disabled, every helper here is a cheap no-op.

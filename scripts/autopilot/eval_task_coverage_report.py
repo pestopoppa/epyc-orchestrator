@@ -22,6 +22,11 @@ try:
 except Exception:  # pragma: no cover - import guard for standalone diagnostics
     fold_supersession_events = None  # type: ignore[assignment]
 
+try:
+    from scripts.autopilot.journal_shards import journal_shards, resolve_journal_paths, load_journal_rows
+except ImportError:  # pragma: no cover - direct script invocation
+    from journal_shards import journal_shards, resolve_journal_paths, load_journal_rows
+
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_JOURNAL_DIR = ORCH_ROOT / "orchestration"
 DEFAULT_POOL_CANDIDATES = (
@@ -46,17 +51,6 @@ def _stable_question_qid(suite: str, prompt_text: str) -> str:
     return hashlib.sha1(payload).hexdigest()[:16]
 
 
-def _jsonl_batch_key(path: Path) -> tuple[int, str]:
-    stem = path.stem
-    if stem == "autopilot_journal":
-        return (0, path.name)
-    prefix = "autopilot_journal_"
-    if stem.startswith(prefix):
-        try:
-            return (int(stem.removeprefix(prefix)), path.name)
-        except ValueError:
-            pass
-    return (10**9, path.name)
 
 
 def default_pool_path() -> Path | None:
@@ -71,29 +65,15 @@ def resolve_journal_paths(paths: list[Path] | None, journal_dir: Path) -> list[P
         resolved: list[Path] = []
         for path in paths:
             if path.is_dir():
-                resolved.extend(sorted(path.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key))
+                resolved.extend(journal_shards(path))
             else:
-                resolved.append(path)
-        return sorted(dict.fromkeys(resolved), key=_jsonl_batch_key)
-    return sorted(journal_dir.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key)
+                resolved.extend(resolve_journal_paths(path))
+        return list(dict.fromkeys(resolved))
+    return journal_shards(journal_dir)
 
 
 def load_jsonl(paths: Iterable[Path]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    invalid_lines: list[dict[str, Any]] = []
-    for path in paths:
-        with path.open("r", encoding="utf-8") as handle:
-            for line_no, line in enumerate(handle, start=1):
-                text = line.strip()
-                if not text:
-                    continue
-                try:
-                    obj = json.loads(text)
-                except json.JSONDecodeError as exc:
-                    invalid_lines.append({"path": str(path), "line": line_no, "error": str(exc)})
-                    continue
-                if isinstance(obj, dict):
-                    rows.append(obj)
+    rows, invalid_lines = load_journal_rows(list(paths), on_malformed="record")
     return rows, {"raw_rows": len(rows), "invalid_lines": invalid_lines}
 
 

@@ -448,13 +448,26 @@ def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
         pid = 12345
         returncode = None
 
+        def __init__(self):
+            self.wait_calls = 0
+
         def wait(self, timeout):
-            raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
+            self.wait_calls += 1
+            if self.wait_calls == 1:
+                raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
+            self.returncode = -9
+            return self.returncode
 
         def kill(self):
             pass
 
-    monkeypatch.setattr(controller_io.subprocess, "Popen", lambda *a, **k: FakeTimeoutProcess())
+    process = FakeTimeoutProcess()
+    command = []
+    monkeypatch.setattr(
+        controller_io.subprocess,
+        "Popen",
+        lambda *a, **k: (command.extend(a[0]), process)[1],
+    )
     monkeypatch.setattr(controller_io, "_open_planner_tap", lambda: None)
     monkeypatch.setattr(controller_io, "_append_planner_archive", records.append)
     monkeypatch.setattr(
@@ -465,20 +478,21 @@ def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
 
     text, session_id = controller_io.invoke_controller(
         "prompt",
-        session_id="old-session",
         timeout=1,
     )
 
     assert text == ""
-    assert session_id == "old-session"
+    assert session_id is None
     assert len(records) == 1
     assert records[0]["type"] == "planner_provider_call"
     assert records[0]["provider"] == "claude"
     assert records[0]["status"] == "timeout"
     assert records[0]["ok"] is False
-    assert records[0]["resume_session_id"] == "old-session"
+    assert records[0]["resume_session_id"] is None
+    assert "--resume" not in command
     assert [status["status"] for status in statuses] == ["running", "timeout"]
     assert statuses[0]["child_pid"] == 12345
+    assert process.wait_calls == 2
 
 
 def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
@@ -573,7 +587,6 @@ def test_invoke_controller_rejects_disallowed_tool_use(monkeypatch) -> None:
 
     text, session_id = controller_io.invoke_controller(
         "prompt",
-        session_id="old-session",
         timeout=1,
     )
 
@@ -844,3 +857,61 @@ def test_extract_rationale_with_repair_unrepairable_falls_back_to_empty_default(
     # Same empty-default SHAPE the pre-repair extract_rationale() always
     # returned on a malformed block -- the caller can distinguish via .status.
     assert result.value == {"falsifier": "", "rubric_scores": {}}
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_numeric_range_rejects_non_finite_values(value: float) -> None:
+    err = controller_io._validate_number_range(
+        {"type": "slot_compact", "keep_ratio": value},
+        "keep_ratio",
+        min_value=0.0,
+        max_value=1.0,
+        min_exclusive=True,
+    )
+    assert err and "finite" in err
+
+
+def test_invoke_controller_drains_large_stderr_and_returns_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+    import os
+
+    cli = tmp_path / "claude"
+    cli.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stderr.write('x' * 200000); sys.stderr.flush()\n"
+        "print(json.dumps({'type': 'result', 'result': 'planner answer'}), flush=True)\n",
+        encoding="utf-8",
+    )
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setattr(controller_io, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(controller_io, "_append_planner_archive", lambda row: None)
+    monkeypatch.setattr(controller_io, "_write_planner_subprocess_status", lambda **kwargs: None)
+
+    text, _session = controller_io.invoke_controller("prompt", timeout=3)
+    assert text == "planner answer"
+
+
+def test_tail_records_matches_full_scan_for_large_archive(tmp_path: Path) -> None:
+    import json
+
+    path = tmp_path / "planner_archive.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        for index in range(20000):
+            handle.write(json.dumps({"id": index, "payload": "x" * 100}) + "\n")
+    expected = [line for line in path.read_text(encoding="utf-8").splitlines() if line][-12:]
+    assert controller_io.tail_records(path, 12) == expected
+
+
+def test_planner_archive_append_failure_is_counted_and_logged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    bad_parent = tmp_path / "not-a-directory"
+    bad_parent.write_text("file", encoding="utf-8")
+    monkeypatch.setattr(controller_io, "PLANNER_ARCHIVE_PATH", bad_parent / "archive.jsonl")
+    before = controller_io.planner_archive_write_failure_count()
+    controller_io._append_planner_archive({"type": "planner_provider_call"})
+    assert controller_io.planner_archive_write_failure_count() == before + 1
+    assert "planner archive append failed" in caplog.text

@@ -334,3 +334,48 @@ def test_recent_failures_excludes_superseded_bug_corrupted_by_default(
 
     assert [entry.trial_id for entry in safe] == [1]
     assert [entry.trial_id for entry in raw] == [1, 2]
+
+
+def test_planner_queries_honor_bug_corruption_supersession(tmp_path: Path) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    entry = _entry(17)
+    entry.surprise_score = 0.8
+    entry.outcome_status = "ok"
+    entry.eval_details = {"per_suite_quality": {"suite-a": 2.0}}
+    journal.record(entry)
+    journal.append_supersession_event(
+        target_trial_ids=[17],
+        fields={"bug_corrupted_by": "fix-sha"},
+        reason="known instrumentation defect",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+
+    effectiveness = journal.species_effectiveness()
+    assert effectiveness["seeder"]["information_count"] == 0
+    assert journal.suite_quality_trend() == {}
+
+
+def test_rows_match_dataclasses_and_invalidate_on_append(tmp_path: Path) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    first = _entry(21)
+    first.eval_details = {"nested": {"value": 1}}
+    journal.record(first)
+
+    assert journal.rows() == [asdict(first)]
+    rows = journal.rows()
+    rows[0]["quality"] = 99.0
+    assert journal.all_entries()[0].quality == 1.0
+
+    journal.record(_entry(22))
+    assert [row["trial_id"] for row in journal.rows()] == [21, 22]
+
+    journal.append_supersession_event(
+        target_trial_ids=[21],
+        fields={"bug_corrupted_by": "fix-sha"},
+        reason="test cache invalidation",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+    assert journal.rows(folded=True)[0]["bug_corrupted_by"] == "fix-sha"
+    assert journal.rows()[0]["bug_corrupted_by"] == ""

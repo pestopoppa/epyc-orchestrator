@@ -19,6 +19,7 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 
 planner_coordinator = importlib.import_module("planner_coordinator")
 planner_providers = importlib.import_module("planner_providers")
+actions = importlib.import_module("actions")
 
 PlannerProviderResult = planner_providers.PlannerProviderResult
 PlannerSettings = planner_coordinator.PlannerSettings
@@ -34,6 +35,14 @@ REPL_NUMERIC_ACTION = {
 }
 
 loop_beliefs_bridge = importlib.import_module("loop_beliefs_bridge")
+
+
+def test_planner_action_registry_matches_dispatch_handlers() -> None:
+    planner_types = set(planner_coordinator.PLANNER_ACTION_TYPES)
+    handlers = set(actions._ACTION_HANDLERS)
+    assert planner_types == planner_coordinator.KNOWN_ACTION_TYPES
+    assert planner_types <= handlers
+    assert handlers - planner_types == planner_coordinator.NON_PLANNER_ACTIONS
 
 
 def _ready_answer(**evidence: Any) -> dict[str, Any]:
@@ -90,11 +99,8 @@ class FakeProvider:
         self,
         name: str,
         responses: list[PlannerProviderResult],
-        *,
-        supports_resume: bool = False,
     ) -> None:
         self.name = name
-        self.supports_resume = supports_resume
         self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
@@ -103,7 +109,6 @@ class FakeProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult:
@@ -111,7 +116,6 @@ class FakeProvider:
             {
                 "prompt": prompt,
                 "role": role,
-                "session_id": session_id,
                 "timeout": timeout,
                 "cwd": cwd,
             }
@@ -163,7 +167,6 @@ def test_primary_failure_falls_back_to_secondary() -> None:
     claude = FakeProvider(
         "claude",
         [PlannerProviderResult(provider="claude", role="draft", ok=True, text="no json")],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -179,7 +182,6 @@ def test_primary_failure_falls_back_to_secondary() -> None:
 
     decision = _plan(
         "prompt",
-        session_id="old",
         planner_state={},
         settings=PlannerSettings(mode="fallback"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -230,7 +232,6 @@ def test_codex_primary_can_use_distinct_codex_critic_alias() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(
             primary="codex",
@@ -283,7 +284,6 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
                 ),
             ),
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -299,7 +299,6 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
 
     decision = _plan(
         "prompt",
-        session_id="old",
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -352,7 +351,6 @@ def test_currently_unavailable_primary_draft_falls_back_before_critique() -> Non
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(
             primary="local_frontdoor",
@@ -414,7 +412,6 @@ def test_selectable_deep_eval_tier3_local_draft_and_critic_is_accepted() -> None
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(
             primary="local_frontdoor",
@@ -523,7 +520,6 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         trial_id=33,
         vidya_kvq_context={"status": "unavailable", "reason": "no ingested ledger",
@@ -573,8 +569,7 @@ def test_vidya_receipt_separates_exposure_from_declared_reliance(
                "frontier": 42, "state_hash": "fold-hash",
                "claim_ids": ["claim-a", "claim-b"]}
     decision = planner_coordinator.PlannerDecision(
-        action=MEMRL_NUMERIC_ACTION, rationale={"vidya_claim_ids": ["claim-b", "foreign"]},
-        session_id=None, canonical_text="", draft_text="", draft_provider="claude",
+        action=MEMRL_NUMERIC_ACTION, rationale={"vidya_claim_ids": ["claim-b", "foreign"]}, canonical_text="", draft_text="", draft_provider="claude",
         mode="single", draft_action=MEMRL_NUMERIC_ACTION,
     )
     planner_coordinator._archive_decision(decision, {}, trial_id=17,
@@ -614,7 +609,6 @@ def test_empty_numeric_planner_action_is_deterministically_blocked() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(primary="claude", mode="single"),
         provider_factory=_factory({"claude": claude}),
@@ -649,7 +643,6 @@ def test_prior_critic_rejected_signature_is_deterministically_blocked() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(primary="claude", mode="single"),
         provider_factory=_factory({"claude": claude}),
@@ -679,7 +672,6 @@ def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circ
                 ),
             ),
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -698,7 +690,6 @@ def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circ
     state = {"claude": {"failures": 1, "circuit_open_until": 0.0}}
     decision = _plan(
         "prompt",
-        session_id="old",
         planner_state=state,
         settings=PlannerSettings(
             mode="draft_critique",
@@ -729,7 +720,6 @@ def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None
                 error="empty response",
             ),
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -745,7 +735,6 @@ def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None
 
     decision = _plan(
         "prompt",
-        session_id="old",
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -785,7 +774,6 @@ def test_local_failure_codex_fallback_can_dispatch_without_external_critic() -> 
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(
             primary="local_ingest",
@@ -856,7 +844,6 @@ def test_spend_breaker_defaults_off_when_env_absent(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(
             primary="claude",
@@ -914,7 +901,6 @@ def test_spend_breaker_forces_cloud_primary_to_local_providers(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(
             primary="claude",
@@ -978,7 +964,6 @@ def test_spend_breaker_accepts_local_ingest_leading_json_action(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(
             primary="claude",
@@ -1039,7 +1024,6 @@ def test_spend_breaker_replaces_cloud_critic_for_local_primary(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(
             primary="local_chat",
@@ -1098,7 +1082,6 @@ def test_spend_breaker_preserves_configured_local_critic(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(
             primary="claude",
@@ -1156,7 +1139,6 @@ def test_local_role_primary_falls_back_to_local_critic_role(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(
             primary="local_frontdoor",
@@ -1219,7 +1201,6 @@ def test_spend_breaker_keeps_config_when_under_threshold(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(
             primary="claude",
@@ -1235,36 +1216,6 @@ def test_spend_breaker_keeps_config_when_under_threshold(
     assert state["_spend_breaker"]["active"] is False
 
 
-def test_nonresumable_primary_clears_persisted_session_id() -> None:
-    action = {"type": "seed_batch", "n_questions": 10}
-    claude = FakeProvider(
-        "claude",
-        [
-            PlannerProviderResult(
-                provider="claude",
-                role="draft",
-                ok=True,
-                text=_action_text(action),
-                session_id="new-session",
-            )
-        ],
-        supports_resume=False,
-    )
-    codex = FakeProvider("codex", [])
-
-    decision = _plan(
-        "prompt",
-        session_id="old-session",
-        planner_state={},
-        settings=PlannerSettings(mode="single"),
-        provider_factory=_factory({"claude": claude, "codex": codex}),
-    )
-
-    assert decision.action == action
-    assert decision.session_id is None
-    assert claude.calls[0]["session_id"] is None
-
-
 def test_shadow_critique_does_not_apply_revision() -> None:
     original = {"type": "code_mutation", "file": "src/escalation.py"}
     revised = {"type": "seed_batch", "n_questions": 10}
@@ -1278,7 +1229,6 @@ def test_shadow_critique_does_not_apply_revision() -> None:
                 text=_action_text(original),
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1301,7 +1251,6 @@ def test_shadow_critique_does_not_apply_revision() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="shadow_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1325,7 +1274,6 @@ def test_active_critique_applies_valid_revision() -> None:
                 text=_action_text(original),
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1349,7 +1297,6 @@ def test_active_critique_applies_valid_revision() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1371,7 +1318,6 @@ def test_active_reject_without_revision_uses_numeric_fallback() -> None:
                 text=_action_text(original),
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1393,7 +1339,6 @@ def test_active_reject_without_revision_uses_numeric_fallback() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1429,7 +1374,6 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
                 text=_action_text(original),
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1448,7 +1392,6 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
     state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1526,7 +1469,6 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
                 text=_action_text(original),
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1544,7 +1486,6 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
     state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1602,7 +1543,6 @@ def test_codex_critic_failure_falls_back_to_claude_for_local_draft() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(
             primary="local_ingest",
@@ -1703,7 +1643,6 @@ def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
                 provider="claude", role="draft", ok=True, text=_action_text(original)
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1716,7 +1655,6 @@ def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(mode="shadow_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1847,7 +1785,6 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
                 provider="claude", role="draft", ok=True, text=_action_text(original)
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1862,7 +1799,6 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
     )
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1950,7 +1886,6 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     claude = FakeProvider(
         "claude",
         [PlannerProviderResult(provider="claude", role="draft", ok=True, text="unused")],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -1967,7 +1902,6 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
 
     decision = _plan(
         "prompt",
-        session_id="old",
         planner_state=state,
         settings=PlannerSettings(mode="fallback"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -1990,7 +1924,6 @@ def _uncritiqued_decision(
     return planner_coordinator.PlannerDecision(
         action=action,
         rationale=rationale or {},
-        session_id=None,
         canonical_text="",
         draft_text="",
         draft_provider="codex",
@@ -2058,12 +1991,10 @@ def test_draft_validation_error_is_surfaced_not_opaque() -> None:
     claude = FakeProvider(
         "claude",
         [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(good))],
-        supports_resume=True,
     )
     state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(primary="codex", critic="claude", mode="fallback"),
         provider_factory=_factory({"codex": codex, "claude": claude}),
@@ -2194,7 +2125,6 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
                 provider="claude", role="draft", ok=True, text=_action_text(original)
             )
         ],
-        supports_resume=True,
     )
     codex = FakeProvider(
         "codex",
@@ -2207,7 +2137,6 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
     state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2254,7 +2183,6 @@ def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
@@ -2286,7 +2214,6 @@ def test_both_models_unavailable_sets_providers_unavailable() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
@@ -2316,7 +2243,6 @@ def test_content_failure_is_not_providers_unavailable() -> None:
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
@@ -2352,7 +2278,6 @@ def test_open_primary_circuit_routes_to_other_model() -> None:
     state = {"codex": {"circuit_open_until": _time.time() + 600.0, "failures": 2}}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(primary="codex", critic="codex_critic", mode="draft_critique"),
         provider_factory=factory,
@@ -2398,7 +2323,6 @@ def test_recovered_parse_repairs_action_without_fallback_or_circuit_trip(
     planner_state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=planner_state,
         settings=PlannerSettings(mode="fallback"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2443,7 +2367,6 @@ def test_unrepairable_action_still_falls_back_and_trips_circuit_breaker(
     planner_state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=planner_state,
         settings=PlannerSettings(mode="fallback"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2479,7 +2402,6 @@ def test_rationale_repair_recovers_malformed_sidecar(monkeypatch: pytest.MonkeyP
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="single"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2518,7 +2440,6 @@ def test_rationale_repair_unrepairable_persists_empty_default_flagged_failed(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="single"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2570,7 +2491,6 @@ def test_recovered_critic_verdict_repairs_without_fallback_or_circuit_trip(
     planner_state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=planner_state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2634,7 +2554,6 @@ def test_unrepairable_critic_verdict_is_typed_failure_and_counted(
     state: dict[str, Any] = {}
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state=state,
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2684,7 +2603,6 @@ def test_clean_critic_verdict_never_invokes_repair(monkeypatch: pytest.MonkeyPat
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2733,7 +2651,6 @@ def test_external_cli_critic_trailing_noise_recovered_by_fish_only(
 
     decision = _plan(
         "prompt",
-        session_id=None,
         planner_state={},
         settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
         provider_factory=_factory({"claude": claude, "codex": codex}),
@@ -2762,7 +2679,7 @@ def test_plan_with_providers_without_validated_ready_answer_raises(bad: Any) -> 
     calls: list[str] = []
     with pytest.raises(loop_beliefs_bridge.BeliefContextRefused):
         planner_coordinator.plan_with_providers(
-            "prompt", session_id=None, provider_factory=_counting_factory(calls),
+            "prompt", provider_factory=_counting_factory(calls),
             belief_context=bad,
         )
     assert calls == []
@@ -2770,7 +2687,7 @@ def test_plan_with_providers_without_validated_ready_answer_raises(bad: Any) -> 
 
 def test_plan_with_providers_requires_belief_context_argument() -> None:
     with pytest.raises(TypeError):
-        planner_coordinator.plan_with_providers("prompt", session_id=None)  # type: ignore[call-arg]
+        planner_coordinator.plan_with_providers("prompt",)  # type: ignore[call-arg]
 
 
 def test_ready_beliefs_cannot_be_forged() -> None:
@@ -2795,8 +2712,7 @@ def test_archive_receipt_carries_loop_beliefs_ledger_state(
         withdrawn_claim_ids=["w1"], section="## Belief-kernel evidence", section_sha256="s"))
     decision = planner_coordinator.PlannerDecision(
         action=MEMRL_NUMERIC_ACTION,
-        rationale={"vidya_claim_ids": ["u2", "c1", "w1", "ghost"]},
-        session_id=None, canonical_text="", draft_text="", draft_provider="claude",
+        rationale={"vidya_claim_ids": ["u2", "c1", "w1", "ghost"]}, canonical_text="", draft_text="", draft_provider="claude",
         mode="single", draft_action=MEMRL_NUMERIC_ACTION,
     )
     planner_coordinator._archive_decision(decision, {}, trial_id=5, belief_context=ready)
@@ -2824,8 +2740,19 @@ def test_plan_with_providers_archives_belief_receipt(monkeypatch: pytest.MonkeyP
     )
     claude = FakeProvider("claude", [PlannerProviderResult(
         provider="claude", role="draft", ok=True, text=draft)])
-    _plan("prompt", session_id=None, provider_factory=lambda _name: claude,
+    _plan("prompt", provider_factory=lambda _name: claude,
           settings=PlannerSettings(mode="single"))
     receipt = records[-1]["vidya_loop_beliefs"]
     assert receipt["status"] == "ready"
     assert receipt["ledger_state"]["freshness"]["sync_action"] == "ingested"
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_numeric_param_validation_rejects_non_finite_values(value: float) -> None:
+    error = planner_coordinator._numeric_param_validation_error(
+        {
+            "type": "numeric_trial",
+            "surface": "think_harder",
+            "params": {"think_harder.min_expected_roi": value},
+        }
+    )
+    assert error and "finite" in error

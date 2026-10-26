@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any
 from experiment_journal import build_error_scope, is_learning_eligible
+from src.autopilot_core.baseline_pin import baseline_pin_for
 from mutation_pair_features import compare_mutation_features
 
 log = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ def enabled() -> bool:
 def _current_native_scope(row: Any) -> dict[str, Any] | None:
     """Validate the producer's recorded scope against this row's native fields."""
     native = getattr(row, "error_scope", None)
-    pin = getattr(row, "baseline_pin", None)
+    pin = baseline_pin_for(row, warn=False)
     details = row.eval_details if isinstance(getattr(row, "eval_details", None), dict) else {}
     comparability = getattr(row, "comparability", None)
     if type(native) is not dict or type(pin) is not dict:

@@ -74,7 +74,6 @@ class PlannerProviderResult:
     provider: str
     role: str
     text: str = ""
-    session_id: str | None = None
     ok: bool = False
     error: str = ""
     duration_s: float = 0.0
@@ -174,14 +173,12 @@ def _route_review_decision_to_ledger(
 
 class PlannerProvider(Protocol):
     name: str
-    supports_resume: bool
 
     def invoke(
         self,
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult: ...
@@ -195,7 +192,6 @@ class ClaudePlannerProvider:
     """
 
     name = "claude"
-    supports_resume = False
 
     def __init__(self, invoke_fn: Any | None = None) -> None:
         self._invoke_fn = invoke_fn or _invoke_claude_controller
@@ -205,28 +201,17 @@ class ClaudePlannerProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult:
         start = time.time()
         try:
-            resume_id = session_id if role == "draft" and self.supports_resume else None
-            text, next_session_id = self._invoke_fn(
-                prompt,
-                session_id=resume_id,
-                timeout=timeout,
-                cwd=cwd,
-            )
+            text, _ = self._invoke_fn(prompt, timeout=timeout, cwd=cwd)
             ok = bool((text or "").strip())
-            stored_session_id = (
-                next_session_id if role == "draft" and self.supports_resume else None
-            )
             return PlannerProviderResult(
                 provider=self.name,
                 role=role,
                 text=text or "",
-                session_id=stored_session_id,
                 ok=ok,
                 error="" if ok else "empty response",
                 duration_s=time.time() - start,
@@ -236,7 +221,6 @@ class ClaudePlannerProvider:
             return PlannerProviderResult(
                 provider=self.name,
                 role=role,
-                session_id=session_id if self.supports_resume else None,
                 ok=False,
                 error=str(exc),
                 duration_s=time.time() - start,
@@ -252,7 +236,6 @@ class CodexPlannerProvider:
     """
 
     name = "codex"
-    supports_resume = False
 
     def __init__(
         self,
@@ -271,11 +254,9 @@ class CodexPlannerProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult:
-        del session_id
         start = time.time()
         tap = _open_planner_tap()
         raw_events: list[str] = []
@@ -423,7 +404,6 @@ class LocalPlannerProvider:
     """
 
     name = "local"
-    supports_resume = False
 
     def __init__(
         self,
@@ -473,11 +453,10 @@ class LocalPlannerProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult:
-        del session_id, cwd
+        del cwd
         start = time.time()
         tap = _open_planner_tap()
         payload = self._payload(prompt, planner_role=role)
@@ -580,7 +559,6 @@ class LocalChatPlannerProvider:
     """
 
     name = "local_chat"
-    supports_resume = False
 
     def __init__(
         self,
@@ -610,11 +588,10 @@ class LocalChatPlannerProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult:
-        del session_id, cwd
+        del cwd
         start = time.time()
         tap = _open_planner_tap()
         payload = self._payload(prompt, planner_role=role)
@@ -717,7 +694,6 @@ class LocalBriefedPlannerProvider:
     """
 
     name = "local_brief_frontdoor"
-    supports_resume = False
 
     def __init__(
         self,
@@ -769,11 +745,9 @@ class LocalBriefedPlannerProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> PlannerProviderResult:
-        del session_id
         start = time.time()
         tap = _open_planner_tap()
 
@@ -781,7 +755,6 @@ class LocalBriefedPlannerProvider:
             result = self._draft_provider.invoke(
                 prompt,
                 role=role,
-                session_id=None,
                 timeout=timeout,
                 cwd=cwd,
             )
@@ -823,7 +796,6 @@ class LocalBriefedPlannerProvider:
         brief_result = self._brief_provider.invoke(
             brief_prompt,
             role="brief",
-            session_id=None,
             timeout=timeout,
             cwd=cwd,
         )
@@ -859,7 +831,6 @@ class LocalBriefedPlannerProvider:
         draft_result = self._draft_provider.invoke(
             draft_prompt,
             role="draft",
-            session_id=None,
             timeout=timeout,
             cwd=cwd,
         )
@@ -1227,6 +1198,11 @@ def _archive_codex_call(
             "ts_iso": datetime.now().isoformat(timespec="seconds"),
             "provider": result.provider,
             "role": result.role,
+            "type": "planner_provider_call",
+            "status": (
+                "ok" if result.ok else
+                "timeout" if "timeout" in str(result.error or "").lower() else "error"
+            ),
             "duration_s": result.duration_s,
             "ok": result.ok,
             "error": result.error,
@@ -1235,7 +1211,7 @@ def _archive_codex_call(
             "result_chars": len(result.text),
             "result_preview": result.text[:500],
             "n_events": len(raw_events),
-            "events": raw_events[-200:],
+            "events": [_summarize_codex_event(line) for line in raw_events[-200:]],
         }
     )
 
@@ -1256,6 +1232,11 @@ def _archive_local_call(
             "ts_iso": datetime.now().isoformat(timespec="seconds"),
             "provider": result.provider,
             "role": result.role,
+            "type": "planner_provider_call",
+            "status": (
+                "ok" if result.ok else
+                "timeout" if "timeout" in str(result.error or "").lower() else "error"
+            ),
             "duration_s": result.duration_s,
             "ok": result.ok,
             "error": result.error,
@@ -1297,6 +1278,11 @@ def _archive_local_chat_call(
             "ts_iso": datetime.now().isoformat(timespec="seconds"),
             "provider": result.provider,
             "role": result.role,
+            "type": "planner_provider_call",
+            "status": (
+                "ok" if result.ok else
+                "timeout" if "timeout" in str(result.error or "").lower() else "error"
+            ),
             "duration_s": result.duration_s,
             "ok": result.ok,
             "error": result.error,

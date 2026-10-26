@@ -21,6 +21,16 @@ from pathlib import Path
 from typing import Any
 
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+from src.autopilot_core.baseline_pin import (
+    BASELINE_PIN_SCHEMA_VERSION,
+    BASELINE_PIN_SOURCE_ABSENT,
+    BASELINE_PIN_SOURCE_LEGACY_REGEX,
+    BASELINE_PIN_SOURCE_STRUCTURED,
+    _BASELINE_QUALITY_RE,
+    _LEGACY_BASELINE_PIN_WARNED,
+    _MAX_QUALITY_SCALE,
+    baseline_pin_for,
+)
 
 # experiment_journal is imported both as the package path
 # ``scripts.autopilot.experiment_journal`` (tests, cross-module readers) and as a
@@ -99,11 +109,9 @@ MAX_TRIALS_PER_FILE = 1000
 # representatives (B5-12/B5-M2); v1 snapshots replay as prefix drift -> full replay.
 SEGMENT_SNAPSHOT_POLICY_VERSION = "journal-segment-snapshot-v2"
 
-_BASELINE_QUALITY_RE = re.compile(r"\bbaseline\s+([0-9]+(?:\.[0-9]+)?)")
 _SUITE_REGRESSION_RE = re.compile(
     r"\bSuite\s+'[^']+'\s+regression:\s+-([0-9]+(?:\.[0-9]+)?)"
 )
-_MAX_QUALITY_SCALE = 3.0
 _LEGACY_SCALE_FAILURE_SUMMARY = (
     "legacy-scale failure_analysis omitted: references impossible 0-3 quality "
     "baseline/per-suite regression; use recorded q/s/r fields instead"
@@ -127,11 +135,6 @@ _HIGHER_TIER_BUDGET_CREDIT_WEIGHT = 0.15
 # (`source="legacy_failure_analysis_regex"`) and logging it once per trial, so a
 # legacy read is never mistaken for a recorded pin. Legacy shards stay loadable:
 # the field defaults to `{}` and nothing on disk is rewritten.
-BASELINE_PIN_SCHEMA_VERSION = 1
-BASELINE_PIN_SOURCE_STRUCTURED = "structured"
-BASELINE_PIN_SOURCE_LEGACY_REGEX = "legacy_failure_analysis_regex"
-BASELINE_PIN_SOURCE_ABSENT = "absent"
-_LEGACY_BASELINE_PIN_WARNED: set[int] = set()
 
 TSV_COLUMNS = [
     "trial_id",
@@ -416,77 +419,6 @@ def build_baseline_pin(
     }
 
 
-def _legacy_baseline_pin_from_text(text: str) -> dict[str, Any] | None:
-    """Parse the pre-EV-14e prose baseline out of ``failure_analysis``.
-
-    Legacy rows ONLY. Returns ``None`` when the prose carries no baseline at all.
-    A value above the 0-3 quality scale is an already-known corrupt-era artifact
-    (see ``has_legacy_scale_failure_analysis``): it is reported as suspect with
-    ``baseline_quality=None`` rather than handed back as a number, so a scrubbed
-    corrupt baseline cannot re-enter a comparison through the fallback.
-    """
-    matches = [float(m.group(1)) for m in _BASELINE_QUALITY_RE.finditer(text or "")]
-    if not matches:
-        return None
-    first = matches[0]
-    suspect = any(v > _MAX_QUALITY_SCALE for v in matches)
-    return {
-        "schema_version": BASELINE_PIN_SCHEMA_VERSION,
-        "source": BASELINE_PIN_SOURCE_LEGACY_REGEX,
-        "tier": None,
-        "baseline_quality": None if suspect else first,
-        "baseline_revision": None,
-        "eval_quality_era": "",
-        "autopilot_speed_era": "",
-        "per_suite_baseline_quality": {},
-        "per_suite_baseline_counts": {},
-        "baseline_path": "",
-        "candidate_quality": None,
-        "delta": None,
-        "relative_delta": None,
-        "suppressed_by": "",
-        "captured_at": "",
-        "legacy_parsed_values": matches,
-        "legacy_scale_suspect": suspect,
-    }
-
-
-def baseline_pin_for(entry: "JournalEntry", *, warn: bool = True) -> dict[str, Any]:
-    """EV-14e reader: the structured pin when present, the legacy regex otherwise.
-
-    Resolution order is deliberate and one-way — a row that carries
-    ``baseline_pin`` is NEVER re-parsed from prose, and a row that does not is
-    marked as a fallback read (``source="legacy_failure_analysis_regex"``) and
-    logged once per trial. A row with neither returns
-    ``source="absent"``: no baseline was recorded, which is a different fact from
-    "the baseline was 0.0".
-    """
-    pin = getattr(entry, "baseline_pin", None)
-    if isinstance(pin, dict) and pin:
-        out = dict(pin)
-        out.setdefault("source", BASELINE_PIN_SOURCE_STRUCTURED)
-        out.setdefault("schema_version", BASELINE_PIN_SCHEMA_VERSION)
-        return out
-    legacy = _legacy_baseline_pin_from_text(getattr(entry, "failure_analysis", "") or "")
-    if legacy is None:
-        return {
-            "schema_version": BASELINE_PIN_SCHEMA_VERSION,
-            "source": BASELINE_PIN_SOURCE_ABSENT,
-            "baseline_quality": None,
-        }
-    trial_id = int(getattr(entry, "trial_id", -1) or -1)
-    if warn and trial_id not in _LEGACY_BASELINE_PIN_WARNED:
-        _LEGACY_BASELINE_PIN_WARNED.add(trial_id)
-        log.warning(
-            "EV-14e legacy baseline read: trial %s carries no structured baseline_pin; "
-            "recovered baseline=%s from failure_analysis prose via regex "
-            "(scale_suspect=%s). This row's comparison identity (tier reference, "
-            "revision, era) was never recorded and cannot be recovered.",
-            trial_id,
-            legacy.get("baseline_quality"),
-            legacy.get("legacy_scale_suspect"),
-        )
-    return legacy
 
 
 @dataclass
@@ -924,6 +856,14 @@ class ExperimentJournal:
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
         self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}
+        self._view_generation = 0
+        self._supersession_cache_generation = -1
+        self._supersession_cache: dict[int, dict[str, Any]] = {}
+        self._folded_cache_generation = -1
+        self._folded_cache: list[JournalEntry] = []
+        self._row_cache_generation = -1
+        self._raw_rows_cache: list[dict[str, Any]] = []
+        self._folded_rows_cache: list[dict[str, Any]] = []
         # A5 durability: count of torn trailing lines skipped during the tolerant
         # load. >0 means a prior append was interrupted; the next append will
         # quarantine + repair the shard. Exposed for observability / tests.
@@ -1183,8 +1123,13 @@ class ExperimentJournal:
                     detail_json=json.dumps(json_sanitize(detail), default=str, allow_nan=False),
                 )
             )
-        except Exception:  # noqa: BLE001 — observability must not break the journal
-            pass
+        except Exception as exc:  # noqa: BLE001 — observability must not break the journal
+            if not getattr(self, "_trace_emit_failure_warned", False):
+                log.warning(
+                    "Live trace event emission failed (%s); journal append remains intact",
+                    type(exc).__name__,
+                )
+                self._trace_emit_failure_warned = True
 
     # ── writing ──────────────────────────────────────────────────
 
@@ -1302,6 +1247,7 @@ class ExperimentJournal:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         self._entries.append(entry)
+        self._view_generation += 1
         self._emit_trace_event(entry)
 
     def append_ledger_event(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -1328,6 +1274,8 @@ class ExperimentJournal:
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         self._ledger_events_by_batch.setdefault(batch, []).append(event)
+        if event.get("type") == SUPERSESSION_EVENT_TYPE:
+            self._view_generation += 1
         return event
 
     def append_supersession_event(
@@ -1555,6 +1503,8 @@ class ExperimentJournal:
         return events[-1] if events else None
 
     def _supersession_overrides_by_trial(self) -> dict[int, dict[str, Any]]:
+        if self._supersession_cache_generation == self._view_generation:
+            return self._supersession_cache
         entry_fields = set(JournalEntry.__dataclass_fields__)
         overrides_by_trial: dict[int, dict[str, Any]] = {}
         for event in self.supersession_events():
@@ -1577,26 +1527,50 @@ class ExperimentJournal:
                 overrides_by_trial.setdefault(trial_id, {}).update(
                     copy.deepcopy(filtered_fields)
                 )
-        return overrides_by_trial
+        self._supersession_cache = overrides_by_trial
+        self._supersession_cache_generation = self._view_generation
+        return self._supersession_cache
+
+    def folded_entries(self) -> list[JournalEntry]:
+        """Return a generation-cached trial view with supersessions folded in.
+
+        The returned list is a shallow copy. Persisted rows remain immutable by
+        journal contract; callers must copy an entry before changing it.
+        """
+        if self._folded_cache_generation != self._view_generation:
+            overrides_by_trial = self._supersession_overrides_by_trial()
+            if not overrides_by_trial:
+                self._folded_cache = list(self._entries)
+            else:
+                self._folded_cache = [
+                    replace(entry, **copy.deepcopy(overrides_by_trial[entry.trial_id]))
+                    if entry.trial_id in overrides_by_trial
+                    else entry
+                    for entry in self._entries
+                ]
+            self._folded_cache_generation = self._view_generation
+        return list(self._folded_cache)
 
     def entries_with_supersessions(self) -> list[JournalEntry]:
-        """Return trial entries with append-only supersession events folded in.
+        """Compatibility name for the planner-facing folded view."""
+        return self.folded_entries()
 
-        This is the runtime read view: persisted trial rows stay immutable, while
-        planner-facing trust and prompt helpers see operator supersession events
-        such as post-hoc resource-contention exclusions.
+    def rows(self, *, folded: bool = False) -> list[dict[str, Any]]:
+        """Return cached shallow JSON-ready trial rows.
+
+        The outer dicts are copied for each caller; nested values alias the
+        journal entries and are read-only by contract. Callers that need to
+        mutate a nested value must copy it first. Supersession ledger rows remain
+        available separately through ``ledger_events()``.
         """
-        overrides_by_trial = self._supersession_overrides_by_trial()
-        if not overrides_by_trial:
-            return list(self._entries)
-        entries: list[JournalEntry] = []
-        for entry in self._entries:
-            overrides = overrides_by_trial.get(entry.trial_id)
-            if overrides:
-                entries.append(replace(entry, **copy.deepcopy(overrides)))
-            else:
-                entries.append(entry)
-        return entries
+        if self._row_cache_generation != self._view_generation:
+            raw_entries = self._entries
+            folded_entries = self.folded_entries()
+            self._raw_rows_cache = [dict(vars(entry)) for entry in raw_entries]
+            self._folded_rows_cache = [dict(vars(entry)) for entry in folded_entries]
+            self._row_cache_generation = self._view_generation
+        cached = self._folded_rows_cache if folded else self._raw_rows_cache
+        return [dict(row) for row in cached]
 
     def next_trial_id(self) -> int:
         if not self._entries:
@@ -1605,9 +1579,6 @@ class ExperimentJournal:
 
     def by_species(self, species: str) -> list[JournalEntry]:
         return [e for e in self._entries if e.species == species]
-
-    def pareto_entries(self) -> list[JournalEntry]:
-        return [e for e in self._entries if e.pareto_status == "frontier"]
 
     def summary(self) -> dict[str, Any]:
         """Compact summary for controller consumption."""
@@ -1868,7 +1839,7 @@ class ExperimentJournal:
         Returns {suite_name: [(trial_id, quality), ...]} sorted by trial_id.
         """
         entries_with_suites = [
-            e for e in self._entries
+            e for e in self.trustworthy_entries()
             if e.eval_details.get("per_suite_quality")
         ][-last_n:]
 
@@ -2062,7 +2033,8 @@ class ExperimentJournal:
         validation successes earn exploration budget without changing old
         consumers that display Pareto counts or any production-promotion gate.
         """
-        entries = self._entries[-window:] if window else self._entries
+        folded = self.entries_with_supersessions()
+        entries = folded[-window:] if window else folded
         stats: dict[str, dict[str, float]] = {}
         for e in entries:
             if e.species not in stats:

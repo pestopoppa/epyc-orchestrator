@@ -18,17 +18,15 @@ DEFAULT_STATE_PATH = (
 )
 
 # Per-tier scoring lives in the shared TierSpec module (single source of truth, imported the
-# same way by scripts/autopilot and src/api). REFERENCE_POINT / MIN_FRONTIER_EVAL_TIER kept as
-# back-compat aliases for any importer.
+# same way by scripts/autopilot and src/api). MIN_FRONTIER_EVAL_TIER stays imported for
+# legacy readers; reference points are derived directly from tier specs.
 from src.autopilot_core.pareto_math import (  # noqa: E402
     dominates as pareto_dominates,
     hypervolume as pareto_hypervolume,
-    hypervolume_monte_carlo as pareto_hypervolume_monte_carlo,
     median_objectives,
 )
 from src.autopilot_core.tier_specs import (  # noqa: E402
     DEFAULT_FRONTIER_TIER,
-    DEFAULT_REFERENCE_POINT,
     LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
     OBJECTIVE_AXIS_NEG_COST,
@@ -39,7 +37,6 @@ from src.autopilot_core.tier_specs import (  # noqa: E402
     objective_value,
     spec_for,
 )
-REFERENCE_POINT = DEFAULT_REFERENCE_POINT
 PARETO_STATUS_TIER_EXCLUDED = "fast_reject"
 
 
@@ -545,9 +542,6 @@ class ParetoArchive:
 
     # ── genealogy ────────────────────────────────────────────────
 
-    def children_of(self, trial_id: int) -> list[ParetoEntry]:
-        return [e for e in self._all_entries if e.parent_trial == trial_id]
-
     def lineage(self, trial_id: int) -> list[ParetoEntry]:
         """Trace lineage back to root."""
         chain = []
@@ -561,177 +555,6 @@ class ParetoArchive:
                 None,
             )
         return list(reversed(chain))
-
-    # ── Bradley-Terry tiebreak — cheap axis-vote proxy (P17.BT-2) ──
-
-    def bt_tiebreak_topk(self, k: int = 5, tier: int | None = None) -> dict[str, Any]:
-        """Axis-vote Bradley-Terry tiebreak over top-K frontier entries (within ONE tier).
-
-        IMPORTANT — what this is, and what this is NOT:
-
-          This is a **cheap axis-vote proxy** that uses the BT engine on
-          data we already have (the recorded 4D objectives). The pairwise
-          inputs are mechanical Borda comparisons across the four
-          objective axes — they are NOT independent model judgments of
-          candidate outputs.
-
-          The Fortytwo-style peer-ranked-consensus form described in
-          intake-615 (arxiv:2510.24801) would use N judge models scoring
-          each candidate pairwise. That is INFERENCE-GATED and tracked
-          separately as P17.BT-4 in the autopilot handoff. This method
-          is P17.BT-2: a strictly cheaper and weaker signal that runs
-          purely off recorded objectives.
-
-        Available as an offline diagnostic for hypervolume stagnation. The
-        live planner prompt no longer injects this signal because J13 found
-        the prompt hint cosmetic/non-certifying.
-
-        Why this is still useful:
-          Hypervolume scalarization collapses four axes into one number
-          and can hide candidates that *consistently* beat peers across
-          axes without being individually hypervolume-dominant.
-          Axis-vote BT surfaces those candidates as alternative
-          exploration seeds — a falsifiable signal at zero inference
-          cost.
-
-        Why pairwise scores come from axis comparison, not new inference:
-          By design this is a code-only tiebreak (P17.BT-2) — it uses
-          the objectives already recorded in archive entries. No
-          eval-tower re-runs, no model calls. The accompanying
-          falsification gate (P17.BT-3) is the only inference-dependent
-          step.
-
-        Top-K selection is range-normalized (fix landed 2026-05-27):
-          The top-K candidates fed to BT are selected by a per-axis
-          range-normalized sum: each axis (obj - ref) is divided by
-          (max_e(obj) - ref) across the frontier before summing, so
-          every axis contributes on a [0, 1] scale regardless of
-          its physical magnitude. This prevents high-magnitude axes
-          (e.g., speed in t/s, range 0-100+) from swamping low-magnitude
-          axes (e.g., reliability in [0,1]) when deciding which
-          candidates even enter the BT comparison.
-
-        Parameters
-        ----------
-        k:
-            Number of top frontier entries to compare. Defaults to 5;
-            capped at the frontier size.
-
-        Returns
-        -------
-        Dict with keys:
-          - `ranking` — list of trial IDs ordered by BT log-skill (high to low)
-          - `log_skills` — dict trial_id -> log-skill (lowest anchored at 0)
-          - `top_k_trial_ids` — input set, in archive order
-          - `warnings` — diagnostics from the BT fit (cycles, dominance skew, etc.)
-          - `converged` — whether the BT iteration converged
-          - `iterations` — Zermelo iteration count
-          - `note` — short status string suitable for diagnostics/logging
-
-        Returns an empty dict (with `note` set) when the frontier has <2
-        entries — BT is undefined on a singleton.
-        """
-        # Local import keeps the BT module a leaf dependency.
-        # bradley_terry lives in src/ (moved 2026-05-27 as part of DAR-6
-        # scaffolding); ORCH_ROOT is on sys.path at autopilot runtime.
-        from src.bradley_terry import bradley_terry_rank
-
-        front = self._front(tier)
-        ref = spec_for(self._tier(tier)).reference_point
-
-        if len(front) < 2:
-            return {
-                "ranking": [e.trial_id for e in front],
-                "log_skills": {e.trial_id: 0.0 for e in front},
-                "top_k_trial_ids": [e.trial_id for e in front],
-                "warnings": [],
-                "converged": True,
-                "iterations": 0,
-                "note": f"BT tiebreak skipped (frontier_size={len(front)})",
-            }
-
-        # Pick top-K frontier entries by hypervolume contribution. Use the
-        # current frontier as-is (no re-ranking); if K exceeds frontier
-        # size, just compare the whole frontier.
-        k = min(max(k, 2), len(front))
-        # Rank frontier entries by a range-normalized sum of axis values minus
-        # the reference. Earlier version used a raw sum, which made
-        # high-magnitude axes (speed in t/s, range 0-100+) dominate vs
-        # low-magnitude axes (reliability in [0,1]). Range-normalization
-        # per axis across the frontier puts each axis on a [0, 1] scale
-        # before summing so no axis can swamp the others purely on units.
-        # Ties broken by quality.
-        n_axes = len(front[0].objectives)
-        # Per-axis frontier max; degenerate axes (max == ref) fall back to
-        # 1.0 so we don't divide by zero and the contribution becomes
-        # (obj - ref) / 1.0 = the raw delta (small for those axes).
-        per_axis_max = [
-            max(e.objectives[a] for e in front)
-            for a in range(n_axes)
-        ]
-        per_axis_range = [
-            (per_axis_max[a] - ref[a]) or 1.0
-            for a in range(n_axes)
-        ]
-
-        def _normalized_axis_sum(e: ParetoEntry) -> float:
-            return sum(
-                (e.objectives[a] - ref[a]) / per_axis_range[a]
-                for a in range(n_axes)
-            )
-
-        scored = sorted(
-            front,
-            key=lambda e: (_normalized_axis_sum(e), self._quality_of(e, tier)),
-            reverse=True,
-        )
-        top_k = scored[:k]
-        trial_ids = [e.trial_id for e in top_k]
-
-        # Build pairwise win-scores from axis-wise Borda counting:
-        #   pair_score[i, j] = fraction of objective axes where i > j
-        #                    (ties count as 0.5)
-        # This is symmetric: pair_score[i,j] + pair_score[j,i] = 1.0.
-        # No axis normalization is needed because we only compare relative
-        # ordering per axis, not magnitudes.
-        n_axes = len(top_k[0].objectives)
-        pairwise: dict[tuple[int, int], float] = {}
-        for i, ei in enumerate(top_k):
-            for j, ej in enumerate(top_k):
-                if i == j:
-                    continue
-                wins = 0.0
-                for a in range(n_axes):
-                    if ei.objectives[a] > ej.objectives[a]:
-                        wins += 1.0
-                    elif ei.objectives[a] == ej.objectives[a]:
-                        wins += 0.5
-                pairwise[(ei.trial_id, ej.trial_id)] = wins / n_axes
-
-        result = bradley_terry_rank(trial_ids, pairwise)
-
-        # Build a short logging note. The lead candidate may differ from the
-        # naive top-of-hypervolume entry — that disagreement is the signal
-        # the controller cares about.
-        naive_top = trial_ids[0]
-        bt_top = result.ranking[0]
-        if naive_top == bt_top:
-            disagreement = f"BT agrees with hypervolume on trial #{naive_top}"
-        else:
-            disagreement = (
-                f"BT picks trial #{bt_top} (rank-by-hv would pick #{naive_top}) "
-                f"— pairwise consensus across {n_axes} axes disagrees with scalarization"
-            )
-
-        return {
-            "ranking": result.ranking,
-            "log_skills": result.log_skills,
-            "top_k_trial_ids": trial_ids,
-            "warnings": result.warnings,
-            "converged": result.converged,
-            "iterations": result.iterations,
-            "note": disagreement,
-        }
 
     # ── parent utility (AP-ME-2, 2026-08-13) ────────────────────
 
@@ -1340,10 +1163,3 @@ def _hypervolume_4d(
     100 points does it fall back to a deterministic Monte Carlo estimate.
     """
     return pareto_hypervolume(points, ref, exact_limit=100, samples=10000)
-
-
-def _hypervolume_monte_carlo(
-    points: list[tuple[float, ...]], ref: tuple[float, ...], samples: int = 10000
-) -> float:
-    """Monte Carlo hypervolume approximation."""
-    return pareto_hypervolume_monte_carlo(points, ref, samples=samples)

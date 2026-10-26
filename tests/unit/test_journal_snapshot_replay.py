@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -33,6 +34,8 @@ def _row(trial_id: int, *, quality: float = 1.0, speed: float = 40.0) -> dict[st
         "cost": 0.2,
         "reliability": 0.9,
         "pareto_status": "frontier",
+        "eval_details": {"nested": {"value": [1, 2]}},
+        "config_snapshot": {"type": "seed_batch", "nested": {"x": [3]}},
     }
 
 
@@ -181,7 +184,9 @@ def test_current_snapshot_payload_helper_returns_verified_archive() -> None:
         snapshot={"archive": archive},
     )
 
+    before = copy.deepcopy((rows, event))
     payload = archive_payload_from_current_snapshot(rows + [event], [event])
+    assert (rows, event) == before
 
     assert payload == archive
     assert payload is not archive
@@ -212,7 +217,9 @@ def test_verified_snapshot_payload_folds_safe_tail() -> None:
         snapshot={"archive": _archive([rows[0]])},
     )
 
+    before = copy.deepcopy((rows, event))
     payload = archive_payload_from_verified_snapshot(rows + [event], [event])
+    assert (rows, event) == before
 
     assert payload == _archive(rows)
 
@@ -247,7 +254,9 @@ def test_verified_snapshot_payload_rejects_within_noise_tail() -> None:
         snapshot={"archive": _archive([rows[0]])},
     )
 
+    before = copy.deepcopy((rows, event))
     payload = archive_payload_from_verified_snapshot(rows + [event], [event])
+    assert (rows, event) == before
 
     assert payload is None
 
@@ -275,7 +284,9 @@ def test_verified_snapshot_payload_folds_within_noise_tail_with_replay_state() -
         },
     )
 
+    before = copy.deepcopy((rows, event))
     payload = archive_payload_from_verified_snapshot(rows + [event], [event])
+    assert (rows, event) == before
 
     assert payload == _archive(rows)
 

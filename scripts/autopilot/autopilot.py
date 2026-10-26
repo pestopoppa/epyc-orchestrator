@@ -123,11 +123,12 @@ from phase_status import (
 
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
 import controller_io
-from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
+from controller_io import PLANNER_ARCHIVE_PATH
 from run_manifest import build_run_manifest, manifest_drift_reasons
 import rejected_mutation_ledger
 import reproposal_rate
 from planner_coordinator import (
+    PLANNER_ACTION_TYPES,
     plan_with_providers,
     review_preseeded_seed,
     uncritiqued_dispatch_block_reason,
@@ -4997,11 +4998,10 @@ def _build_prior_planner_decision_digest(
         return "  (none yet — planner archive has no prior decisions)"
 
     try:
-        tail: deque[str] = deque(maxlen=max(limit * 6, limit))
-        with open(archive_path) as fh:
-            for line in fh:
-                if line.strip():
-                    tail.append(line)
+        tail = deque(
+            controller_io.tail_records(archive_path, max(limit * 6, limit)),
+            maxlen=max(limit * 6, limit),
+        )
     except Exception as exc:
         return f"  (prior decision digest unavailable: {exc})"
 
@@ -7178,7 +7178,6 @@ def _reject_in_flight_manifest_drift(state: dict[str, Any]) -> None:
 def _default_state() -> dict[str, Any]:
     return {
         "trial_counter": 0,
-        "session_id": None,
         "paused": False,
         "species_budget": SpeciesBudget().as_dict(),
         "td_errors": [],
@@ -7822,7 +7821,7 @@ def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> No
             reproductions=_reproductions,
         )
 
-    configure_promotion_guard_archive(_provider)
+    configure_promotion_guard_archive(_provider, journal=journal)
 
 
 def _live_objective_policy_from_state(state: Mapping[str, Any]) -> str:
@@ -8325,21 +8324,6 @@ def _query_slot_memory() -> str:
     return "\n".join(lines)
 
 
-# ── Claude CLI Controller ────────────────────────────────────────
-# Controller invocation, action extraction, and AP-9 single-variable
-# validation moved to controller_io.py (2026-05-22 refactor). Wrapper below
-# preserves the original cwd=ORCH_ROOT semantics.
-
-
-def invoke_controller(
-    prompt: str,
-    session_id: str | None = None,
-    timeout: int = 300,
-) -> tuple[str, str | None]:
-    """Invoke Claude CLI for meta-reasoning."""
-    return _invoke_controller_impl(prompt, session_id=session_id, timeout=timeout, cwd=ORCH_ROOT)
-
-
 # ── Action Dispatch (moved to actions.py, 2026-05-22 refactor) ──
 # dispatch_action() is re-imported from actions.py at the module top so the
 # public name + signature are preserved for callers (run_loop, tests).
@@ -8568,8 +8552,11 @@ def run_loop(
     else:
         breadcrumb.mark_terminal("run_loop_return")
     finally:
-        if tui is not None:
-            tui.__exit__(None, None, None)
+        try:
+            if tui is not None:
+                tui.__exit__(None, None, None)
+        finally:
+            configure_promotion_guard_archive(None)
 
 
 def _make_eval_progress_callback(
@@ -9517,23 +9504,7 @@ def _run_loop_inner(
             )
 
             try:
-                _known_actions = [
-                    "seed_batch",
-                    "numeric_trial",
-                    "prompt_mutation",
-                    "gepa_optimize",
-                    "code_mutation",
-                    "structural_experiment",
-                    "consult_gate_probe",
-                    "structural_prune",
-                    "slot_compact",
-                    "train_routing_models",
-                    "distill_skillbank",
-                    "reset_memories",
-                    "deep_eval",
-                    "rollback",
-                    "distill_knowledge",
-                ]
+                _known_actions = list(PLANNER_ACTION_TYPES)
                 (
                     action_availability_text,
                     viable_tail_actions,
@@ -9638,7 +9609,6 @@ def _run_loop_inner(
                 "planner_invoke",
                 trial_id=trial_counter,
                 prompt_chars=len(prompt),
-                session_id=state.get("session_id"),
                 idle_reason="planner subprocess running",
             )
             planner_provider_state = state.setdefault("planner_providers", {})
@@ -9647,7 +9617,6 @@ def _run_loop_inner(
                 state["planner_providers"] = planner_provider_state
             planner_decision = plan_with_providers(
                 prompt,
-                session_id=state.get("session_id"),
                 cwd=ORCH_ROOT,
                 planner_state=planner_provider_state,
                 stagnation_signal=stagnation_signal,
@@ -9657,7 +9626,6 @@ def _run_loop_inner(
                 vidya_kvq_context=vidya_kvq_context,
                 belief_context=belief_ready,
             )
-            state["session_id"] = planner_decision.session_id
             if shutdown_requested:
                 log.info("Shutdown requested during selection; discarding selected action")
                 exit_trigger = "signal"
@@ -9676,7 +9644,6 @@ def _run_loop_inner(
                 "planner_parse",
                 trial_id=trial_counter,
                 response_chars=len(planner_decision.canonical_text or ""),
-                session_id=planner_decision.session_id,
                 draft_provider=planner_decision.draft_provider,
                 critic_provider=planner_decision.critic_provider,
                 planner_mode=planner_decision.mode,
@@ -11869,7 +11836,7 @@ def _belief_settings_from_args(args: argparse.Namespace) -> "_loop_beliefs.Belie
 
 
 def _journal_rows_for_archive(journal: ExperimentJournal) -> list[dict[str, Any]]:
-    rows = [asdict(entry) for entry in journal.all_entries()]
+    rows = journal.rows()
     if hasattr(journal, "supersession_events"):
         rows.extend(journal.supersession_events())
     return rows
@@ -12112,7 +12079,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             f"{collision.get('superseded_owner')} at {collision.get('at')} "
             "(that operation will not resume AutoPilot)"
         )
-    print(f"Session ID: {state.get('session_id', 'none')}")
+    print("Planner continuity: planner archive (legacy session_id is ignored)")
     if archive_source != ARCHIVE_SOURCE_STATE:
         print(f"Archive source: {archive_source}")
     for line in _baseline_promotion_summary_lines(state, journal):

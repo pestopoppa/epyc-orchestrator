@@ -120,11 +120,10 @@ def settings(tmp_path: Path) -> Any:
 class FakeProvider:
     def __init__(self, name: str, responses: list[Any]) -> None:
         self.name = name
-        self.supports_resume = False
         self.responses = list(responses)
         self.calls: list[dict[str, Any]] = []
 
-    def invoke(self, prompt: str, *, role: str, session_id: Any = None, timeout: int = 300,
+    def invoke(self, prompt: str, *, role: str, timeout: int = 300,
                cwd: Any = None) -> Any:
         self.calls.append({"prompt": prompt, "role": role})
         return self.responses.pop(0)
@@ -202,7 +201,7 @@ def test_stale_ledger_ingested_then_planner_runs_with_ledger_state_receipt(
     claude = FakeProvider("claude", [PlannerProviderResult(
         provider="claude", role="draft", ok=True, text=draft)])
     decision = planner_coordinator.plan_with_providers(
-        "prompt", session_id=None, provider_factory=lambda _n: claude,
+        "prompt", provider_factory=lambda _n: claude,
         settings=PlannerSettings(mode="single"), belief_context=outcome.ready)
     assert decision.action == NUMERIC and claude.calls[0]["role"] == "draft"
     receipt = _no_live_side_effects[-1]["vidya_loop_beliefs"]
@@ -231,7 +230,7 @@ def test_refused_chain_broken_never_reaches_a_planner_provider(settings: Any) ->
 
     with pytest.raises(lb.BeliefContextRefused):
         planner_coordinator.plan_with_providers(
-            "prompt", session_id=None, provider_factory=factory, belief_context=outcome.ready)
+            "prompt", provider_factory=factory, belief_context=outcome.ready)
     assert built == []
 
 
@@ -445,7 +444,7 @@ def test_critic_unavailable_keeps_seed_unrun() -> None:
 def test_seed_review_token_cannot_license_drafting_or_be_forged() -> None:
     with pytest.raises(lb.BeliefContextRefused):
         planner_coordinator.plan_with_providers(
-            "prompt", session_id=None, belief_context=_token(),
+            "prompt", belief_context=_token(),
             provider_factory=lambda _n: (_ for _ in ()).throw(AssertionError("built")))
     with pytest.raises(lb.BeliefContextRefused):
         planner_coordinator.review_preseeded_seed(
@@ -1184,7 +1183,7 @@ def test_plan_with_providers_archives_the_counterfactual_without_dispatching(
         PlannerProviderResult(provider="claude", role="draft", ok=True, text=real),
         PlannerProviderResult(provider="claude", role="draft", ok=True, text=_fence(shadow))])
     decision = planner_coordinator.plan_with_providers(
-        prompt, session_id=None, provider_factory=lambda _n: claude,
+        prompt, provider_factory=lambda _n: claude,
         settings=PlannerSettings(mode="single"), belief_context=ready)
     assert decision.action == NUMERIC  # the shadow never replaces the real action
     assert len(claude.calls) == 2

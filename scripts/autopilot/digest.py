@@ -183,6 +183,26 @@ def _journal_entries_for_digest(journal: Any) -> list[Any]:
     return []
 
 
+def _action_diversity_section(journal: Any) -> list[str]:
+    """Render the rich/lean action diversity telemetry for operator review."""
+    lines = ["### Action diversity by prompt gate"]
+    fn = getattr(journal, "action_diversity_by_gate", None)
+    if not callable(fn):
+        return lines + ["- (journal does not expose action diversity telemetry)"]
+    try:
+        data = fn()
+    except Exception as exc:
+        return lines + [f"- (action diversity unavailable: {exc})"]
+    for name in ("rich", "lean"):
+        bucket = data.get(name, {}) if isinstance(data, dict) else {}
+        lines.append(
+            f"- {name}: count={bucket.get('count', 0)}, "
+            f"distinct={bucket.get('distinct_action_types', 0)}, "
+            f"entropy={_fmt_num(bucket.get('entropy_bits', 0.0), 3)} bits"
+        )
+    return lines
+
+
 def _mechanism_class(action_type: str) -> str:
     if action_type in {"prompt_mutation", "gepa_optimize"}:
         return "prompt_search"
@@ -496,6 +516,8 @@ def render_digest(
         body.append("")
     if journal is not None:
         body.extend(_mechanism_effectiveness_section(journal))
+        body.append("")
+        body.extend(_action_diversity_section(journal))
         body.append("")
         body.extend(_journal_section(journal))
         body.append("")

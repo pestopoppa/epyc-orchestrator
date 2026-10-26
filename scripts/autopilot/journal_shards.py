@@ -99,3 +99,41 @@ def resolve_journal_paths(
         shards = journal_shards(path.parent, stem=stem, suffix=suffix)
         return shards or [path]
     return [path]
+
+
+def load_journal_rows(
+    paths: list[Path], *, on_malformed: str = "skip"
+) -> tuple[list[dict], list[dict[str, object]]]:
+    """Load dict rows and report malformed lines under an explicit policy.
+
+    ``skip`` and ``record`` continue past malformed lines; ``record`` returns
+    their path, line number and JSON error in the second tuple element. ``raise``
+    fails on the first malformed line. File access errors remain visible to the
+    caller so each report can preserve its established missing-file behavior.
+    """
+    if on_malformed not in {"skip", "record", "raise"}:
+        raise ValueError(f"unknown malformed-line policy: {on_malformed!r}")
+    import json
+
+    rows: list[dict] = []
+    malformed: list[dict[str, object]] = []
+    for path in paths:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    row = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    detail = {"path": str(path), "line": line_number, "error": str(exc)}
+                    if on_malformed == "raise":
+                        raise ValueError(
+                            f"malformed JSONL at {path}:{line_number}: {exc}"
+                        ) from exc
+                    if on_malformed == "record":
+                        malformed.append(detail)
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    return rows, malformed

@@ -530,31 +530,27 @@ def _env_enabled(value: str | None) -> bool | None:
 
 def _journal_shards(journal_dir: Path) -> list[Path]:
     try:
-        return sorted(path for path in journal_dir.glob("autopilot_journal*.jsonl") if path.is_file())
-    except OSError:
-        return []
+        from scripts.autopilot.journal_shards import journal_shards
+    except ImportError:  # pragma: no cover - direct script invocation
+        from journal_shards import journal_shards
+    return journal_shards(journal_dir)
 
 
 def _read_journal_rows(journal_dir: Path) -> list[dict[str, Any]] | None:
-    rows: list[dict[str, Any]] = []
     shards = _journal_shards(journal_dir)
     if not shards:
         return None
+    try:
+        from scripts.autopilot.journal_shards import load_journal_rows
+    except ImportError:  # pragma: no cover - direct script invocation
+        from journal_shards import load_journal_rows
+    rows: list[dict[str, Any]] = []
     for shard in shards:
         try:
-            with shard.open(encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(row, dict):
-                        rows.append(row)
+            shard_rows, _malformed = load_journal_rows([shard], on_malformed="skip")
         except OSError:
             continue
+        rows.extend(shard_rows)
     return rows
 
 

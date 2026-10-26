@@ -406,8 +406,14 @@ def _pareto_archive_for_safety_guard() -> Any | None:
             pareto_archive_from_journal_rows,
         )
 
-        journal = ExperimentJournal()
-        rows = [asdict(entry) for entry in journal.all_entries()]
+        journal = _QUALITY_CEILING_JOURNAL
+        if journal is None:
+            journal = ExperimentJournal()
+        rows = (
+            journal.rows()
+            if hasattr(journal, "rows")
+            else [asdict(entry) for entry in journal.all_entries()]
+        )
         if hasattr(journal, "supersession_events"):
             rows.extend(journal.supersession_events())
         archive = pareto_archive_from_journal_rows(
@@ -449,6 +455,7 @@ class PromotionGuardView:
 
 PromotionGuardProvider = Callable[..., "PromotionGuardView | None"]
 _PROMOTION_GUARD_PROVIDER: PromotionGuardProvider | None = None
+_QUALITY_CEILING_JOURNAL: Any | None = None
 _LEGACY_GUARD_FALLBACK_WARNED = False
 # Per-update_baseline evaluation context: the pending candidate row(s) and a one-build
 # cache (the live rebuild costs ~1 s; one promotion decision used to rebuild it 4 times).
@@ -483,16 +490,21 @@ def empty_frontier_min_repro() -> int:
     return value
 
 
-def configure_promotion_guard_archive(provider: PromotionGuardProvider | None) -> None:
+def configure_promotion_guard_archive(
+    provider: PromotionGuardProvider | None, *, journal: Any | None = None
+) -> None:
     """Install (or clear, with None) the live-scope archive provider for promotion checks.
 
     The autopilot installs one at startup that rebuilds the frontier from the journal under
     the LIVE ``pareto_objective_policy`` and ``pareto_exclude_before_ts`` — the same
     authority path (``_journal_archive_payload_for_authority``) that seeds the live archive.
     The provider is called as ``provider(pending_rows=(...))``.
+    The optional journal supplies the separate LEGACY all-era quality ceiling;
+    every configuration call replaces it, including clearing it with None.
     """
-    global _PROMOTION_GUARD_PROVIDER, _LEGACY_GUARD_FALLBACK_WARNED
+    global _PROMOTION_GUARD_PROVIDER, _LEGACY_GUARD_FALLBACK_WARNED, _QUALITY_CEILING_JOURNAL
     _PROMOTION_GUARD_PROVIDER = provider
+    _QUALITY_CEILING_JOURNAL = journal
     _LEGACY_GUARD_FALLBACK_WARNED = False
 
 

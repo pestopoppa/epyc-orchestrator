@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from experiment_journal import DEFAULT_JOURNAL_DIR, ExperimentJournal
+try:
+    from scripts.autopilot.journal_shards import journal_shards
+except ImportError:  # pragma: no cover - direct script invocation
+    from journal_shards import journal_shards
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_JOURNAL = ORCH_ROOT / "orchestration" / "autopilot_journal.jsonl"
@@ -92,21 +96,8 @@ def iter_jsonl(paths: list[Path]) -> list[dict[str, Any]]:
     return rows
 
 
-def _jsonl_batch_key(path: Path) -> tuple[int, str]:
-    stem = path.stem
-    if stem == "autopilot_journal":
-        return (0, path.name)
-    prefix = "autopilot_journal_"
-    if stem.startswith(prefix):
-        try:
-            return (int(stem.removeprefix(prefix)), path.name)
-        except ValueError:
-            pass
-    return (10**9, path.name)
-
-
 def _jsonl_batches(journal_dir: Path) -> list[Path]:
-    return sorted(journal_dir.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key)
+    return journal_shards(journal_dir)
 
 
 def _row_timestamp(row: Mapping[str, Any]) -> float | None:

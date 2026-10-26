@@ -58,6 +58,7 @@ from src.autopilot_core.infra_fingerprint import (
     compare_infra_fingerprints,
     fingerprint_digest,
 )
+from src.autopilot_core.baseline_pin import baseline_pin_for
 
 AP55_GATE_SCHEMA_VERSION = 1
 
@@ -187,7 +188,7 @@ def _row_fingerprint(row: Any) -> Mapping[str, Any] | None:
 
 
 def _baseline_revision(row: Any) -> Any:
-    pin = _get(row, "baseline_pin", {}) or {}
+    pin = baseline_pin_for(row, warn=False)
     return pin.get("baseline_revision") if isinstance(pin, Mapping) else None
 
 

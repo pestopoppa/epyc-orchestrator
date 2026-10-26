@@ -98,16 +98,12 @@ def test_dominance_and_frontier_identical(policy: str, tier: int) -> None:
         "stepping_stones_text",
         "geometry",
         "geometry_text",
-        "bt_tiebreak_topk",
         "parent_utility_ranking",
     ],
 )
 def test_archive_reads_identical(policy: str, tier: int, reader: str) -> None:
     archive, golden = _replay(policy)
-    if reader == "bt_tiebreak_topk":
-        actual = archive.bt_tiebreak_topk(k=5, tier=tier)
-    else:
-        actual = getattr(archive, reader)(tier)
+    actual = getattr(archive, reader)(tier)
     assert _norm(actual) == golden["tiers"][str(tier)][reader]
 
 

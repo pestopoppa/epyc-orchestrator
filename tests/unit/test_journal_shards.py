@@ -127,3 +127,53 @@ def test_resolve_journal_paths_honors_explicit_non_base_path(tmp_path: Path) -> 
     # An explicit, non-base path is returned as-is (single element), even when
     # rotated shards exist beside it.
     assert resolve_journal_paths(explicit) == [explicit]
+
+
+def test_all_report_readers_find_gap_shard_in_numeric_order(tmp_path: Path) -> None:
+    import json
+    import sys
+
+    root = Path(__file__).resolve().parents[2]
+    scripts = root / "scripts" / "autopilot"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    from scripts.autopilot import core_v2_select, eval_task_coverage_report
+    from scripts.autopilot import phase_status, preflight_audit
+
+    base = _touch(tmp_path / "autopilot_journal.jsonl")
+    _touch(tmp_path / "autopilot_journal_1.jsonl")
+    shard3 = _touch(tmp_path / "autopilot_journal_3.jsonl")
+    base.write_text('{"trial_id": 0}\n', encoding="utf-8")
+    (tmp_path / "autopilot_journal_1.jsonl").write_text(
+        '{"trial_id": 1}\n', encoding="utf-8"
+    )
+    shard3.write_text('{"trial_id": 3}\n', encoding="utf-8")
+
+    assert [row["trial_id"] for row in preflight_audit._load_jsonl(base)] == [0, 1, 3]
+    assert core_v2_select._jsonl_batches(tmp_path) == [
+        base, tmp_path / "autopilot_journal_1.jsonl", shard3
+    ]
+    assert eval_task_coverage_report.resolve_journal_paths(None, tmp_path) == [
+        base, tmp_path / "autopilot_journal_1.jsonl", shard3
+    ]
+    assert [row["trial_id"] for row in phase_status._read_journal_rows(tmp_path)] == [0, 1, 3]
+
+
+def test_shared_journal_reader_malformed_line_policies(tmp_path: Path) -> None:
+    from scripts.autopilot.journal_shards import load_journal_rows
+
+    path = tmp_path / "rows.jsonl"
+    path.write_text('{"ok": true}\nnot-json\n', encoding="utf-8")
+    rows, malformed = load_journal_rows([path], on_malformed="record")
+    assert rows == [{"ok": True}]
+    assert malformed[0]["path"] == str(path)
+    assert malformed[0]["line"] == 2
+    rows, malformed = load_journal_rows([path], on_malformed="skip")
+    assert rows == [{"ok": True}]
+    assert malformed == []
+    try:
+        load_journal_rows([path], on_malformed="raise")
+    except ValueError as exc:
+        assert f"{path}:2" in str(exc)
+    else:
+        raise AssertionError("strict malformed-line policy did not raise")

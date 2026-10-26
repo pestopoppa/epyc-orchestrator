@@ -20,7 +20,6 @@ planner_providers = importlib.import_module("planner_providers")
 
 
 class FakePlannerProvider:
-    supports_resume = False
 
     def __init__(self, name: str, responses: list[planner_providers.PlannerProviderResult]):
         self.name = name
@@ -32,7 +31,6 @@ class FakePlannerProvider:
         prompt: str,
         *,
         role: str,
-        session_id: str | None = None,
         timeout: int = 300,
         cwd: Path | str | None = None,
     ) -> planner_providers.PlannerProviderResult:
@@ -40,7 +38,6 @@ class FakePlannerProvider:
             {
                 "prompt": prompt,
                 "role": role,
-                "session_id": session_id,
                 "timeout": timeout,
                 "cwd": cwd,
             }
@@ -54,29 +51,25 @@ class FakePlannerProvider:
 def test_claude_provider_does_not_resume_or_persist_session_by_default(tmp_path) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_invoke(prompt, *, session_id=None, timeout=300, cwd=None):
+    def fake_invoke(prompt, *, timeout=300, cwd=None):
         captured["prompt"] = prompt
-        captured["session_id"] = session_id
         captured["timeout"] = timeout
         captured["cwd"] = cwd
         return "ok", "new-session"
 
     provider = planner_providers.ClaudePlannerProvider(invoke_fn=fake_invoke)
 
-    assert provider.supports_resume is False
     result = provider.invoke(
         "prompt",
         role="draft",
-        session_id="old-session",
         timeout=7,
         cwd=tmp_path,
     )
 
     assert result.ok is True
-    assert result.session_id is None
+    assert not hasattr(result, "session_id")
     assert captured == {
         "prompt": "prompt",
-        "session_id": None,
         "timeout": 7,
         "cwd": tmp_path,
     }
@@ -1034,3 +1027,16 @@ def test_codex_critic_alias_uses_codex_with_distinct_provider_name(monkeypatch, 
     ]
     assert captured["input"] == "prompt"
     assert captured["timeout"] == 7
+
+
+def test_provider_archive_rows_include_digest_type_and_failure_status(monkeypatch) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_providers, "_append_planner_archive", records.append)
+    failure = planner_providers.PlannerProviderResult(
+        provider="codex", role="critique", text="", ok=False,
+        error="timeout after 600s", duration_s=1.0,
+    )
+    planner_providers._archive_codex_call("prompt", failure, ["{}"])
+    assert records[-1]["type"] == "planner_provider_call"
+    assert records[-1]["status"] == "timeout"
+    assert records[-1]["events"] == ["[codex:?] {}"]

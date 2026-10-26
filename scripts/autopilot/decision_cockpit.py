@@ -47,6 +47,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.autopilot_core.baseline_pin import baseline_pin_for
+
 try:
     from scripts.autopilot.journal_shards import journal_shards, shard_batch_index
 except ModuleNotFoundError:  # pragma: no cover - bare-module import context
@@ -564,8 +566,6 @@ def signature(row: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
-_QUALITY_BASELINE_PROSE_RE = re.compile(
-    r"Quality regression:\s*[0-9]+(?:\.[0-9]+)?\s+vs\s+baseline\s+([0-9]+(?:\.[0-9]+)?)")
 _VIOLATION_RE = re.compile(r"VIOLATIONS:\s*\n\s*-\s*([^\n]+)")
 
 
@@ -768,21 +768,19 @@ def delta_row(row: dict[str, Any], *, incumbent: dict[str, Any], era: str,
             "paired": {"shared_qids": shared, "candidate_only_correct": cand_only,
                        "incumbent_only_correct": inc_only},
         })
-    pin = row.get("baseline_pin") if isinstance(row.get("baseline_pin"), dict) else {}
-    if pin:
-        pinned = {"source": pin.get("source") or "structured",
-                  "baseline_quality": _float(pin.get("baseline_quality")),
-                  "era": pin.get("eval_quality_era") or None}
-    else:
-        # Only the quality-regression sentence names a QUALITY baseline; the generic
-        # "baseline N" regex also matches the throughput-floor sentence (a t/s value).
-        m = _QUALITY_BASELINE_PROSE_RE.search(str(row.get("failure_analysis") or ""))
-        val = _float(m.group(1)) if m else None
-        if val is not None and val <= QUALITY_SCALE:
-            pinned = {"source": "legacy_quality_regression_prose", "baseline_quality": val, "era": None}
-        else:
-            pinned = {"source": "absent" if m is None else "legacy_scale_suspect",
-                      "baseline_quality": None, "era": None}
+    pin = baseline_pin_for(row, warn=False, legacy_quality_only=True)
+    pin_source = pin.get("source") or "absent"
+    if pin_source == "legacy_failure_analysis_regex":
+        pin_source = (
+            "legacy_scale_suspect"
+            if pin.get("legacy_scale_suspect")
+            else "legacy_quality_regression_prose"
+        )
+    pinned = {
+        "source": pin_source,
+        "baseline_quality": _float(pin.get("baseline_quality")),
+        "era": pin.get("eval_quality_era") or None,
+    }
     if pinned["baseline_quality"] is not None and q is not None:
         pinned["delta"] = q - pinned["baseline_quality"]
     seq = row.get("seq") if isinstance(row.get("seq"), dict) else {}

@@ -1286,33 +1286,81 @@ def test_env_restart_performs_when_key_missing_from_live_env(monkeypatch: pytest
     assert len(restarts) == 1
 
 
-def test_live_api_env_reads_proc_environ(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    class FakeCompleted:
-        stdout = "4242\n"
-
-    monkeypatch.setattr(
-        applicator.subprocess, "run", lambda *a, **kw: FakeCompleted(),
+def _write_fake_stack_api(
+    tmp_path: Path, *, argv: bytes, cwd: Path | None = None
+) -> tuple[Path, Path]:
+    state_path = tmp_path / "orchestrator_state.json"
+    state_path.write_text(
+        json.dumps({
+            "orchestrator": {
+                "role": "orchestrator", "pid": 4242, "port": 8000,
+                "started_at": "2026-10-25T12:00:00", "model_path": "uvicorn",
+                "log_file": "api.log",
+            }
+        }),
+        encoding="utf-8",
     )
-    environ_file = tmp_path / "environ"
-    environ_file.write_bytes(b"FOO=1\0ORCHESTRATOR_X=abc\0NOEQ\0")
-    real_read_bytes = Path.read_bytes
-
-    def fake_read_bytes(self):
-        if str(self) == "/proc/4242/environ":
-            return real_read_bytes(environ_file)
-        return real_read_bytes(self)
-
-    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
-    out = applicator._live_api_env(["ORCHESTRATOR_X", "MISSING"])
-    assert out == {"ORCHESTRATOR_X": "abc", "MISSING": None}
+    proc_root = tmp_path / "proc"
+    proc = proc_root / "4242"
+    proc.mkdir(parents=True)
+    (proc / "cmdline").write_bytes(argv)
+    (proc / "environ").write_bytes(b"FOO=1\0ORCHESTRATOR_X=abc\0NOEQ\0")
+    (proc / "cwd").symlink_to(cwd or applicator.ORCH_ROOT, target_is_directory=True)
+    return state_path, proc_root
 
 
-def test_live_api_env_none_when_no_process(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeCompleted:
-        stdout = ""
+def test_live_api_env_reads_only_recorded_stack_pid_and_matching_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from scripts.server import stack_paths
 
-    monkeypatch.setattr(applicator.subprocess, "run", lambda *a, **kw: FakeCompleted())
-    assert applicator._live_api_env(["ANY"]) is None
+    state_path, proc_root = _write_fake_stack_api(
+        tmp_path, argv=b"python\0-m\0uvicorn\0src.api:app\0"
+    )
+    monkeypatch.setattr(stack_paths, "STATE_FILE", state_path)
+    monkeypatch.setattr(applicator, "PROC_ROOT", proc_root)
+    assert applicator._live_api_env(["ORCHESTRATOR_X", "MISSING"]) == {
+        "ORCHESTRATOR_X": "abc", "MISSING": None
+    }
+
+
+@pytest.mark.parametrize(
+    "argv,cwd_kind",
+    [
+        (b"python\0src.api:app-extra\0", "expected"),
+        (b"python\0-m\0uvicorn\0src.api:app\0", "other"),
+    ],
+)
+def test_live_api_env_returns_unknown_for_wrong_process_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    argv: bytes,
+    cwd_kind: str,
+) -> None:
+    from scripts.server import stack_paths
+
+    other_cwd = tmp_path / "other-clone"
+    other_cwd.mkdir()
+    state_path, proc_root = _write_fake_stack_api(
+        tmp_path,
+        argv=argv,
+        cwd=applicator.ORCH_ROOT if cwd_kind == "expected" else other_cwd,
+    )
+    monkeypatch.setattr(stack_paths, "STATE_FILE", state_path)
+    monkeypatch.setattr(applicator, "PROC_ROOT", proc_root)
+    assert applicator._live_api_env(["ORCHESTRATOR_X"]) is None
+
+
+def test_restart_api_always_uses_stack_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        applicator,
+        "_reload_api_via_stack",
+        lambda **kwargs: calls.append(kwargs) or {"status": "ok", "method": "stack"},
+    )
+    result = applicator.restart_api(env_overrides=None, url="http://test")
+    assert result == {"status": "ok", "method": "stack"}
+    assert calls == [{"env_overrides": None, "url": "http://test"}]
 
 
 def test_capture_reversible_param_preimage_reads_attested_worker_env(
@@ -1401,3 +1449,99 @@ def test_restore_reversible_param_preimage_preserves_absent_env(
             "url": "http://test",
         }
     ]
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_float_review_plane_knob_rejects_non_finite(value: float) -> None:
+    knob = applicator.ReviewPlaneKnob(
+        name="test_ratio", kind="float", default=0.5, lo=0.0, hi=1.0
+    )
+    error = knob.validate(value)
+    assert error and "finite" in error
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_float_role_restart_knob_rejects_non_finite(value: float) -> None:
+    knob = applicator.RoleRestartKnob(
+        name="test_ratio", kind="float", default=0.5, role="test", lo=0.0, hi=1.0
+    )
+    error = knob.validate(value)
+    assert error and "finite" in error
+
+
+def test_ap3_restart_refusal_precedes_prewarm_pause_and_registry_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[dict[str, object]] = []
+    calls: list[str] = []
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    monkeypatch.setattr(applicator, "_ap3_role_restart_gate_mode", lambda: "scoped")
+    monkeypatch.setattr(applicator, "_ap3_scope_errors", lambda params: [])
+    monkeypatch.setattr(
+        applicator, "_ap3_restart_block",
+        lambda: {"gate": "gpu_window", "reason": "test refusal"},
+    )
+    monkeypatch.setattr(
+        applicator, "_ap3_prewarm_role_targets",
+        lambda *a, **k: calls.append("prewarm"),
+    )
+    monkeypatch.setattr(
+        applicator, "_pause_autopilot_dispatch",
+        lambda **k: calls.append("pause"),
+    )
+    monkeypatch.setattr(
+        applicator, "_apply_registry_overrides",
+        lambda **k: calls.append("registry"),
+    )
+    result = applicator.apply_params(
+        {"role_restart.frontdoor_draft_max": 4},
+        journal=FakeJournal(), trial_id=7,
+    )
+    assert result["status"] == "error"
+    assert result["role_restart_result"]["per_role"]["frontdoor"]["status"] == "refused"
+    assert calls == []
+    assert len(events) == 1
+    assert events[0]["status"] == "refused"
+    assert events[0]["boundary_trial_id"] == 7
+
+
+def test_restart_role_direct_refusal_has_no_mutating_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[dict[str, object]] = []
+    calls: list[str] = []
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    monkeypatch.setattr(
+        applicator, "_ap3_restart_block",
+        lambda: {"gate": "gpu_quiet", "reason": "test refusal"},
+    )
+    monkeypatch.setattr(applicator, "_pause_autopilot_dispatch", lambda **k: calls.append("pause"))
+    monkeypatch.setattr(applicator, "_apply_registry_overrides", lambda **k: calls.append("registry"))
+    result = applicator.restart_role(
+        "frontdoor", registry_overrides={"roles.frontdoor.max_tokens": 4},
+        journal=FakeJournal(), trial_id=9, pause_dispatch=True,
+    )
+    assert result["status"] == "refused"
+    assert calls == []
+    assert len(events) == 1
+    assert events[0]["boundary_trial_id"] == 9
+
+
+def test_auto_compress_reports_unknown_utilization_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(kv_compress.httpx, "get", lambda *a, **k: (_ for _ in ()).throw(OSError("offline")))
+    assert kv_compress.get_slot_utilization(8070, slot_id=0) is None
+    result = kv_compress.auto_compress_if_needed(8070, slot_id=0)
+    assert result is not None
+    assert result.success is False
+    assert "probe failed" in (result.error or "")

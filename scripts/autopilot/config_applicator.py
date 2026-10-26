@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -44,6 +45,7 @@ log = logging.getLogger("autopilot.config")
 
 ORCHESTRATOR_URL = "http://localhost:8000"
 ORCH_ROOT = Path(__file__).resolve().parents[1].parent
+PROC_ROOT = Path("/proc")
 DEFAULT_STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_AUTOPILOT_STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 DEFAULT_MODEL_REGISTRY_PATH = ORCH_ROOT / "orchestration" / "model_registry.yaml"
@@ -203,10 +205,12 @@ class ReviewPlaneKnob:
     def validate(self, value: Any) -> str | None:
         try:
             coerced = self.coerce(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return f"{self.name}: value {value!r} is not a valid {self.kind}"
         if self.kind == "bool":
             return None
+        if self.kind == "float" and not math.isfinite(coerced):
+            return f"{self.name}: value {coerced!r} must be finite"
         if self.lo is not None and coerced < self.lo:
             return f"{self.name}: {coerced} < min {self.lo}"
         if self.hi is not None and coerced > self.hi:
@@ -266,13 +270,15 @@ class RoleRestartKnob:
     def validate(self, value: Any) -> str | None:
         try:
             coerced = self.coerce(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return f"{self.name}: value {value!r} is not a valid {self.kind}"
         if self.kind == "enum":
             if coerced not in self.allowed_values:
                 allowed = ", ".join(self.allowed_values)
                 return f"{self.name}: {coerced!r} not in allowed values [{allowed}]"
             return None
+        if self.kind == "float" and not math.isfinite(coerced):
+            return f"{self.name}: value {coerced!r} must be finite"
         if self.lo is not None and coerced < self.lo:
             return f"{self.name}: {coerced} < min {self.lo}"
         if self.hi is not None and coerced > self.hi:
@@ -1210,14 +1216,31 @@ def _live_api_env(keys: "list[str] | tuple[str, ...]") -> dict[str, str | None] 
     "unknown" and restart (fail-safe toward applying, never toward skipping).
     """
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", r"uvicorn src\.api:app"],
-            capture_output=True, text=True, timeout=5,
-        )
-        pids = [p for p in result.stdout.split() if p.strip().isdigit()]
-        if not pids:
+        from scripts.server import stack_paths
+
+        state = json.loads(stack_paths.STATE_FILE.read_text(encoding="utf-8"))
+        process = state.get("orchestrator") if isinstance(state, dict) else None
+        if not isinstance(process, dict):
             return None
-        raw = Path(f"/proc/{pids[0]}/environ").read_bytes()
+        pid = process.get("pid")
+        if (
+            process.get("role") != "orchestrator"
+            or process.get("port") != 8000
+            or process.get("model_path") != "uvicorn"
+            or not isinstance(process.get("started_at"), str)
+            or not process.get("started_at")
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+        ):
+            return None
+        proc = PROC_ROOT / str(pid)
+        argv = proc.joinpath("cmdline").read_bytes().split(b"\0")
+        if b"src.api:app" not in argv:
+            return None
+        if proc.joinpath("cwd").resolve(strict=True) != ORCH_ROOT.resolve():
+            return None
+        raw = proc.joinpath("environ").read_bytes()
         env = dict(
             pair.split("=", 1)
             for pair in raw.decode("utf-8", errors="ignore").split("\0")
@@ -1546,6 +1569,29 @@ def apply_role_restart_params(
     result_errors: list[str] = []
     for role in sorted(groups):
         overrides = groups[role]
+        block = _ap3_restart_block()
+        if block is not None:
+            role_result = {
+                "status": "refused",
+                "role": role,
+                "refusal": block,
+                "registry_override_keys": sorted(overrides),
+            }
+            _attach_restart_boundary_event(
+                role_result,
+                journal=journal,
+                role=role,
+                affected_roles=[role],
+                env_keys=[],
+                registry_override_keys=sorted(overrides),
+                trial_id=trial_id,
+                reason="AP-3 restart refused before prewarm by GPU safety gate",
+                evidence={"refusal": block},
+                actor=actor,
+            )
+            per_role[role] = role_result
+            result_errors.append(f"{role}: restart refused by AP-3 safety gate")
+            break
         prewarm = _ap3_prewarm_role_targets(
             role,
             registry_path=registry_path,
@@ -1593,8 +1639,10 @@ def apply_role_restart_params(
         )
         role_result["ap3_prewarm"] = prewarm
         per_role[role] = role_result
-        if role_result.get("status") == "error" or role_result.get("error"):
-            result_errors.append(f"{role}: {role_result.get('error') or 'role restart failed'}")
+        if role_result.get("status") in {"error", "refused"} or role_result.get("error"):
+            result_errors.append(
+                f"{role}: {role_result.get('error') or role_result.get('refusal') or 'role restart failed'}"
+            )
             break
 
     result: dict[str, Any] = {
@@ -2159,32 +2207,8 @@ def restart_api(
     the new environment. A SIGHUP cannot mutate another process environment,
     so env overrides always go through orchestrator_stack.py reload.
     """
-    import os
-    import signal
-
     log.info("Restarting API server...")
-
-    if env_overrides:
-        return _reload_api_via_stack(env_overrides=env_overrides, url=url)
-
-    # Try to find and signal the uvicorn process
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", "uvicorn.*orchestrator"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.stdout.strip():
-            pid = int(result.stdout.strip().split("\n")[0])
-            os.kill(pid, signal.SIGHUP)
-            log.info("Sent SIGHUP to uvicorn pid %d", pid)
-            # Wait for restart
-            time.sleep(3)
-            if health_check(url):
-                return {"status": "ok", "method": "sighup", "pid": pid}
-    except Exception as e:
-        log.warning("SIGHUP restart failed: %s", e)
-
-    return _reload_api_via_stack(env_overrides=None, url=url)
+    return _reload_api_via_stack(env_overrides=env_overrides, url=url)
 
 
 def restart_role(
@@ -2243,6 +2267,29 @@ def restart_role(
                 "error": "smoke_check required for strict role restart",
                 "reason": "smoke_check_required",
             }
+
+        block = _ap3_restart_block()
+        if block is not None:
+            refused = {
+                "status": "refused",
+                "method": "stack_reload",
+                "role": role,
+                "affected_roles": list(resolved_affected_roles),
+                "refusal": block,
+            }
+            _attach_restart_boundary_event(
+                refused,
+                journal=journal,
+                role=role,
+                affected_roles=resolved_affected_roles,
+                env_keys=sorted((env_overrides or {}).keys()),
+                registry_override_keys=sorted((registry_overrides or {}).keys()),
+                trial_id=trial_id,
+                reason="role restart refused before pause by GPU safety gate",
+                evidence={"refusal": block},
+                actor=actor,
+            )
+            return refused
 
         if pause_dispatch:
             dispatch_pause = _pause_autopilot_dispatch(
@@ -2730,6 +2777,9 @@ def apply_params(
     url: str = ORCHESTRATOR_URL,
     dry_run: bool = False,
     kv_roles: list[str] | None = None,
+    *,
+    journal: Any | None = None,
+    trial_id: int | None = None,
 ) -> dict[str, Any]:
     """Apply parameters using the appropriate method.
 
@@ -2786,12 +2836,16 @@ def apply_params(
     # AP-3 role restart (expensive): registry overrides + sequential stack reloads.
     if classified["role_restart"]:
         role_restart_result = ApplyResult.from_payload(
-            apply_role_restart_params(classified["role_restart"])
+            apply_role_restart_params(
+                classified["role_restart"], journal=journal, trial_id=trial_id
+            )
         )
         results["role_restart_result"] = role_restart_result.to_dict()
         errors.extend(
             f"role_restart: {error}" for error in role_restart_result.errors
         )
+        if role_restart_result.payload.get("status") == "refused":
+            errors.append("role_restart: refused by AP-3 safety gate")
 
     # KV compaction (runtime POST to llama-server /slots/{id}?action=compact)
     if classified["kv_compact"]:

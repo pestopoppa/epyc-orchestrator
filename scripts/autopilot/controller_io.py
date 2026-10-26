@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import subprocess
 import threading
@@ -241,6 +242,7 @@ def _open_planner_tap() -> Any:
 
 
 import contextlib
+from collections import deque
 import contextvars
 
 _ARCHIVE_TAGS: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
@@ -259,11 +261,50 @@ def planner_archive_tags(**tags: Any):
         _ARCHIVE_TAGS.reset(token)
 
 
+def tail_records(path: Path, limit: int) -> list[str]:
+    """Read the last non-empty JSONL records without scanning the full archive."""
+    if limit <= 0:
+        return []
+    path = Path(path)
+    if not path.exists():
+        return []
+    chunk_size = 64 * 1024
+    position = path.stat().st_size
+    remainder = b""
+    newest: list[bytes] = []
+    with path.open("rb") as handle:
+        while position > 0 and len(newest) < limit:
+            size = min(chunk_size, position)
+            position -= size
+            handle.seek(position)
+            block = handle.read(size) + remainder
+            parts = block.split(b"\n")
+            remainder = parts[0]
+            complete = parts[1:]
+            if position == 0:
+                complete = parts
+                remainder = b""
+            for raw in reversed(complete):
+                if raw.strip():
+                    newest.append(raw)
+                    if len(newest) >= limit:
+                        break
+    return [raw.decode("utf-8", errors="replace") for raw in reversed(newest)]
+
+
+PLANNER_ARCHIVE_WRITE_FAILURES = 0
+
+
+def planner_archive_write_failure_count() -> int:
+    """Failures to append planner rows in this process (including prior turns)."""
+    return PLANNER_ARCHIVE_WRITE_FAILURES
+
+
 def _append_planner_archive(record: dict) -> None:
     """Append one planner-session record to the persistent JSONL archive.
 
-    Best-effort: silent on failure (the tap file is the live source of
-    truth; archive is for after-the-fact analysis). One JSONL line per
+    Best-effort: archive failures are logged because planner prompts and the
+    optional spend breaker consume this file. One JSONL line per
     session with timestamp, duration, session_id, prompt hash + length,
     captured events, and final result.
     """
@@ -275,7 +316,9 @@ def _append_planner_archive(record: dict) -> None:
         with open(PLANNER_ARCHIVE_PATH, "a") as fh:
             fh.write(json.dumps(record, separators=(",", ":")) + "\n")
     except Exception as exc:
-        log.debug("planner archive append failed: %s", exc)
+        global PLANNER_ARCHIVE_WRITE_FAILURES
+        PLANNER_ARCHIVE_WRITE_FAILURES += 1
+        log.warning("planner archive append failed: %s", exc)
 
 
 def _summarize_event(line: str) -> str:
@@ -375,15 +418,14 @@ def _summarize_event(line: str) -> str:
 
 def invoke_controller(
     prompt: str,
-    session_id: str | None = None,
     timeout: int = 300,
     *,
     cwd: Path | str | None = None,
 ) -> tuple[str, str | None]:
     """Invoke Claude CLI for meta-reasoning with live streaming to planner tap.
 
-    Returns (response_text, session_id). `cwd` is the working directory
-    Claude runs in; defaults to current process cwd if not provided.
+    Returns response text and any session token emitted by this CLI process.
+    The token is informational only; subsequent planner turns use archive context.
 
     Streams each event to PLANNER_TAP_PATH as it's emitted so the dashboard
     can watch the planner reason in real time.
@@ -418,8 +460,6 @@ def invoke_controller(
     ).strip()
     if fallback_model:
         cmd.extend(["--fallback-model", fallback_model])
-    if session_id:
-        cmd.extend(["--resume", session_id])
 
     tap = _open_planner_tap()
     if tap is not None:
@@ -427,8 +467,6 @@ def invoke_controller(
             tap.write(
                 f"\n{'=' * 72}\n[{datetime.now().isoformat(timespec='seconds')}] PLANNER session start\n"
             )
-            if session_id:
-                tap.write(f"resume_session: {session_id}\n")
             tap.write(f"prompt_chars: {len(prompt)}\n")
             tap.write(f"{'-' * 72}\n")
             tap.flush()
@@ -436,13 +474,14 @@ def invoke_controller(
             pass
 
     result_text = ""
-    final_session_id = session_id
+    final_session_id = None
     proc: subprocess.Popen | None = None
     reader_thread: threading.Thread | None = None
     # Captured events for the archive write at end. Each entry is the
     # one-line summary; full raw JSON would bloat the JSONL too much for
     # routine grep, and the user can always reconstruct via the live tap.
     archive_events: list[str] = []
+    stderr_chunks: deque[str] = deque(maxlen=128)
     archive_meta: dict[str, Any] = {}
     disallowed_tool_uses: list[str] = []
     session_start_ts = time.time()
@@ -467,7 +506,7 @@ def invoke_controller(
                 "error": error,
                 "duration_s": time.time() - session_start_ts,
                 "session_id": final_session_id,
-                "resume_session_id": session_id,
+                "resume_session_id": None,
                 "prompt_chars": len(prompt),
                 "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
                 "result_chars": len(result_text),
@@ -521,6 +560,18 @@ def invoke_controller(
         except Exception as exc:
             log.warning("Planner stdout drain failed: %s", exc)
 
+    def _drain_stderr(p: subprocess.Popen) -> None:
+        if p.stderr is None:
+            return
+        try:
+            while True:
+                chunk = p.stderr.read(8192)
+                if not chunk:
+                    break
+                stderr_chunks.append(chunk)
+        except Exception as exc:
+            log.warning("Planner stderr drain failed: %s", exc)
+
     try:
         proc = subprocess.Popen(
             cmd,
@@ -540,12 +591,18 @@ def invoke_controller(
         )
 
         reader_thread = threading.Thread(target=_drain_stdout, args=(proc,), daemon=True)
+        stderr_thread = threading.Thread(target=_drain_stderr, args=(proc,), daemon=True)
         reader_thread.start()
+        stderr_thread.start()
 
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=5)
+            reader_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+            stderr = "".join(stderr_chunks)
             log.error("Controller timed out after %ds", timeout)
             _write_planner_subprocess_status(
                 status="timeout",
@@ -567,12 +624,13 @@ def invoke_controller(
                 ok=False,
                 error=f"timeout after {timeout}s",
             )
-            return "", session_id
+            return "", None
 
         reader_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        stderr = "".join(stderr_chunks)
 
         if proc.returncode != 0:
-            stderr = proc.stderr.read() if proc.stderr else ""
             log.error("Controller failed (rc=%d): %s", proc.returncode, stderr[:500])
             _write_planner_subprocess_status(
                 status="process_failed",
@@ -589,48 +647,12 @@ def invoke_controller(
                     tap.flush()
                 except Exception:
                     pass
-            # 2026-05-23: detect stale --resume target. claude CLI emits
-            # various stderr patterns when the resumed session has been
-            # pruned / wasn't persisted; returning the same stale
-            # session_id back to the caller causes it to save it again
-            # into autopilot state, repeating the failure every trial.
-            # Clear it so the next call starts fresh. Broadened pattern
-            # set to catch CLI wording drift across versions.
-            _stderr_low = (stderr or "").lower()
-            _stale_session_phrases = (
-                "no conversation found",
-                "session expired",
-                "session not found",
-                "conversation not found",
-                "unknown session",
-                "invalid session",
-                "could not resume",
-                "session has been deleted",
-            )
-            _stale_id_combo = "session id" in _stderr_low and (
-                "not found" in _stderr_low
-                or "expired" in _stderr_low
-                or "invalid" in _stderr_low
-                or "no such" in _stderr_low
-            )
-            if _stale_id_combo or any(p in _stderr_low for p in _stale_session_phrases):
-                log.warning(
-                    "Clearing stale planner session_id=%s (CLI reports it no longer "
-                    "exists / expired); next trial will start a fresh conversation",
-                    (session_id or "")[:12],
-                )
-                _archive_controller_call(
-                    status="stale_session",
-                    ok=False,
-                    error=stderr[:1000],
-                )
-                return "", None
             _archive_controller_call(
                 status="process_failed",
                 ok=False,
                 error=stderr[:1000],
             )
-            return "", session_id
+            return "", None
 
         if disallowed_tool_uses:
             tools = sorted(set(disallowed_tool_uses))
@@ -695,7 +717,7 @@ def invoke_controller(
             ok=False,
             error="Claude CLI not found",
         )
-        return "", session_id
+        return "", None
     finally:
         if tap is not None:
             try:
@@ -817,23 +839,22 @@ def extract_action(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _coerce_rationale(data: dict[str, Any]) -> dict[str, Any]:
+    falsifier = data.get("falsifier", "")
+    rubric = data.get("rubric_scores", {})
+    if not isinstance(falsifier, str):
+        falsifier = str(falsifier)
+    if not isinstance(rubric, dict):
+        rubric = {}
+    result = {"falsifier": falsifier, "rubric_scores": rubric}
+    claim_ids = data.get("vidya_claim_ids")
+    if isinstance(claim_ids, list) and all(isinstance(cid, str) for cid in claim_ids):
+        result["vidya_claim_ids"] = claim_ids
+    return result
+
+
 def extract_rationale(text: str) -> dict[str, Any]:
-    """Extract the optional rationale sidecar from the controller response.
-
-    Looks for a ```json:autopilot_rationale``` fenced block. The block carries
-    the chosen action's falsifier + self-scored rubric, e.g.
-
-        ```json:autopilot_rationale
-        {"falsifier": "...", "rubric_scores": {"info_gain": 4,
-         "coherence": 5, "usefulness": 3, "synthesis_note": "..."}}
-        ```
-
-    Returns `falsifier` (str), `rubric_scores` (dict), and an optional
-    `vidya_claim_ids` list when explicitly supplied. The first two default to
-    empty when the block is missing or malformed. The
-    contract is intentionally soft: rationale capture is observability, not a
-    gate, so a missing block must not abort the trial.
-    """
+    """Extract the optional rationale sidecar; missing or malformed is soft."""
     empty: dict[str, Any] = {"falsifier": "", "rubric_scores": {}}
     marker = "```json:autopilot_rationale"
     if marker not in text:
@@ -846,22 +867,10 @@ def extract_rationale(text: str) -> dict[str, Any]:
         return empty
     try:
         data = json.loads(text[start:end].strip())
-    except json.JSONDecodeError as e:
-        log.warning("Failed to parse autopilot_rationale JSON: %s", e)
+    except json.JSONDecodeError as exc:
+        log.warning("Failed to parse autopilot_rationale JSON: %s", exc)
         return empty
-    if not isinstance(data, dict):
-        return empty
-    falsifier = data.get("falsifier", "")
-    rubric = data.get("rubric_scores", {})
-    if not isinstance(falsifier, str):
-        falsifier = str(falsifier)
-    if not isinstance(rubric, dict):
-        rubric = {}
-    result = {"falsifier": falsifier, "rubric_scores": rubric}
-    claim_ids = data.get("vidya_claim_ids")
-    if isinstance(claim_ids, list) and all(isinstance(cid, str) for cid in claim_ids):
-        result["vidya_claim_ids"] = claim_ids
-    return result
+    return _coerce_rationale(data) if isinstance(data, dict) else empty
 
 
 # --------------------------------------------------------------------------- TD-21.2/.3 repair
@@ -1182,16 +1191,7 @@ def extract_rationale_with_repair(
     )
     if result.value is None:
         return RepairResult(dict(empty), result.status, result.reason, site, result.repair_calls)
-    falsifier = result.value.get("falsifier", "")
-    rubric = result.value.get("rubric_scores", {})
-    if not isinstance(falsifier, str):
-        falsifier = str(falsifier)
-    if not isinstance(rubric, dict):
-        rubric = {}
-    rationale = {"falsifier": falsifier, "rubric_scores": rubric}
-    claim_ids = result.value.get("vidya_claim_ids")
-    if isinstance(claim_ids, list) and all(isinstance(cid, str) for cid in claim_ids):
-        rationale["vidya_claim_ids"] = claim_ids
+    rationale = _coerce_rationale(result.value)
     return RepairResult(rationale, result.status, result.reason, site, result.repair_calls)
 
 
@@ -1267,6 +1267,8 @@ def _validate_number_range(
     action_type = action.get("type", "action")
     if not _is_number(value):
         return f"{action_type} {key} must be numeric; got {value!r}"
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"{action_type} {key} must be finite; got {value!r}"
     if min_value is not None:
         below = value <= min_value if min_exclusive else value < min_value
         if below:

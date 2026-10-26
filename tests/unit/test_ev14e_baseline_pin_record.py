@@ -151,6 +151,31 @@ def test_no_pin_and_no_prose_reports_absent_never_zero():
     assert pin["baseline_quality"] is None
 
 
+def test_baseline_pin_reader_accepts_report_row_mappings():
+    pin = baseline_pin_for({
+        "trial_id": "legacy-row-id",
+        "baseline_pin": {},
+        "failure_analysis": "Quality regression: 1.444 vs baseline 1.900 (-24%)",
+    }, warn=False)
+    assert pin["source"] == BASELINE_PIN_SOURCE_LEGACY_REGEX
+    assert pin["baseline_quality"] == 1.9
+    assert pin["baseline_revision"] is None
+
+
+def test_baseline_pin_mapping_preserves_unknown_structured_identity():
+    original = {
+        "source": "structured",
+        "baseline_revision": "unknown",
+        "eval_quality_era": "",
+        "baseline_quality": 1.5,
+        "producer_extension": {"v": 1},
+    }
+    assert baseline_pin_for({"baseline_pin": original}, warn=False) == original
+    assert baseline_pin_for({"baseline_pin": {}, "failure_analysis": "none"}, warn=False)[
+        "source"
+    ] == BASELINE_PIN_SOURCE_ABSENT
+
+
 # --- persistence / backward compatibility ------------------------------------
 
 

@@ -182,52 +182,34 @@ def _gate_success_detail(output: str) -> str:
     return "; ".join(selected) or "passed"
 
 
-def _jsonl_batch_key(path: Path) -> tuple[int, str]:
-    stem = path.stem
-    if stem == "autopilot_journal":
-        return (0, path.name)
-    prefix = "autopilot_journal_"
-    if stem.startswith(prefix):
-        try:
-            return (int(stem.removeprefix(prefix)), path.name)
-        except ValueError:
-            pass
-    return (10**9, path.name)
-
-
 def _jsonl_paths(path: Path) -> list[Path]:
+    try:
+        from scripts.autopilot.journal_shards import resolve_journal_paths, journal_shards
+    except ImportError:  # pragma: no cover - direct script invocation
+        from journal_shards import resolve_journal_paths, journal_shards
+
     if path.is_dir():
-        return sorted(path.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key)
-    if path.name != "autopilot_journal.jsonl":
-        return [path]
-    paths = [path]
-    batch = 1
-    while True:
-        batch_path = path.with_name(f"autopilot_journal_{batch}.jsonl")
-        if not batch_path.exists():
-            break
-        paths.append(batch_path)
-        batch += 1
-    return paths
+        return journal_shards(path)
+    return resolve_journal_paths(path)
 
 
 def _load_jsonl(path: Path) -> list[dict]:
-    rows: list[dict] = []
-    if not path.exists():
+    if not path.exists() and not path.is_dir():
+        return []
+    try:
+        from scripts.autopilot.journal_shards import load_journal_rows
+    except ImportError:  # pragma: no cover - direct script invocation
+        from journal_shards import load_journal_rows
+    try:
+        rows, malformed = load_journal_rows(_jsonl_paths(path), on_malformed="record")
+        for item in malformed:
+            log.debug(
+                "Skipping malformed JSONL line %s in %s",
+                item["line"], item["path"],
+            )
         return rows
-    for jsonl_path in _jsonl_paths(path):
-        for line_num, line in enumerate(
-            jsonl_path.read_text(encoding="utf-8").splitlines(),
-            1,
-        ):
-            try:
-                row = json.loads(line)
-            except Exception:
-                log.debug("Skipping malformed JSONL line %d in %s", line_num, jsonl_path)
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
-    return rows
+    except OSError:
+        return []
 
 
 def _trial_id(row: dict) -> int | None:
