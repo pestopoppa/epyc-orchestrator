@@ -53,6 +53,7 @@ import hashlib
 import json
 import os
 import platform
+import stat
 import subprocess
 import sys
 import threading
@@ -215,6 +216,9 @@ def read_mounts(text: str | None = None) -> list[tuple[str, str, str]]:
 def with_mount_aliases(paths: Iterable[str], mounts: list[tuple[str, str, str]]) -> set[str]:
     """Add every other mountpoint spelling of each fenced path."""
     out = {p.rstrip("/") or "/" for p in paths}
+    # Landlock follows the target inode. A denied symlink spelling must also
+    # fence its target, including a missing leaf below an existing symlink.
+    out.update(os.path.realpath(p) for p in tuple(out))
     for path in list(out):
         owners = [m for m in mounts if _rules.is_under(path, m[2])]
         if not owners:
@@ -266,6 +270,10 @@ def build_landlock_rules(fenced: set[str], root: str = "/", special: dict[str, i
     descended, so a file created there later has no rule and stays denied.
     """
     fenced = {f.rstrip("/") or "/" for f in fenced}
+    fenced.update(os.path.realpath(path) for path in tuple(fenced))
+    root = os.path.realpath(root)
+    if any(_rules.is_under(root, path) for path in fenced):
+        return []
     special = {k.rstrip("/") or "/": v for k, v in (special or {}).items()}
     marks = sorted(fenced | set(special))
 
@@ -301,6 +309,28 @@ def build_landlock_rules(fenced: set[str], root: str = "/", special: dict[str, i
                 continue
             rules.append([path, KIND_FULL if is_dir else KIND_FILE])
     return rules
+
+
+def safe_extra_landlock_rules(paths: Iterable[str], spec: dict[str, Any]) -> list[list[Any]]:
+    """Refresh only requested scratch subtrees, never widen a deny or /proc rule.
+
+    The large root rule set stays cached. Newly created private run directories
+    are discovered locally, while an ancestor of a denied (even missing) leaf
+    receives only deny-aware sibling grants from the existing builder.
+    """
+    fenced = set(spec.get("fenced") or [])
+    fenced.update(path for path, kind in spec.get("rules", []) if kind == KIND_PROC)
+    fenced = with_mount_aliases(fenced, read_mounts())
+    result: list[list[Any]] = []
+    for raw in paths:
+        path = os.path.realpath(raw)
+        if any(_rules.is_under(path, denied) for denied in fenced):
+            continue
+        if os.path.isdir(path):
+            result.extend(build_landlock_rules(fenced, root=path))
+        elif os.path.isfile(path):
+            result.append([path, KIND_FILE])
+    return [list(rule) for rule in dict.fromkeys(tuple(rule) for rule in result)]
 
 
 def spec_path_for(roots: Any, mode: str) -> str:
@@ -348,6 +378,36 @@ def _write_cached(payload: str, kind: str) -> str:
     return str(path)
 
 
+def extra_grant_environment(rules: list[list[Any]]) -> dict[str, str]:
+    """Bounded transport independent of Linux's per-environment-string limit.
+
+    The digest binds the exact bytes parsed by the standalone shim; mutable
+    cached content is never accepted merely because its filename looks hashed.
+    """
+    payload = json.dumps(rules).encode("utf-8")
+    limit = 8 * 1024 * 1024
+    if len(payload) > limit:
+        raise ValueError("scratch grant payload exceeded the size bound")
+    path = _write_cached(payload.decode("utf-8"), "extra-grants")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("scratch grant cache is not a bounded regular file")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            cached = handle.read(limit + 1)
+        expected = hashlib.sha256(payload).hexdigest()
+        if len(cached) > limit or hashlib.sha256(cached).hexdigest() != expected:
+            raise ValueError("scratch grant cache digest mismatch")
+    finally:
+        os.close(fd)
+    return {
+        "EPYC_FENCE_KERNEL_EXTRA_FILE": path,
+        "EPYC_FENCE_KERNEL_EXTRA_SHA256": expected,
+        "EPYC_FENCE_KERNEL_EXTRA": "[]",
+    }
+
+
 def wrap_command(
     argv: list[str], *, extra_allow: Iterable[str] = (), policy: Any = None,
 ) -> tuple[list[str], dict[str, str], str]:
@@ -370,5 +430,7 @@ def wrap_command(
     from src.repl_environment.knowledge_fence import fence_roots
 
     spec = spec_path_for(fence_roots(), level)
-    env = {"EPYC_FENCE_KERNEL_EXTRA": json.dumps([str(p) for p in extra_allow])}
+    with open(spec, encoding="utf-8") as handle:
+        extra_rules = safe_extra_landlock_rules(extra_allow, json.load(handle))
+    env = extra_grant_environment(extra_rules)
     return [sys.executable, "-c", shim_source(), spec, "--", *argv], env, level

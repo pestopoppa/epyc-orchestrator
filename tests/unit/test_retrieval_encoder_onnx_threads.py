@@ -76,11 +76,22 @@ def _load_with_stubs(monkeypatch, module_name: str, model_dir):
             return types.SimpleNamespace(
                 enable_truncation=lambda **k: None,
                 enable_padding=lambda **k: None,
+                no_truncation=lambda: None,
+                no_padding=lambda: None,
+                encode=lambda text, **k: types.SimpleNamespace(
+                    ids=[50368 if text.strip() == "[Q]" else 50369]
+                ),
                 # colbert_encoder resolves the trained [Q]/[D] prefix token ids
                 # at load time; a stub lacking this reads as a model that has
                 # no prefix tokens, which is a different test.
                 token_to_id=lambda token: 50368,
             )
+
+        @staticmethod
+        def from_str(source):
+            # ColBERT now parses and fingerprints the same captured byte buffer.
+            assert source == "{}"
+            return _FakeTokenizer.from_file(None)
 
     fake_tok = types.ModuleType("tokenizers")
     fake_tok.Tokenizer = _FakeTokenizer

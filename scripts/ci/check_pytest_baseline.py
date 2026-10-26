@@ -51,7 +51,14 @@ def _report_failures(suites: list[ET.Element]) -> list[tuple[str, str]]:
 
 
 def _suite_count(suites: list[ET.Element]) -> int:
-    return sum(int(suite.attrib.get("tests", 0)) for suite in suites)
+    # Headers may include collection skips or passed-subtest counters that do
+    # not represent executed parent tests. Duplicated records cannot pad a floor.
+    return len({
+        (case.attrib.get("classname"), case.attrib.get("name"))
+        for suite in suites
+        for case in suite.findall("testcase")
+        if case.attrib.get("classname") and case.attrib.get("name")
+    })
 
 
 def _write_summary(path: Path | None, lines: list[str]) -> None:

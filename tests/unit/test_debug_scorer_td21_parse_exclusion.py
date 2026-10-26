@@ -86,9 +86,17 @@ def _reset_flag_and_stats():
     """
     debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = False
     debug_scorer.reset_parse_failure_stats()
+    # The seeding wrapper owns a separate cached scorer module. Control that
+    # instance too; restoring its actual prior flag avoids cross-file leaks.
+    private_scorer = _SS._load_orchestrator_debug_scorer()
+    private_flag = private_scorer.EXCLUDE_UNPARSEABLE_ANSWERS
+    private_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = False
+    private_scorer.reset_parse_failure_stats()
     yield
     debug_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = _SHIPPED_DEFAULT_ON_IMPORT
     debug_scorer.reset_parse_failure_stats()
+    private_scorer.EXCLUDE_UNPARSEABLE_ANSWERS = private_flag
+    private_scorer.reset_parse_failure_stats()
 
 
 def test_shipped_default_matches_ratification_state():

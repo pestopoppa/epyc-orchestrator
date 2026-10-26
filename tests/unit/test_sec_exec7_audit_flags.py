@@ -53,7 +53,12 @@ def narrow_tmp(tmp_path, monkeypatch):
     d = tmp_path / "scratch"
     d.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(d))
-    return d
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(d))
+    from src.config import reset_config
+
+    reset_config()
+    yield d
+    reset_config()
 
 
 def _records(path):
@@ -130,10 +135,22 @@ def _var_tmp_target():
     return p
 
 
-def test_python_hook_flags_out_of_root_writes_and_not_in_root_ones(audit, flags, narrow_tmp):
+def test_python_hook_flags_out_of_root_writes_and_not_in_root_ones(audit, flags, narrow_tmp, tmp_path):
     flags(exec_write_flags=True)
-    target = _var_tmp_target()
+    # A sibling is outside the narrow allowed root but on the same filesystem;
+    # cross-device rename into /var/tmp would fail before the audit assertion.
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    target = str(outside / "audit-target.txt")
     repl = REPLEnvironment(context="t")
+    from src.config import get_config
+    from src.repl_environment.exec_containment import child_env
+
+    launch_env = child_env(task_id=getattr(repl, "task_id", None))
+    roots = write_audit.allowed_write_roots([launch_env["HOME"], str(get_config().paths.tmp_dir)])
+    actual_target = os.path.realpath(target)
+    assert all(actual_target != root and not actual_target.startswith(root.rstrip("/") + "/") for root in roots)
+    assert outside.stat().st_dev == narrow_tmp.stat().st_dev
     try:
         inside = repl._run_python_code(
             "import os\nopen(os.path.join(os.environ['HOME'], 'ok.txt'), 'w').write('x')\n"

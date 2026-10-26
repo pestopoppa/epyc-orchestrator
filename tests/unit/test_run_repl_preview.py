@@ -30,7 +30,7 @@ def test_prompt_contains_rendering_only_not_batch_dump():
 def test_guards(tmp_path):
     for args, msg in ([["--out", str(tmp_path / "o")], "WINDOW_CONFIRMED=1"],):
         r = subprocess.run([sys.executable, str(_R / "scripts/benchmark/run_repl_preview.py"), *args], capture_output=True, text=True,
-                           env={"PATH": "/usr/bin:/bin"})
+                           env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"})
         assert r.returncode != 0 and msg in r.stderr
     with pytest.raises(SystemExit, match="production stack port"):
         M.prove_port_ownership("http://127.0.0.1:8070", 1, {8070})

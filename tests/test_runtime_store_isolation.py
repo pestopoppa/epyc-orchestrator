@@ -19,6 +19,48 @@ from src.trace.navigation import get_conversation, get_records, search_conversat
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_store_constructor_seam_preserves_explicit_default_none_and_signature(tmp_path):
+    from orchestration.repl_memory.episodic_store import DEFAULT_DB_PATH
+    from tests.fixtures.runtime_store_paths import private_default_store_init
+
+    observed = []
+
+    def original(self, db_path=DEFAULT_DB_PATH):
+        observed.append(db_path)
+
+    wrapped = private_default_store_init(original, tmp_path)
+    wrapped(object())
+    wrapped(object(), DEFAULT_DB_PATH)
+    wrapped(object(), db_path=DEFAULT_DB_PATH)
+    wrapped(object(), db_path=None)
+    assert observed == [tmp_path, DEFAULT_DB_PATH, DEFAULT_DB_PATH, None]
+    assert inspect.signature(wrapped) == inspect.signature(original)
+
+
+def test_omitted_episodic_path_is_private_and_explicit_paths_remain_exact(tmp_path, monkeypatch):
+    from orchestration.repl_memory.episodic_store import EpisodicStore
+
+    monkeypatch.setenv("OWN_ISOLATION_PROBE", "test-control")
+    monkeypatch.undo()
+    omitted = EpisodicStore(use_faiss=False)
+    positional = EpisodicStore(tmp_path / "positional", use_faiss=False)
+    keyword = EpisodicStore(db_path=tmp_path / "keyword", use_faiss=False)
+    try:
+        assert omitted.db_path == tmp_path / "default-episodic-store"
+        assert not omitted.db_path.is_relative_to(ROOT)
+        assert positional.db_path == tmp_path / "positional"
+        assert keyword.db_path == tmp_path / "keyword"
+    finally:
+        for store in (omitted, positional, keyword):
+            store.close()
+
+
+def test_runtime_log_cas_and_session_defaults_are_outside_checkout(tmp_path_factory):
+    for name in ("ORCHESTRATOR_PATHS_LOG_DIR", "ORCHESTRATOR_REPLAY_CAS_DIR",
+                 "ORCHESTRATOR_PATHS_SESSIONS_DIR"):
+        _assert_private(os.environ[name], tmp_path_factory)
+
+
 def _assert_private(path, tmp_path_factory):
     path = Path(path)
     # Check before writing: the same tests are safe against the unfixed parent.

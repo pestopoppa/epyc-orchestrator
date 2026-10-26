@@ -283,8 +283,10 @@ def wrap(
     except OSError as exc:
         raise ContainmentUnavailable(f"could not build the containment spec: {exc}") from exc
     extra = [str(p) for p in extra_allow if p]
+    with open(spec, encoding="utf-8") as handle:
+        extra_rules = fence_kernel.safe_extra_landlock_rules(extra, json.load(handle))
     wrapped = [sys.executable, "-c", fence_kernel.shim_source(), spec, "--", *argv]
-    return wrapped, {"EPYC_FENCE_KERNEL_EXTRA": json.dumps(extra)}
+    return wrapped, fence_kernel.extra_grant_environment(extra_rules)
 
 
 def describe_refusal(exc: BaseException) -> str:

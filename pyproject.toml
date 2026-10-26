@@ -94,6 +94,7 @@ dev = [
     "pytest-xdist>=3.5.0",
     "hypothesis>=6.0.0",
     "pandas>=2.0.0",  # Required for canvas export tests
+    "math-verify[antlr4_13_2]==0.9.0",  # Real math-verifier contract tests
 ]
 eval-scoring = [
     "math-verify[antlr4_13_2]==0.9.0",
@@ -217,6 +218,7 @@ dev = [
     "pytest-xdist>=3.5.0",
     "hypothesis>=6.0.0",
     "pandas>=2.0.0",  # Required for canvas export tests
+    "math-verify[antlr4_13_2]==0.9.0",  # Real math-verifier contract tests
 ]
 
 [tool.hatch.metadata]

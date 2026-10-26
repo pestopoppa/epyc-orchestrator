@@ -5,6 +5,7 @@ cannot enforce; the fail-closed tests below them always run. Every kernel assert
 unsandboxed control run, so a pass cannot be vacuous.
 """
 
+import hashlib
 import json
 import os
 import signal
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from pathlib import Path
 
 import pytest
 
@@ -130,6 +132,190 @@ def test_landlock_rules_deny_a_path_that_does_not_exist_yet(tmp_path):
     assert str(tmp_path / "d" / "keep.txt") in granted
     assert token not in granted
     assert ["/proc", fence_kernel.KIND_PROC] in rules
+
+
+def test_extra_grants_carve_fences_and_keep_a_private_run_directory(tmp_path):
+    from src.repl_environment import _fence_kernel_shim as shim
+
+    vault = tmp_path / "vault"
+    (vault / "descendant").mkdir(parents=True)
+    private = tmp_path / "private"
+    private.mkdir()
+    assert fence_kernel.build_landlock_rules({str(vault)}, root=str(vault)) == []
+    assert fence_kernel.build_landlock_rules({str(vault)}, root=str(vault / "descendant")) == []
+    spec = {"fenced": [str(vault)], "rules": []}
+    extra = fence_kernel.safe_extra_landlock_rules([str(tmp_path), str(private)], spec)
+    assert [str(private), fence_kernel.KIND_FULL] in extra
+    assert [str(tmp_path), fence_kernel.KIND_FULL] not in extra
+    assert [str(vault), fence_kernel.KIND_FULL] not in extra
+    # Revalidation in the standalone shim also rejects legacy/broad and
+    # symlink-repointed grants, independently of the parent's rule generation.
+    alias = tmp_path / "alias"
+    alias.symlink_to(vault, target_is_directory=True)
+    safe = shim._k_safe_grants([str(tmp_path), str(alias), [str(private), shim._K_FULL]], [str(vault)])
+    assert safe == [(str(private), shim._K_FULL)]
+
+
+def test_extra_grants_preserve_denied_symlink_mount_and_proc_aliases(tmp_path, monkeypatch):
+    from src.repl_environment import _fence_kernel_shim as shim
+
+    physical = tmp_path / "physical"
+    alias = tmp_path / "alias"
+    (physical / "vault").mkdir(parents=True)
+    (alias / "vault").mkdir(parents=True)
+    mounts = [("fixture-dev", "/", str(physical)), ("fixture-dev", "/", str(alias))]
+    monkeypatch.setattr(fence_kernel, "read_mounts", lambda: mounts)
+    fenced = {str(physical / "vault")}
+    expanded = fence_kernel.with_mount_aliases(fenced, mounts)
+    assert str(alias / "vault") in expanded
+    spec = {"fenced": list(fenced), "rules": [["/proc", fence_kernel.KIND_PROC]]}
+    assert fence_kernel.safe_extra_landlock_rules([str(alias / "vault"), "/proc"], spec) == []
+    assert shim._k_safe_grants([[str(alias / "vault"), shim._K_FULL]], expanded) == []
+
+    symlink = tmp_path / "denied-link"
+    symlink.symlink_to(physical / "vault", target_is_directory=True)
+    assert fence_kernel.safe_extra_landlock_rules([str(physical / "vault")],
+        {"fenced": [str(symlink)], "rules": []}) == []
+
+
+@pytest.mark.parametrize("shape", ["ancestor", "exact", "descendant", "symlink"])
+def test_sandbox_extras_never_reopen_a_denied_subtree(caps, tmp_path, shape):
+    vault = tmp_path / "vault"
+    nested = vault / "descendant"
+    nested.mkdir(parents=True)
+    secret = nested / "secret.txt"
+    secret.write_text("FAKE-EXTRA-GRANT-SECRET")
+    private = tmp_path / "private-run"
+    private.mkdir()
+    alias = tmp_path / "vault-alias"
+    alias.symlink_to(vault, target_is_directory=True)
+    extra = {"ancestor": tmp_path, "exact": vault, "descendant": nested, "symlink": alias}[shape]
+    script = private / "probe.py"
+    script.write_text(f"""from pathlib import Path
+try:
+    print(Path({str(secret)!r}).read_text())
+except PermissionError:
+    print('CRED-DENIED')
+target = Path({str(private / 'owned.txt')!r})
+target.write_text('owned')
+print(target.read_text())
+""")
+    policy = Policy(no_network=False, hide_foreign_proc=False, scope=False)
+    result = _run([sys.executable, str(script)], policy=policy, cwd=private,
+                  allow=[str(extra)], deny=[str(vault)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["CRED-DENIED", "owned"]
+    assert secret.read_text() == "FAKE-EXTRA-GRANT-SECRET"
+
+
+def test_extra_ancestor_does_not_allow_creating_a_future_denied_file(caps, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    future = vault / "future-token"
+    private = tmp_path / "private-run"
+    private.mkdir()
+    script = private / "probe.py"
+    script.write_text(f"""from pathlib import Path
+try:
+    Path({str(future)!r}).write_text('SHOULD-NOT-EXIST')
+    print('CREATED')
+except PermissionError:
+    print('CREATE-DENIED')
+Path({str(private / 'ok')!r}).write_text('owned')
+print('OWNED-WRITE')
+""")
+    result = _run([sys.executable, str(script)],
+                  policy=Policy(no_network=False, hide_foreign_proc=False, scope=False),
+                  cwd=private, allow=[str(tmp_path)], deny=[str(future)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["CREATE-DENIED", "OWNED-WRITE"]
+    assert not future.exists()
+
+
+def test_large_carved_rules_roundtrip_without_an_oversized_environment(caps, tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    vault = shared / "vault"
+    vault.mkdir()
+    secret = vault / "token"
+    secret.write_text("FAKE-LARGE-RULE-SECRET")
+    private = shared / "private"
+    private.mkdir()
+    for index in range(1500):
+        (shared / ("sibling-" + str(index) + "x" * 100)).write_text("fixture")
+    script = private / "probe.py"
+    script.write_text(f"""from pathlib import Path
+try:
+    print(Path({str(secret)!r}).read_text())
+except PermissionError:
+    print('CRED-DENIED')
+Path('owned').write_text('owned')
+print(Path('owned').read_text())
+""")
+    argv, extra = exec_sandbox.wrap([sys.executable, str(script)],
+        policy=Policy(no_network=False, hide_foreign_proc=False, scope=False),
+        extra_allow=[str(shared)], deny_paths=[str(vault)])
+    payload = Path(extra["EPYC_FENCE_KERNEL_EXTRA_FILE"]).read_bytes()
+    assert len(payload) > 131072  # larger than Linux's single env-string limit
+    assert len(json.dumps(extra)) < 4096
+    env = child_env(task_id="large-extra-control")
+    env.update(extra)
+    result = subprocess.run(argv, cwd=private, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == ["CRED-DENIED", "owned"]
+
+
+def test_extra_grant_parent_refuses_tampered_cached_bytes(tmp_path, monkeypatch):
+    path = tmp_path / "tampered.json"
+    path.write_text('[["/unexpected", 1]]')
+    monkeypatch.setattr(fence_kernel, "_write_cached", lambda *args: str(path))
+    with pytest.raises(ValueError, match="digest mismatch"):
+        fence_kernel.extra_grant_environment([])
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory", "oversize", "invalid", "nonlist"])
+def test_extra_file_transport_fails_closed(kind, tmp_path):
+    from src.repl_environment import _fence_kernel_shim as shim
+
+    path = tmp_path / "extra"
+    digest = hashlib.sha256(b"[]").hexdigest()
+    if kind == "symlink":
+        target = tmp_path / "target"
+        target.write_text("[]")
+        path.symlink_to(target)
+    elif kind == "directory":
+        path.mkdir()
+    elif kind == "oversize":
+        with path.open("wb") as handle:
+            handle.truncate(shim._K_MAX_EXTRA_BYTES + 1)
+    else:
+        data = b"{" if kind == "invalid" else b"{}"
+        path.write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+    with pytest.raises((OSError, ValueError)):
+        shim._k_read_extra_file(str(path), digest)
+
+
+def test_extra_file_tamper_refuses_before_the_child_command(tmp_path):
+    private = tmp_path / "private"
+    private.mkdir()
+    extra = fence_kernel.extra_grant_environment([[str(private), fence_kernel.KIND_FULL]])
+    path = Path(extra["EPYC_FENCE_KERNEL_EXTRA_FILE"])
+    original = path.read_bytes()
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"mode": "landlock", "rules": [], "fenced": []}))
+    try:
+        path.write_text("[]")
+        env = child_env(task_id="tampered-extra-control")
+        env.update(extra)
+        result = subprocess.run([sys.executable, "-c", fence_kernel.shim_source(), str(spec),
+                                 "--", sys.executable, "-c", "print('SHOULD-NOT-RUN')"],
+                                env=env, cwd=private, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 126
+        assert "digest mismatch" in result.stderr
+        assert "SHOULD-NOT-RUN" not in result.stdout
+    finally:
+        path.write_bytes(original)
 
 
 def test_child_env_has_a_token_free_hf_home_only_when_contained(monkeypatch, flags):

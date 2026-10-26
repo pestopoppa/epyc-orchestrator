@@ -8,6 +8,15 @@
 # kind: post = issues the HTTP request; route = orchestrator-served route; table = path map;
 #       reference = metadata/telemetry/proof string, no prompt leaves here.
 sinks:
+  src/api/routes/chat_pipeline/scout_stage.py::_record_scout_call: {kind: reference, reason: "serving-call telemetry records the scout endpoint, does not send a request"}
+  src/api/routes/chat_vision.py::_record_vl_call: {kind: reference, reason: "serving-call telemetry records the VL endpoint, does not send a request"}
+  src/backends/llama_server.py::_record_infer_stream: {kind: reference, reason: "stream inference telemetry names the completion endpoint"}
+  src/harness_loop/transport.py::<module>: {kind: table, reason: "endpoint constant consumed by the HTTP transport"}
+  src/services/worker_pool.py::_record_worker_completion: {kind: reference, reason: "worker-completion telemetry records the endpoint, does not send a request"}
+  src/structured_output/repair.py::_record_repair_call: {kind: reference, reason: "repair serving-call telemetry names the endpoint"}
+  src/tools/web/research.py::_record_worker_synthesis: {kind: reference, reason: "synthesis serving-call telemetry names the endpoint"}
+  src/trace/attribution/judge.py::__call__: {kind: post, reason: "trace attribution judge sends dedicated system/user judging messages"}
+  src/vision/analyzers/vl_describe.py::_record_server_call: {kind: reference, reason: "VL analyzer serving-call telemetry names the endpoint"}
   orchestration/repl_memory/distillation/teachers.py::distill: {kind: post, reason: "distillation teacher call; prompt = json.dumps(trajectories), offline (CT-19a path 17)"}
   src/api/routes/chat_pipeline/scout_stage.py::complete: {kind: post, reason: "scout streaming completion, inputs neutralised in scout_stage"}
   src/api/routes/chat_pipeline/scout_stage.py::prefill_trunk: {kind: post, reason: "scout prefill, same assembler"}

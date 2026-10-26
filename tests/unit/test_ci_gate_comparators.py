@@ -104,6 +104,22 @@ def test_pytest_baseline_enforces_collection_floor(tmp_path: Path) -> None:
     assert "Collection floor failed: 1 < 3." in result.stdout
 
 
+def test_collection_skips_header_padding_and_duplicates_cannot_satisfy_floor(tmp_path: Path) -> None:
+    junit = tmp_path / "results.xml"
+    baseline = _pytest_baseline(tmp_path, floor=2)
+    junit.write_text(
+        '<testsuite tests="999" failures="0" errors="0" skipped="1">'
+        '<testcase classname="" name="tests.optional_module"><skipped/></testcase>'
+        '<testcase classname="tests.unit.test_ok" name="test_ok"/>'
+        '<testcase classname="tests.unit.test_ok" name="test_ok"/>'
+        '</testsuite>', encoding="utf-8",
+    )
+    result = _run_script("check_pytest_baseline.py", "--junit", str(junit),
+                         "--baseline", str(baseline), "--pytest-exit-code", "0")
+    assert result.returncode == 1
+    assert "Collection floor failed: 1 < 2." in result.stdout
+
+
 def test_pytest_baseline_preserves_nested_class_and_parameter_identity(tmp_path: Path) -> None:
     junit = tmp_path / "results.xml"
     baseline = tmp_path / "pytest-baseline.json"

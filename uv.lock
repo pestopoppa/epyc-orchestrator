@@ -964,6 +964,7 @@ colbert-export = [
 ]
 dev = [
     { name = "hypothesis" },
+    { name = "math-verify", extra = ["antlr4-13-2"] },
     { name = "mypy" },
     { name = "pandas" },
     { name = "pytest" },
@@ -989,6 +990,7 @@ toon = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
+    { name = "math-verify", extra = ["antlr4-13-2"] },
     { name = "mypy" },
     { name = "pandas" },
     { name = "pytest" },
@@ -1013,6 +1015,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=0.2.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
     { name = "markdown-it-py", specifier = ">=3.0.0" },
+    { name = "math-verify", extras = ["antlr4-13-2"], marker = "extra == 'dev'", specifier = "==0.9.0" },
     { name = "math-verify", extras = ["antlr4-13-2"], marker = "extra == 'eval-scoring'", specifier = "==0.9.0" },
     { name = "matplotlib", specifier = ">=3.10.9" },
     { name = "mcp", specifier = ">=1.0.0" },
@@ -1050,6 +1053,7 @@ provides-extras = ["dev", "eval-scoring", "toon", "sandbox", "graph", "colbert-e
 [package.metadata.requires-dev]
 dev = [
     { name = "hypothesis", specifier = ">=6.0.0" },
+    { name = "math-verify", extras = ["antlr4-13-2"], specifier = "==0.9.0" },
     { name = "mypy", specifier = ">=1.8.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pytest", specifier = ">=7.4.0" },

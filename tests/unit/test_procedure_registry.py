@@ -462,6 +462,8 @@ class TestIntegration:
         registry = ProcedureRegistry(
             procedures_dir=temp_procedures_dir,
             schema_path=temp_schema_path,
+            state_dir=temp_procedures_dir / "state",
+            checkpoint_dir=temp_procedures_dir / "checkpoints",
             validate_on_load=False,
         )
 

@@ -85,7 +85,7 @@ def test_fixture_turns_the_tap_off():
     assert tap_mod._get_sentinel() not in _PRODUCTION_PATHS
 
 
-def test_unit_real_call_never_touches_the_production_tap(monkeypatch):
+def test_unit_real_call_never_touches_the_production_tap(monkeypatch, tmp_path_factory):
     opened, writers = _spy_tap_io(monkeypatch)
     prims, backend = _prims()
 
@@ -95,7 +95,11 @@ def test_unit_real_call_never_touches_the_production_tap(monkeypatch):
     assert writers == []
     touched = set(opened) & (_PRODUCTION_PATHS | {_production_sentinel()})
     assert touched == set(), f"unit test touched the live tap: {sorted(touched)}"
-    assert not any(p.startswith(str(_PRODUCTION_TMP)) for p in opened), opened
+    # An owned TMPDIR may itself live below /mnt/raid0/llm/tmp.  Containment
+    # in pytest's private root, rather than a lexical production-prefix ban,
+    # proves the sentinel access stayed isolated in either placement.
+    owned_root = tmp_path_factory.getbasetemp().resolve()
+    assert all(Path(p).resolve().is_relative_to(owned_root) for p in opened), opened
 
 
 def test_positive_control_a_sentinel_enables_the_tap_on_the_same_call(tmp_path, monkeypatch):
@@ -115,4 +119,4 @@ def test_positive_control_a_sentinel_enables_the_tap_on_the_same_call(tmp_path, 
     text = tap_file.read_text()
     assert "ROLE=role_a" in text and "tap isolation prompt" in text
     assert (tmp_path / "inference_tap_events.jsonl").exists()
-    assert not any(p.startswith(str(_PRODUCTION_TMP)) for p in opened), opened
+    assert all(Path(p).resolve().is_relative_to(tmp_path.resolve()) for p in opened), opened

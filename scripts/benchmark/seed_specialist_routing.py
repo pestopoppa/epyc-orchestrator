@@ -195,8 +195,8 @@ def _handle_sigterm(sig, frame):
     state.close_poll_client()
 
 
-signal.signal(signal.SIGINT, _handle_sigint)
-signal.signal(signal.SIGTERM, _handle_sigterm)
+# Process signal ownership belongs to the real __main__ entry point below.
+# Importing benchmark helpers must not replace the caller's signal handlers.
 
 
 # ── Question sampling ─────────────────────────────────────────────────

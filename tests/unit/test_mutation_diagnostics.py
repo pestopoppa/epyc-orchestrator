@@ -132,6 +132,8 @@ def test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author(m
     seen = []
     fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "Ω original",
                            _negative_transfer_safety_block=lambda: "native safety")
+    # Synthetic targets are eligible; exclusion policy is tested separately.
+    fake._mutation_exclusion_reason = lambda _: None
     fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
     fake._build_code_mutation_prompt = fake._build_mutation_prompt
     def invoke(prompt):
@@ -195,6 +197,7 @@ def test_busy_author_capture_lock_is_typed_and_fake_author_still_runs(monkeypatc
     seen = []
     fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "original",
                            _negative_transfer_safety_block=lambda: "native safety")
+    fake._mutation_exclusion_reason = lambda _: None
     fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
     def invoke(prompt):
         seen.append(prompt)

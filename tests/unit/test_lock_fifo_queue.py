@@ -198,14 +198,44 @@ def _nested_worker(tmp_dir: str, role: str, regions: list[str], result_path: str
 
 
 def _sigterm_ticket_worker(tmp_dir: str, ready_path: str) -> None:
+    import signal
+
     os.environ["ORCHESTRATOR_TMP_DIR"] = tmp_dir
     import src.runtime.lock_queue as lq2
 
     qdir = lq2.queue_dir(Path(tmp_dir))
     _tid, path = lq2.write_ticket(qdir, resource_keys=["q0"], mode="exclusive", tag="sigterm-test")
+    before = signal.getsignal(signal.SIGTERM)
     lq2.install_ticket_sigterm_cleanup(path)
+    info = {
+        "pid": os.getpid(),
+        "inherited_handler": repr(before),
+        "inherited_module": getattr(before, "__module__", None),
+        "inherited_name": getattr(before, "__qualname__", None),
+    }
+    Path(ready_path + ".handler.json").write_text(json.dumps(info))
     Path(ready_path).write_text(str(path))
     time.sleep(30)  # waits to be SIGTERMed by the test
+
+
+def test_ticket_cleanup_preserves_an_existing_callable_handler(tmp_path, monkeypatch):
+    import signal
+
+    path = tmp_path / "owned-ticket"
+    path.write_text("owned")
+    installed = []
+    called = []
+
+    def previous(signum, frame):
+        called.append(signum)
+
+    monkeypatch.setattr(signal, "getsignal", lambda _: previous)
+    monkeypatch.setattr(signal, "signal", lambda signum, handler: installed.append(handler))
+    monkeypatch.setattr(lq.os, "kill", lambda *args: pytest.fail("callable-handler branch must not send a signal"))
+    assert lq.install_ticket_sigterm_cleanup(path) is previous
+    installed[0](signal.SIGTERM, None)
+    assert called == [signal.SIGTERM]
+    assert not path.exists()
 
 
 def _gpu_worker(
@@ -366,17 +396,25 @@ class TestTicketMechanics:
         ctx = _ctx()
         p = ctx.Process(target=_sigterm_ticket_worker, args=(str(tmp_path), str(ready_path)))
         p.start()
-        deadline = time.time() + 5
-        while time.time() < deadline and not ready_path.exists():
-            time.sleep(0.02)
-        assert ready_path.exists(), "worker never installed its ticket/handler"
-        ticket_path = Path(ready_path.read_text())
-        assert ticket_path.exists()
+        try:
+            deadline = time.time() + 5
+            while time.time() < deadline and not ready_path.exists():
+                time.sleep(0.02)
+            assert ready_path.exists(), "worker never installed its ticket/handler"
+            ticket_path = Path(ready_path.read_text())
+            assert ticket_path.exists()
+            handler = json.loads(Path(str(ready_path) + ".handler.json").read_text())
 
-        p.terminate()  # multiprocessing.Process.terminate() sends SIGTERM
-        p.join(timeout=5)
-        assert not p.is_alive(), "SIGTERM handler must still let the process terminate"
-        assert not ticket_path.exists(), "SIGTERM handler must remove the ticket"
+            p.terminate()  # multiprocessing.Process.terminate() sends SIGTERM
+            p.join(timeout=5)
+            assert not p.is_alive(), f"SIGTERM handler must still let the process terminate: {handler}"
+            assert not ticket_path.exists(), "SIGTERM handler must remove the ticket"
+        finally:
+            # Only the captured test-owned child; retain failing handler evidence.
+            if p.is_alive():
+                p.kill()
+                p.join(timeout=5)
+            assert not p.is_alive(), "owned signal-probe child survived cleanup"
 
 
 # ───────────────────────────── cross-process FIFO behavior ─────────────────────────────

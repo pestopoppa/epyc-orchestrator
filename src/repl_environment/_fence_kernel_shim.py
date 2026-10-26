@@ -20,8 +20,11 @@ through to an unrestricted exec.
 Spec: ``{"mode": "landlock"|"mountns", "rules": [[path, kind], ...],
 "fenced": [path, ...]}``. Here ``kind`` is 1 (full read access to a subtree),
 2 (list-only directory) or 3 (read a single file). The environment variable
-``EPYC_FENCE_KERNEL_EXTRA`` may name extra full-access paths as a JSON list:
-the per-call script and run directory.
+``EPYC_FENCE_KERNEL_EXTRA`` carries deny-aware per-call scratch rules as a JSON
+list of [path, kind] pairs. Legacy path strings are accepted only when their
+full subtree does not intersect a fence. No extra grant can override a deny.
+Large rule lists use ``EPYC_FENCE_KERNEL_EXTRA_FILE`` rather than an environment
+string; it must be a bounded regular file and is read before restriction.
 
 SEC-EXEC-3/5 extensions (production model-exec containment, driven by ``exec_sandbox``):
 
@@ -48,9 +51,11 @@ be relinked into an allowed directory.
 
 import ctypes as _k_ctypes
 import errno as _k_errno
+import hashlib as _k_hashlib
 import json as _k_json
 import os as _k_os
 import platform as _k_platform
+import stat as _k_stat
 import sys as _k_sys
 
 _K_SYS = {"x86_64": (444, 445, 446), "aarch64": (444, 445, 446)}
@@ -73,6 +78,7 @@ _K_REFER = 1 << 13     # ABI >= 2
 _K_TRUNCATE = 1 << 14  # ABI >= 3
 _K_PR_SET_NO_NEW_PRIVS = 38
 _K_FULL, _K_DIR_ONLY, _K_FILE = 1, 2, 3
+_K_MAX_EXTRA_BYTES = 8 * 1024 * 1024
 _K_PROC = 4  # expanded at exec time (own pid + non-numeric /proc entries)
 # Landlock ABI 4 (net) / ABI 6 (scope) bits.
 _K_NET_BIND_TCP = 1 << 0
@@ -165,7 +171,52 @@ def _k_proc_rules():
     return out
 
 
-def _k_landlock_restrict(rules, extra, masks=None, netdeny=False, scope=False):
+def _k_read_extra_file(path, expected_sha256):
+    fd = _k_os.open(path, _k_os.O_RDONLY | _k_os.O_NOFOLLOW | _k_os.O_NONBLOCK)
+    try:
+        info = _k_os.fstat(fd)
+        if not _k_stat.S_ISREG(info.st_mode) or info.st_size > _K_MAX_EXTRA_BYTES:
+            raise ValueError("scratch grants must be a bounded regular file")
+        with _k_os.fdopen(fd, "rb", closefd=False) as handle:
+            raw = handle.read(_K_MAX_EXTRA_BYTES + 1)
+        if len(raw) > _K_MAX_EXTRA_BYTES:
+            raise ValueError("scratch grants exceeded the size bound")
+        if not expected_sha256 or _k_hashlib.sha256(raw).hexdigest() != expected_sha256:
+            raise ValueError("scratch grant payload digest mismatch")
+        result = _k_json.loads(raw)
+        if not isinstance(result, list):
+            raise ValueError("scratch grant file must contain a list")
+        return result
+    finally:
+        _k_os.close(fd)
+
+
+def _k_safe_grants(entries, fenced):
+    denied = {_k_os.path.realpath(path) for path in fenced}
+
+    def under(path, root):
+        return path == root or path.startswith(root.rstrip("/") + "/")
+
+    safe = []
+    for entry in entries:
+        if isinstance(entry, str):
+            path, kind = entry, _K_FULL
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            path, kind = entry
+        else:
+            raise ValueError("invalid scratch grant")
+        if not isinstance(path, str) or type(kind) is not int or kind not in (_K_FULL, _K_DIR_ONLY, _K_FILE):
+            raise ValueError("invalid scratch grant type")
+        path = _k_os.path.realpath(path)
+        if any(under(path, root) for root in denied):
+            continue
+        if kind != _K_DIR_ONLY and any(under(root, path) for root in denied):
+            continue
+        safe.append((path, kind))
+    return safe
+
+
+def _k_landlock_restrict(rules, extra, masks=None, netdeny=False, scope=False, fenced=()):
     nums = _K_SYS.get(_k_platform.machine())
     if nums is None:
         raise OSError(_k_errno.ENOSYS, "landlock syscall numbers unknown for this arch")
@@ -193,7 +244,9 @@ def _k_landlock_restrict(rules, extra, masks=None, netdeny=False, scope=False):
                 entries.extend(_k_proc_rules())
             else:
                 entries.append((p, k))
-        entries += [(p, _K_FULL) for p in extra]
+        entries = _k_safe_grants(entries, fenced)
+        proc_roots = [path for path, kind in rules if kind == _K_PROC]
+        entries += _k_safe_grants(extra, [*fenced, *proc_roots])
         if not handled:
             entries = []  # no filesystem right is handled: path rules would be EINVAL
         for path, kind in entries:
@@ -370,10 +423,15 @@ def _k_main(argv):
         with open(spec_path) as fh:
             spec = _k_json.load(fh)
         extra = _k_json.loads(_k_os.environ.pop("EPYC_FENCE_KERNEL_EXTRA", "") or "[]")
+        extra_file = _k_os.environ.pop("EPYC_FENCE_KERNEL_EXTRA_FILE", "")
+        extra_sha256 = _k_os.environ.pop("EPYC_FENCE_KERNEL_EXTRA_SHA256", "")
+        if extra_file:
+            extra += _k_read_extra_file(extra_file, extra_sha256)
         mode = spec.get("mode")
         if mode == "landlock":
             _k_landlock_restrict(spec.get("rules") or [], extra, spec.get("masks"),
-                                 bool(spec.get("netdeny")), bool(spec.get("scope")))
+                                 bool(spec.get("netdeny")), bool(spec.get("scope")),
+                                 spec.get("fenced") or [])
             if spec.get("netdeny"):
                 _k_seccomp_netdeny()
         elif mode == "mountns":

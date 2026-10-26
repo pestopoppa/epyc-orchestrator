@@ -54,6 +54,9 @@ os.environ[_PROGRESS_LOG_DIR_ENV] = _TEST_PROGRESS_LOG_TEMP.name
 _TEST_RUNTIME_STORES = tempfile.TemporaryDirectory(prefix="orchestrator-pytest-stores-")
 _TEST_TRACE_DB_PATHS: set[Path] = set()
 _RUNTIME_STORE_ENVS = {
+    "ORCHESTRATOR_PATHS_LOG_DIR": "logs",
+    "ORCHESTRATOR_REPLAY_CAS_DIR": "replay_cas",
+    "ORCHESTRATOR_PATHS_SESSIONS_DIR": "sessions",
     "ORCHESTRATOR_DELEGATION_REPORT_DIR": "delegation_reports",
     "AUTOPILOT_EVAL_INSTRUMENT_LEDGER": "eval_instrument_ledger.json",
     # Successful tool audits may persist first-seen hosts beside this log.
@@ -65,6 +68,7 @@ _RUNTIME_STORE_ENVS = {
 _PREVIOUS_RUNTIME_STORE_ENVS = {key: os.environ.get(key) for key in _RUNTIME_STORE_ENVS}
 for _env, _name in _RUNTIME_STORE_ENVS.items():
     os.environ[_env] = os.path.join(_TEST_RUNTIME_STORES.name, _name)
+Path(os.environ["ORCHESTRATOR_PATHS_LOG_DIR"]).mkdir(parents=True, exist_ok=True)
 _PRODUCTION_KERNEL_STORE_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
 
 
@@ -543,6 +547,18 @@ def _reset_prefix_history():
     set_prefix_history(None)
     yield
     set_prefix_history(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_omitted_episodic_store_path(tmp_path):
+    """Keep default store construction private without changing explicit paths."""
+    from orchestration.repl_memory.episodic_store import EpisodicStore
+    from tests.fixtures.runtime_store_paths import private_default_store_init
+
+    with pytest.MonkeyPatch.context() as isolation:
+        isolation.setattr(EpisodicStore, "__init__", private_default_store_init(
+            EpisodicStore.__init__, tmp_path / "default-episodic-store"))
+        yield
 
 
 @pytest.fixture(autouse=True)
