@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import eval_tower_trace_feedback  # type: ignore[import-not-found]
 from eval_tower import EvalTower  # type: ignore[import-not-found]

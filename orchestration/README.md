@@ -685,8 +685,8 @@ See `research/TOON_EVALUATION.md` for full evaluation report.
 All dependencies are declared in `pyproject.toml`. Install with:
 
 ```bash
-pip install -e .           # Core dependencies
-pip install -e ".[dev]"    # + testing/linting tools
+uv sync                    # Core, testing, and linting dependencies
+pip install -e .           # Core dependencies only (pip)
 pip install -e ".[datasets]"  # + HuggingFace datasets for benchmark sampling
 ```
 

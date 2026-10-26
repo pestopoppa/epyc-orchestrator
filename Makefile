@@ -1,23 +1,23 @@
 # Makefile for amd-epyc-inference
 # ================================
 #
-# Gate chain for a scripts-heavy repo:
-#   schema → shellcheck → format → lint → (stubs for unit/integration)
+# Gate chain:
+#   schema → shellcheck → format → shell/markdown/Python lint
 #
 # Run all gates: make gates
 # Run specific:  make shellcheck
 
 SHELL := /usr/bin/env bash
-.PHONY: all gates schema shellcheck shfmt shfmt-check mdlint format lint typecheck coverage coverage-orchestrator-slice warnings-orchestrator-slice integration-sanity unit integration security security-check health docs docs-check bench clean help setup bootstrap download-models validate-paths docker-build docker-build-dev docker-run docker-dev docker-test docker-lint docker-clean nix-develop nix-build nix-shell nextplaid-reindex check-agent-config
+.PHONY: all gates schema shellcheck shfmt shfmt-check mdlint format pyformat-check lint typecheck coverage coverage-orchestrator-slice warnings-orchestrator-slice integration-sanity unit integration test security security-check health docs docs-check bench clean help setup bootstrap download-models validate-paths docker-build docker-build-dev docker-run docker-dev docker-test docker-lint docker-clean nix-develop nix-build nix-shell nextplaid-reindex check-agent-config
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 PY ?= python3
+PYTEST_ARGS ?= -n 4
+FORMAT_BASE ?=
+RUFF_BASELINE ?= tests/ci/ruff-baseline.json
 
-GATES_DEPS := schema shellcheck format lint
-ifneq ($(CI),)
-GATES_DEPS += integration-sanity
-endif
+GATES_DEPS := schema shellcheck format lint pylint
 
 # Shell scripts to check (limit to key directories)
 SHELL_SCRIPTS := $(shell find scripts/ -name '*.sh' 2>/dev/null)
@@ -36,8 +36,8 @@ gates: $(GATES_DEPS)
 
 help:
 	@echo "Available targets:"
-	@echo "  make gates      - Run all verification gates (schema + shell + format + lint)"
-	@echo "  make test-all   - Run schema validation + Python lint + unit tests"
+	@echo "  make gates      - Run schema, shell, format, and lint gates"
+	@echo "  make test       - Run the complete pytest suite under tests/"
 	@echo "  make quick      - Quick check (schema + shellcheck + pylint)"
 	@echo ""
 	@echo "Setup (new installations):"
@@ -61,7 +61,7 @@ help:
 	@echo "Individual gates:"
 	@echo "  make schema     - Validate IR JSON files"
 	@echo "  make shellcheck - Check shell scripts"
-	@echo "  make pylint     - Lint Python with ruff"
+	@echo "  make pylint     - Lint application, autopilot, and test Python with ruff"
 	@echo "  make unit       - Run unit tests"
 	@echo "  make validate-registry - Validate model registry and paths"
 	@echo "  make security-check - Run tracked-file security audit"
@@ -72,11 +72,12 @@ help:
 	@echo "  make nextplaid-reindex - Reindex changed files (requires the NextPLAID service)"
 	@echo "  make coverage-orchestrator-slice - Focused per-file coverage gate for benchmark/runtime seeding slice"
 	@echo "  make warnings-orchestrator-slice - Focused warning gate (ResourceWarning + DeprecationWarning as errors)"
-	@echo "  make integration-sanity - Integration suite with strict warning policy (CI-enforced)"
+	@echo "  make integration-sanity - Integration suite with strict warning policy"
 	@echo ""
 	@echo "Formatting:"
 	@echo "  make shfmt      - Format shell scripts (in-place)"
-	@echo "  make pyformat   - Format Python with ruff"
+	@echo "  make pyformat   - Format all Python with ruff"
+	@echo "  make pyformat-check - Check formatting of changed Python files"
 	@echo "  make clean      - Remove generated files"
 
 # ── Schema Gates ──────────────────────────────────────────────────────────────
@@ -151,7 +152,7 @@ mdformat:
 
 # ── Aggregate Targets ─────────────────────────────────────────────────────────
 
-format: shfmt-check
+format: shfmt-check pyformat-check
 	@# Add mdformat here when ready: format: shfmt mdformat
 
 lint: shellcheck mdlint
@@ -176,11 +177,20 @@ docs-check:
 
 pylint:
 	@echo "==> pylint (ruff)"
-	@if command -v ruff >/dev/null 2>&1; then \
-		ruff check src/ orchestration/ tests/ && echo "  ✓ ruff passed"; \
-	else \
-		echo "  ⚠ ruff not installed (pip install ruff)"; \
-	fi
+	@command -v ruff >/dev/null 2>&1 || { echo "  ERROR: ruff not installed (install the dev dependencies)" >&2; exit 1; }
+	@set -e; \
+	report="$$(mktemp "$${TMPDIR:-/tmp}/orchestrator-ruff.XXXXXX.json")"; \
+	trap 'rm -f "$$report"' EXIT; \
+	set +e; \
+	ruff check --output-format=json src/ orchestration/ scripts/autopilot/ scripts/ci/ tests/ > "$$report"; \
+	ruff_status=$$?; \
+	set -e; \
+	$(PY) scripts/ci/check_ruff_baseline.py --ruff-json "$$report" --baseline "$(RUFF_BASELINE)" --ruff-exit-code "$$ruff_status" && echo "  ✓ no new Ruff diagnostics"
+
+pyformat-check:
+	@echo "==> pyformat-check (changed Python files)"
+	@command -v ruff >/dev/null 2>&1 || { echo "  ERROR: ruff not installed (install the dev dependencies)" >&2; exit 1; }
+	@$(PY) scripts/ci/check_changed_python_format.py $(if $(FORMAT_BASE),--base '$(FORMAT_BASE)',)
 
 pyformat:
 	@echo "==> pyformat (ruff)"
@@ -278,8 +288,9 @@ integration:
 		echo "  (no tests/integration directory)"; \
 	fi
 
-test: unit integration
-	@echo "  ✓ all tests passed"
+test:
+	@echo "==> complete pytest suite (tests/)"
+	@CI=true ORCHESTRATOR_MOCK_MODE=1 $(PY) -m pytest tests $(PYTEST_ARGS)
 
 # ── Optional Gates ────────────────────────────────────────────────────────────
 

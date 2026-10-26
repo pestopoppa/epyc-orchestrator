@@ -1,0 +1,227 @@
+name: Orchestrator CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CI: "true"
+      ORCHESTRATOR_MOCK_MODE: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TMPDIR: ${{ runner.temp }}
+      RUFF_CACHE_DIR: ${{ runner.temp }}/ruff-cache
+      UV_CACHE_DIR: ${{ runner.temp }}/uv-cache
+      UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/orchestrator-venv
+      PYTHONHASHSEED: "0"
+      PYTEST_XML: ${{ runner.temp }}/orchestrator-junit.xml
+      COVERAGE_FILE: ${{ runner.temp }}/orchestrator-coverage-data
+      CI_NATIVE_DIR: ${{ runner.temp }}/orchestrator-ci-native
+      CI_CONTEXT: ${{ runner.temp }}/orchestrator-ci-context.json
+      APP_DIR: ${{ github.workspace }}/app
+      EPYC_ROOT: ${{ github.workspace }}/carrier
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}/app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: app
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout public CI evidence carrier
+        uses: actions/checkout@v4
+        with:
+          repository: pestopoppa/epyc-root
+          ref: dbf3cc506a55e3aff5a48246ce44d34b677622da
+          path: carrier
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install locked Python dependencies
+        run: |
+          python -m pip install uv==0.13.5
+          uv sync --frozen
+
+      - name: Set the reviewed format baseline
+        run: |
+          baseline_head=$(python -c 'import json; print(json.load(open("tests/ci/orchestrator-baseline.json"))["source_head"])')
+          git cat-file -e "$baseline_head^{commit}"
+          echo "FORMAT_BASE=$baseline_head" >> "$GITHUB_ENV"
+          echo "ORCHESTRATOR_BASELINE_HEAD=$baseline_head" >> "$GITHUB_ENV"
+
+      - name: Install gate tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck shfmt
+          npm install --global markdownlint-cli
+
+      - name: Run repository gates
+        run: uv run --locked make gates
+
+      - name: Snapshot checkout before tests
+        if: always()
+        run: |
+          git -C "$APP_DIR" status --porcelain --ignored --untracked-files=all > "$RUNNER_TEMP/app-status-before-tests"
+          git -C "$EPYC_ROOT" status --porcelain --ignored --untracked-files=all > "$RUNNER_TEMP/carrier-status-before-tests"
+
+      - name: Record the test command context
+        if: always()
+        run: |
+          uv_version=$(uv --version)
+          app_python_version=$(uv run --locked python -c 'import platform; print(platform.python_version())')
+          pytest_version=$(uv run --locked python -c 'import pytest; print(pytest.__version__)')
+          ruff_version=$(uv run --locked ruff --version)
+          shellcheck_version=$(shellcheck --version | tail -n 1)
+          shfmt_version=$(shfmt --version)
+          markdownlint_version=$(markdownlint --version)
+          export UV_VERSION="$uv_version" APP_PYTHON_VERSION="$app_python_version"
+          export PYTEST_VERSION="$pytest_version" RUFF_VERSION="$ruff_version"
+          export SHELLCHECK_VERSION="$shellcheck_version" SHFMT_VERSION="$shfmt_version"
+          export MARKDOWNLINT_VERSION="$markdownlint_version"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          baseline = json.loads(Path("tests/ci/orchestrator-baseline.json").read_text())
+          lock_hash = hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest()
+          env_keys = [
+              "CI", "ORCHESTRATOR_MOCK_MODE", "PYTHONDONTWRITEBYTECODE", "PYTHONHASHSEED", "TMPDIR",
+              "RUFF_CACHE_DIR", "UV_CACHE_DIR", "COVERAGE_FILE", "PYTEST_XML", "CI_NATIVE_DIR", "CI_CONTEXT",
+              "UV_PROJECT_ENVIRONMENT", "APP_DIR", "APP_PYTHON_VERSION",
+              "EPYC_ROOT",
+              "SHELLCHECK_VERSION", "SHFMT_VERSION", "MARKDOWNLINT_VERSION",
+              "FORMAT_BASE", "ORCHESTRATOR_BASELINE_HEAD",
+              "PATH", "HOME", "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_JOB",
+              "GITHUB_RUN_ATTEMPT", "GITHUB_SHA", "GITHUB_REF", "GITHUB_EVENT_NAME",
+              "GITHUB_BASE_REF", "GITHUB_HEAD_REF",
+          ]
+          test_argv = [
+              "uv", "run", "--locked", "make", "test",
+              "PYTEST_ARGS=-n 2 -m 'not requires_server and not requires_live_models and not requires_materialized_trace' "
+              "-p no:cacheprovider --junitxml=" + os.environ["PYTEST_XML"],
+          ]
+          context = {
+              "schema": "orchestrator-ci-context.v1",
+              "tested_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "carrier_commit": subprocess.check_output(["git", "-C", os.environ["EPYC_ROOT"], "rev-parse", "HEAD"], text=True).strip(),
+              "pull_request_base_sha": "${{ github.event.pull_request.base.sha }}" or None,
+              "reviewed_baseline_source_head": baseline["source_head"],
+              "python": os.environ["APP_PYTHON_VERSION"],
+              "project_installation": "editable project in isolated UV_PROJECT_ENVIRONMENT",
+              "uv": os.environ["UV_VERSION"],
+              "pytest": os.environ["PYTEST_VERSION"],
+              "ruff": os.environ["RUFF_VERSION"],
+              "shellcheck": os.environ["SHELLCHECK_VERSION"],
+              "shfmt": os.environ["SHFMT_VERSION"],
+              "markdownlint": os.environ["MARKDOWNLINT_VERSION"],
+              "runner_release": Path("/etc/os-release").read_text(encoding="utf-8"),
+              "uv_lock_sha256": lock_hash,
+              "install_command": "uv sync --frozen",
+              "gates_argv": ["uv", "run", "--locked", "make", "gates"],
+              "test_argv": test_argv,
+              "ci_environment": {key: os.environ.get(key) for key in env_keys},
+              "excluded_markers": baseline["ci_exclusions"],
+          }
+          Path(os.environ["CI_CONTEXT"]).write_text(
+              json.dumps(context, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+      - name: Run complete pytest suite
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          uv run --locked python "$EPYC_ROOT/scripts/ci/native_conformance.py" \
+            --cwd "$APP_DIR" \
+            --junit "$PYTEST_XML" \
+            --output "$CI_NATIVE_DIR" \
+            --repo "app=$APP_DIR" \
+            --repo "carrier=$EPYC_ROOT" \
+            --read-path "$CI_CONTEXT" \
+            --read-path "$APP_DIR/.github/workflows/orchestrator-ci.yml" \
+            --read-path "$APP_DIR/Makefile" \
+            --read-path "$APP_DIR/Justfile" \
+            --read-path "$APP_DIR/pyproject.toml" \
+            --read-path "$APP_DIR/uv.lock" \
+            --read-path "$APP_DIR/tests/README.md" \
+            --read-path "$APP_DIR/tests/fixtures/ni63_capacity_child/source_clone.py" \
+            --read-path "$APP_DIR/tests/unit/test_orchestrator_stack_import_is_argv_safe.py" \
+            --read-path "$APP_DIR/scripts/ci/check_pytest_baseline.py" \
+            --read-path "$APP_DIR/scripts/ci/check_ruff_baseline.py" \
+            --read-path "$APP_DIR/tests/ci/orchestrator-baseline.json" \
+            --select "complete tests/ suite" \
+            --select "CI excludes only the three declared host-resource markers" \
+            --select "baseline source ${{ env.ORCHESTRATOR_BASELINE_HEAD }}" \
+            -- \
+            uv run --locked make test \
+            "PYTEST_ARGS=-n 2 -m 'not requires_server and not requires_live_models and not requires_materialized_trace' -p no:cacheprovider --junitxml=$PYTEST_XML"
+
+      - name: Enforce collection floor and fail only on new test IDs
+        if: always()
+        run: |
+          pytest_status=$(uv run --locked python -c 'import json,sys; print(json.load(open(sys.argv[1]))["exit_code"])' "$CI_NATIVE_DIR/receipt.json")
+          uv run --locked python scripts/ci/check_pytest_baseline.py \
+            --junit "$CI_NATIVE_DIR/original-junit.xml" \
+            --baseline tests/ci/orchestrator-baseline.json \
+            --pytest-exit-code "$pytest_status" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
+      - name: Reopen and grade the native receipt through the shared verifier
+        if: always()
+        run: |
+          PYTHONPATH="$EPYC_ROOT:$EPYC_ROOT/scripts/vidya" \
+            uv run --locked python - "$CI_NATIVE_DIR/receipt.json" "$RUNNER_TEMP/orchestrator-ci-shared-grade.json" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+          from adapters.ci_conformance import native_rows, project_ci_conformance
+          from claim_tuple import grade
+
+          receipt = Path(sys.argv[1])
+          inputs = sorted(receipt.parent.iterdir())
+          before = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs if path.is_file()}
+          rows = native_rows(receipt)
+          if len(rows) != 1:
+              raise SystemExit("native receipt did not produce exactly one existing CI conformance row")
+          quality, traceability, reasons = grade(project_ci_conformance(rows[0]))
+          after = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs if path.is_file()}
+          if before != after:
+              raise SystemExit("shared verifier modified original native custody")
+          Path(sys.argv[2]).write_text(json.dumps({"quality": quality, "traceability": traceability,
+              "reasons": reasons, "input_sha256": before}, sort_keys=True, indent=2) + "\n")
+          print(json.dumps({"quality": quality, "traceability": traceability}))
+          PY
+
+      - name: Ensure tests left no checkout artifacts
+        if: always()
+        run: |
+          git -C "$APP_DIR" status --porcelain --ignored --untracked-files=all > "$RUNNER_TEMP/app-status-after-tests"
+          git -C "$EPYC_ROOT" status --porcelain --ignored --untracked-files=all > "$RUNNER_TEMP/carrier-status-after-tests"
+          diff -u "$RUNNER_TEMP/app-status-before-tests" "$RUNNER_TEMP/app-status-after-tests"
+          diff -u "$RUNNER_TEMP/carrier-status-before-tests" "$RUNNER_TEMP/carrier-status-after-tests"
+
+      - name: Preserve original test output, JUnit, receipt, and shared-grade summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchestrator-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/orchestrator-ci-native/
+            ${{ runner.temp }}/orchestrator-ci-shared-grade.json
+            ${{ runner.temp }}/orchestrator-ci-context.json
+          if-no-files-found: error

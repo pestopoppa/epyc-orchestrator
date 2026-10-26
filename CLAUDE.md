@@ -43,9 +43,8 @@ Sessions: /chat(session_id) → latest Checkpoint restore → cross-request vari
 ## Testing
 
 ```bash
-pytest tests/ -n 8    # Safe parallel default
-pytest tests/ -v      # Verbose single-threaded
-make gates            # Full verification pipeline
+make test             # Complete test suite under tests/
+make gates            # Schema, format, shell/Markdown, and Python lint gates
 ```
 
 Do NOT use `pytest -n auto` — it spawns too many workers and exhausts memory.
@@ -55,9 +54,8 @@ Do NOT use `pytest -n auto` — it spawns too many workers and exhausts memory.
 Run `make gates` after any changes. This runs:
 1. Schema validation (`validate_ir.py`)
 2. Shell lint (`shellcheck`)
-3. Format check (`ruff format --check`)
-4. Lint (`ruff check`)
-5. NextPlaid reindex (`nextplaid-reindex`; plus conditional `integration-sanity`)
+3. Changed-file Python format check (`ruff format --check`)
+4. Shell, Markdown, and Python lint (`ruff check`, including scripts/autopilot)
 
 ## Operator Decision Requests
 

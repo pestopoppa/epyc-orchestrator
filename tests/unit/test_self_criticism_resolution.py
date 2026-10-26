@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from safety_gate import EvalResult, SafetyVerdict  # type: ignore[import-not-found]
 from self_criticism import generate_self_criticism  # type: ignore[import-not-found]

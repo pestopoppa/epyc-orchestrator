@@ -252,7 +252,6 @@ class TestLogEscalation:
 class TestMakeEndResult:
     """Tests for _make_end_result with real observability stubs."""
 
-    @pytest.mark.asyncio
     async def test_end_result_records_success_evidence(self, graph_ctx):
         """_make_end_result records success evidence in hypothesis graph."""
         state, deps = graph_ctx(with_hypothesis_graph=True)
@@ -266,7 +265,6 @@ class TestMakeEndResult:
         assert len(hg.evidence) >= 1
         assert any(e["outcome"] == "success" for e in hg.evidence)
 
-    @pytest.mark.asyncio
     async def test_end_result_records_failure_evidence(self, graph_ctx):
         """_make_end_result records failure evidence."""
         state, deps = graph_ctx(with_hypothesis_graph=True)
@@ -279,7 +277,6 @@ class TestMakeEndResult:
         hg = deps.hypothesis_graph
         assert any(e["outcome"] == "failure" for e in hg.evidence)
 
-    @pytest.mark.asyncio
     async def test_end_result_updates_workspace_decisions(self, graph_ctx):
         """_make_end_result appends to workspace_state decisions."""
         state, deps = graph_ctx()
@@ -293,7 +290,6 @@ class TestMakeEndResult:
         assert len(ws["decisions"]) >= 1
         assert ws["decisions"][-1]["rationale"] == "success"
 
-    @pytest.mark.asyncio
     async def test_end_result_contains_metadata(self, graph_ctx):
         """End result includes turns, role_history, delegation_events."""
         state, deps = graph_ctx()

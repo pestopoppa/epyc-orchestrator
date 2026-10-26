@@ -15,7 +15,6 @@ from src.api.state import get_state, reset_state
 from src.features import reset_features
 
 
-@pytest.mark.asyncio
 async def test_disconnect_during_first_streamed_generation_sets_backend_cancel(monkeypatch):
     """The route has not returned StreamingResponse while it awaits its first event."""
     started = threading.Event()

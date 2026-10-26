@@ -47,7 +47,6 @@ class TestFigureAnalyzerInit:
 class TestFigureAnalyzerClientManagement:
     """Test HTTP client lifecycle management."""
 
-    @pytest.mark.asyncio
     async def test_get_client_creates_new_client(self):
         """Test that _get_client creates a new client if none exists."""
         analyzer = FigureAnalyzer()
@@ -61,7 +60,6 @@ class TestFigureAnalyzerClientManagement:
         # Cleanup
         await analyzer.close()
 
-    @pytest.mark.asyncio
     async def test_get_client_reuses_existing_client(self):
         """Test that _get_client reuses existing client."""
         analyzer = FigureAnalyzer()
@@ -71,7 +69,6 @@ class TestFigureAnalyzerClientManagement:
 
         await analyzer.close()
 
-    @pytest.mark.asyncio
     async def test_close_client(self):
         """Test closing the HTTP client."""
         analyzer = FigureAnalyzer()
@@ -81,7 +78,6 @@ class TestFigureAnalyzerClientManagement:
         await analyzer.close()
         assert analyzer._client is None
 
-    @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test using FigureAnalyzer as async context manager."""
         async with FigureAnalyzer() as analyzer:
@@ -157,7 +153,6 @@ class TestImageProcessing:
 class TestAnalyzeSingleFigure:
     """Test single figure analysis."""
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_success(self):
         """Test successful figure analysis."""
         analyzer = FigureAnalyzer(vision_api_url="http://test:8000/vision")
@@ -179,7 +174,6 @@ class TestAnalyzeSingleFigure:
             assert description == "A bar chart showing quarterly revenue"
             mock_client.post.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_http_error(self):
         """Test figure analysis with HTTP error."""
         analyzer = FigureAnalyzer()
@@ -197,7 +191,6 @@ class TestAnalyzeSingleFigure:
 
             assert description.startswith("[Analysis failed: HTTP 500]")
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_timeout(self):
         """Test figure analysis with timeout."""
         analyzer = FigureAnalyzer()
@@ -211,7 +204,6 @@ class TestAnalyzeSingleFigure:
 
             assert description == "[Analysis timeout]"
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_exception(self):
         """Test figure analysis with general exception."""
         analyzer = FigureAnalyzer()
@@ -226,7 +218,6 @@ class TestAnalyzeSingleFigure:
             assert description.startswith("[Analysis error:")
             assert "Network error" in description
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_empty_description(self):
         """Test figure analysis returning empty description."""
         analyzer = FigureAnalyzer()
@@ -248,14 +239,12 @@ class TestAnalyzeSingleFigure:
 class TestAnalyzeFigures:
     """Test batch figure analysis."""
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_empty_list(self):
         """Test analyzing empty figure list."""
         analyzer = FigureAnalyzer()
         result = await analyzer.analyze_figures("/fake/path.pdf", [])
         assert result == []
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_pdf_not_found(self):
         """Test analyzing figures with non-existent PDF."""
         analyzer = FigureAnalyzer()
@@ -268,7 +257,6 @@ class TestAnalyzeFigures:
         assert len(result) == 1
         assert result[0].description == ""
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_success(self):
         """Test successful batch figure analysis."""
         analyzer = FigureAnalyzer()
@@ -304,7 +292,6 @@ class TestAnalyzeFigures:
                     assert result[0].image_base64 is not None
                     assert result[1].image_base64 is not None
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_page_render_error(self):
         """Test figure analysis when page rendering fails."""
         analyzer = FigureAnalyzer()
@@ -330,7 +317,6 @@ class TestConvenienceFunctions:
         analyzer2 = get_figure_analyzer()
         assert analyzer1 is analyzer2
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_function_default_prompt(self):
         """Test analyze_figures convenience function with default prompt."""
         bbox = BoundingBox(id=0, x1=0, y1=0, x2=100, y2=100)
@@ -357,7 +343,6 @@ class TestConvenienceFunctions:
                     assert len(result) == 1
                     assert result[0].description == "Test description"
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_function_custom_prompt(self):
         """Test analyze_figures convenience function with custom prompt."""
         bbox = BoundingBox(id=0, x1=0, y1=0, x2=100, y2=100)

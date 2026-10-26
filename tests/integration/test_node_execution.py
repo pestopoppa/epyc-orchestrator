@@ -33,7 +33,6 @@ def _make_ctx(state: TaskState, deps: TaskDeps) -> Ctx:
 # ── FrontdoorNode ─────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_frontdoor_happy_path(graph_ctx):
     """FrontdoorNode: FINAL on first turn → End with success."""
     state, deps = graph_ctx(
@@ -52,7 +51,6 @@ async def test_frontdoor_happy_path(graph_ctx):
     assert "4" in result.data.answer
 
 
-@pytest.mark.asyncio
 async def test_frontdoor_max_turns_failure(graph_ctx):
     """FrontdoorNode: max turns reached without answer → End with failure."""
     state, deps = graph_ctx(
@@ -72,7 +70,6 @@ async def test_frontdoor_max_turns_failure(graph_ctx):
     assert "Max turns" in result.data.answer
 
 
-@pytest.mark.asyncio
 async def test_frontdoor_max_turns_rescue(graph_ctx):
     """FrontdoorNode: max turns but last_output has answer → rescue."""
     state, deps = graph_ctx(
@@ -94,7 +91,6 @@ async def test_frontdoor_max_turns_rescue(graph_ctx):
     assert isinstance(result.data, TaskResult)
 
 
-@pytest.mark.asyncio
 async def test_frontdoor_error_retry(graph_ctx):
     """FrontdoorNode: error within retry limit → returns FrontdoorNode."""
     state, deps = graph_ctx(
@@ -112,7 +108,6 @@ async def test_frontdoor_error_retry(graph_ctx):
     assert state.consecutive_failures == 1
 
 
-@pytest.mark.asyncio
 async def test_frontdoor_error_escalation(graph_ctx):
     """FrontdoorNode: retries exhausted → escalates to CoderEscalation."""
     state, deps = graph_ctx(
@@ -134,7 +129,6 @@ async def test_frontdoor_error_escalation(graph_ctx):
 # ── WorkerNode ────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_worker_happy_path(graph_ctx):
     """WorkerNode: FINAL on first turn → End with success."""
     state, deps = graph_ctx(
@@ -152,7 +146,6 @@ async def test_worker_happy_path(graph_ctx):
     assert result.data.success is True
 
 
-@pytest.mark.asyncio
 async def test_worker_non_final_loops(graph_ctx):
     """WorkerNode: non-final output → returns WorkerNode for retry."""
     code = "```python\nfor i in range(3):\n    print(f'step {i}')\n```"
@@ -170,7 +163,6 @@ async def test_worker_non_final_loops(graph_ctx):
     assert state.turns == 1
 
 
-@pytest.mark.asyncio
 async def test_worker_escalates_on_repeated_failures(graph_ctx):
     """WorkerNode: retries exhausted → escalates to CoderEscalation."""
     state, deps = graph_ctx(
@@ -191,7 +183,6 @@ async def test_worker_escalates_on_repeated_failures(graph_ctx):
 # ── CoderNode ─────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_coder_happy_path(graph_ctx):
     """CoderNode: FINAL on first turn → End with success."""
     state, deps = graph_ctx(
@@ -210,7 +201,6 @@ async def test_coder_happy_path(graph_ctx):
     assert "21" in result.data.answer
 
 
-@pytest.mark.asyncio
 async def test_coder_escalates_to_architect(graph_ctx):
     """CoderNode: retries exhausted → escalates to ArchitectNode."""
     state, deps = graph_ctx(
@@ -228,7 +218,6 @@ async def test_coder_escalates_to_architect(graph_ctx):
     assert state.escalation_count == 1
 
 
-@pytest.mark.asyncio
 async def test_coder_records_mitigation_on_success_after_escalation(graph_ctx):
     """CoderNode: success after prior escalation → records mitigation."""
     state, deps = graph_ctx(
@@ -257,7 +246,6 @@ async def test_coder_records_mitigation_on_success_after_escalation(graph_ctx):
 # ── Full graph: run_task ──────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_run_task_end_to_end(graph_ctx):
     """run_task: simple task with FINAL → success result."""
     from src.graph.graph import run_task
@@ -276,7 +264,6 @@ async def test_run_task_end_to_end(graph_ctx):
     assert len(result.role_history) >= 1
 
 
-@pytest.mark.asyncio
 async def test_run_task_escalation_flow(graph_ctx):
     """run_task: error triggers escalation chain."""
     from src.graph.graph import run_task
@@ -300,7 +287,6 @@ async def test_run_task_escalation_flow(graph_ctx):
     assert len(result.role_history) >= 2
 
 
-@pytest.mark.asyncio
 async def test_run_task_max_turns_stops(graph_ctx):
     """run_task: hitting max_turns terminates the graph."""
     from src.graph.graph import run_task
@@ -322,7 +308,6 @@ async def test_run_task_max_turns_stops(graph_ctx):
 # ── Role history tracking ─────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_role_history_tracked(graph_ctx):
     """run_task records role transitions in result.role_history."""
     from src.graph.graph import run_task

@@ -12,7 +12,6 @@ file can never silently poison the gate again.
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 
 from safety_gate import Baseline, QUALITY_MAX  # noqa: E402
 

@@ -62,9 +62,6 @@ import pytest
 # scripts/autopilot must be on sys.path -- same setup as the other eval_tower
 # unit tests (see tests/unit/test_eval_tower_ev11_stats.py).
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
-sys.path.insert(0, str(REPO_ROOT))
 
 # Guarded import: a concurrently-edited / transiently-broken eval_tower.py must
 # SKIP (loudly, naming the error) instead of erroring this pin out of existence.

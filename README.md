@@ -110,7 +110,7 @@ Q-value TD-error magnitude for MemRL routing — converged (MA-10 ≈ 0, below t
 # 1. Clone
 git clone https://github.com/pestopoppa/epyc-orchestrator.git
 cd epyc-orchestrator
-pip install -e ".[dev]"
+uv sync
 
 # 2. Launch full stack (orchestrator + all llama-servers)
 python scripts/server/orchestrator_stack.py start
@@ -183,8 +183,8 @@ Benchmarks live in the [epyc-inference-research](https://github.com/pestopoppa/e
 ## Development
 
 ```bash
-pytest tests/ -n 8                             # parallel test run
-ruff check src/                                # lint
+make test                                      # complete test suite (all tests/)
+make gates                                     # schema, shell, Markdown, Python format/lint
 python scripts/autopilot/preflight_audit.py    # 9-check diagnostic
 ```
 

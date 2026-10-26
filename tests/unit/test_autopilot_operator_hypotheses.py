@@ -20,8 +20,6 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 operator_hypotheses = importlib.import_module("operator_hypotheses")
 

@@ -61,7 +61,6 @@ def _ctx(store, task_id="task-df3", **deps):
 # ── SQLiteStatePersistence._write ─────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_persistence_snapshot_lands_in_graph_snapshots(store):
     with pytest.warns(DeprecationWarning):
         persistence = SQLiteStatePersistence(store, "run-1")
@@ -72,7 +71,6 @@ async def test_persistence_snapshot_lands_in_graph_snapshots(store):
     assert rows[0]["data"]["node_class"] == "FrontdoorNode"
 
 
-@pytest.mark.asyncio
 async def test_persistence_fenced_write_under_lease(store, session_id):
     lease = store.leases.try_acquire(session_id, ttl_s=30)
     with pytest.warns(DeprecationWarning):

@@ -31,7 +31,6 @@ from tests.unit.test_graph_nodes import MockREPLResult, make_deps, make_state
 
 
 class TestEarlyAbortBudget:
-    @pytest.mark.asyncio
     async def test_early_abort_escalates_when_under_budget(self):
         """escalation_count < max_escalations: early-abort still escalates immediately
         (no retry precondition), and the count is incremented."""
@@ -55,7 +54,6 @@ class TestEarlyAbortBudget:
         assert state.escalation_count == 1
         assert str(Role.CODER_ESCALATION) in state.role_history
 
-    @pytest.mark.asyncio
     async def test_early_abort_cycle_is_denied_without_charging_escalation(self):
         """An early abort cannot bypass the shared role-cycle guard."""
         state = make_state(
@@ -73,7 +71,6 @@ class TestEarlyAbortBudget:
         assert state.escalation_count == 0
         assert str(Role.CODER_ESCALATION) not in state.role_history
 
-    @pytest.mark.asyncio
     async def test_early_abort_blocked_at_budget_falls_through_to_normal_failure_path(self):
         """escalation_count == max_escalations: early-abort must NOT escalate.
         It must land at the same destination sibling sites use when
@@ -99,7 +96,6 @@ class TestEarlyAbortBudget:
         assert state.escalation_count == 2
         assert str(Role.CODER_ESCALATION) not in state.role_history
 
-    @pytest.mark.asyncio
     async def test_sibling_non_early_abort_path_unaffected(self):
         """Regression guard: a non-EARLY_ABORT error (CODE category) on WorkerNode still
         retries then escalates through `_should_escalate` exactly as before the fix."""

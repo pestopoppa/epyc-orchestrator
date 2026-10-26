@@ -19,9 +19,6 @@ import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "benchmark"))
 
 from orchestration.repl_memory.q_scorer import (  # noqa: E402
     PRIOR_SOURCE_STACK_PRIORS,

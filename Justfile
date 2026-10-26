@@ -17,9 +17,8 @@ default: gates
 # ── Main Targets ──────────────────────────────────────────────────────────────
 
 # Run all verification gates
-gates: schema shellcheck lint
-    @echo ""
-    @echo "✅ All gates passed"
+gates:
+    make gates
 
 # Show available recipes
 help:
@@ -73,22 +72,24 @@ format: shfmt
 # Lint all (shellcheck + mdlint)
 lint: shellcheck mdlint
 
-# ── Python Gates (stubs) ──────────────────────────────────────────────────────
+# ── Python Gates ─────────────────────────────────────────────────────────────
 
 # Type check Python (stub)
 typecheck:
     @echo "==> typecheck (stub)"
     @echo "  (no Python typechecker configured)"
 
-# Run unit tests (stub)
+# Run the unit subset
 unit:
-    @echo "==> unit (stub)"
-    @echo "  (no unit tests yet)"
+    make unit
 
-# Run integration tests (stub)
+# Run the integration subset
 integration:
-    @echo "==> integration (stub)"
-    @echo "  (no integration tests yet)"
+    make integration
+
+# Run the complete test suite
+test:
+    make test
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 

@@ -21,8 +21,6 @@ import pytest
 
 # Add autopilot dir so diversity_metrics can resolve its own imports
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_REPO_ROOT))
-sys.path.insert(0, str(_REPO_ROOT / "scripts" / "autopilot"))
 
 import diversity_metrics as dm  # noqa: E402
 from scripts.autopilot.safety_gate import EvalResult  # noqa: E402

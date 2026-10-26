@@ -20,7 +20,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 import species.prompt_forge as pf  # noqa: E402
 # HIL-6 S2: the MHS-3 guards and their tunables live in mutation_guards; patch them THERE.

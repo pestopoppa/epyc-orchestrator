@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from autopilot import _config_fingerprint, _EPHEMERAL_ACTION_KEYS  # type: ignore[import-not-found]
 from src.api.routes.dashboard import _config_fingerprint_from_row

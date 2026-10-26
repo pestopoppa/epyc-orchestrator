@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import eval_tower  # noqa: E402
 from eval_tower import EvalTower, QuestionResult  # noqa: E402

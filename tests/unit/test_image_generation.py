@@ -46,7 +46,6 @@ class FakeSDClient:
         }
 
 
-@pytest.mark.asyncio
 async def test_generator_records_unwired_enhancer_policy(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("src.services.image_generator.output_dir_for_today", lambda: tmp_path)
     client = FakeSDClient()

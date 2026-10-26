@@ -365,7 +365,6 @@ class TestDualRunValidation:
         defaults.update(kwargs)
         return TaskState(**defaults)
 
-    @pytest.mark.asyncio
     async def test_simple_success_parity(self):
         """Scenario: frontdoor succeeds on turn 1. Both backends should agree."""
         from src.graph.langgraph.nodes import frontdoor_node
@@ -388,7 +387,6 @@ class TestDualRunValidation:
         # role_history delta should be empty (frontdoor didn't add a new role)
         assert result["role_history"] == []
 
-    @pytest.mark.asyncio
     async def test_self_loop_then_success(self):
         """Scenario: frontdoor fails turn 1 (retry), succeeds turn 2."""
         from src.graph.langgraph.nodes import frontdoor_node
@@ -439,7 +437,6 @@ class TestDualRunValidation:
         assert result2["_result"]["success"] is True
         assert "Fixed answer" in result2["_result"]["answer"]
 
-    @pytest.mark.asyncio
     async def test_escalation_produces_role_delta(self):
         """Scenario: frontdoor fails and escalates to coder_escalation.
         role_history delta should contain only the new role."""
@@ -468,7 +465,6 @@ class TestDualRunValidation:
         # escalation_count should be incremented
         assert result["escalation_count"] == 1
 
-    @pytest.mark.asyncio
     async def test_max_turns_terminates(self):
         """Scenario: node at max_turns should terminate without calling _execute_turn."""
         from src.graph.langgraph.nodes import frontdoor_node
@@ -496,7 +492,6 @@ class TestDualRunValidation:
         assert result["_result"]["success"] is False
         assert "Max turns" in result["_result"]["answer"]
 
-    @pytest.mark.asyncio
     async def test_budget_exceeded_terminates(self):
         """Scenario: budget exceeded should terminate early."""
         from src.graph.langgraph.nodes import frontdoor_node
@@ -518,7 +513,6 @@ class TestDualRunValidation:
         assert result["_result"]["success"] is False
         assert "budget" in result["_result"]["answer"].lower()
 
-    @pytest.mark.asyncio
     async def test_early_abort_first_strike_escalates_with_retries_remaining(self):
         """LangGraph preserves immediate escalation for an admitted abort."""
         from src.graph.langgraph.nodes import frontdoor_node
@@ -542,7 +536,6 @@ class TestDualRunValidation:
         assert result["escalation_count"] == 1
         assert result["role_history"] == ["coder_escalation"]
 
-    @pytest.mark.asyncio
     async def test_early_abort_cycle_falls_through_without_escalating(self):
         """A cyclic LangGraph route follows the existing retry/failure chain."""
         from src.graph.langgraph.nodes import frontdoor_node
@@ -572,7 +565,6 @@ class TestDualRunValidation:
         assert result["escalation_count"] == 0
         assert result["role_history"] == []
 
-    @pytest.mark.asyncio
     async def test_early_abort_at_budget_falls_through_without_escalating(self):
         """An exhausted escalation budget refuses LangGraph first-strike routing."""
         from src.graph.langgraph.nodes import frontdoor_node

@@ -222,7 +222,6 @@ class TestPDFRouterExtraction:
 
         assert figures == []
 
-    @pytest.mark.asyncio
     async def test_extract_structured_odl_uses_odl_figures_not_pymupdf(
         self, tmp_path, monkeypatch
     ):
@@ -341,7 +340,6 @@ class TestPDFRouterExtraction:
         assert result.structured_data is structured
         assert result.method == "opendataloader_structured"
 
-    @pytest.mark.asyncio
     async def test_extract_structured_odl_reports_hybrid_backend(
         self,
         tmp_path,
@@ -657,7 +655,6 @@ class TestOpendataloaderRuntimeProbe:
 class TestFastPathDefaultFlip:
     """extract() now defaults to ODL, with pdftotext as the safety fallback."""
 
-    @pytest.mark.asyncio
     async def test_default_path_uses_opendataloader(self, tmp_path, monkeypatch):
         pdf_path = tmp_path / "doc.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
@@ -687,7 +684,6 @@ class TestFastPathDefaultFlip:
         assert result.method == "opendataloader"
         assert result.ocr_required is False
 
-    @pytest.mark.asyncio
     async def test_default_inert_pdftotext_when_runtime_unavailable(
         self, tmp_path, monkeypatch
     ):
@@ -718,7 +714,6 @@ class TestFastPathDefaultFlip:
         mock_pt.assert_called_once_with(pdf_path)
         assert result.method == "pdftotext"
 
-    @pytest.mark.asyncio
     async def test_odl_empty_falls_back_to_pdftotext(self, tmp_path, monkeypatch):
         pdf_path = tmp_path / "doc.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
@@ -746,7 +741,6 @@ class TestFastPathDefaultFlip:
         assert result.method == "pdftotext"
         assert result.text == clean
 
-    @pytest.mark.asyncio
     async def test_garbage_check_parity_odl_garbled_uses_pdftotext(
         self, tmp_path, monkeypatch
     ):
@@ -779,7 +773,6 @@ class TestFastPathDefaultFlip:
         assert result.text == clean
         assert result.ocr_required is False
 
-    @pytest.mark.asyncio
     async def test_both_fast_paths_garbled_falls_through_to_ocr(
         self, tmp_path, monkeypatch
     ):
@@ -811,7 +804,6 @@ class TestFastPathDefaultFlip:
         assert result.method == "lightonocr"
         assert result.ocr_required is True
 
-    @pytest.mark.asyncio
     async def test_structured_odl_empty_falls_back_and_clears_structured_data(
         self, tmp_path, monkeypatch
     ):

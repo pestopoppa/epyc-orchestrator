@@ -18,8 +18,6 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
 
 rr = importlib.import_module("reproposal_rate")
 rml = importlib.import_module("rejected_mutation_ledger")

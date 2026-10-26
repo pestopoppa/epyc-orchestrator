@@ -82,7 +82,6 @@ def _neutralize_realized_numa_probe(monkeypatch):
     dashboard_topology._REALIZED_NUMA_CACHE.update({"ts": 0.0, "value": None, "probed": False})
 
 
-@pytest.mark.asyncio
 async def test_optimization_brief_is_threaded_cached_and_fails_open(monkeypatch) -> None:
     calls = 0
 

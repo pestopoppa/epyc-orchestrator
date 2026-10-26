@@ -137,7 +137,6 @@ class TestParallelEmbedderAsync:
             use_fallback=True,
         )
 
-    @pytest.mark.asyncio
     async def test_embed_async_with_mock_server(self, mock_config):
         """Test embed_async with mocked HTTP response."""
         from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
@@ -169,7 +168,6 @@ class TestParallelEmbedderAsync:
 
         await client.close()
 
-    @pytest.mark.asyncio
     async def test_embed_async_fallback_on_all_failures(self, mock_config):
         """Test fallback when all servers fail."""
         from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
@@ -190,7 +188,6 @@ class TestParallelEmbedderAsync:
 
         await client.close()
 
-    @pytest.mark.asyncio
     async def test_embed_async_no_fallback_raises(self):
         """Test that error is raised when fallback disabled and all fail."""
         from orchestration.repl_memory.parallel_embedder import (
@@ -215,7 +212,6 @@ class TestParallelEmbedderAsync:
 
         await client.close()
 
-    @pytest.mark.asyncio
     async def test_embed_batch_async(self, mock_config):
         """Test batch embedding."""
         from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
@@ -246,7 +242,6 @@ class TestParallelEmbedderAsync:
 
         await client.close()
 
-    @pytest.mark.asyncio
     async def test_health_check_all(self, mock_config):
         """Test health check across all servers."""
         from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
@@ -393,7 +388,6 @@ class TestParallelEmbedderAsyncContextManager:
 
         monkeypatch.setattr(httpx, "AsyncClient", fake_async_client)
 
-    @pytest.mark.asyncio
     async def test_async_with_returns_client_and_closes(self, monkeypatch):
         from orchestration.repl_memory.parallel_embedder import (
             EmbedderPoolConfig,
@@ -416,7 +410,6 @@ class TestParallelEmbedderAsyncContextManager:
         assert outer._closed is True
         assert ("POST", "http://mock-embed:9999/embedding") in calls
 
-    @pytest.mark.asyncio
     async def test_async_with_propagates_exception_and_still_closes(self, monkeypatch):
         from orchestration.repl_memory.parallel_embedder import (
             EmbedderPoolConfig,
@@ -436,7 +429,6 @@ class TestParallelEmbedderAsyncContextManager:
         assert client._http_client is None
         assert client._closed is True
 
-    @pytest.mark.asyncio
     async def test_embed_text_async_convenience_function(self, monkeypatch):
         from orchestration.repl_memory.parallel_embedder import embed_text_async
 

@@ -412,7 +412,6 @@ class TestGateConfigParallelizable:
 class TestRunAllGatesParallel:
     """Test async parallel gate execution."""
 
-    @pytest.mark.asyncio
     async def test_parallel_gates_run_concurrently(self, tmp_path):
         """Two fast parallelizable gates complete faster than sequential."""
         config_file = tmp_path / "gates.yaml"
@@ -439,7 +438,6 @@ gates:
         # Sequential would take ~0.6s, parallel should take ~0.3s (+overhead)
         assert elapsed < 0.55
 
-    @pytest.mark.asyncio
     async def test_parallel_then_sequential(self, tmp_path):
         """Parallel gates run first, then sequential gates."""
         config_file = tmp_path / "gates.yaml"
@@ -468,7 +466,6 @@ gates:
         assert results[1].gate_name == "fast_format"
         assert results[2].gate_name == "heavy_unit"
 
-    @pytest.mark.asyncio
     async def test_parallel_required_failure_stops(self, tmp_path):
         """Required parallel gate failure stops sequential phase."""
         config_file = tmp_path / "gates.yaml"
@@ -493,7 +490,6 @@ gates:
         assert results[0].gate_name == "bad_lint"
         assert not results[0].passed
 
-    @pytest.mark.asyncio
     async def test_parallel_optional_failure_continues(self, tmp_path):
         """Optional parallel gate failure doesn't stop execution."""
         config_file = tmp_path / "gates.yaml"
@@ -517,7 +513,6 @@ gates:
         assert not results[0].passed  # optional lint failed
         assert results[1].passed  # unit ran and passed
 
-    @pytest.mark.asyncio
     async def test_parallel_preserves_order(self, tmp_path):
         """Results returned in config order, not completion order."""
         config_file = tmp_path / "gates.yaml"
@@ -539,7 +534,6 @@ gates:
         assert results[0].gate_name == "slow"
         assert results[1].gate_name == "fast"
 
-    @pytest.mark.asyncio
     async def test_parallel_with_retries(self, tmp_path):
         """Gate with retry_count gets retried after parallel batch."""
         # Create a small helper script: fails on first call, succeeds on second
@@ -568,7 +562,6 @@ gates:
         assert len(results) == 1
         assert results[0].passed  # Passed on retry
 
-    @pytest.mark.asyncio
     async def test_all_sequential_fallback(self, tmp_path):
         """When no parallelizable gates, behaves like run_all_gates."""
         config_file = tmp_path / "gates.yaml"
@@ -587,7 +580,6 @@ gates:
         assert len(results) == 2
         assert all(r.passed for r in results)
 
-    @pytest.mark.asyncio
     async def test_parallel_required_only(self, tmp_path):
         """required_only=True filters before parallelization."""
         config_file = tmp_path / "gates.yaml"

@@ -11,8 +11,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 experiment_journal = importlib.import_module("experiment_journal")
 meta_optimizer = importlib.import_module("meta_optimizer")

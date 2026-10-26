@@ -60,7 +60,6 @@ class TestSQLiteStatePersistence:
         persistence = SQLiteStatePersistence(store, "session-001")
         assert persistence._session_id == "session-001"
 
-    @pytest.mark.asyncio
     async def test_snapshot_node(self):
         store = MagicMock()
         persistence = SQLiteStatePersistence(store, "session-001")
@@ -72,7 +71,6 @@ class TestSQLiteStatePersistence:
         store.save_graph_snapshot.assert_called_once()
         store.save_checkpoint.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_snapshot_end(self):
         store = MagicMock()
         persistence = SQLiteStatePersistence(store, "session-001")
@@ -84,7 +82,6 @@ class TestSQLiteStatePersistence:
         store.save_graph_snapshot.assert_called_once()
         store.save_checkpoint.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_load_next_returns_none(self):
         """load_next returns None (resume not yet implemented)."""
         store = MagicMock()
@@ -92,7 +89,6 @@ class TestSQLiteStatePersistence:
         result = await persistence.load_next()
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_load_all_returns_snapshots(self):
         store = MagicMock()
         persistence = SQLiteStatePersistence(store, "session-001")
@@ -111,7 +107,6 @@ class TestSQLiteStatePersistence:
         persistence = SQLiteStatePersistence(None, "session-001")
         persistence._write({"test": True})  # Should not raise
 
-    @pytest.mark.asyncio
     async def test_record_run_context_manager(self):
         """record_run should work as an async context manager."""
         store = MagicMock()

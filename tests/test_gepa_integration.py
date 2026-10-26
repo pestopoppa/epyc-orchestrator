@@ -14,7 +14,6 @@ import pytest
 
 # Add autopilot to path
 _autopilot_dir = Path(__file__).resolve().parents[1] / "scripts" / "autopilot"
-sys.path.insert(0, str(_autopilot_dir))
 
 
 # ── Import tests ──────────────────────────────────────────────────

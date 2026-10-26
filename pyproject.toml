@@ -82,8 +82,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Compatibility mirror for pip and existing `uv sync --extra dev` consumers;
+# dependency-groups.dev is canonical, and its exact match is tested in tests/unit.
 dev = [
-    "ruff>=0.8.0",
+    "ruff>=0.15.10",
     "mypy>=1.8.0",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",
@@ -152,10 +154,24 @@ known-first-party = ["src", "orchestration"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = [".", "scripts/autopilot", "scripts/autopilot/species"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-q -ra --strict-markers"
+timeout = 120
 asyncio_mode = "auto"
+markers = [
+    "heavy: tests that load models and may need more memory",
+    "real_mode: tests that require real inference servers",
+    "requires_server: requires a live llama-server; excluded from hermetic CI",
+    "requires_live_models: requires live orchestrator models; excluded from hermetic CI",
+    "integration: integration tests",
+    "requires_materialized_trace: reads host trace data; excluded from hermetic CI",
+    "real_inference_lock_state: opts out of the hermetic inference-lock fixture to test real host lock state",
+    "real_kv_slot_io: opts out of hermetic KV-slot I/O to test the real server and slot directory",
+    "real_inference_tap: opts out of the hermetic inference-tap fixture to test real tap state",
+    "slow: tests with intentionally long-running work",
+]
 
 [tool.coverage.run]
 source = ["src", "scripts/benchmark"]
@@ -193,6 +209,14 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "ruff>=0.15.10",
+    "mypy>=1.8.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.5.0",
+    "hypothesis>=6.0.0",
+    "pandas>=2.0.0",  # Required for canvas export tests
 ]
 
 [tool.hatch.metadata]

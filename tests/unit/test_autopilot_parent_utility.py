@@ -18,8 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 pareto_archive = importlib.import_module("pareto_archive")
 ParetoArchive = pareto_archive.ParetoArchive

@@ -19,8 +19,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
 
 from src.llm_primitives.primitives import LLMPrimitives  # noqa: E402
 from eval_tower import EvalTower, QuestionResult  # noqa: E402

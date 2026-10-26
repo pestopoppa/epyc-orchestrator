@@ -99,7 +99,6 @@ def _state():
     return state
 
 
-@pytest.mark.asyncio
 async def test_bundle_and_scouts_compose_in_one_chat_request(lane):
     from src.api.routes.chat import chat
     from src.api.routes.chat_utils import RoutingResult

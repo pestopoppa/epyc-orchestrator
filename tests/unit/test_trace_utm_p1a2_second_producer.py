@@ -205,7 +205,6 @@ def _capturing_delegator(responses: list[str]):
     return delegator, events
 
 
-@pytest.mark.asyncio
 async def test_delegator_passes_iteration_index_as_turn_ordinal():
     delegator, events = _capturing_delegator([REQUEST_CHANGES, REQUEST_CHANGES, APPROVE])
     task_ir = {
@@ -225,7 +224,6 @@ async def test_delegator_passes_iteration_index_as_turn_ordinal():
     assert all(ev.seed is None for ev in decisions)
 
 
-@pytest.mark.asyncio
 async def test_delegator_ordinal_restarts_per_step_and_never_derives_task_key():
     delegator, events = _capturing_delegator([APPROVE, REQUEST_CHANGES, APPROVE])
     task_ir = {  # no task_id: task_key must stay NULL, never "S1"/"S2"
@@ -256,7 +254,6 @@ def test_review_without_ordinal_stays_null():
     assert [ev.turn_ordinal for ev in events] == [None, 4, None]
 
 
-@pytest.mark.asyncio
 async def test_final_aggregate_review_holds_no_ordinal():
     """The RD-10b aggregate review is one-shot: no loop, no invented 0."""
     events: list = []

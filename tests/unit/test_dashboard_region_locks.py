@@ -451,7 +451,6 @@ class TestRegionLocksSnapshot:
 
         assert _filter_instance_regions_for_mode(topology, "both") == topology
 
-    @pytest.mark.asyncio
     async def test_shared_occupancy_is_canonical_when_proc_role_disagrees(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -512,7 +511,6 @@ class TestRegionLocksSnapshot:
         assert payload["coherence"]["proc_pairs"] == [["frontdoor", 0]]
         assert payload["coherence"]["occupancy_pairs"] == [["worker_general", 0]]
 
-    @pytest.mark.asyncio
     async def test_region_snapshot_retries_when_occupancy_changes_during_proc_scan(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -564,7 +562,6 @@ class TestRegionLocksSnapshot:
         assert payload["coherence"]["retries"] == 1
         assert payload["occupancy"]["entries"] == []
 
-    @pytest.mark.asyncio
     async def test_region_lock_grid_keeps_configured_quarters_visible_in_full_mode(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -645,7 +642,6 @@ class TestRegionLocksSnapshot:
         assert [inst["shape"] for inst in worker["instances"][1:]] == ["q0", "q1", "q2", "q3"]
         assert {str(r["region"]) for r in worker["regions"]} == {"q0", "q1", "q2", "q3"}
 
-    @pytest.mark.asyncio
     async def test_region_lock_grid_renders_unselected_free_quarters_as_ready(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -711,7 +707,6 @@ class TestRegionLocksSnapshot:
         assert "FREE" in full_title and "q0,q1,q2,q3" in full_title
         assert "not selected by stack_numa_mode" not in full_title
 
-    @pytest.mark.asyncio
     async def test_region_lock_grid_shapes_follow_quarter_mode(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setenv("ORCHESTRATOR_STACK_NUMA_MODE", "quarter")
         (tmp_path / f"cpu_region.{_HOST}.q0.lock").write_text("")
@@ -770,7 +765,6 @@ class TestRegionLocksSnapshot:
         ]
         assert worker["active_instance_idxs"] == [1]
 
-    @pytest.mark.asyncio
     async def test_empty_region_embedder_is_not_a_cpu_lock_panel_role(
         self,
         tmp_path,
@@ -816,7 +810,6 @@ class TestRegionLocksSnapshot:
         assert "embedder" not in payload["topology_quartered_roles"]
         assert "frontdoor" in payload["by_role"]
 
-    @pytest.mark.asyncio
     async def test_pair_measured_roles_appear_without_same_role_entries(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -871,7 +864,6 @@ class TestRegionLocksSnapshot:
             "q1"
         ]
 
-    @pytest.mark.asyncio
     async def test_runtime_holder_outside_matrix_visible_shapes_resolves(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -926,7 +918,6 @@ class TestRegionLocksSnapshot:
             }
         ]
 
-    @pytest.mark.asyncio
     async def test_lock_payload_instance_idx_wins_over_region_set_fallback(
         self,
         tmp_path,
@@ -1000,7 +991,6 @@ class TestRegionLocksSnapshot:
             }
         ]
 
-    @pytest.mark.asyncio
     async def test_blocked_by_roles_uses_contention_matrix_not_raw_overlap(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -1054,7 +1044,6 @@ class TestRegionLocksSnapshot:
         assert payload["by_role"]["ingest_long_context"]["blocked_by_roles"] == []
         assert payload["by_role"]["architect_general"]["blocked_by_roles"] == ["worker_general"]
 
-    @pytest.mark.asyncio
     async def test_two_worker_halves_lock_every_overlapping_display_shape(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -1149,7 +1138,6 @@ class TestRegionLocksSnapshot:
             ]
             assert all("LOCKED" in cell["title"] for cell in rows[role]["cells"])
 
-    @pytest.mark.asyncio
     async def test_frontdoor_full_locks_all_cpu_models_and_shows_serving_capacity(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -1299,7 +1287,6 @@ class TestNonLockRoleCompleteness:
         )
         monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
 
-    @pytest.mark.asyncio
     async def test_non_lock_roles_rendered_with_na_lock_state(self, tmp_path, monkeypatch) -> None:
         self._base_env(tmp_path, monkeypatch)
         import src.api.routes.dashboard as dash_mod
@@ -1359,7 +1346,6 @@ class TestNonLockRoleCompleteness:
         # Lock-domain display rows are untouched (no display-only marker).
         assert "no_lock_domain" not in rows["worker_general"]
 
-    @pytest.mark.asyncio
     async def test_non_lock_roles_fail_open_on_port_discovery_error(
         self, tmp_path, monkeypatch
     ) -> None:

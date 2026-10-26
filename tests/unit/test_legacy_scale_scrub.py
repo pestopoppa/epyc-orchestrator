@@ -10,7 +10,6 @@ impossible (>3.0) baseline/per-suite value so a corrected value is never re-surf
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 
 from experiment_journal import (  # noqa: E402
     has_legacy_scale_failure_analysis,

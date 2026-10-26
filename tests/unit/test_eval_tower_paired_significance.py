@@ -20,9 +20,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
-sys.path.insert(0, str(REPO_ROOT))
 
 from eval_tower import screen_paired_arms  # type: ignore[import-not-found]
 from paired_stats import (  # type: ignore[import-not-found]

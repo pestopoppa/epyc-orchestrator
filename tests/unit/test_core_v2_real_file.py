@@ -23,8 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import eval_tower  # noqa: E402
 from eval_tower import EvalTower, dataset_content_sha256  # noqa: E402

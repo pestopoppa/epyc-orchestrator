@@ -7,8 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from hle_metrics import (  # noqa: E402
     compute_hle_observe_payload,

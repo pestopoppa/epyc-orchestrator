@@ -55,7 +55,6 @@ async def _run(ctx, turns: int) -> None:
         await _execute_turn(ctx, Role.FRONTDOOR)
 
 
-@pytest.mark.asyncio
 async def test_task_state_context_never_reaches_the_turn_prompt(graph_ctx):
     """The DESIGN-NOTE finding, as a test: two runs that differ ONLY in
     TaskState.context (one compacting from turn 5) send byte-identical turn prompts."""
@@ -71,7 +70,6 @@ async def test_task_state_context_never_reaches_the_turn_prompt(graph_ctx):
     assert small == big
 
 
-@pytest.mark.asyncio
 async def test_compaction_makes_no_index_llm_call_by_default(graph_ctx):
     """The fix: an index of a field no prompt renders is not worth a worker_general
     call (which carried the whole unbounded context as input)."""
@@ -83,7 +81,6 @@ async def test_compaction_makes_no_index_llm_call_by_default(graph_ctx):
     assert _calls(deps, "worker_general") == []
 
 
-@pytest.mark.asyncio
 async def test_llm_index_flag_restores_the_call_with_capped_input(graph_ctx):
     from src.graph import compaction
 
@@ -98,7 +95,6 @@ async def test_llm_index_flag_restores_the_call_with_capped_input(graph_ctx):
     assert len(call.args[0]) < len(huge)
 
 
-@pytest.mark.asyncio
 async def test_context_overflow_no_longer_claims_a_compaction(graph_ctx):
     """The overflow path used to force-compact TaskState.context (never rendered)
     and reply 'context compacted; retry the turn' with nothing that overflowed shrunk."""
@@ -147,7 +143,6 @@ def test_answer_force_frac_env(monkeypatch):
     assert answer_force_at(_Prims(100.0), now=0.0) == pytest.approx(65.0)
 
 
-@pytest.mark.asyncio
 async def test_forced_answer_turn_demands_final_and_skips_compaction(graph_ctx):
     set_features(Features(session_compaction=True))
     ctx, state, deps = _ctx(graph_ctx, context_override=BIG)
@@ -160,7 +155,6 @@ async def test_forced_answer_turn_demands_final_and_skips_compaction(graph_ctx):
     assert state.compaction_count == 0                    # no compaction on the answer turn
 
 
-@pytest.mark.asyncio
 async def test_no_forced_answer_before_the_point_or_when_unset(graph_ctx):
     ctx, state, deps = _ctx(graph_ctx)
     state.answer_force_at_s = time.perf_counter() + 3600

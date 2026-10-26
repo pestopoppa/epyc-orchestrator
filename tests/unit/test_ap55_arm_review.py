@@ -16,8 +16,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import ap55_shadow_review as review  # noqa: E402
 from src.autopilot_core import ap55_promotion_gate as g  # noqa: E402

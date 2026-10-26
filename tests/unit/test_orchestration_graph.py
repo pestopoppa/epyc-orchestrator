@@ -27,7 +27,6 @@ from tests.unit.test_graph_nodes import (
 class TestRunTask:
     """Test the run_task() convenience function."""
 
-    @pytest.mark.asyncio
     async def test_basic_success(self):
         state = make_state(prompt="What is 2+2?")
         deps = make_deps(
@@ -38,7 +37,6 @@ class TestRunTask:
         assert result.success is True
         assert result.turns == 1
 
-    @pytest.mark.asyncio
     async def test_worker_to_coder_escalation(self):
         state = make_state(current_role=Role.WORKER_GENERAL)
         deps = make_deps(
@@ -59,7 +57,6 @@ class TestRunTask:
         # Should have escalated
         assert len(state.role_history) > 1
 
-    @pytest.mark.asyncio
     async def test_full_chain_frontdoor_to_architect(self):
         """Test escalation from frontdoor -> coder -> architect."""
         state = make_state(current_role=Role.FRONTDOOR)
@@ -87,7 +84,6 @@ class TestRunTask:
         assert isinstance(result, TaskResult)
         assert state.escalation_count >= 2
 
-    @pytest.mark.asyncio
     async def test_no_primitives(self):
         """Should fail gracefully when no LLM primitives."""
         state = make_state()
@@ -95,7 +91,6 @@ class TestRunTask:
         result = await run_task(state, deps, start_role=Role.FRONTDOOR)
         assert result.success is False
 
-    @pytest.mark.asyncio
     async def test_role_history_tracking(self):
         state = make_state(current_role=Role.CODER_ESCALATION, role_history=[])
         deps = make_deps(
@@ -104,7 +99,6 @@ class TestRunTask:
         await run_task(state, deps, start_role=Role.CODER_ESCALATION)
         assert "coder_escalation" in state.role_history
 
-    @pytest.mark.asyncio
     async def test_format_error_never_escalates(self):
         """FORMAT errors should retry only, never escalate."""
         state = make_state(current_role=Role.CODER_ESCALATION)
@@ -127,7 +121,6 @@ class TestRunTask:
         # escalation_count should be 0 for format errors
         assert state.escalation_count == 0
 
-    @pytest.mark.asyncio
     async def test_schema_capability_gap_can_escalate(self):
         """SCHEMA errors escalate after retries when signature indicates capability gap."""
         state = make_state(current_role=Role.CODER_ESCALATION)

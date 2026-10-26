@@ -388,7 +388,6 @@ This is level three content with enough text to pass the filter.
 class TestDocumentClient:
     """Tests for the OCR client."""
 
-    @pytest.mark.asyncio
     async def test_client_health_check_mocked(self):
         """Test health check with mocked response."""
         from src.services.document_client import DocumentFormalizerClient
@@ -407,7 +406,6 @@ class TestDocumentClient:
 
         await client.close()
 
-    @pytest.mark.asyncio
     async def test_client_context_manager(self):
         """Test client as async context manager."""
         from src.services.document_client import DocumentFormalizerClient
@@ -415,7 +413,6 @@ class TestDocumentClient:
         async with DocumentFormalizerClient() as client:
             assert client is not None
 
-    @pytest.mark.asyncio
     async def test_ocr_image_mocked(self, mock_ocr_page_result, sample_image_base64):
         """Test image OCR with mocked response."""
         from src.services.document_client import DocumentFormalizerClient
@@ -437,7 +434,6 @@ class TestDocumentClient:
 
         await client.close()
 
-    @pytest.mark.asyncio
     async def test_process_document_uses_local_odl_structured_extractor(
         self, tmp_path, monkeypatch
     ):
@@ -496,7 +492,6 @@ class TestDocumentClient:
         assert result.pages[1].bboxes[0].page == 2
         assert result.pages[1].bboxes[0].x1 == 100
 
-    @pytest.mark.asyncio
     async def test_process_document_default_pdf_uses_ocr_client(self, tmp_path, monkeypatch):
         """Default PDF processing should keep the existing OCR-server path."""
         from src.models.document import DocumentProcessRequest, OCRResult, PageOCRResult
@@ -648,7 +643,6 @@ class TestDocumentPreprocessor:
             }
         ]
 
-    @pytest.mark.asyncio
     async def test_preprocess_uses_structured_context_when_available(self, tmp_path):
         """Structured payloads should drive heading chunking and figure prompts."""
         from unittest.mock import patch
@@ -716,7 +710,6 @@ class TestDocumentPreprocessor:
         assert mock_analyze.await_count == 1
         assert result.document_result.figures[0].description == "Analyzed p1_fig1"
 
-    @pytest.mark.asyncio
     async def test_preprocess_suppresses_unsafe_odl_context_when_scan_enabled(self, tmp_path):
         """Unsafe ODL metadata should not drive chunking or VL context."""
         from unittest.mock import patch
@@ -791,7 +784,6 @@ class TestDocumentPreprocessor:
         assert mock_analyze.await_count == 1
         assert any("ODL structured context suppressed" in w for w in result.warnings)
 
-    @pytest.mark.asyncio
     async def test_preprocess_keeps_odl_context_when_scan_disabled(self, tmp_path):
         """Default-off injection scanning preserves existing ODL behavior."""
         from unittest.mock import patch
@@ -840,7 +832,6 @@ class TestDocumentPreprocessor:
         assert heading in titles
         assert not any("ODL structured context suppressed" in w for w in result.warnings)
 
-    @pytest.mark.asyncio
     async def test_preprocess_body_scan_default_policy_preserves_body(self, tmp_path, monkeypatch):
         """Body text is not scanned unless the body policy explicitly opts in."""
         from unittest.mock import patch
@@ -883,7 +874,6 @@ class TestDocumentPreprocessor:
         assert unsafe_body in result.document_result.sections[0].content
         assert not any("Document body injection scan warning" in w for w in result.warnings)
 
-    @pytest.mark.asyncio
     async def test_preprocess_body_scan_warns_without_mutating_body(self, tmp_path, monkeypatch):
         """Warn-mode body scanning annotates risk without altering OCR content."""
         from unittest.mock import patch
@@ -1180,7 +1170,6 @@ class TestFigureAnalyzer:
         assert cropped.width == 400
         assert cropped.height == 400
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_mocked(self):
         """Test single figure analysis with mocked vision API."""
         from src.services.figure_analyzer import FigureAnalyzer
@@ -1207,7 +1196,6 @@ class TestFigureAnalyzer:
 
         await analyzer.close()
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_timeout(self):
         """Test single figure analysis with timeout."""
         from src.services.figure_analyzer import FigureAnalyzer
@@ -1229,7 +1217,6 @@ class TestFigureAnalyzer:
 
         await analyzer.close()
 
-    @pytest.mark.asyncio
     async def test_analyze_single_figure_api_error(self):
         """Test single figure analysis with API error."""
         from src.services.figure_analyzer import FigureAnalyzer
@@ -1253,7 +1240,6 @@ class TestFigureAnalyzer:
 
         await analyzer.close()
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_empty_list(self):
         """Test analyzing empty figure list."""
         from src.services.figure_analyzer import FigureAnalyzer
@@ -1265,7 +1251,6 @@ class TestFigureAnalyzer:
 
         await analyzer.close()
 
-    @pytest.mark.asyncio
     async def test_analyze_figures_nonexistent_pdf(self, sample_figure_refs):
         """Test analyzing figures with nonexistent PDF."""
         from src.services.figure_analyzer import FigureAnalyzer
@@ -1286,7 +1271,6 @@ class TestFigureAnalyzer:
 class TestFigureAnalyzerIntegration:
     """Integration tests for figure analysis with document preprocessor."""
 
-    @pytest.mark.asyncio
     async def test_preprocessor_with_figure_analysis(self, mock_ocr_result):
         """Test preprocessor enables figure analysis when configured."""
         from src.services.document_preprocessor import (
@@ -1385,7 +1369,6 @@ class TestDispatcherDocumentRoles:
 class TestDocumentAPIEndpoints:
     """Tests for document API endpoints."""
 
-    @pytest.mark.asyncio
     async def test_health_endpoint(self):
         """Test document health endpoint."""
         from fastapi.testclient import TestClient
@@ -1411,7 +1394,6 @@ class TestDocumentAPIEndpoints:
             data = response.json()
             assert data["healthy"] is True
 
-    @pytest.mark.asyncio
     async def test_process_endpoint_missing_input(self):
         """Test process endpoint with missing input."""
         from fastapi.testclient import TestClient

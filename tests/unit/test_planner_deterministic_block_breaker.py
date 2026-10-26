@@ -17,7 +17,6 @@ import sys
 from pathlib import Path
 
 ORCH_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ORCH_ROOT / "scripts" / "autopilot"))
 
 from autopilot import (  # noqa: E402
     MAX_CONSECUTIVE_PLANNER_DETERMINISTIC_BLOCKS,

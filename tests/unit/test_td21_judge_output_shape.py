@@ -31,9 +31,6 @@ import httpx
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(REPO_ROOT))
 
 import debug_scorer  # noqa: E402
 from debug_scorer import ScoringUnavailableError, request_llm_judge_text, score_answer  # noqa: E402

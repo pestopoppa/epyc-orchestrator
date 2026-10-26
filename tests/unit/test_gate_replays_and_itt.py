@@ -103,7 +103,6 @@ def test_itt_counts_and_delta_flag():
 
 
 def test_self_criticism_appends_itt_text_without_changing_decision():
-    sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
     from safety_gate import EvalResult, SafetyVerdict
     from self_criticism import generate_self_criticism
 

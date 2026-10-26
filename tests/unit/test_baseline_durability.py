@@ -26,7 +26,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 
 from safety_gate import (  # noqa: E402
     Baseline,

@@ -337,12 +337,6 @@ class TestRealModeIntegration:
 class TestLiveServerIntegration:
     """Tests requiring a live llama-server instance."""
 
-    @pytest.fixture(autouse=True)
-    def skip_without_server(self, request):
-        """Skip tests if --run-server not provided."""
-        if not request.config.getoption("--run-server"):
-            pytest.skip("Need --run-server to run live server tests")
-
     def test_llm_primitives_real_inference(self, server_urls):
         """LLMPrimitives should perform real inference with live server."""
         primitives = LLMPrimitives(

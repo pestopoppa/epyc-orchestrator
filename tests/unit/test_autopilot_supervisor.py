@@ -1,17 +1,9 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-from pathlib import Path
 import sys
 
-
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "autopilot" / "autopilot_supervisor.py"
-spec = importlib.util.spec_from_file_location("autopilot_supervisor", SCRIPT)
-assert spec is not None and spec.loader is not None
-supervisor = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(supervisor)
+import autopilot_supervisor as supervisor
 
 
 def test_supervisor_records_death_and_restarts_once(tmp_path: Path) -> None:

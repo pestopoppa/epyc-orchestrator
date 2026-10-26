@@ -5,7 +5,6 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
 

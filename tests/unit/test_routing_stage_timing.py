@@ -299,7 +299,6 @@ def test_chat_response_schema_has_optional_stage_ms() -> None:
     assert resp.routing_stage_ms is None
 
 
-@pytest.mark.asyncio
 async def test_handle_chat_stamps_stage_ms_on_response(mock_app_state, mock_llm_primitives):
     """Non-streaming /chat: the response carries the request's stage_ms, mode included."""
     from src.api.routes.chat import _handle_chat

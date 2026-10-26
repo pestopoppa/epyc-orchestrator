@@ -497,7 +497,6 @@ async def _run(request, primitives):
                                initial_role=Role.FRONTDOOR)
 
 
-@pytest.mark.asyncio
 async def test_pulls_never_enter_any_prompt_the_loop_sends():
     script = [
         # turn 1: pull the WHOLE big section (sentinel included) into a variable, print
@@ -534,7 +533,6 @@ async def test_pulls_never_enter_any_prompt_the_loop_sends():
     assert [t["bytes_pulled"] > 0 for t in acc["turns"]] == [True, False, False]
 
 
-@pytest.mark.asyncio
 async def test_print_cap_bounds_the_next_root_prompt():
     script = [
         "```python\nprint(context['big'])\n```",      # ~26 KB printed
@@ -552,7 +550,6 @@ async def test_print_cap_bounds_the_next_root_prompt():
     assert t1["capped"] and t1["shown_bytes"] == 512 and t1["printed_bytes"] > 20_000
 
 
-@pytest.mark.asyncio
 async def test_bundle_less_request_prompt_is_unchanged():
     prims = _RecordingPrimitives(["```python\nFINAL('ok')\n```"])
     request = ChatRequest(prompt="Plain task.", real_mode=True, mock_mode=False,
@@ -573,7 +570,6 @@ def test_one_line_prints_and_bundle_pulls_are_not_auto_finalized():
     assert auto_wrap_final("42") == "FINAL(42)"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("scoped", ["bundle", "task_root"])
 async def test_proactive_delegation_never_intercepts_a_bundle_or_scoped_request(scoped, tmp_path):
     """The proactive stage runs BEFORE mode selection and ignores force_mode. The real

@@ -185,7 +185,6 @@ def test_sampling_metadata_is_stable_and_absent_when_empty() -> None:
     }
 
 
-@pytest.mark.asyncio
 async def test_openai_vision_completion_uses_existing_vision_handler(monkeypatch):
     captured: dict[str, object] = {}
 

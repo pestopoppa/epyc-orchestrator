@@ -7,10 +7,10 @@ Thank you for your interest in contributing!
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/epyc-orchestrator.git`
 3. Create a branch: `git checkout -b my-feature`
-4. Install dev dependencies: `pip install -e ".[dev]"`
+4. Install core and development dependencies: `uv sync`
 5. Make your changes
 6. Run verification: `make gates`
-7. Run tests: `pytest tests/ -n 8`
+7. Run the complete test suite: `make test`
 8. Commit and push
 9. Open a pull request
 
@@ -19,7 +19,7 @@ Thank you for your interest in contributing!
 ```bash
 cp .env.example .env
 # Edit .env to set paths for your system
-pip install -e ".[dev,toon]"
+uv sync --extra toon
 ```
 
 ## Code Style
@@ -28,17 +28,19 @@ pip install -e ".[dev,toon]"
 - Formatting and linting via `ruff` (configured in `pyproject.toml`)
 - All filesystem paths should use `get_config()` — never hardcode absolute paths
 - Use lazy imports for heavy dependencies
-- Run `make gates` before committing (schema validation, shellcheck, format, lint)
+- Run `make gates` before committing (schema validation, shell and Markdown checks,
+  changed-file Python formatting, and Python lint)
 
 ## Testing
 
 ```bash
-pytest tests/ -n 8          # Parallel (safe default)
-pytest tests/ -v             # Verbose, single-threaded
-pytest tests/ -k "test_name" # Run specific test
+make test                                  # Complete suite, including top-level tests/
+make test PYTEST_ARGS="-n 1 -k test_name"  # Focused debugging
 ```
 
-Tests run in mock mode by default — no model servers required.
+The complete suite uses pytest's `tests/` testpaths. Tests requiring a live server,
+live models, or the materialized host trace are opt-in; see [tests/README.md](tests/README.md).
+CI runs the same suite in mock mode and reports baseline failures separately from new failures.
 
 ## Pull Request Guidelines
 

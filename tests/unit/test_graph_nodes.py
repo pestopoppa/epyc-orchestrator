@@ -268,7 +268,6 @@ class TestSelectStartNode:
 
 
 class TestFrontdoorNode:
-    @pytest.mark.asyncio
     async def test_success_ends(self):
         """Frontdoor with successful REPL result should End."""
         state = make_state(current_role=Role.FRONTDOOR)
@@ -280,7 +279,6 @@ class TestFrontdoorNode:
         assert result.output.success is True
         assert "answer" in result.output.answer
 
-    @pytest.mark.asyncio
     async def test_error_retries_then_escalates(self):
         """Frontdoor should retry then escalate to coder on repeated errors."""
         state = make_state(current_role=Role.FRONTDOOR)
@@ -302,7 +300,6 @@ class TestFrontdoorNode:
         # Should have escalated to coder then succeeded
         assert len(state.role_history) > 1
 
-    @pytest.mark.asyncio
     async def test_max_turns(self):
         """Should stop at max_turns."""
         state = make_state(current_role=Role.FRONTDOOR, max_turns=1)
@@ -313,7 +310,6 @@ class TestFrontdoorNode:
         assert result.output.success is False
         assert "Max turns" in result.output.answer
 
-    @pytest.mark.asyncio
     async def test_repeated_nudges_fail_without_looping(self):
         """Repeated corrective nudges should terminate when escalation is unavailable."""
         state = make_state(
@@ -348,7 +344,6 @@ class TestBackendInfraSentinel:
         "holders=[] after 60.0s]"
     )
 
-    @pytest.mark.asyncio
     async def test_placement_timeout_ends_after_one_turn_no_escalation(self):
         state = make_state(current_role=Role.FRONTDOOR)
         deps = make_deps(
@@ -368,7 +363,6 @@ class TestBackendInfraSentinel:
         # No escalation to coder_escalation (or anywhere else) was attempted.
         assert result.output.role_history == ["frontdoor"]
 
-    @pytest.mark.asyncio
     async def test_genuine_comment_only_output_still_nudges(self):
         """Regression: real model prose/comment output (no [ERROR: prefix)
         must still hit the existing comment-only nudge -- the new sentinel
@@ -387,7 +381,6 @@ class TestBackendInfraSentinel:
         assert result.output.success is False
         assert "repeated no-progress nudges" in result.output.answer
 
-    @pytest.mark.asyncio
     async def test_direct_mode_unchanged(self):
         """Sanity: the sentinel-detection helper only touches REPL turns --
         it must not be reachable from (nor alter) the direct-answer path,
@@ -402,7 +395,6 @@ class TestBackendInfraSentinel:
 
 
 class TestCoderNode:
-    @pytest.mark.asyncio
     async def test_success(self):
         state = make_state(current_role=Role.CODER_ESCALATION)
         deps = make_deps(
@@ -411,7 +403,6 @@ class TestCoderNode:
         result = await orchestration_graph.run(CoderNode(), state=state, deps=deps)
         assert result.output.success is True
 
-    @pytest.mark.asyncio
     async def test_escalates_to_architect(self):
         """Coder should escalate to ArchitectNode on repeated errors."""
         state = make_state(current_role=Role.CODER_ESCALATION)
@@ -428,7 +419,6 @@ class TestCoderNode:
 
 
 class TestArchitectNode:
-    @pytest.mark.asyncio
     async def test_terminal_failure(self):
         """Architect is terminal — should fail after retries exhausted."""
         state = make_state(current_role=Role.ARCHITECT_GENERAL)
@@ -453,7 +443,6 @@ class TestArchitectNode:
 class TestEscalationCountIncrement:
     """Verify the bug fix: escalation_count is actually incremented."""
 
-    @pytest.mark.asyncio
     async def test_escalation_count_incremented(self):
         state = make_state(current_role=Role.FRONTDOOR)
         deps = make_deps(
@@ -515,7 +504,6 @@ class TestRescueFromLastOutput:
 class TestMaxTurnsRescue:
     """Test that max-turns triggers rescue instead of immediate failure."""
 
-    @pytest.mark.asyncio
     async def test_max_turns_rescues_prose_answer(self):
         """When max turns hit and last_output has a prose answer, rescue it."""
         state = make_state(current_role=Role.FRONTDOOR, max_turns=1)
@@ -529,7 +517,6 @@ class TestMaxTurnsRescue:
         assert result.output.success is True
         assert "B" in result.output.answer
 
-    @pytest.mark.asyncio
     async def test_max_turns_no_rescue_without_answer(self):
         """When max turns hit and last_output has no extractable answer, fail."""
         state = make_state(current_role=Role.FRONTDOOR, max_turns=1)

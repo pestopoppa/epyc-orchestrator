@@ -39,7 +39,6 @@ def _inline_chat_to_thread():
 class TestChatEndpoint:
     """Tests for POST /chat endpoint."""
 
-    @pytest.mark.asyncio
     async def test_mock_mode_returns_response(self, mock_app_state):
         """Mock mode request returns ChatResponse."""
         with patch("src.api.routes.chat._handle_chat", new_callable=AsyncMock) as mock_handle:
@@ -58,7 +57,6 @@ class TestChatEndpoint:
             assert "[MOCK]" in data["answer"]
             mock_handle.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_increments_and_decrements_active(self, mock_app_state):
         """Chat endpoint tracks active requests."""
         with patch("src.api.routes.chat._handle_chat", new_callable=AsyncMock) as mock_handle:
@@ -77,7 +75,6 @@ class TestChatEndpoint:
             mock_app_state.increment_active.assert_called_once()
             mock_app_state.decrement_active.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_decrements_even_on_exception(self, mock_app_state):
         """Active counter is decremented even if handler raises."""
         with patch("src.api.routes.chat._handle_chat", new_callable=AsyncMock) as mock_handle:
@@ -98,7 +95,6 @@ class TestChatEndpoint:
 class TestRewardEndpoint:
     """Tests for POST /chat/reward endpoint."""
 
-    @pytest.mark.asyncio
     async def test_reward_injection_success(self, mock_app_state):
         """Successful reward injection returns success=True."""
         async def fake_to_thread(func, *args, **kwargs):
@@ -121,7 +117,6 @@ class TestRewardEndpoint:
             assert response["success"] is True
             mock_store.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_reward_injection_failure(self, mock_app_state):
         """Failed reward injection returns success=False."""
         async def fake_to_thread(func, *args, **kwargs):
@@ -151,7 +146,6 @@ class TestRewardEndpoint:
 class TestHandleChat:
     """Tests for _handle_chat internal function."""
 
-    @pytest.mark.asyncio
     async def test_mock_mode_path(self, mock_app_state):
         """Mock mode returns early from _execute_mock."""
         request = ChatRequest(prompt="Test", mock_mode=True, real_mode=False)
@@ -178,7 +172,6 @@ class TestHandleChat:
                     assert result.mock_mode is True
                     mock_exec.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_vision_early_return(self, mock_app_state):
         """Vision pipeline returns early when it produces a response."""
         request = ChatRequest(prompt="Test", real_mode=True, image_path="/test.png")
@@ -210,7 +203,6 @@ class TestHandleChat:
 
                                 assert result.answer == "Vision result"
 
-    @pytest.mark.asyncio
     async def test_generated_vision_role_triggers_multimodal_handler(
         self, mock_app_state
     ):
@@ -271,7 +263,6 @@ class TestHandleChat:
         assert call_args[5] == "document_vision"
         assert call_args[6] == "direct"
 
-    @pytest.mark.asyncio
     async def test_forced_non_vision_role_with_image_skips_multimodal_handler(
         self, mock_app_state
     ):
@@ -338,7 +329,6 @@ class TestHandleChat:
         assert result.mode == "direct"
         mock_multimodal.assert_not_awaited()
 
-    @pytest.mark.asyncio
     async def test_proactive_delegation_path(self, mock_app_state):
         """Proactive delegation returns early when successful."""
         request = ChatRequest(prompt="Complex task", real_mode=True)
@@ -374,7 +364,6 @@ class TestHandleChat:
 
                                     assert result.mode == "proactive"
 
-    @pytest.mark.asyncio
     async def test_direct_mode_path(self, mock_app_state):
         """Direct mode executes _execute_direct."""
         request = ChatRequest(prompt="Simple question", real_mode=True, force_mode="direct")
@@ -420,7 +409,6 @@ class TestHandleChat:
 
                                             assert result.mode == "direct"
 
-    @pytest.mark.asyncio
     async def test_repl_fallback_path(self, mock_app_state):
         """REPL mode is the default fallback."""
         request = ChatRequest(prompt="Complex task", real_mode=True)
@@ -468,7 +456,6 @@ class TestHandleChat:
 
                                                 assert result.answer == "REPL answer"
 
-    @pytest.mark.asyncio
     async def test_document_result_forces_repl(self, mock_app_state):
         """Document preprocessing result forces REPL mode."""
         request = ChatRequest(prompt="Describe document", real_mode=True)
@@ -518,7 +505,6 @@ class TestHandleChat:
 class TestChatStreamEndpoint:
     """Tests for POST /chat/stream SSE endpoint."""
 
-    @pytest.mark.asyncio
     async def test_stream_mock_mode(self, mock_app_state):
         """Mock mode streams simulated tokens."""
         with patch("src.api.routes.chat.score_completed_task"):
@@ -536,7 +522,6 @@ class TestChatStreamEndpoint:
             content = "".join(chunks)
             assert "[MOCK]" in content or "turn_start" in content
 
-    @pytest.mark.asyncio
     async def test_stream_mock_mode_with_thinking(self, mock_app_state):
         """Mock mode with thinking_budget emits thinking events."""
         with patch("src.api.routes.chat.score_completed_task"):
@@ -552,7 +537,6 @@ class TestChatStreamEndpoint:
             # Should contain thinking events
             assert "thinking" in content or "Analyzing" in content
 
-    @pytest.mark.asyncio
     async def test_stream_plan_mode(self, mock_app_state):
         """Plan mode emits analysis without full execution."""
         with patch("src.api.routes.chat.score_completed_task"):
@@ -572,7 +556,6 @@ class TestChatStreamEndpoint:
             content = "".join(chunks)
             assert "PLAN MODE" in content or "Would process" in content
 
-    @pytest.mark.asyncio
     async def test_stream_real_mode_initialization_error(self, mock_app_state):
         """Real mode handles LLMPrimitives initialization errors."""
         with patch("src.api.routes.chat.ensure_memrl_initialized"):
@@ -593,7 +576,6 @@ class TestChatStreamEndpoint:
                         # Should contain error event
                         assert "error" in content.lower() or "unavailable" in content.lower()
 
-    @pytest.mark.asyncio
     async def test_stream_logs_task_start(self, mock_app_state):
         """Stream endpoint logs task start via progress logger."""
         with patch("src.api.routes.chat.score_completed_task"):
@@ -606,7 +588,6 @@ class TestChatStreamEndpoint:
 
             mock_app_state.progress_logger.log_task_started.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_stream_logs_task_completed(self, mock_app_state):
         """Stream endpoint logs task completion."""
         with patch("src.api.routes.chat.score_completed_task"):
@@ -628,7 +609,6 @@ class TestChatStreamEndpoint:
 class TestChatEdgeCases:
     """Edge case tests for chat endpoints."""
 
-    @pytest.mark.asyncio
     async def test_delegated_mode_returns_none_fallthrough(self, mock_app_state):
         """Delegated mode returning None falls through to next mode."""
         request = ChatRequest(prompt="Task", real_mode=True)
@@ -688,7 +668,6 @@ class TestChatEdgeCases:
 
                                                         assert result.answer == "REPL fallback"
 
-    @pytest.mark.asyncio
     async def test_react_mode_returns_none_fallthrough(self, mock_app_state):
         """React mode returning None falls through to REPL."""
         request = ChatRequest(prompt="Task", real_mode=True, force_mode="react")

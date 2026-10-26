@@ -704,7 +704,6 @@ class TestRoutingAndCompaction:
         ctx.state.current_role = "architect_general"
         assert _get_model_max_context(ctx) == 196608
 
-    @pytest.mark.asyncio
     async def test_forced_compaction_runs_despite_flag_and_turn_gates(self, tmp_path, monkeypatch):
         from unittest.mock import patch
 

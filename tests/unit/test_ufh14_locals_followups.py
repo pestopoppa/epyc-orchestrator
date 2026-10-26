@@ -101,7 +101,6 @@ def test_record_http_call_not_double_counted_inside_recorded_call(log_file):
     assert _recs(log_file) == []
 
 
-@pytest.mark.asyncio
 async def test_worker_pool_http_call_records_and_result_unchanged(log_file):
     from src.services.worker_pool import WorkerPoolManager
 

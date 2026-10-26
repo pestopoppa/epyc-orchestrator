@@ -375,7 +375,6 @@ class TestMaybeCompactContext:
         yield
         set_context_limit_resolver(None)
 
-    @pytest.mark.asyncio
     async def test_skips_when_compaction_disabled(self):
         from src.graph.compaction import _maybe_compact_context
 
@@ -386,7 +385,6 @@ class TestMaybeCompactContext:
         # Should return immediately — no LLM call made
         ctx.deps.primitives.llm_call.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_skips_when_no_primitives(self):
         from src.graph.compaction import _maybe_compact_context
 
@@ -397,7 +395,6 @@ class TestMaybeCompactContext:
             mock_feat.return_value.session_compaction_llm_index = True
             await _maybe_compact_context(ctx)
 
-    @pytest.mark.asyncio
     async def test_skips_when_too_few_turns(self):
         from src.graph.compaction import _maybe_compact_context
 
@@ -411,7 +408,6 @@ class TestMaybeCompactContext:
             with patch("src.config.get_config", side_effect=ImportError):
                 await _maybe_compact_context(ctx)
 
-    @pytest.mark.asyncio
     async def test_compacts_when_context_exceeds_threshold(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -449,7 +445,6 @@ class TestMaybeCompactContext:
         # Context should be replaced with compacted version
         assert "Context Index" in ctx.state.context or ctx.state.compaction_count == 1
 
-    @pytest.mark.asyncio
     async def test_compacts_when_recompaction_interval_reaches_threshold(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -486,7 +481,6 @@ class TestMaybeCompactContext:
         assert ctx.state.compaction_count == 2
         assert ctx.state.last_compaction_turn == 10
 
-    @pytest.mark.asyncio
     async def test_compacts_when_session_token_budget_requests_compaction(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -530,7 +524,6 @@ class TestMaybeCompactContext:
         assert ctx.state.compaction_count == 1
         assert ctx.state.context_file_paths
 
-    @pytest.mark.asyncio
     async def test_skips_when_to_externalize_section_is_empty(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -566,7 +559,6 @@ class TestMaybeCompactContext:
         assert ctx.state.context == "x" * 4000
         assert ctx.state.context_file_paths == []
 
-    @pytest.mark.asyncio
     async def test_falls_back_to_default_compaction_index_on_llm_failure(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -597,7 +589,6 @@ class TestMaybeCompactContext:
         assert "Fallback Index" in ctx.state.context
         assert ctx.state.compaction_count == 1
 
-    @pytest.mark.asyncio
     async def test_session_token_budget_errors_dont_force_compaction(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -635,7 +626,6 @@ class TestMaybeCompactContext:
         assert ctx.state.compaction_count == 0
         assert ctx.state.context_file_paths == []
 
-    @pytest.mark.asyncio
     async def test_write_failure_aborts_compaction(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -673,7 +663,6 @@ class TestMaybeCompactContext:
         assert ctx.state.context == "x" * 5000
         assert ctx.state.context_file_paths == []
 
-    @pytest.mark.asyncio
     async def test_fails_over_to_debug_log_when_compaction_body_throws(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 
@@ -708,7 +697,6 @@ class TestMaybeCompactContext:
         assert "Context Index (compaction #1)" in ctx.state.context
         assert ctx.state.compaction_count == 1
 
-    @pytest.mark.asyncio
     async def test_uses_threaded_llm_call_when_not_running_pytest(self, tmp_path, monkeypatch):
         from src.graph.compaction import _maybe_compact_context
 

@@ -384,7 +384,6 @@ class TestChatEndpoint:
         assert payload["report_id"] == rid
         assert "Full specialist" in payload["content"]
 
-    @pytest.mark.asyncio
     async def test_delegated_pre_start_lock_timeout_sets_break_reason(self, monkeypatch):
         """Delegated stage should surface pre-delegation lock timeout as explicit break_reason."""
 
@@ -455,7 +454,6 @@ class TestChatEndpoint:
         assert diag.get("break_reason") == "pre_delegation_lock_timeout"
         assert diag.get("loops") == 0
 
-    @pytest.mark.asyncio
     async def test_session_restore_roundtrip_repl_globals(self, monkeypatch):
         """Two /chat calls with same session_id should restore persisted globals."""
         class _InMemorySessionStore:
@@ -562,7 +560,6 @@ class TestChatEndpoint:
             assert d2["session_persistence"]["restore_success"] is True
             assert d2["session_persistence"]["restored_globals"] >= 1
 
-    @pytest.mark.asyncio
     async def test_session_restore_protocol_compat_diagnostics(self, monkeypatch):
         """Restore should gracefully handle legacy/newer protocol payloads with diagnostics."""
         class _CheckpointPayload:
@@ -681,7 +678,6 @@ class TestChatEndpoint:
             assert proto["compat_mode"] == "forward_downgrade"
             assert "future_field" in proto["dropped_fields"]
 
-    @pytest.mark.asyncio
     async def test_chat_response_includes_budget_diagnostics_from_primitives(self, monkeypatch):
         """Every finalized /chat response should include budget diagnostics payload."""
         state = MagicMock(spec=AppState)
@@ -760,7 +756,6 @@ class TestChatEndpoint:
             assert data["budget_diagnostics"]["deadline_present"] is True
             assert data["budget_diagnostics"]["budget_applied"] is True
 
-    @pytest.mark.asyncio
     async def test_chat_response_includes_cache_stats_from_primitives(self, monkeypatch):
         """Integration proof for C4: /chat response includes cache_stats payload."""
         state = MagicMock(spec=AppState)
@@ -835,7 +830,6 @@ class TestChatEndpoint:
             assert data["cache_stats"]["worker"]["cache_hit_rate"] == 0.75
             assert data["cache_stats"]["worker"]["cache_hits"] == 3
 
-    @pytest.mark.asyncio
     async def test_chat_repl_response_surfaces_tool_chain_wave_diagnostics(self, monkeypatch):
         """Integration proof: /chat response includes normalized tool_chains wave_timeline."""
         state = MagicMock(spec=AppState)

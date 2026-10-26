@@ -17,8 +17,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 autopilot = importlib.import_module("autopilot")
 planner_roster = importlib.import_module("planner_roster")

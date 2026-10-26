@@ -31,7 +31,6 @@ def _setup(monkeypatch, tmp_path, on):
     return db
 
 
-@pytest.mark.asyncio
 async def test_turn_recorded_when_on(graph_ctx, monkeypatch, tmp_path):
     db = _setup(monkeypatch, tmp_path, True)
     state, deps = graph_ctx(responses=["x = 2 + 2\nFINAL(x)"])
@@ -45,7 +44,6 @@ async def test_turn_recorded_when_on(graph_ctx, monkeypatch, tmp_path):
     assert run.turns[0].role == "frontdoor"
 
 
-@pytest.mark.asyncio
 async def test_nothing_recorded_when_off(graph_ctx, monkeypatch, tmp_path):
     db = _setup(monkeypatch, tmp_path, False)
     state, deps = graph_ctx(responses=["FINAL(1)"])

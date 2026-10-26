@@ -128,7 +128,6 @@ def client(test_app):
 class TestTryCheapFirstEdgeCases:
     """Tests for the _try_cheap_first speculative pre-filter."""
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_disabled(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -146,7 +145,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_forced_mode(self, base_routing, mock_primitives, mock_state):
         """When request has force_mode set, returns None."""
         request = ChatRequest(
@@ -168,7 +166,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_forced_role(self, base_routing, mock_primitives, mock_state):
         """When request has force_role set, returns None."""
         request = ChatRequest(
@@ -190,7 +187,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_vision_role(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -208,7 +204,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("initial_role", ["worker_general", "worker_explore"])
     async def test_returns_none_for_live_worker_role(
         self, base_request, base_routing, mock_primitives, mock_state, initial_role
@@ -227,7 +222,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_long_context_capacity_route(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -251,7 +245,6 @@ class TestTryCheapFirstEdgeCases:
         assert result is None
         mock_primitives.llm_call.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_delegated_mode(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -269,7 +262,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_on_empty_answer(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -291,7 +283,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_on_short_answer(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -320,7 +311,6 @@ class TestTryCheapFirstEdgeCases:
             assert entry.data["cheap_first_passed"] is False
             assert entry.data["reason"] == "empty_or_short_answer"
 
-    @pytest.mark.asyncio
     async def test_returns_none_on_error_answer(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -342,7 +332,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_response_on_good_answer(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -382,7 +371,6 @@ class TestTryCheapFirstEdgeCases:
                 assert entry.data["cheap_first_passed"] is True
                 assert entry.data["reason"] == "passed"
 
-    @pytest.mark.asyncio
     async def test_returns_none_on_llm_exception(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -404,7 +392,6 @@ class TestTryCheapFirstEdgeCases:
             )
             assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_on_quality_issue(
         self, base_request, base_routing, mock_primitives, mock_state
     ):
@@ -439,7 +426,6 @@ class TestTryCheapFirstEdgeCases:
 class TestChatEndpoint:
     """Tests for POST /chat via TestClient."""
 
-    @pytest.mark.asyncio
     async def test_mock_mode_returns_200(self, mock_state):
         """Mock mode chat request returns 200 with mock answer."""
         mock_response = ChatResponse(
@@ -466,7 +452,6 @@ class TestChatEndpoint:
             assert data["mock_mode"] is True
             assert "[MOCK]" in data["answer"]
 
-    @pytest.mark.asyncio
     async def test_chat_returns_200_for_successful_request(self, mock_state):
         """Chat endpoint returns 200 for a successful non-error response."""
         mock_response = ChatResponse(
@@ -495,7 +480,6 @@ class TestChatEndpoint:
             assert data["answer"] == "A real answer to the user question."
             assert data["turns"] == 2
 
-    @pytest.mark.asyncio
     async def test_chat_returns_error_status_on_error_code(self, mock_state):
         """When _handle_chat returns error_code, HTTP status matches."""
         mock_response = ChatResponse(
@@ -525,7 +509,6 @@ class TestChatEndpoint:
             data = json.loads(response.body.decode("utf-8"))
             assert data["error_code"] == 504
 
-    @pytest.mark.asyncio
     async def test_chat_503_includes_retry_after(self, mock_state):
         """When error_code=503, response includes Retry-After header."""
         mock_response = ChatResponse(
@@ -554,7 +537,6 @@ class TestChatEndpoint:
             assert response.status_code == 503
             assert response.headers.get("retry-after") == "30"
 
-    @pytest.mark.asyncio
     async def test_chat_increments_and_decrements_active(self, mock_state):
         """Chat endpoint calls increment_active/decrement_active around handling."""
         mock_response = ChatResponse(
@@ -576,7 +558,6 @@ class TestChatEndpoint:
             mock_state.increment_active.assert_called_once()
             mock_state.decrement_active.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_chat_prompt_root_override_is_request_scoped(
         self, tmp_path, monkeypatch, mock_state
     ):
@@ -611,7 +592,6 @@ class TestChatEndpoint:
 class TestRewardEndpoint:
     """Tests for POST /chat/reward."""
 
-    @pytest.mark.asyncio
     async def test_inject_reward_returns_success(self, mock_state):
         """inject_reward endpoint returns success dict."""
 
@@ -633,7 +613,6 @@ class TestRewardEndpoint:
             assert response["success"] is True
             mock_store.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_inject_reward_returns_failure(self, mock_state):
         """inject_reward returns success=False when store fails."""
 
@@ -654,7 +633,6 @@ class TestRewardEndpoint:
             )
             assert response["success"] is False
 
-    @pytest.mark.asyncio
     async def test_inject_reward_with_embedding(self, mock_state):
         """inject_reward passes precomputed embedding to store."""
         embedding = [0.1, 0.2, 0.3]
@@ -687,7 +665,6 @@ class TestRewardEndpoint:
 class TestHandleChat:
     """Tests for _handle_chat dispatcher logic."""
 
-    @pytest.mark.asyncio
     async def test_script_interception_returns_before_routing_when_enabled(self, mock_state):
         request = ChatRequest(
             prompt="How many y-intercepts does the graph of the parabola x = y^2 - 4y - 1 have?",
@@ -714,7 +691,6 @@ class TestHandleChat:
         assert result.routing_strategy == "script_interception:parabola_y_intercepts"
         assert result.mode == "script_interception"
 
-    @pytest.mark.asyncio
     async def test_dispatches_to_execute_mock(self, mock_state):
         """_handle_chat returns mock response when use_mock is True."""
         request = ChatRequest(prompt="Hello", mock_mode=True, real_mode=False)
@@ -742,7 +718,6 @@ class TestHandleChat:
             assert result.mock_mode is True
             assert result.answer == "[MOCK] Hello"
 
-    @pytest.mark.asyncio
     async def test_calls_route_request_first(self, mock_state):
         """_handle_chat calls _route_request as the first stage."""
         request = ChatRequest(prompt="Test", mock_mode=True)
@@ -767,7 +742,6 @@ class TestHandleChat:
             await _handle_chat(request, mock_state)
             mock_route.assert_called_once_with(request, mock_state)
 
-    @pytest.mark.asyncio
     async def test_calls_preprocess_before_execution(self, mock_state):
         """_handle_chat calls _preprocess after routing."""
         request = ChatRequest(prompt="Preprocess test", mock_mode=True)
@@ -799,7 +773,6 @@ class TestHandleChat:
 class TestChatStreamEndpoint:
     """Tests for POST /chat/stream."""
 
-    @pytest.mark.asyncio
     async def test_stream_returns_streaming_response(self, mock_state):
         """chat_stream endpoint returns a streaming response (200)."""
         # Patch features to use legacy streaming (not unified)
@@ -814,7 +787,6 @@ class TestChatStreamEndpoint:
             assert isinstance(response, StreamingResponse)
             assert "text/event-stream" in (response.media_type or "")
 
-    @pytest.mark.asyncio
     async def test_stream_mock_mode_contains_done(self, mock_state):
         """Mock mode stream contains [DONE] sentinel."""
         with patch("src.api.routes.chat.features") as mock_features:
@@ -834,7 +806,6 @@ class TestChatStreamEndpoint:
             body = "".join(chunks)
             assert "[DONE]" in body
 
-    @pytest.mark.asyncio
     async def test_stream_rejects_task_scope_and_quiescence(self, mock_state, tmp_path):
         """INF-78 review fix F2: /chat/stream installs no task scope and no quiescence
         carrier, so a request carrying any of task_root/read_roots/quiescent_after/edit_mode
@@ -864,7 +835,6 @@ class TestChatStreamEndpoint:
 class TestPlanReviewDrop:
     """Plan-review drop discards scaffolding and continues normal execution."""
 
-    @pytest.mark.asyncio
     async def test_drop_falls_back_to_default_route_execution(
         self, mock_state, mock_primitives, base_routing
     ):
@@ -935,7 +905,6 @@ class TestEditModeFailClosed:
     ORCHESTRATOR_EDIT_ROOT) are unmet. Regression for the 2026-05-27 review finding #3; the
     end-to-end 412 was live-probed, this locks it in CI."""
 
-    @pytest.mark.asyncio
     async def test_force_mode_edit_412_when_flag_and_root_missing(
         self, mock_state, mock_primitives, base_routing, monkeypatch
     ):
@@ -981,7 +950,6 @@ class TestEditModeFailClosed:
         assert "ORCHESTRATOR_EDIT_TRANSACTION" in detail
         assert "ORCHESTRATOR_EDIT_ROOT" in detail
 
-    @pytest.mark.asyncio
     async def test_force_mode_edit_applies_transaction_when_flag_and_root_set(
         self, mock_state, mock_primitives, base_routing, monkeypatch, tmp_path
     ):
@@ -1043,7 +1011,6 @@ class TestEditModeFailClosed:
         assert result.answer.startswith("edit transaction applied: 1 write(s), 0 delete(s)")
         assert target_file.read_text() == "VALUE = 2"
 
-    @pytest.mark.asyncio
     async def test_force_mode_edit_runs_review_consult_when_feature_enabled(
         self, mock_state, mock_primitives, base_routing, monkeypatch, tmp_path
     ):
@@ -1138,7 +1105,6 @@ class TestEditModeFailClosed:
         assert events[0]["rerun_requested"] is True
         assert events[0]["schema_hash"] == "schema123"
 
-    @pytest.mark.asyncio
     async def test_force_mode_edit_targeted_gate_skips_plain_edit(
         self, mock_state, mock_primitives, base_routing, monkeypatch, tmp_path
     ):
@@ -1218,7 +1184,6 @@ class TestEditModeFailClosed:
 class TestHandleChatXmasCheapFirst:
     """X-MAS enforce should not suppress cheap-first for the cheap role itself."""
 
-    @pytest.mark.asyncio
     async def test_xmas_enforce_to_cheap_role_still_allows_cheap_first(
         self, mock_state, mock_primitives
     ):
@@ -1288,7 +1253,6 @@ class TestHandleChatXmasCheapFirst:
         assert result.routing_strategy == "cheap_first:xmas_enforce:learned"
         assert result.xmas_meta is xmas_meta
 
-    @pytest.mark.asyncio
     async def test_xmas_enforce_applies_only_to_allowlisted_roles(
         self, mock_state, mock_primitives
     ):

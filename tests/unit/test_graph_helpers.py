@@ -52,7 +52,6 @@ class TestClassifyError:
 
 
 class TestReplTimeoutTerminal:
-    @pytest.mark.asyncio
     async def test_terminal_environment_stops_future_turn_before_llm_work(self, monkeypatch):
         repl = REPLEnvironment(context="test", config=REPLConfig(timeout_seconds=7))
         repl.mark_timed_out()
@@ -67,7 +66,6 @@ class TestReplTimeoutTerminal:
         )
         assert state.turns == 0
 
-    @pytest.mark.asyncio
     async def test_execute_turn_timeout_does_not_rescue_final_or_export_artifacts(
         self, monkeypatch
     ):
@@ -151,7 +149,6 @@ class TestReplTimeoutTerminal:
             if not finished.is_set():
                 assert await asyncio.to_thread(finished.wait, 2)
 
-    @pytest.mark.asyncio
     async def test_late_worker_cannot_resume_execute_or_checkpoint(self):
         started = Event()
         release = Event()

@@ -182,7 +182,6 @@ class TestEdgeValidation:
 class TestBridge:
     """Test that bridge dispatches based on feature flag."""
 
-    @pytest.mark.asyncio
     async def test_bridge_uses_pydantic_graph_when_flag_off(self):
         from src.features import Features, set_features, reset_features
 
@@ -200,7 +199,6 @@ class TestBridge:
         finally:
             reset_features()
 
-    @pytest.mark.asyncio
     async def test_bridge_uses_langgraph_when_flag_on(self):
         from src.features import Features, set_features, reset_features
 

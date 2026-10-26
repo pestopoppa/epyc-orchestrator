@@ -189,7 +189,6 @@ class TestBurstWorkerRoles:
 class TestStepExecutor:
     """StepExecutor wave-ordered execution."""
 
-    @pytest.mark.asyncio
     async def test_sequential_waves_execute_in_order(self):
         """Two sequential waves: S1 before S2."""
         primitives = _make_mock_primitives()
@@ -212,7 +211,6 @@ class TestStepExecutor:
         assert results[1].subtask_id == "S2"
         assert results[1].success
 
-    @pytest.mark.asyncio
     async def test_context_passing_between_waves(self):
         """Output from wave 0 is available in wave 1 via step_outputs."""
         primitives = _make_mock_primitives({"worker_general": "wave0 result"})
@@ -233,7 +231,6 @@ class TestStepExecutor:
         assert results[1].success
         assert "S1" in executor.step_outputs
 
-    @pytest.mark.asyncio
     async def test_step_failure_skips_dependents(self):
         """Failed step causes dependents to be skipped."""
         primitives = MagicMock()
@@ -256,7 +253,6 @@ class TestStepExecutor:
         assert not results[1].success
         assert "dependency failed" in results[1].error
 
-    @pytest.mark.asyncio
     async def test_burst_worker_steps_parallelize(self):
         """Steps targeting burst workers run concurrently."""
         call_times = []
@@ -293,7 +289,6 @@ class TestStepExecutor:
         if len(call_times) == 2:
             assert abs(call_times[0] - call_times[1]) < 0.04
 
-    @pytest.mark.asyncio
     async def test_non_burst_steps_run_sequentially(self):
         """HOT tier steps within a wave run one at a time."""
         call_order = []
@@ -322,7 +317,6 @@ class TestStepExecutor:
         # Sequential: calls happen in order
         assert call_order == ["coder_escalation", "worker_general"]
 
-    @pytest.mark.asyncio
     async def test_no_review_service(self):
         """Works without review service (skips review)."""
         primitives = _make_mock_primitives()
@@ -339,7 +333,6 @@ class TestStepExecutor:
         assert len(results) == 1
         assert results[0].success
 
-    @pytest.mark.asyncio
     async def test_role_mapping_applied(self):
         """Actor → role mapping is respected."""
         captured_roles = []
@@ -365,7 +358,6 @@ class TestStepExecutor:
 
         assert captured_roles == ["coder_escalation", "worker_explore"]
 
-    @pytest.mark.asyncio
     async def test_mixed_burst_and_sequential_wave(self):
         """Wave with both burst and non-burst steps handles both."""
         primitives = _make_mock_primitives()

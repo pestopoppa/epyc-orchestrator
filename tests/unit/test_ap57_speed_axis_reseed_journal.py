@@ -15,8 +15,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(REPO_ROOT))
 
 import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import (  # type: ignore[import-not-found]  # noqa: E402

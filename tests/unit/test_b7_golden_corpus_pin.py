@@ -40,8 +40,6 @@ CORPUS_PATH = REPORT_DIR / "golden_corpus.jsonl"
 RESULTS_PATH = REPORT_DIR / "results.jsonl"
 CODE_EXEC_TMP = Path("/mnt/raid0/llm/tmp")
 
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import debug_scorer  # noqa: E402
 from debug_scorer import score_answer  # noqa: E402

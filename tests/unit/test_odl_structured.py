@@ -432,7 +432,6 @@ def test_pdf_extraction_result_carries_structured_doc() -> None:
     assert r.structured_data.page_count == 2
 
 
-@pytest.mark.asyncio
 async def test_analyze_figures_uses_matching_figure_context_prompt(tmp_path: Path) -> None:
     pdf_path = tmp_path / "doc.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")

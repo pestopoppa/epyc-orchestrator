@@ -1,14 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "autopilot" / "autopilot_restart_advisor.py"
-spec = importlib.util.spec_from_file_location("autopilot_restart_advisor", SCRIPT)
-assert spec is not None and spec.loader is not None
-advisor = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(advisor)
+import autopilot_restart_advisor as advisor
 
 
 def _phase_report(**overrides):

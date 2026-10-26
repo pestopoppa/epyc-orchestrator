@@ -435,7 +435,6 @@ class TestExecuteMock:
 class TestExecuteVision:
     """Tests for _execute_vision stage."""
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_non_real_mode(self, mock_primitives, mock_state):
         """Returns None for non-real-mode requests."""
         request = ChatRequest(
@@ -456,7 +455,6 @@ class TestExecuteVision:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_no_vision_input(self, mock_primitives, mock_state):
         """Returns None for requests without vision input."""
         request = ChatRequest(prompt="No image here", real_mode=True)
@@ -473,7 +471,6 @@ class TestExecuteVision:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_successful_image_path_preprocessing(self, mock_primitives, mock_state):
         """Successful preprocessing with image_path returns None (fall through)."""
         request = ChatRequest(
@@ -505,7 +502,6 @@ class TestExecuteVision:
         assert result is None
         assert routing.document_result is not None
 
-    @pytest.mark.asyncio
     async def test_successful_base64_preprocessing(self, mock_primitives, mock_state):
         """Successful preprocessing with base64 image returns None (fall through)."""
         request = ChatRequest(
@@ -536,7 +532,6 @@ class TestExecuteVision:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_successful_files_preprocessing(self, mock_primitives, mock_state):
         """Successful preprocessing with files list returns None (fall through)."""
         request = ChatRequest(
@@ -567,7 +562,6 @@ class TestExecuteVision:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_preprocessing_failure_adds_context_note(self, mock_primitives, mock_state):
         """Failed preprocessing injects context note and returns None."""
         request = ChatRequest(
@@ -599,7 +593,6 @@ class TestExecuteVision:
         assert "[IMAGE:" in request.context
         assert "Document pipeline failed" in request.context
 
-    @pytest.mark.asyncio
     async def test_preprocessing_exception_adds_context_note(self, mock_primitives, mock_state):
         """Exception during preprocessing injects context note and returns None."""
         request = ChatRequest(
@@ -951,7 +944,6 @@ class TestExecuteDelegated:
 class TestExecuteProactive:
     """Tests for _execute_proactive stage."""
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_feature_disabled(self, mock_primitives, mock_state):
         """Returns None when parallel_execution feature disabled."""
         request = ChatRequest(prompt="Complex task", real_mode=True)
@@ -972,7 +964,6 @@ class TestExecuteProactive:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_non_complex_task(self, mock_primitives, mock_state):
         """Returns None for non-COMPLEX classified tasks."""
         request = ChatRequest(prompt="Simple question", real_mode=True)
@@ -997,7 +988,6 @@ class TestExecuteProactive:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_architect_role(self, mock_primitives, mock_state):
         """Returns None when architect already selected (avoids double-entry)."""
         request = ChatRequest(prompt="Complex task", real_mode=True)
@@ -1022,7 +1012,6 @@ class TestExecuteProactive:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_plan_too_short(self, mock_primitives, mock_state):
         """Returns None when plan has fewer than 2 steps."""
         request = ChatRequest(prompt="Implement a complex feature", real_mode=True)
@@ -1048,7 +1037,6 @@ class TestExecuteProactive:
 
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_successful_proactive_delegation(self, mock_primitives, mock_state):
         """Successful proactive delegation returns ChatResponse."""
         request = ChatRequest(prompt="Build a complex system", real_mode=True)
@@ -1089,7 +1077,6 @@ class TestExecuteProactive:
         assert result.mode == "proactive"
         assert result.turns == 3  # 1 + 2 subtasks
 
-    @pytest.mark.asyncio
     async def test_proactive_delegation_exception(self, mock_primitives, mock_state):
         """Exception during delegation execution returns None."""
         request = ChatRequest(prompt="Build a complex system", real_mode=True)

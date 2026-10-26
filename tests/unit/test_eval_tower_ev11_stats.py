@@ -16,9 +16,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "benchmark"))
-sys.path.insert(0, str(REPO_ROOT))
 
 from eval_tower import EvalTower, QuestionResult, _require_math_verify  # type: ignore[import-not-found]
 from src.llm_primitives.stat_tests import (

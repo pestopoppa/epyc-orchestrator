@@ -18,8 +18,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-if str(AUTOPILOT_DIR) not in sys.path:
-    sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from scripts.autopilot import rejected_mutation_ledger as rml  # noqa: E402
 from src.harness_loop import substrate  # noqa: E402

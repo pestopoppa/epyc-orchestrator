@@ -238,7 +238,6 @@ class TestArchiveExtractionIntegration:
 class TestArchivePreprocessing:
     """Tests for archive preprocessing integration."""
 
-    @pytest.mark.asyncio
     async def test_preprocess_archive_with_mocked_ocr(
         self, sample_document_archive, mock_ocr_result
     ):
@@ -261,7 +260,6 @@ class TestArchivePreprocessing:
             # Should have processed the 2 PDFs (report.pdf, guide.pdf)
             assert result.document_result.total_pages > 0
 
-    @pytest.mark.asyncio
     async def test_preprocess_detects_archive_input(self, sample_document_archive):
         """Test that preprocessor correctly detects archive inputs."""
         from src.services.document_preprocessor import DocumentPreprocessor

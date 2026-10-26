@@ -55,7 +55,6 @@ async def _run(raw: str) -> tuple | None:
 
 # ─── flag OFF: provably zero behavior change ─────────────────────────────────────
 
-@pytest.mark.asyncio
 async def test_flag_off_returns_none_even_with_valid_patchset(monkeypatch, tmp_path):
     _set_flag(monkeypatch, False)
     _point_repo(monkeypatch, tmp_path)
@@ -66,14 +65,12 @@ async def test_flag_off_returns_none_even_with_valid_patchset(monkeypatch, tmp_p
 
 # ─── flag ON but nothing to do → fall through ────────────────────────────────────
 
-@pytest.mark.asyncio
 async def test_flag_on_no_patchset_block_returns_none(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
     assert await _run('FINAL("the answer is 42")') is None
 
 
-@pytest.mark.asyncio
 async def test_flag_on_malformed_block_returns_none(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -84,7 +81,6 @@ async def test_flag_on_malformed_block_returns_none(monkeypatch, tmp_path):
 
 # ─── flag ON, valid patchset → apply + verify + promote ──────────────────────────
 
-@pytest.mark.asyncio
 async def test_valid_patchset_applies_verifies_promotes(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -103,7 +99,6 @@ async def test_valid_patchset_applies_verifies_promotes(monkeypatch, tmp_path):
     assert (tmp_path / "added.py").read_text() == "VALUE = 7\n"
 
 
-@pytest.mark.asyncio
 async def test_modify_patchset_applies(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -121,7 +116,6 @@ async def test_modify_patchset_applies(monkeypatch, tmp_path):
 
 # ─── flag ON, verify failure → nudge, live tree UNTOUCHED ─────────────────────────
 
-@pytest.mark.asyncio
 async def test_verify_failure_does_not_promote(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -137,7 +131,6 @@ async def test_verify_failure_does_not_promote(monkeypatch, tmp_path):
     assert not (tmp_path / "broken.py").exists()  # live tree untouched
 
 
-@pytest.mark.asyncio
 async def test_verify_command_uses_full_tree_sandbox(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -157,7 +150,6 @@ async def test_verify_command_uses_full_tree_sandbox(monkeypatch, tmp_path):
     assert result[3]["_batch_edit"]["verifier"] == "py_compile + owner command passed"
 
 
-@pytest.mark.asyncio
 async def test_verifier_label_uses_the_command_snapshot(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -181,7 +173,6 @@ async def test_verifier_label_uses_the_command_snapshot(monkeypatch, tmp_path):
     assert result[3]["_batch_edit"]["verifier"] == "py_compile + owner command passed"
 
 
-@pytest.mark.asyncio
 async def test_syntax_only_success_is_not_described_as_acceptance_verified(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -196,7 +187,6 @@ async def test_syntax_only_success_is_not_described_as_acceptance_verified(monke
     assert result[3]["_batch_edit"]["verifier"] == "syntax-only (py_compile)"
 
 
-@pytest.mark.asyncio
 async def test_verify_command_failure_does_not_promote(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -210,7 +200,6 @@ async def test_verify_command_failure_does_not_promote(monkeypatch, tmp_path):
     assert not (tmp_path / "added.py").exists()
 
 
-@pytest.mark.asyncio
 async def test_stale_base_does_not_promote(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -229,7 +218,6 @@ async def test_stale_base_does_not_promote(monkeypatch, tmp_path):
 
 # ─── BEP-1c telemetry: malformed != absent (hard gate) ────────────────────────────
 
-@pytest.mark.asyncio
 async def test_telemetry_distinguishes_absent_vs_malformed(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)
@@ -241,7 +229,6 @@ async def test_telemetry_distinguishes_absent_vs_malformed(monkeypatch, tmp_path
     assert H._BATCH_EDIT_STATE_COUNTS.get("malformed") == 1   # DISTINCT signal, not collapsed
 
 
-@pytest.mark.asyncio
 async def test_telemetry_records_applied_and_verify_failed(monkeypatch, tmp_path):
     _set_flag(monkeypatch, True)
     _point_repo(monkeypatch, tmp_path)

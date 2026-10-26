@@ -33,7 +33,7 @@ git clone <repo-url> && cd claude
 cp .env.example .env   # Edit paths for your system
 
 # 2. Install Python dependencies
-pip install -e ".[dev]"   # or: uv sync
+uv sync                    # core and development dependencies
 
 # 3. Verify setup
 make validate-paths && make gates

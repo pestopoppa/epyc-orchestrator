@@ -21,8 +21,6 @@ from unittest.mock import MagicMock
 import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from resilient_http import resilient_post  # noqa: E402
 from orchestrator_watch import (  # noqa: E402

@@ -134,7 +134,6 @@ def _later_world(monkeypatch):
     reset_features()
 
 
-@pytest.mark.asyncio
 async def test_production_recording_replays_byte_for_byte(monkeypatch, tmp_path):
     db, repl, seen = await _record(monkeypatch, tmp_path)
     assert type(repl).__name__ == "REPLEnvironment" and repl.llm_primitives is not None
@@ -163,7 +162,6 @@ async def test_production_recording_replays_byte_for_byte(monkeypatch, tmp_path)
     h2.close()
 
 
-@pytest.mark.asyncio
 async def test_stub_registry_default_is_caught_and_really_diverges(monkeypatch, tmp_path):
     db, *_ = await _record(monkeypatch, tmp_path)
     run, cas = load_run(db, TASK_ID), CAS(tmp_path / "cas")
@@ -187,7 +185,6 @@ async def test_stub_registry_default_is_caught_and_really_diverges(monkeypatch, 
                                              "detail": res.divergence["detail"]}
 
 
-@pytest.mark.asyncio
 async def test_recorded_sub_call_is_load_bearing(monkeypatch, tmp_path):
     db, *_ = await _record(monkeypatch, tmp_path)
     run, cas = load_run(db, TASK_ID), CAS(tmp_path / "cas")
@@ -202,7 +199,6 @@ async def test_recorded_sub_call_is_load_bearing(monkeypatch, tmp_path):
     assert res.divergence["what"] in ("unrecorded_llm_call", "aux_prompt_differs")
 
 
-@pytest.mark.asyncio
 async def test_registry_drift_between_recording_and_replay_is_reported(monkeypatch, tmp_path):
     db, *_ = await _record(monkeypatch, tmp_path)
     run, cas = load_run(db, TASK_ID), CAS(tmp_path / "cas")
@@ -225,7 +221,6 @@ async def test_registry_drift_between_recording_and_replay_is_reported(monkeypat
     assert "tool catalogue" in res.divergence["detail"] and "missing ['get_time']" in res.divergence["detail"]
 
 
-@pytest.mark.asyncio
 async def test_per_node_langgraph_dispatch_replays(monkeypatch, tmp_path):
     """The LangGraph decision, proved: a run whose FrontdoorNode dispatched to the LangGraph node function
     (``langgraph_frontdoor``) names the pydantic node in its seed and replays byte-for-byte."""
@@ -240,7 +235,6 @@ async def test_per_node_langgraph_dispatch_replays(monkeypatch, tmp_path):
     assert res.ok, (res.divergence, h.warnings)
 
 
-@pytest.mark.asyncio
 async def test_recording_does_not_change_what_the_model_is_sent(monkeypatch, tmp_path):
     """Flag-off vs flag-on through the production construction: identical prompts (the seed's catalogue
     fingerprint and the order-faithful payload are recorded beside the run, never in it)."""

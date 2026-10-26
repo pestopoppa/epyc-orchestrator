@@ -27,22 +27,6 @@ from unittest.mock import MagicMock
 pytestmark = pytest.mark.integration
 
 
-def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line("markers", "integration: mark test as integration test")
-    config.addinivalue_line("markers", "requires_server: mark test as requiring live llama-server")
-
-
-def pytest_addoption(parser):
-    """Add custom command line options."""
-    parser.addoption(
-        "--run-server",
-        action="store_true",
-        default=False,
-        help="Run tests against live llama-server",
-    )
-
-
 @pytest.fixture
 def server_url():
     """Get server URL from environment or default."""
@@ -198,12 +182,6 @@ class TestPrefixRouterIntegration:
 @pytest.mark.requires_server
 class TestLiveServerCaching:
     """Tests that require a live llama-server instance."""
-
-    @pytest.fixture(autouse=True)
-    def skip_without_server(self, request):
-        """Skip tests if --run-server not provided."""
-        if not request.config.getoption("--run-server"):
-            pytest.skip("Need --run-server to run live server tests")
 
     def test_server_health(self, server_url):
         """Verify server is reachable."""

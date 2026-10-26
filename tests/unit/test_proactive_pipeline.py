@@ -143,7 +143,6 @@ class TestExecuteProactiveGating:
         s.hybrid_router = None
         return s
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_feature_disabled(
         self,
         mock_request,
@@ -164,7 +163,6 @@ class TestExecuteProactiveGating:
             )
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_not_real_mode(
         self,
         mock_request,
@@ -186,7 +184,6 @@ class TestExecuteProactiveGating:
             )
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_for_non_complex_tasks(
         self,
         mock_request,
@@ -212,7 +209,6 @@ class TestExecuteProactiveGating:
                 )
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_architect_already_selected(
         self,
         mock_request,
@@ -240,7 +236,6 @@ class TestExecuteProactiveGating:
                 )
         assert result is None
 
-    @pytest.mark.asyncio
     async def test_returns_none_when_plan_too_short(
         self,
         mock_request,

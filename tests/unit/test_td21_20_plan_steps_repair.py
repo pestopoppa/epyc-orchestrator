@@ -49,7 +49,6 @@ def _primitives(*llm_call_results):
 
 
 class TestDecomposePlanStepsHappyPath:
-    @pytest.mark.asyncio
     async def test_clean_json_array_fished_with_zero_repair_calls(self):
         primitives = _primitives()  # llm_call must never be reached
         raw = json.dumps(
@@ -68,7 +67,6 @@ class TestDecomposePlanStepsHappyPath:
 
 
 class TestDecomposePlanStepsRepair:
-    @pytest.mark.asyncio
     async def test_unparseable_prose_costs_one_repair_call_and_recovers(self):
         repaired = json.dumps(
             [
@@ -92,7 +90,6 @@ class TestDecomposePlanStepsRepair:
         assert primitives.llm_call.call_count == 1
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get((_PLAN_STEPS_REPAIR_SITE, "repaired")) == 1
 
-    @pytest.mark.asyncio
     async def test_unrecognized_actor_is_not_silently_accepted(self):
         """A closed-set enum on `actor` makes an off-set value structurally
         impossible to receive as "repaired" -- unlike a Python clamp, which
@@ -111,7 +108,6 @@ class TestDecomposePlanStepsRepair:
         assert steps == []
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get((_PLAN_STEPS_REPAIR_SITE, "failed")) == 1
 
-    @pytest.mark.asyncio
     async def test_terminal_transport_failure_is_logged_and_counted(self, caplog):
         primitives = _primitives(RuntimeError("connection refused"))
         raw = "The architect's reply had no extractable plan at all."
@@ -123,7 +119,6 @@ class TestDecomposePlanStepsRepair:
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get((_PLAN_STEPS_REPAIR_SITE, "failed")) == 1
         assert any("plan-step repair failed" in record.message for record in caplog.records)
 
-    @pytest.mark.asyncio
     async def test_empty_array_repair_is_a_legitimate_zero_step_outcome(self):
         """The reply may genuinely contain no steps -- an empty array is a
         valid "repaired" outcome, not a failure; the caller's own >= 2
@@ -151,7 +146,6 @@ def mock_state():
 
 
 class TestExecuteProactiveRepairIntegration:
-    @pytest.mark.asyncio
     async def test_malformed_plan_is_repaired_and_delegation_proceeds(self, mock_state):
         request = ChatRequest(prompt="Build a complex system", real_mode=True)
         routing = RoutingResult(
@@ -208,7 +202,6 @@ class TestExecuteProactiveRepairIntegration:
         assert primitives.llm_call.call_count == 2
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get((_PLAN_STEPS_REPAIR_SITE, "repaired")) == 1
 
-    @pytest.mark.asyncio
     async def test_terminal_plan_repair_failure_falls_through_silently_to_caller(self, mock_state):
         """Falling through is still allowed (business rule unchanged) -- but
         it must be COUNTED, unlike the pre-TD-21.20 bare `[]`."""

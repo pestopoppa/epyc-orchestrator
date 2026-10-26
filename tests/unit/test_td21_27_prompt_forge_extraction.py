@@ -28,7 +28,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 import species.prompt_forge as prompt_forge_mod  # noqa: E402
 from species.prompt_forge import (  # noqa: E402

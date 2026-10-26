@@ -11,7 +11,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 # scripts/autopilot is not a package / not on the default test path (mirror autopilot.py's runtime).
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 
 from bsv_observe import (  # noqa: E402
     SUITE_PASS_QUALITY,

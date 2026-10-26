@@ -15,7 +15,6 @@ from src.runtime.live_telemetry import (
 )
 
 
-@pytest.mark.asyncio
 async def test_chat_batch_activity_stays_unresolved_until_handler_exit() -> None:
     reset_live_telemetry_for_tests()
     entered = asyncio.Event()

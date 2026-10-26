@@ -9,7 +9,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from experiment_journal import (
     BASELINE_PROMOTION_EVENT_TYPE,

@@ -239,7 +239,6 @@ class TestWorkerPoolManager:
         assert worker.managed_process is False
         assert {"explore", "code", "fast", "parallel_burst"} <= set(worker.task_types)
 
-    @pytest.mark.asyncio
     async def test_initialize(self, pool_manager):
         """Test pool initialization."""
         await pool_manager.initialize()
@@ -252,7 +251,6 @@ class TestWorkerPoolManager:
         # Cleanup
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_initialize_idempotent(self, pool_manager):
         """Test initialize is idempotent."""
         await pool_manager.initialize()
@@ -327,7 +325,6 @@ class TestWorkerPoolManager:
         assert "-t" in cmd
         assert "16" in cmd  # threads for consolidated fast worker
 
-    @pytest.mark.asyncio
     async def test_start_unmanaged_stack_worker_attaches_without_killing_port(self, pool_manager):
         """Stack-prior workers are stack-owned HTTP backends, not pool-owned processes."""
         config = WorkerConfig(
@@ -354,7 +351,6 @@ class TestWorkerPoolManager:
         build_command.assert_not_called()
         popen.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_stop_all(self, pool_manager):
         """Test stopping all workers."""
         await pool_manager.initialize()
@@ -371,7 +367,6 @@ class TestWorkerPoolManager:
         assert status["hot_workers"] == {}
         assert status["warm_workers"] == {}
 
-    @pytest.mark.asyncio
     async def test_get_status_initialized(self, pool_manager):
         """Test status when initialized."""
         await pool_manager.initialize()
@@ -394,7 +389,6 @@ class TestWorkerPoolManager:
 class TestWorkerPoolHTTP:
     """Tests for HTTP calls with mocked responses."""
 
-    @pytest.mark.asyncio
     async def test_http_call_success(self, pool_manager):
         """Test successful HTTP call."""
         await pool_manager.initialize()
@@ -419,7 +413,6 @@ class TestWorkerPoolHTTP:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_http_call_error(self, pool_manager):
         """Test HTTP call with error response."""
         await pool_manager.initialize()
@@ -441,7 +434,6 @@ class TestWorkerPoolHTTP:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_http_call_forwards_json_schema_and_grammar(self, pool_manager):
         """TD-21.22a: json_schema/grammar reach the /completion payload when set,
         the same top-level keys LlamaServerBackend._build_payload uses."""
@@ -474,7 +466,6 @@ class TestWorkerPoolHTTP:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_http_call_omits_schema_when_not_provided(self, pool_manager):
         """Default None must not add json_schema/grammar keys to the payload --
         byte-identical to the pre-TD-21.22a payload."""
@@ -509,7 +500,6 @@ class TestWorkerPoolHTTP:
 class TestWorkerPoolIntegration:
     """Integration tests without actual server connections."""
 
-    @pytest.mark.asyncio
     async def test_call_routes_correctly(self, pool_manager):
         """Test that call routes to correct worker type."""
         await pool_manager.initialize()
@@ -531,7 +521,6 @@ class TestWorkerPoolIntegration:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_batch_parallel_execution(self, pool_manager):
         """Test that batch executes prompts in parallel."""
         await pool_manager.initialize()
@@ -551,7 +540,6 @@ class TestWorkerPoolIntegration:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_batch_maintains_order(self, pool_manager):
         """Test that batch results maintain prompt order."""
         await pool_manager.initialize()
@@ -573,7 +561,6 @@ class TestWorkerPoolIntegration:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_batch_forwards_json_schema_to_http_call(self, pool_manager):
         """TD-21.22a: one schema constrains every prompt in the batch."""
         await pool_manager.initialize()
@@ -596,7 +583,6 @@ class TestWorkerPoolIntegration:
 
         await pool_manager.stop_all()
 
-    @pytest.mark.asyncio
     async def test_batch_omits_schema_kwargs_when_not_provided(self, pool_manager):
         """Default None must reach _http_call exactly as before TD-21.22a
         (no json_schema/grammar keyword at all, not even as None) -- a

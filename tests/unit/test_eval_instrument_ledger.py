@@ -27,7 +27,6 @@ def _load_eval_tower(ledger_path: Path):
 
     os.environ["AUTOPILOT_EVAL_INSTRUMENT_LEDGER"] = str(ledger_path)
     sys.modules.pop("eval_tower", None)
-    sys.path.insert(0, str(ORCH_ROOT / "scripts" / "autopilot"))
     spec = importlib.util.spec_from_file_location(
         "eval_tower", ORCH_ROOT / "scripts" / "autopilot" / "eval_tower.py"
     )

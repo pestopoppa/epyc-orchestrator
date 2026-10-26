@@ -11,8 +11,6 @@ import pytest
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import strategy_projection_report as spr  # noqa: E402
 

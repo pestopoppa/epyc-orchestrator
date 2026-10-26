@@ -298,7 +298,6 @@ def test_registry_tools_read_only_and_confined(roots):
 # ── acceptance: two concurrent requests do not cross ────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_concurrent_requests_with_different_roots_do_not_cross(roots):
     """Two asyncio tasks (== two concurrent /chat requests in one uvicorn worker), each with
     its own scope, interleave their tool calls in worker threads. A barrier forces both
@@ -388,7 +387,6 @@ class _FakeHttpRequest:
         return False
 
 
-@pytest.mark.asyncio
 async def test_chat_route_installs_echoes_and_clears_scope(roots):
     from src.api.models import ChatRequest, ChatResponse
     from src.api.routes.chat import chat

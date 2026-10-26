@@ -84,7 +84,6 @@ def test_memrl_scoring_suppressed_and_excluded():
     assert Q.is_excluded("task-b") and not Q.is_excluded("task-a")
 
 
-@pytest.mark.asyncio
 async def test_idle_scoring_loop_respects_the_hold(monkeypatch):
     from src.api.services import memrl
 
@@ -245,7 +244,6 @@ async def _run_chat_then_witness(quiescent_after: bool) -> tuple[dict, object]:
     return verdict, response
 
 
-@pytest.mark.asyncio
 async def test_injected_trailing_work_trips_the_witness():
     verdict, response = await _run_chat_then_witness(quiescent_after=False)
     assert verdict["quiescent"] is False, verdict
@@ -254,7 +252,6 @@ async def test_injected_trailing_work_trips_the_witness():
     assert response.quiescence is None
 
 
-@pytest.mark.asyncio
 async def test_quiescent_after_suppresses_the_trailing_work():
     verdict, response = await _run_chat_then_witness(quiescent_after=True)
     assert verdict["quiescent"] is True, verdict

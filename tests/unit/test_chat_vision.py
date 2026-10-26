@@ -339,7 +339,6 @@ class TestSafeEvalMath:
 class TestExecuteVisionTool:
     """Test vision tool execution dispatcher."""
 
-    @pytest.mark.asyncio
     async def test_execute_ocr_extract_success(self):
         """Test OCR extract tool with successful response."""
         mock_response = MagicMock()
@@ -357,7 +356,6 @@ class TestExecuteVisionTool:
             assert result == "Extracted text from image"
             mock_client.post.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_execute_ocr_extract_http_error(self):
         """Test OCR extract tool with HTTP error."""
         mock_response = MagicMock()
@@ -373,7 +371,6 @@ class TestExecuteVisionTool:
 
             assert result.startswith("[OCR error: HTTP 500]")
 
-    @pytest.mark.asyncio
     async def test_execute_ocr_extract_exception(self):
         """Test OCR extract tool with exception."""
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -387,31 +384,26 @@ class TestExecuteVisionTool:
             assert result.startswith("[OCR error:")
             assert "Connection failed" in result
 
-    @pytest.mark.asyncio
     async def test_execute_calculate_tool(self):
         """Test calculate tool with valid expression."""
         result = await _execute_vision_tool('calculate(expression="2 + 3")', "")
         assert result == "5"
 
-    @pytest.mark.asyncio
     async def test_execute_calculate_tool_single_quotes(self):
         """Test calculate tool with single-quoted expression."""
         result = await _execute_vision_tool("calculate(expression='10 * 2')", "")
         assert result == "20"
 
-    @pytest.mark.asyncio
     async def test_execute_calculate_tool_parse_error(self):
         """Test calculate tool with unparseable expression."""
         result = await _execute_vision_tool("calculate(no_expression_arg)", "")
         assert result.startswith("[ERROR: Could not parse")
 
-    @pytest.mark.asyncio
     async def test_execute_calculate_tool_eval_error(self):
         """Test calculate tool with invalid expression."""
         result = await _execute_vision_tool('calculate(expression="1 / 0")', "")
         assert result.startswith("[Calculate error:")
 
-    @pytest.mark.asyncio
     async def test_execute_get_current_date_tool(self):
         """Test get_current_date tool."""
         result = await _execute_vision_tool("get_current_date()", "")
@@ -419,21 +411,18 @@ class TestExecuteVisionTool:
         assert len(result) > 10
         assert "(" in result and ")" in result
 
-    @pytest.mark.asyncio
     async def test_execute_get_current_time_tool(self):
         """Test get_current_time tool."""
         result = await _execute_vision_tool("get_current_time()", "")
         # Should return ISO format timestamp
         assert "T" in result  # ISO format contains T separator
 
-    @pytest.mark.asyncio
     async def test_execute_unknown_tool(self):
         """Test execution of unknown tool."""
         result = await _execute_vision_tool("unknown_tool(arg1='value')", "")
         assert result.startswith("[Tool 'unknown_tool' not available")
         assert "Available:" in result
 
-    @pytest.mark.asyncio
     async def test_execute_unparseable_action(self):
         """Test execution with unparseable action string."""
         result = await _execute_vision_tool("not a valid action format", "")
@@ -443,7 +432,6 @@ class TestExecuteVisionTool:
 class TestVisionReActMode:
     """Test vision ReAct loop execution."""
 
-    @pytest.mark.asyncio
     async def test_vision_react_direct_answer(self):
         """Test ReAct mode with immediate final answer."""
         mock_response = MagicMock()
@@ -474,7 +462,6 @@ class TestVisionReActMode:
             assert tools_used == 0
             assert tools_called == []
 
-    @pytest.mark.asyncio
     async def test_vision_react_with_tool_call(self):
         """Test ReAct mode with tool call followed by final answer."""
         responses = [
@@ -533,7 +520,6 @@ class TestVisionReActMode:
             assert tools_used == 1
             assert "ocr_extract" in tools_called
 
-    @pytest.mark.asyncio
     async def test_vision_react_max_turns_exhausted(self):
         """Test ReAct mode hitting max turns limit."""
         mock_response = MagicMock()
@@ -564,7 +550,6 @@ class TestVisionReActMode:
             # Should synthesize answer after max turns
             assert tools_used >= 1
 
-    @pytest.mark.asyncio
     async def test_vision_react_http_error(self):
         """Test ReAct mode with HTTP error."""
         mock_response = MagicMock()
@@ -585,7 +570,6 @@ class TestVisionReActMode:
             assert answer == "[Vision ReAct: no answer produced]"
             assert tools_used == 0
 
-    @pytest.mark.asyncio
     async def test_vision_react_no_action_no_final_answer(self):
         """Test ReAct mode with response that has neither action nor final answer."""
         mock_response = MagicMock()
@@ -620,7 +604,6 @@ class TestVisionReActMode:
 class TestHandleMultiFileVision:
     """Test multi-file vision handling."""
 
-    @pytest.mark.asyncio
     async def test_handle_multi_file_vision_no_files(self):
         """Test multi-file handler with no files."""
         from src.api.models import ChatRequest
@@ -632,7 +615,6 @@ class TestHandleMultiFileVision:
         with pytest.raises(RuntimeError, match="No files provided"):
             await _handle_multi_file_vision(request, primitives, state, "task123")
 
-    @pytest.mark.asyncio
     async def test_handle_multi_file_vision_with_archive(self):
         """Test multi-file handler with archive extraction."""
         from pathlib import Path
@@ -663,7 +645,6 @@ class TestHandleMultiFileVision:
                     assert "Summary of files" in result
                     mock_extractor.extract_all.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_handle_multi_file_vision_with_images(self):
         """Test multi-file handler with image files."""
         from src.api.models import ChatRequest
@@ -692,7 +673,6 @@ class TestHandleMultiFileVision:
 class TestHandleVisionRequest:
     """Test main vision request handler."""
 
-    @pytest.mark.asyncio
     async def test_handle_vision_request_no_image(self):
         """Test vision request with no image data."""
         from src.api.models import ChatRequest
@@ -704,7 +684,6 @@ class TestHandleVisionRequest:
         with pytest.raises(RuntimeError, match="No image data provided"):
             await _handle_vision_request(request, primitives, state, "task123")
 
-    @pytest.mark.asyncio
     async def test_handle_vision_request_image_too_large(self):
         """Test vision request with oversized image."""
         from src.api.models import ChatRequest
@@ -718,7 +697,6 @@ class TestHandleVisionRequest:
         with pytest.raises(RuntimeError, match="Image too large"):
             await _handle_vision_request(request, primitives, state, "task123")
 
-    @pytest.mark.asyncio
     async def test_handle_vision_request_success(self, monkeypatch):
         """Test successful vision request."""
         from src.api.models import ChatRequest
@@ -760,7 +738,6 @@ class TestHandleVisionRequest:
 
                 assert result == "The image is blue"
 
-    @pytest.mark.asyncio
     async def test_handle_vision_request_all_servers_fail(self, monkeypatch):
         """Test vision request when all VL servers fail."""
         from src.api.models import ChatRequest
@@ -799,7 +776,6 @@ class TestHandleVisionRequest:
                 with pytest.raises(RuntimeError, match="All vision paths failed"):
                     await _handle_vision_request(request, primitives, state, "task123")
 
-    @pytest.mark.asyncio
     async def test_vl_reachability_probe_deduplicates_unreachable_aliases(
         self, monkeypatch
     ):
@@ -822,7 +798,6 @@ class TestHandleVisionRequest:
 
         assert attempted == [("localhost", 8086)]
 
-    @pytest.mark.asyncio
     async def test_vl_reachability_probe_finds_second_endpoint_within_deadline(
         self, monkeypatch
     ):
@@ -857,7 +832,6 @@ class TestHandleVisionRequest:
         writer.close.assert_called_once_with()
         writer.wait_closed.assert_awaited_once_with()
 
-    @pytest.mark.asyncio
     async def test_vl_reachability_probe_bounds_and_cancels_pending_connects(
         self, monkeypatch
     ):
@@ -892,7 +866,6 @@ class TestHandleVisionRequest:
         assert cancelled.is_set()
         assert loop.time() - start < 0.1
 
-    @pytest.mark.asyncio
     async def test_vl_reachability_probe_bounds_writer_cleanup(self, monkeypatch):
         import asyncio
 
@@ -925,7 +898,6 @@ class TestHandleVisionRequest:
         assert loop.time() - start < 0.1
         writer.close.assert_called_once_with()
 
-    @pytest.mark.asyncio
     async def test_vl_reachability_probe_closes_writer_when_cancelled(self, monkeypatch):
         import asyncio
 
@@ -954,7 +926,6 @@ class TestHandleVisionRequest:
 
         writer.close.assert_called_once_with()
 
-    @pytest.mark.asyncio
     async def test_server_only_cold_refusal_precedes_ocr_and_structured_analysis(
         self, monkeypatch
     ):
@@ -1003,7 +974,6 @@ class TestHandleVisionRequest:
         get_document_client.assert_not_called()
         http_client.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_server_only_reachable_endpoint_keeps_ocr_and_vl_request(
         self, monkeypatch
     ):
@@ -1059,7 +1029,6 @@ class TestHandleVisionRequest:
         http_client.post.assert_awaited_once()
         assert http_client.post.await_args.args[0].endswith("/v1/chat/completions")
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("backend", "expect_legacy"),
         [("server", False), ("auto", True), ("cli", True), ("malformed", True), (None, True)],

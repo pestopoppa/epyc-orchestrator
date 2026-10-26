@@ -13,8 +13,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
-sys.path.insert(0, str(ROOT / "scripts" / "benchmark"))
 
 from eval_tower import (  # noqa: E402
     QUESTION_COUNT_FIELDS,

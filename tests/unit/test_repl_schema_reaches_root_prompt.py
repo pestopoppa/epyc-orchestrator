@@ -42,7 +42,6 @@ def _root(prims):
     return prims.root_prompts()
 
 
-@pytest.mark.asyncio
 async def test_schema_preamble_is_in_the_first_root_prompt(schema_validation_on):
     prims = _RecordingPrimitives(["```python\nFINAL('{\"answer\": \"yes\"}')\n```"])
     request = ChatRequest(prompt="Answer yes.", real_mode=True, mock_mode=False,
@@ -54,7 +53,6 @@ async def test_schema_preamble_is_in_the_first_root_prompt(schema_validation_on)
     assert "FINAL(" in first and '"required"' in first
 
 
-@pytest.mark.asyncio
 async def test_schema_retry_shows_the_model_why(schema_validation_on):
     prims = _RecordingPrimitives([
         "```python\nFINAL('{\"wrong\": 1}')\n```",          # fails the schema; repair
@@ -74,7 +72,6 @@ async def test_schema_retry_shows_the_model_why(schema_validation_on):
     assert 'Rejected value: {"wrong": 1}' in roots[1]
 
 
-@pytest.mark.asyncio
 async def test_no_schema_prompt_unchanged():
     prims = _RecordingPrimitives(["```python\nFINAL('{\"answer\": \"x\"}')\n```"])
     request = ChatRequest(prompt="Plain.", real_mode=True, mock_mode=False,

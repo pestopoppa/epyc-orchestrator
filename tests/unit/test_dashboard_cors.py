@@ -83,7 +83,6 @@ def _client(app: RecordingApp) -> AsyncClient:
 class TestPreflight:
     """OPTIONS preflight from the hub is answered by the middleware itself."""
 
-    @pytest.mark.asyncio
     async def test_preflight_returns_204_with_cors_headers(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -106,7 +105,6 @@ class TestPreflight:
         # The app must never see the preflight.
         assert app.calls == []
 
-    @pytest.mark.asyncio
     async def test_preflight_allows_https_hub_origin(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -119,7 +117,6 @@ class TestPreflight:
         assert resp.headers[CORS_HEADER] == HUB_ORIGIN_HTTPS
         assert app.calls == []
 
-    @pytest.mark.asyncio
     async def test_preflight_from_other_origin_is_forwarded_untouched(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -138,7 +135,6 @@ class TestPreflight:
 class TestAllowedOriginEcho:
     """Simple (non-preflight) requests from the hub get the origin echoed back."""
 
-    @pytest.mark.asyncio
     async def test_get_dashboard_api_echoes_origin(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -150,7 +146,6 @@ class TestAllowedOriginEcho:
         assert "Origin" in resp.headers["vary"]
         assert CREDENTIALS_HEADER not in resp.headers
 
-    @pytest.mark.asyncio
     async def test_post_control_path_echoes_origin(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -164,7 +159,6 @@ class TestAllowedOriginEcho:
         assert CREDENTIALS_HEADER not in resp.headers
         assert app.calls == [("POST", "/dashboard/api/autopilot_control")]
 
-    @pytest.mark.asyncio
     async def test_sse_headers_land_on_response_start_without_buffering(self):
         app = RecordingApp()
         wrapped = DashboardCORSMiddleware(app)
@@ -183,7 +177,6 @@ class TestAllowedOriginEcho:
 
         assert b"".join(chunks) == b"data: 0\n\ndata: 1\n\ndata: 2\n\n"
 
-    @pytest.mark.asyncio
     async def test_parameterised_dashboard_paths_are_covered(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -191,7 +184,6 @@ class TestAllowedOriginEcho:
 
         assert resp.headers[CORS_HEADER] == HUB_ORIGIN
 
-    @pytest.mark.asyncio
     async def test_inner_allow_credentials_is_stripped(self):
         """Starlette's global CORSMiddleware stamps allow-credentials on ANY response
         carrying an Origin header, even for origins it disallows. Inert on its own —
@@ -204,7 +196,6 @@ class TestAllowedOriginEcho:
         assert resp.headers[CORS_HEADER] == HUB_ORIGIN
         assert CREDENTIALS_HEADER not in resp.headers
 
-    @pytest.mark.asyncio
     async def test_no_duplicate_allow_origin_when_inner_app_already_set_one(self):
         """A second Access-Control-Allow-Origin would make browsers reject the response."""
         app = RecordingApp(extra_headers=[(b"access-control-allow-origin", HUB_ORIGIN.encode())])
@@ -217,7 +208,6 @@ class TestAllowedOriginEcho:
 class TestPassthrough:
     """Anything outside the hub-origin × dashboard-path box is untouched."""
 
-    @pytest.mark.asyncio
     async def test_no_origin_header_is_untouched(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -229,7 +219,6 @@ class TestPassthrough:
         assert "vary" not in resp.headers
         assert CREDENTIALS_HEADER not in resp.headers
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "origin",
         [
@@ -250,7 +239,6 @@ class TestPassthrough:
         assert CREDENTIALS_HEADER not in resp.headers
         assert app.calls == [("GET", DASHBOARD_SSE_PATH)]
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "path",
         [
@@ -272,7 +260,6 @@ class TestPassthrough:
         assert "vary" not in resp.headers
         assert app.calls == [("GET", path)]
 
-    @pytest.mark.asyncio
     async def test_preflight_on_non_dashboard_path_is_not_answered_here(self):
         app = RecordingApp()
         async with _client(app) as client:
@@ -285,7 +272,6 @@ class TestPassthrough:
         assert CORS_HEADER not in resp.headers
         assert app.calls == [("OPTIONS", "/v1/chat/completions")]
 
-    @pytest.mark.asyncio
     async def test_non_http_scope_is_passed_through(self):
         """Websocket/lifespan scopes must not be inspected for CORS."""
         seen: list[str] = []
@@ -314,7 +300,6 @@ class TestAppWiring:
         # the hub's preflight with 400 "Disallowed CORS origin".
         assert classes[0] is DashboardCORSMiddleware
 
-    @pytest.mark.asyncio
     async def test_real_app_answers_hub_preflight(self):
         from src.api import create_app
 
@@ -329,7 +314,6 @@ class TestAppWiring:
         assert resp.headers[CORS_HEADER] == HUB_ORIGIN
         assert CREDENTIALS_HEADER not in resp.headers
 
-    @pytest.mark.asyncio
     async def test_real_app_echoes_origin_on_dashboard_api(self):
         from src.api import create_app
 
@@ -341,7 +325,6 @@ class TestAppWiring:
         assert "Origin" in resp.headers["vary"]
         assert CREDENTIALS_HEADER not in resp.headers
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("path", ["/health", "/v1/chat/completions"])
     async def test_real_app_leaves_non_dashboard_paths_uncorsed(self, path: str):
         """The hub origin buys nothing outside the dashboard data plane.

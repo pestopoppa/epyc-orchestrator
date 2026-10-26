@@ -539,6 +539,12 @@ def _reset_config_between_tests():
 
 def pytest_collection_modifyitems(config, items):
     """Add markers and warnings for parallel execution."""
+    if not config.getoption("--run-server"):
+        skip_server = pytest.mark.skip(reason="Need --run-server to run live server tests")
+        for item in items:
+            if "requires_server" in item.keywords:
+                item.add_marker(skip_server)
+
     # Check if pytest-xdist is being used with too many workers
     try:
         num_workers = config.option.numprocesses

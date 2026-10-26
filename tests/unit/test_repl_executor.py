@@ -92,7 +92,6 @@ def basic_routing():
 class TestBasicREPLExecution:
     """Test basic REPL execution flow."""
 
-    @pytest.mark.asyncio
     async def test_simple_final_answer(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -124,7 +123,6 @@ class TestBasicREPLExecution:
                 assert response.mode == "repl"
                 assert not response.answer.startswith("[ERROR")
 
-    @pytest.mark.asyncio
     async def test_multi_turn_execution(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -154,7 +152,6 @@ class TestBasicREPLExecution:
                 assert response.turns == 3
                 assert response.answer == "Final answer"
 
-    @pytest.mark.asyncio
     async def test_max_turns_reached(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -190,7 +187,6 @@ class TestBasicREPLExecution:
                 assert response.turns == 2
                 assert "[Max turns (2) reached without FINAL()]" in response.answer
 
-    @pytest.mark.asyncio
     async def test_llm_call_exception_returns_error(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -224,7 +220,6 @@ class TestBasicREPLExecution:
                 assert response.answer.startswith("[ERROR:")
                 assert "LLM server timeout" in response.answer
 
-    @pytest.mark.asyncio
     async def test_repl_restores_globals_from_session_checkpoint(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -299,7 +294,6 @@ class TestBasicREPLExecution:
         assert "tmp_fn" in response.session_persistence["unavailable_globals"]
         assert response.session_persistence["checkpoint_saved"] is True
 
-    @pytest.mark.asyncio
     async def test_cross_request_roundtrip_restores_globals(
         self, basic_routing, mock_primitives, tmp_path, monkeypatch
     ):
@@ -386,7 +380,6 @@ class TestGenerationMonitoring:
     that the graph is invoked properly and the results are used.
     """
 
-    @pytest.mark.asyncio
     async def test_graph_invoked_in_real_mode(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -419,7 +412,6 @@ class TestGenerationMonitoring:
                 # Verify run_task was called
                 mock_run_task.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_graph_result_used_for_response(
         self, basic_routing, mock_primitives, mock_state
     ):
@@ -467,7 +459,6 @@ class TestGenerationMonitoring:
 class TestTwoStageSummarization:
     """Test two-stage summarization integration."""
 
-    @pytest.mark.asyncio
     async def test_two_stage_summarization_triggered(
         self, basic_routing, mock_primitives, mock_state
     ):
@@ -527,7 +518,6 @@ class TestTwoStageSummarization:
                 ]
                 mock_two_stage.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_two_stage_summarization_not_triggered_for_small_context(
         self, basic_routing, mock_primitives, mock_state
     ):
@@ -586,7 +576,6 @@ class TestTwoStageSummarization:
 class TestLongContextExploration:
     """Test long context exploration mode."""
 
-    @pytest.mark.asyncio
     async def test_long_context_uses_extended_max_turns(
         self, basic_routing, mock_primitives, mock_state
     ):
@@ -652,7 +641,6 @@ class TestLongContextExploration:
 class TestDocumentREPLEnvironment:
     """Test DocumentREPLEnvironment integration."""
 
-    @pytest.mark.asyncio
     async def test_document_result_uses_document_repl(
         self, basic_request, mock_primitives, mock_state
     ):
@@ -706,7 +694,6 @@ class TestDocumentREPLEnvironment:
                     mock_doc_repl_class.assert_called_once()
                     assert response.answer == "Document answer"
 
-    @pytest.mark.asyncio
     async def test_non_document_result_uses_regular_repl(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -756,7 +743,6 @@ class TestEscalationHandling:
     graph results with escalation are correctly propagated through the executor.
     """
 
-    @pytest.mark.asyncio
     async def test_escalation_reflected_in_role_history(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -789,7 +775,6 @@ class TestEscalationHandling:
                 assert len(response.role_history) >= 2
                 assert "coder_escalation" in response.role_history
 
-    @pytest.mark.asyncio
     async def test_error_escalation_to_higher_tier(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -822,7 +807,6 @@ class TestEscalationHandling:
                 # Verify graph was invoked
                 mock_run.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_escalation_explore_action(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -854,7 +838,6 @@ class TestEscalationHandling:
 
                 assert response.answer == "Explored"
 
-    @pytest.mark.asyncio
     async def test_escalation_fail_action(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -896,7 +879,6 @@ class TestModelInitiatedRouting:
     Model-initiated escalation is now handled inside graph nodes.
     """
 
-    @pytest.mark.asyncio
     async def test_model_requests_escalation(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -939,7 +921,6 @@ class TestDelegationLogging:
     via TaskResult.delegation_events.
     """
 
-    @pytest.mark.asyncio
     async def test_delegation_events_in_response(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -987,7 +968,6 @@ class TestExecutionTimeout:
     a timeout result from the graph is handled gracefully.
     """
 
-    @pytest.mark.asyncio
     async def test_repl_execution_timeout(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -1029,7 +1009,6 @@ class TestExecutionTimeout:
 class TestTwoStageExceptionHandling:
     """Test two-stage summarization exception handling."""
 
-    @pytest.mark.asyncio
     async def test_two_stage_exception_falls_back_to_repl(
         self, basic_routing, mock_primitives, mock_state
     ):
@@ -1090,7 +1069,6 @@ class TestTwoStageExceptionHandling:
 class TestContextHandling:
     """Test request context handling."""
 
-    @pytest.mark.asyncio
     async def test_context_appended_to_prompt(self, basic_routing, mock_primitives, mock_state):
         """Test that request context is appended to prompt."""
         request = ChatRequest(
@@ -1146,7 +1124,6 @@ class TestToolOutputsInAnswer:
     still reads from repl.artifacts after the graph completes.
     """
 
-    @pytest.mark.asyncio
     async def test_tool_outputs_tracked_in_response(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -1178,7 +1155,6 @@ class TestToolOutputsInAnswer:
                 # tools_success should be inferred from tool outputs
                 assert response.tools_success is not None or response.tools_success is None
 
-    @pytest.mark.asyncio
     async def test_tool_chains_grouped_in_response(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):
@@ -1287,7 +1263,6 @@ def _lease_state(store):
 
 
 class TestSessionLease:
-    @pytest.mark.asyncio
     async def test_request_holds_and_releases_the_lease_and_fences_its_save(
         self, basic_routing, mock_primitives, tmp_path
     ):
@@ -1334,7 +1309,6 @@ class TestSessionLease:
         finally:
             store.close()
 
-    @pytest.mark.asyncio
     async def test_timed_out_request_releases_lease_without_checkpoint(
         self, basic_routing, mock_primitives, tmp_path
     ):
@@ -1367,7 +1341,6 @@ class TestSessionLease:
         finally:
             store.close()
 
-    @pytest.mark.asyncio
     async def test_session_owned_elsewhere_runs_stateless_and_says_so(
         self, basic_routing, mock_primitives, tmp_path, monkeypatch
     ):
@@ -1454,7 +1427,6 @@ def _schema_repl_repl_class():
 class TestFinalSchemaValidationRepair:
     """TD-21.1 conversion of repl_executor.py's FINAL() schema-validation path."""
 
-    @pytest.mark.asyncio
     async def test_fished_directly_needs_zero_extra_calls(
         self, basic_routing, mock_primitives, mock_state, monkeypatch
     ):
@@ -1510,7 +1482,6 @@ class TestFinalSchemaValidationRepair:
         mock_primitives.llm_call.assert_not_called()
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "parsed")) == 1
 
-    @pytest.mark.asyncio
     async def test_repairable_final_is_repaired_without_graph_rerun(
         self, basic_routing, mock_primitives, mock_state, monkeypatch
     ):
@@ -1572,7 +1543,6 @@ class TestFinalSchemaValidationRepair:
         assert mock_primitives.llm_call.call_args.kwargs.get("role") == "worker_general"
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "repaired")) == 1
 
-    @pytest.mark.asyncio
     async def test_unrepairable_final_falls_back_to_retry_path(
         self, basic_routing, mock_primitives, mock_state, monkeypatch
     ):
@@ -1639,7 +1609,6 @@ class TestFinalSchemaValidationRepair:
         assert mock_primitives.llm_call.call_count == 1  # one repair attempt, then fallback
         assert STRUCTURED_OUTPUT_REPAIR_COUNTS.get(("repl_final", "failed")) == 1
 
-    @pytest.mark.asyncio
     async def test_exhausted_retries_flag_response_as_invalid(
         self, basic_routing, mock_primitives, mock_state, monkeypatch
     ):

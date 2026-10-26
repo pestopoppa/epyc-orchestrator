@@ -6,8 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts" / "autopilot"))
 
 from src.autopilot_core.gold_self_check import classify, header_text, summarize
 

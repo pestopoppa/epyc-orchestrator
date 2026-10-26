@@ -12,8 +12,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 gen_system_card = importlib.import_module("gen_system_card")
 autopilot = importlib.import_module("autopilot")

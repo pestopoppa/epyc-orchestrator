@@ -74,7 +74,6 @@ class TestFeatureFlagDispatch:
     """Verify per-node flags route to the correct backend."""
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_flag_off_uses_pydantic_graph(self, node_name, pg_class, role, flag_name, _esc_target):
         """With flag off, node should NOT call _run_via_langgraph."""
         from src.graph import nodes as nodes_mod
@@ -100,7 +99,6 @@ class TestFeatureFlagDispatch:
         mock_lg.assert_not_called()
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_flag_on_uses_langgraph(self, node_name, pg_class, role, flag_name, _esc_target):
         """With flag on, node should delegate to _run_via_langgraph."""
         from src.graph import nodes as nodes_mod
@@ -131,7 +129,6 @@ class TestDualRunParity:
     """Run same scenario through both backends, compare results."""
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_success_parity(self, node_name, pg_class, role, flag_name, _esc_target):
         """Both backends should return __end__ on immediate success."""
         from src.graph.langgraph.nodes import (
@@ -162,7 +159,6 @@ class TestDualRunParity:
         assert lg_result["_result"]["success"] is True
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_self_loop_parity(self, node_name, pg_class, role, flag_name, _esc_target):
         """Both backends should return self-loop on retryable error."""
         from src.graph.langgraph.nodes import (
@@ -199,7 +195,6 @@ class TestDualRunParity:
         [p for p in NODE_PARAMS if p[4] is not None],
         ids=[p[0] for p in NODE_PARAMS if p[4] is not None],
     )
-    @pytest.mark.asyncio
     async def test_escalation_parity(self, node_name, pg_class, role, flag_name, esc_target):
         """Non-terminal nodes should escalate to the correct target."""
         from src.graph.langgraph.nodes import (
@@ -233,7 +228,6 @@ class TestDualRunParity:
         assert lg_result["escalation_count"] == 1
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_max_turns_parity(self, node_name, pg_class, role, flag_name, _esc_target):
         """Both backends should terminate when max_turns reached."""
         from src.graph.langgraph.nodes import (
@@ -279,7 +273,6 @@ class TestInfraFailureShortCircuit:
     _SENTINEL = "[ERROR: placement timeout role=frontdoor reason=race_lost holders=[] after 60.0s]"
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_langgraph_backend_ends_verbatim_no_escalation(
         self, node_name, pg_class, role, flag_name, _esc_target
     ):
@@ -316,7 +309,6 @@ class TestInfraFailureShortCircuit:
         assert lg_result["consecutive_failures"] == 0
 
     @pytest.mark.parametrize("node_name,pg_class,role,flag_name,_esc_target", NODE_PARAMS, ids=NODE_IDS)
-    @pytest.mark.asyncio
     async def test_pydantic_graph_backend_ends_verbatim_no_escalation(
         self, node_name, pg_class, role, flag_name, _esc_target
     ):
@@ -351,7 +343,6 @@ class TestInfraFailureShortCircuit:
 class TestRunViaLanggraph:
     """Test the _run_via_langgraph dispatch helper in nodes.py."""
 
-    @pytest.mark.asyncio
     async def test_success_returns_end(self):
         """On __end__, helper should return End[TaskResult]."""
         from pydantic_graph import End
@@ -382,7 +373,6 @@ class TestRunViaLanggraph:
         assert result.data.success is True
         assert result.data.answer == "Test answer"
 
-    @pytest.mark.asyncio
     async def test_self_loop_returns_node_instance(self):
         """On self-loop, helper should return the correct node class instance."""
         from src.graph.nodes import FrontdoorNode, _run_via_langgraph
@@ -402,7 +392,6 @@ class TestRunViaLanggraph:
 
         assert isinstance(result, FrontdoorNode)
 
-    @pytest.mark.asyncio
     async def test_escalation_returns_target_node(self):
         """On escalation, helper should return the escalation target node."""
         from src.graph.nodes import CoderEscalationNode, _run_via_langgraph
@@ -422,7 +411,6 @@ class TestRunViaLanggraph:
 
         assert isinstance(result, CoderEscalationNode)
 
-    @pytest.mark.asyncio
     async def test_unknown_next_node_raises(self):
         """Unknown next_node should raise ValueError."""
         from src.graph.nodes import _run_via_langgraph
@@ -437,7 +425,6 @@ class TestRunViaLanggraph:
              pytest.raises(ValueError, match="Unknown next_node"):
             await _run_via_langgraph(ctx, "frontdoor")
 
-    @pytest.mark.asyncio
     async def test_state_conversion_roundtrip(self):
         """State should survive the TaskState → LG → TaskState round-trip."""
         from src.graph.nodes import _run_via_langgraph
@@ -478,7 +465,6 @@ class TestRunViaLanggraph:
 class TestCrossBackendEscalation:
     """Test escalation across backends (LG node → PG node via state transfer)."""
 
-    @pytest.mark.asyncio
     async def test_worker_lg_to_coder_escalation_pg(self):
         """WorkerNode on LangGraph escalates to CoderEscalationNode on pydantic_graph.
 

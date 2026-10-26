@@ -18,7 +18,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from species.prompt_forge import (  # noqa: E402
     CODE_MUTATION_ALLOWLIST,

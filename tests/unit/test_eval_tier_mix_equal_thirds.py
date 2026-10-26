@@ -23,7 +23,6 @@ ORCH_ROOT = Path(__file__).resolve().parents[2]
 def et(tmp_path):
     os.environ["AUTOPILOT_EVAL_INSTRUMENT_LEDGER"] = str(tmp_path / "ledger.json")
     sys.modules.pop("eval_tower", None)
-    sys.path.insert(0, str(ORCH_ROOT / "scripts" / "autopilot"))
     spec = importlib.util.spec_from_file_location(
         "eval_tower", ORCH_ROOT / "scripts" / "autopilot" / "eval_tower.py"
     )

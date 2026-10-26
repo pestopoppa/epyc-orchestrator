@@ -196,7 +196,6 @@ class TestTargetRoleSelection:
 class TestDelegateWorkflow:
     """Test main delegate() workflow."""
 
-    @pytest.mark.asyncio
     async def test_delegate_no_steps(self):
         """Test delegation with empty plan."""
         registry = Mock()
@@ -214,7 +213,6 @@ class TestDelegateWorkflow:
         assert result.task_id == "test123"
         assert result.aggregated_output == "[ERROR: No subtasks in plan]"
 
-    @pytest.mark.asyncio
     async def test_delegate_sequential_execution(self):
         """Test sequential subtask execution."""
         registry = Mock()
@@ -251,7 +249,6 @@ class TestDelegateWorkflow:
             assert len(result.subtask_results) == 2
             assert result.all_approved is True
 
-    @pytest.mark.asyncio
     async def test_delegate_canonicalizes_worker_explore_actor(self):
         """Test worker_explore delegates through the live worker_general path."""
         registry = Mock()
@@ -285,7 +282,6 @@ class TestDelegateWorkflow:
 
         assert primitives.llm_call.call_args.kwargs["role"] == "worker_general"
 
-    @pytest.mark.asyncio
     async def test_delegate_canonicalizes_worker_chain_actor(self):
         """Test generic worker chain names resolve through the live worker role."""
         registry = Mock()
@@ -319,7 +315,6 @@ class TestDelegateWorkflow:
 
         assert primitives.llm_call.call_args.kwargs["role"] == "worker_general"
 
-    @pytest.mark.asyncio
     async def test_delegate_with_progress_logger(self):
         """Test delegation with progress logging."""
         registry = Mock()

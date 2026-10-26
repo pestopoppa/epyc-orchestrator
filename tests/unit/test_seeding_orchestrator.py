@@ -16,10 +16,8 @@ import pytest
 
 
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
-sys.path.insert(0, str(_ROOT))
 # resilient_http (watcher path) lives under scripts/autopilot; make it importable
 # so the eval reconnect-backoff watcher-path test can patch resilient_post.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 _SPEC = importlib.util.spec_from_file_location("seeding_orchestrator_test", _ROOT / "seeding_orchestrator.py")
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_orchestrator_test"] = _MOD

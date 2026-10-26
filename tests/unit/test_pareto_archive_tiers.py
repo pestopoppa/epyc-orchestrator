@@ -13,7 +13,6 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from pareto_archive import (  # noqa: E402
     PARETO_STATUS_TIER_EXCLUDED,

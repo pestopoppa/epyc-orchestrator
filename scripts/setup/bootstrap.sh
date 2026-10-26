@@ -208,7 +208,7 @@ install_python_deps() {
     log_info "Using uv for installation..."
     uv sync
   elif [[ -f "pyproject.toml" ]]; then
-    log_info "Using pip for installation..."
+    log_info "Using pip compatibility extra for installation..."
     pip install -e ".[dev]"
   elif [[ -f "requirements.txt" ]]; then
     log_info "Using pip with requirements.txt..."

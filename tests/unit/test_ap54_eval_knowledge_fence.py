@@ -364,7 +364,6 @@ class _FakeHttpRequest:
         return False
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("flag, expected_state", [(True, "active"), (False, "unarmed"), (None, None)])
 async def test_chat_route_arms_echoes_and_clears(tree: Path, flag, expected_state) -> None:
     from src.api.models import ChatRequest, ChatResponse
@@ -554,7 +553,6 @@ def test_measurement_tuple_carries_fence_state() -> None:
     assert "eval_fence" not in ej.measurement_tuple(entry)
 
 
-@pytest.mark.asyncio
 async def test_unfenced_eval_request_is_logged_not_silent(caplog) -> None:
     from src.api.models import ChatRequest, ChatResponse
     from src.api.routes import chat as chat_mod

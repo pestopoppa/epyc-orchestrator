@@ -8,7 +8,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
 from short_term_memory import MEMORY_PATH, ShortTermMemory  # noqa: E402

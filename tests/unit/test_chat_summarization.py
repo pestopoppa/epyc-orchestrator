@@ -219,7 +219,6 @@ class TestTransientUnavailableDetection:
 class TestTwoStagePipelineExecution:
     """Test two-stage summarization pipeline execution."""
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_summarization_basic(self):
         """Test basic two-stage pipeline execution."""
         mock_primitives = MagicMock()
@@ -261,7 +260,6 @@ class TestTwoStagePipelineExecution:
             mock_primitives.llm_batch.assert_called_once()
             mock_primitives.llm_call.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_chunking_strategy(self):
         """Test that context is chunked appropriately."""
         mock_primitives = MagicMock()
@@ -291,7 +289,6 @@ class TestTwoStagePipelineExecution:
             assert stats["chunks"] == 3
             assert len(mock_primitives.llm_batch.call_args[0][0]) == 3
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_worker_role_selection(self):
         """Test that live worker_summarize is selected from stack priors."""
         mock_primitives = MagicMock()
@@ -323,7 +320,6 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_role"] == "worker_summarize"
             assert stats["role_history"] == ["worker_summarize", "frontdoor"]
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_worker_fallback(self):
         """Test stack-prior role selection is independent of endpoint health."""
         mock_primitives = MagicMock()
@@ -353,7 +349,6 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_role"] == "worker_summarize"
             assert stats["role_history"] == ["worker_summarize", "frontdoor"]
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_batch_failure_fallback(self):
         """Test fallback to sequential calls when llm_batch fails."""
         mock_primitives = MagicMock()
@@ -393,7 +388,6 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_fallback_count"] == 0
             assert stats["worker_failure_count"] == 0
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_batch_real_primitives_no_typeerror_fallback(self):
         """Regression for the batch/n_tokens bug: `llm_batch(worker_prompts,
         role=worker_role, n_tokens=500)` (line ~233) used to raise TypeError
@@ -438,7 +432,6 @@ class TestTwoStagePipelineExecution:
         assert stats["worker_fallback_count"] == 0
         assert stats["worker_failure_count"] == 0
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_batch_genuine_failure_falls_back_and_logs(self):
         """A genuine (non-TypeError) llm_batch failure must still trigger the
         existing sequential-fallback path, AND be logged -- this site already
@@ -481,7 +474,6 @@ class TestTwoStagePipelineExecution:
         assert stats["worker_failure_count"] == 0
         assert answer  # sequential fallback via _real_call still produced output
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_worker_unavailable_falls_back_to_main_role_once(self):
         """Transient worker outages retry a chunk once through the synthesis role."""
         mock_primitives = MagicMock()
@@ -512,7 +504,6 @@ class TestTwoStagePipelineExecution:
         assert stats["worker_failure_count"] == 0
         assert stats["producer_role"] == "frontdoor"
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_sequential_worker_failure(self):
         """Test handling of individual worker failures in sequential fallback."""
         mock_primitives = MagicMock()
@@ -548,7 +539,6 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_fallback_count"] == 0
             assert stats["worker_failure_count"] == 1
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_summarization_prompt_format(self):
         """Test that worker prompts include task context and instructions."""
         mock_primitives = MagicMock()
@@ -582,7 +572,6 @@ class TestTwoStagePipelineExecution:
             assert "Find all mentions" in first_prompt
             assert "Section Content" in first_prompt
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_synthesis_for_summarization(self):
         """Test synthesis prompt for summarization tasks."""
         mock_primitives = MagicMock()
@@ -613,7 +602,6 @@ class TestTwoStagePipelineExecution:
             assert "comprehensive summary" in synthesis_prompt.lower()
             assert "main thesis" in synthesis_prompt.lower()
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_synthesis_for_non_summarization(self):
         """Test synthesis prompt for non-summarization tasks."""
         mock_primitives = MagicMock()
@@ -646,7 +634,6 @@ class TestTwoStagePipelineExecution:
                 or "exact values" in synthesis_prompt.lower()
             )
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_synthesis_failure_uses_digests(self):
         """Test that synthesis failure falls back to worker digests."""
         mock_primitives = MagicMock()
@@ -679,7 +666,6 @@ class TestTwoStagePipelineExecution:
             assert stats["producer_role"] == "worker_summarize"
             assert stats["role_history"] == ["worker_summarize"]
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_progress_logging(self):
         """Test that progress is logged when logger available."""
         mock_primitives = MagicMock()
@@ -711,7 +697,6 @@ class TestTwoStagePipelineExecution:
             assert call_args[1]["task_id"] == "test-vwx"
             assert call_args[1]["strategy_used"] == "two_stage_context"
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_stats_include_worker_digests(self):
         """Test that stats include worker digests for review gate."""
         mock_primitives = MagicMock()
@@ -745,7 +730,6 @@ class TestTwoStagePipelineExecution:
             assert stats["worker_digests"][0]["section"] == 1
             assert "key point A" in stats["worker_digests"][0]["summary"]
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_chunk_overlap(self):
         """Test that chunks have overlap for context continuity."""
         mock_primitives = MagicMock()
@@ -784,7 +768,6 @@ class TestTwoStagePipelineExecution:
             # This is indicated by chunk boundaries not being exact multiples
             assert len(captured_prompts) >= 2
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_token_estimation(self):
         """Test that context tokens are estimated in stats."""
         mock_primitives = MagicMock()
@@ -816,7 +799,6 @@ class TestTwoStagePipelineExecution:
                 assert stats["context_tokens"] == 5000
                 mock_estimate.assert_called()
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_max_chunks_limit(self):
         """Test that chunking is bounded to max 8 chunks."""
         mock_primitives = MagicMock()
@@ -846,7 +828,6 @@ class TestTwoStagePipelineExecution:
             # Should be capped at 8 chunks
             assert stats["chunks"] == 8
 
-    @pytest.mark.asyncio
     async def test_run_two_stage_min_chunks_enforced(self):
         """Test that at least 2 chunks are created."""
         mock_primitives = MagicMock()

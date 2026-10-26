@@ -152,7 +152,6 @@ def test_fake_proc_seam_yields_claimed_cores(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
 async def test_no_bench_spawn_is_byte_identical(
     monkeypatch, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -166,7 +165,6 @@ async def test_no_bench_spawn_is_byte_identical(
     assert _spawn_argv(popen) == ["numactl", "--interleave=all", *expected_cmd]
 
 
-@pytest.mark.asyncio
 async def test_no_bench_spawn_unchanged_without_numactl(
     monkeypatch, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -180,7 +178,6 @@ async def test_no_bench_spawn_unchanged_without_numactl(
     assert _spawn_argv(popen) == expected_cmd
 
 
-@pytest.mark.asyncio
 async def test_bench_claiming_partial_physical_range_pins_worker_smt_safe(
     monkeypatch, tmp_path: Path, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -195,7 +192,6 @@ async def test_bench_claiming_partial_physical_range_pins_worker_smt_safe(
     assert _spawn_argv(popen) == ["taskset", "-c", "48-95,144-191", *expected_cmd]
 
 
-@pytest.mark.asyncio
 async def test_bench_claiming_all_physical_cores_refuses_worker_spawn(
     monkeypatch, tmp_path: Path, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -206,7 +202,6 @@ async def test_bench_claiming_all_physical_cores_refuses_worker_spawn(
     assert popen.call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_bench_claiming_middle_range_pins_to_complement(
     monkeypatch, tmp_path: Path, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -220,7 +215,6 @@ async def test_bench_claiming_middle_range_pins_to_complement(
     assert _spawn_argv(popen)[:3] == ["taskset", "-c", "0-47,96-143"]
 
 
-@pytest.mark.asyncio
 async def test_bench_claiming_every_core_refuses_spawn(
     monkeypatch, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -233,7 +227,6 @@ async def test_bench_claiming_every_core_refuses_spawn(
     assert popen.call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_unobservable_claim_refuses_spawn(
     monkeypatch, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -251,7 +244,6 @@ async def test_unobservable_claim_refuses_spawn(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
 async def test_allow_during_bench_env_bypasses_refusal_and_logs_loudly(
     monkeypatch, caplog, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -269,7 +261,6 @@ async def test_allow_during_bench_env_bypasses_refusal_and_logs_loudly(
     assert "may invalidate the run" in caplog.text
 
 
-@pytest.mark.asyncio
 async def test_allow_knob_set_without_bench_stays_silent(
     monkeypatch, caplog, pool_manager: WorkerPoolManager, worker: WorkerInstance
 ) -> None:
@@ -326,7 +317,6 @@ def test_llamacppbackend_cmd_refuses_unobservable_claim(monkeypatch) -> None:
         LlamaCppBackend(_FakeRegistry())._build_command(_FakeRoleConfig(), _FakeRequest(timeout=60))
 
 
-@pytest.mark.asyncio
 async def test_lightonocr_spawn_pinned_off_bench_claim(monkeypatch, tmp_path: Path) -> None:
     """Per-request llama-mtmd-cli spawns get taskset-pinned off a live bench."""
     import src.services.lightonocr_llama_server as ocr_mod
@@ -353,7 +343,6 @@ async def test_lightonocr_spawn_pinned_off_bench_claim(monkeypatch, tmp_path: Pa
     assert captured[0][3] == str(configured_cli)
 
 
-@pytest.mark.asyncio
 async def test_lightonocr_spawn_quiet_path_unchanged(monkeypatch, tmp_path: Path) -> None:
     """No bench -> the spawn argv is the CLI + flags, no taskset prefix."""
     import src.services.lightonocr_llama_server as ocr_mod

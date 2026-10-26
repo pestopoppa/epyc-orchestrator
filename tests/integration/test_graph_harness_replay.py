@@ -102,7 +102,6 @@ async def _record(monkeypatch, tmp_path, script=SCRIPT, flags_on=True, fixed=Fal
     return db, state, deps, seen, end
 
 
-@pytest.mark.asyncio
 async def test_prefix_replays_every_real_turn_byte_for_byte(monkeypatch, tmp_path):
     db, state, deps, seen, end = await _record(monkeypatch, tmp_path)
     assert end is not None and end.data.answer == "42" and len(seen) == len(SCRIPT)
@@ -132,7 +131,6 @@ async def test_prefix_replays_every_real_turn_byte_for_byte(monkeypatch, tmp_pat
     h3.close()
 
 
-@pytest.mark.asyncio
 async def test_each_neutraliser_is_load_bearing(monkeypatch, tmp_path):
     """Remove one recorded-value neutraliser at a time: the prefix must then diverge (so the hazard is real)."""
     db, *_ = await _record(monkeypatch, tmp_path)
@@ -164,7 +162,6 @@ async def test_each_neutraliser_is_load_bearing(monkeypatch, tmp_path):
     h2.close()   # (the live tool results carry fresh random ids / clock values)
 
 
-@pytest.mark.asyncio
 async def test_environment_drift_is_reported_not_hidden(monkeypatch, tmp_path):
     db, *_ = await _record(monkeypatch, tmp_path)
     run, cas = load_run(db, "hil16b-run"), CAS(tmp_path / "cas")
@@ -175,7 +172,6 @@ async def test_environment_drift_is_reported_not_hidden(monkeypatch, tmp_path):
     assert not r.ok and r.divergence["what"] == "environment_drift" and "tmp_dir" in r.divergence["detail"]
 
 
-@pytest.mark.asyncio
 async def test_restart_goes_live_and_patch_reaches_only_the_llm(monkeypatch, tmp_path):
     db, *_ = await _record(monkeypatch, tmp_path)
     run, cas = load_run(db, "hil16b-run"), CAS(tmp_path / "cas")
@@ -192,7 +188,6 @@ async def test_restart_goes_live_and_patch_reaches_only_the_llm(monkeypatch, tmp
     h.close()
 
 
-@pytest.mark.asyncio
 async def test_prompt_bytes_identical_with_flags_on_and_off(monkeypatch, tmp_path):
     """Recording must not change what the model is sent."""
     sets = []

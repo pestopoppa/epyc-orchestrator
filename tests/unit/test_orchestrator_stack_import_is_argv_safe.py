@@ -3,12 +3,14 @@
 Regression for the import-time ``os.execv`` re-exec in
 ``scripts/server/orchestrator_stack.py``: it replaced the *importer's* process
 with ``orchestrator_stack.py <importer's argv[1:]>``. These probes import an
-external, source-pinned fixture clone so the real host capacity guard is active
+external, source-derived fixture clone so the real host capacity guard is active
 without importing the accepted production lineup into the pytest process.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -17,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.ni63_capacity_child.source_clone import (
+    SOURCE_CLOSURE,
     assert_real_available_headroom,
     materialize_source_clone,
     probe_environment,
@@ -31,6 +34,34 @@ HOSTILE_ARGV = [
     ["--help"],
     ["stop", "--all"],
 ]
+
+
+def test_source_clone_records_current_checkout_provenance(tmp_path: Path) -> None:
+    clone = materialize_source_clone(
+        REPO_ROOT,
+        tmp_path,
+        variant="fit",
+        project_venv_python=VENV_PY,
+    )
+
+    provenance = json.loads((clone / "source-provenance.json").read_text(encoding="utf-8"))
+    assert provenance["schema"] == "ni63-source-provenance.v1"
+    assert provenance["source_root"] == str(REPO_ROOT.resolve())
+    assert set(provenance["files"]) == set(SOURCE_CLOSURE)
+    assert len(SOURCE_CLOSURE) == 32
+
+    for relative in SOURCE_CLOSURE:
+        source_bytes = (REPO_ROOT / relative).read_bytes()
+        clone_bytes = (clone / relative).read_bytes()
+        record = provenance["files"][relative]
+        assert clone_bytes == source_bytes
+        assert record["git_blob_sha1"] == materialize_git_blob_sha1(source_bytes)
+        assert record["sha256"] == hashlib.sha256(source_bytes).hexdigest()
+
+
+def materialize_git_blob_sha1(data: bytes) -> str:
+    header = b"blob " + str(len(data)).encode("ascii") + b"\0"
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
 
 
 def _foreign_interpreter() -> str:
