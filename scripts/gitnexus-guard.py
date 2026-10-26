@@ -4,6 +4,7 @@ import json
 import datetime
 import hashlib
 import math
+import errno
 import os
 from pathlib import Path
 import re
@@ -472,7 +473,17 @@ def node_admission(current, pid, require_native_mapping=False):
     if not tids or len(tids) > len(current["cpus"]):
         deny("quarter Node exceeds the thread cap")
     for entry in tids:
-        if frozenset(os.sched_getaffinity(int(entry.name))) != current["cpus"]:
+        try:
+            affinity = os.sched_getaffinity(int(entry.name))
+        except OSError as exc:
+            if exc.errno != errno.ESRCH:
+                raise
+            try:
+                entry.stat()
+            except FileNotFoundError:
+                continue
+            deny("Node task remains present after affinity ESRCH")
+        if frozenset(affinity) != current["cpus"]:
             deny("actual Node thread affinity differs from granted CPUs")
     if proc_stat(pid) != start:
         deny("Node identity changed during admission")
