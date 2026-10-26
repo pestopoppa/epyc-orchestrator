@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+import pytest
 from pathlib import Path
 
 _ORCH_ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +41,7 @@ def test_extract_identifiers_pure_no_deps():
     assert "enriches" not in ids
 
 
+@pytest.mark.requires_live_models
 def test_symbol_to_kb_kb_rag_query():
     """--symbol kb_rag.query -> KB chunks about KB-RAG / ColBERT / retrieval."""
     res = federation.symbol_to_kb("kb_rag.query", top_k=6)
@@ -61,6 +63,7 @@ def test_symbol_to_kb_kb_rag_query():
     )
 
 
+@pytest.mark.requires_live_models
 def test_doc_to_code_iqk_enablement():
     """--doc 'iqk IQ-quant enablement' -> code symbols/files, or clean empty."""
     if not _gitnexus_available():
