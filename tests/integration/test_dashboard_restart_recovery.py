@@ -28,12 +28,28 @@ STARTUP_BUDGET_S = 20.0
 
 _LAUNCHER = """
 import sys
+import time
+from pathlib import Path
 from fastapi import FastAPI
-from src.api.routes.dashboard import router
+from starlette.responses import JSONResponse
+from src.api.routes import dashboard
 import uvicorn
 
+# Exercise real HTTP/SSE, snapshot wrapper and restart accounting against an
+# owned producer. Never poll serving slots or tail/create the operator's logs.
+private = Path(sys.argv[2])
+for name in ("_INFERENCE_TAP_PATH", "AUTOPILOT_LOG", "_PLANNER_TAP_PATH", "_TAP_SENTINEL_PATH"):
+    setattr(dashboard, name, private / name)
+dashboard._PANELS = []
+dashboard._latest_tap_events_mtime = lambda: None
+dashboard._structured_tap_requests_for_dashboard = lambda **kwargs: []
+dashboard.live_telemetry_sequence = lambda: ()
+async def fixture_snapshot():
+    return JSONResponse({"generated_at": time.time(),
+                         "slots_poll_meta": {"fixture": "owned-offline"}})
+dashboard._snapshot_impl = fixture_snapshot
 app = FastAPI()
-app.include_router(router)
+app.include_router(dashboard.router)
 uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")
 """
 
@@ -44,9 +60,9 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _launch(port: int, repo_root: Path) -> subprocess.Popen:
+def _launch(port: int, repo_root: Path, private: Path) -> subprocess.Popen:
     return subprocess.Popen(
-        [sys.executable, "-c", _LAUNCHER, str(port)],
+        [sys.executable, "-c", _LAUNCHER, str(port), str(private)],
         cwd=repo_root,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -83,12 +99,12 @@ def _read_one_sse_event(base: str, timeout_s: float = 10.0) -> str:
 
 
 @pytest.mark.integration
-def test_dashboard_survives_sigkill_restart():
+def test_dashboard_survives_sigkill_restart(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
 
-    proc = _launch(port, repo_root)
+    proc = _launch(port, repo_root, tmp_path)
     try:
         _wait_healthy(base, STARTUP_BUDGET_S)
 
@@ -100,13 +116,13 @@ def test_dashboard_survives_sigkill_restart():
         proc.send_signal(signal.SIGKILL)
         proc.wait(timeout=5)
 
-        proc = _launch(port, repo_root)
+        proc = _launch(port, repo_root, tmp_path)
         recovered_at = time.time()
         health = _wait_healthy(base, RECOVERY_BUDGET_S)
 
         post = httpx.get(f"{base}/dashboard/api/snapshot", timeout=10.0).json()
         assert post["generated_at"] > pre_ts, "snapshot must be rebuilt fresh, not replayed"
-        assert "slots_poll_meta" in post
+        assert post["slots_poll_meta"] == {"fixture": "owned-offline"}
 
         event_name = _read_one_sse_event(base)
         assert event_name, "a reconnected SSE client must receive events again"
@@ -123,12 +139,12 @@ def test_dashboard_survives_sigkill_restart():
 
 
 @pytest.mark.integration
-def test_dashboard_health_probe_runs_real_build():
+def test_dashboard_health_probe_runs_real_build(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
 
-    proc = _launch(port, repo_root)
+    proc = _launch(port, repo_root, tmp_path)
     try:
         _wait_healthy(base, STARTUP_BUDGET_S)
         r = httpx.get(f"{base}/dashboard/api/health?probe=snapshot", timeout=15.0)
