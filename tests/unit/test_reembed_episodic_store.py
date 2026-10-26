@@ -129,7 +129,9 @@ def test_start_embedding_server_launches_kernel_store_binary_with_a_log(
 
     monkeypatch.setattr(reembed.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(reembed.requests, "get", lambda *a, **k: SimpleNamespace(status_code=200))
-    monkeypatch.setattr(kernel_paths, "backend_ld_library_path", lambda backend: [f"/store/{backend}"])
+    monkeypatch.setattr(
+        kernel_paths, "backend_ld_library_path", lambda backend: [f"/store/{backend}"]
+    )
     monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(tmp_path))
     monkeypatch.setenv("LD_LIBRARY_PATH", "/ambient/lib")
 

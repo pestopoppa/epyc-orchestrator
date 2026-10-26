@@ -35,10 +35,7 @@ def _legacy_baseline_pin_from_text(
             )
         ]
     else:
-        matches = [
-            float(match.group(1))
-            for match in _BASELINE_QUALITY_RE.finditer(text or "")
-        ]
+        matches = [float(match.group(1)) for match in _BASELINE_QUALITY_RE.finditer(text or "")]
     if not matches:
         return None
     suspect = any(value > _MAX_QUALITY_SCALE for value in matches)

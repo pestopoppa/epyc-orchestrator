@@ -5,6 +5,7 @@ snapshot (+ tail fold) payload, or the full replay it falls back to, must be can
 equal to a full replay of every row. The spy pins the cost: at most one prefix replay per
 call, none on a repeat call that shares the journal-scoped verification cache.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -71,7 +72,9 @@ def _tail_supersession(target: int) -> dict:
 @pytest.mark.parametrize("with_tail_event", [False, True])
 def test_snapshot_payload_equals_full_replay(rows, policy, through, with_tail_event):
     event = _snapshot_event(rows, through, policy)
-    ledger = [event] + ([_tail_supersession(through + 2)] if with_tail_event and through < 1505 else [])
+    ledger = [event] + (
+        [_tail_supersession(through + 2)] if with_tail_event and through < 1505 else []
+    )
     all_rows = rows + ledger[1:]
     full = reconstruct_archive_from_journal_rows(all_rows, None, objective_policy=policy)
     payload = jsr.archive_payload_from_verified_snapshot(all_rows, ledger) or full
@@ -113,9 +116,7 @@ def test_pre_p2_snapshot_falls_back_until_current_format_rebuild(rows):
     """
     policy = POLICIES[0]
     through = max(int(row["trial_id"]) for row in rows)
-    current = reconstruct_archive_from_journal_rows(
-        rows, None, objective_policy=policy
-    )
+    current = reconstruct_archive_from_journal_rows(rows, None, objective_policy=policy)
     assert current is not None
 
     # Recreate the old archive payload from the pinned pre-P2 result. The only archive

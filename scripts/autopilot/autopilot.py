@@ -5028,6 +5028,26 @@ def _build_prior_planner_decision_digest(
             )
             if fallback:
                 line += f" fallback={fallback[:120]}"
+            trace = record.get("provider_trace")
+            failures: list[str] = []
+            if isinstance(trace, list):
+                for event in trace:
+                    if not isinstance(event, dict) or event.get("ok") is not False:
+                        continue
+                    # Archive diagnostics are untrusted text: keep one bounded,
+                    # printable line, separate from the recorded decision fields.
+                    diagnostic = " ".join(
+                        str(event.get(key) or "") for key in ("provider", "role", "error")
+                    )
+                    diagnostic = " ".join(
+                        "".join(c if c.isprintable() else " " for c in diagnostic).split()
+                    )[:160]
+                    if diagnostic:
+                        failures.append(diagnostic)
+                    if len(failures) == 2:
+                        break
+            if failures:
+                line += " provider_failures=" + "; ".join(failures)
             rows.append(line + issue_text)
         elif record.get("type") == "planner_provider_call" and not record.get("ok", True):
             line = (
@@ -11836,7 +11856,11 @@ def _belief_settings_from_args(args: argparse.Namespace) -> "_loop_beliefs.Belie
 
 
 def _journal_rows_for_archive(journal: ExperimentJournal) -> list[dict[str, Any]]:
-    rows = journal.rows()
+    rows = (
+        journal.rows()
+        if hasattr(journal, "rows")
+        else [asdict(entry) for entry in journal.all_entries()]
+    )
     if hasattr(journal, "supersession_events"):
         rows.extend(journal.supersession_events())
     return rows

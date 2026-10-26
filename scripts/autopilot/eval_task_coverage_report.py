@@ -23,7 +23,11 @@ except Exception:  # pragma: no cover - import guard for standalone diagnostics
     fold_supersession_events = None  # type: ignore[assignment]
 
 try:
-    from scripts.autopilot.journal_shards import journal_shards, resolve_journal_paths, load_journal_rows
+    from scripts.autopilot.journal_shards import (
+        journal_shards,
+        resolve_journal_paths,
+        load_journal_rows,
+    )
 except ImportError:  # pragma: no cover - direct script invocation
     from journal_shards import journal_shards, resolve_journal_paths, load_journal_rows
 
@@ -49,8 +53,6 @@ def _safe_pct(numerator: int | float, denominator: int | float) -> float:
 def _stable_question_qid(suite: str, prompt_text: str) -> str:
     payload = f"{suite}\x00{prompt_text}".encode("utf-8", errors="replace")
     return hashlib.sha1(payload).hexdigest()[:16]
-
-
 
 
 def default_pool_path() -> Path | None:

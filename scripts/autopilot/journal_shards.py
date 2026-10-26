@@ -128,9 +128,7 @@ def load_journal_rows(
                 except json.JSONDecodeError as exc:
                     detail = {"path": str(path), "line": line_number, "error": str(exc)}
                     if on_malformed == "raise":
-                        raise ValueError(
-                            f"malformed JSONL at {path}:{line_number}: {exc}"
-                        ) from exc
+                        raise ValueError(f"malformed JSONL at {path}:{line_number}: {exc}") from exc
                     if on_malformed == "record":
                         malformed.append(detail)
                     continue

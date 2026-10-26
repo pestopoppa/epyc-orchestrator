@@ -505,15 +505,19 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
         returncode = None
 
         def wait(self, timeout):
+            if self.returncode is not None:
+                return self.returncode
             raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
 
         def kill(self):
-            pass
+            self.returncode = -9
+
+    process = FakeTimeoutProcess()
 
     def fake_popen(cmd, *args, **kwargs):
         captured["cmd"] = cmd
         captured["env"] = kwargs.get("env", {})
-        return FakeTimeoutProcess()
+        return process
 
     monkeypatch.setenv("CLAUDECODE", "parent-session")
     monkeypatch.setenv("AUTOPILOT_CLAUDE_MODEL", "opus")
@@ -524,6 +528,7 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
 
     controller_io.invoke_controller("prompt", timeout=1)
 
+    assert process.returncode == -9
     assert captured["cmd"][:3] == ["claude", "-p", "prompt"]
     assert "--permission-mode" in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--permission-mode") + 1] == "default"
@@ -873,7 +878,6 @@ def test_numeric_range_rejects_non_finite_values(value: float) -> None:
 def test_invoke_controller_drains_large_stderr_and_returns_result(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    import json
     import os
 
     cli = tmp_path / "claude"

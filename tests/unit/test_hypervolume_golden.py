@@ -6,6 +6,7 @@ persist hv_history_by_tier and are verified by exact prefix replay, so any drift
 single HV value would invalidate them: these digests must never be re-captured to make a
 change pass.
 """
+
 from __future__ import annotations
 
 import hashlib

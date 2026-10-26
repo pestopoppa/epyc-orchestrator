@@ -48,6 +48,11 @@ def capture(row_value, outcomes, history, *, proxy_outcomes=None):
             per_suite_quality=proxy_outcomes or {}), history=history)
 
 
+def _fixture_mutation_exclusion(filename):
+    assert filename == "prompts/a.md"
+    return None
+
+
 def method(name, bindings=None, script="species/prompt_forge.py"):
     """Execute the exact source method without importing model-owning PromptForge dependencies."""
     path = ROOT / "scripts/autopilot" / script
@@ -132,7 +137,8 @@ def test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author(m
         pass
     seen = []
     fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "Ω original",
-                           _negative_transfer_safety_block=lambda: "native safety")
+                           _negative_transfer_safety_block=lambda: "native safety",
+                           _mutation_exclusion_reason=_fixture_mutation_exclusion)
     fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
     fake._build_code_mutation_prompt = fake._build_mutation_prompt
     def invoke(prompt):
@@ -195,7 +201,8 @@ def test_busy_author_capture_lock_is_typed_and_fake_author_still_runs(monkeypatc
         pass
     seen = []
     fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "original",
-                           _negative_transfer_safety_block=lambda: "native safety")
+                           _negative_transfer_safety_block=lambda: "native safety",
+                           _mutation_exclusion_reason=_fixture_mutation_exclusion)
     fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
     def invoke(prompt):
         seen.append(prompt)

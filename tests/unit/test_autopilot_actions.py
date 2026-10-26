@@ -801,10 +801,14 @@ def test_dispatch_numeric_trial_convention_skip_stops_before_eval(
 
 
 def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
+    def apply(params, *, journal, trial_id):
+        assert journal is None and trial_id is None
+        return {"status": "ok", "applied": dict(params)}
+
     monkeypatch.setattr(
         actions,
         "_apply_params",
-        lambda params: {"status": "ok", "applied": dict(params)},
+        apply,
     )
 
     class FakeSwarm:
@@ -874,10 +878,14 @@ def test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it(
     `objectives_from` call sites.
     """
 
+    def apply(params, *, journal, trial_id):
+        assert journal is None and trial_id is None
+        return {"status": "ok", "applied": dict(params)}
+
     monkeypatch.setattr(
         actions,
         "_apply_params",
-        lambda params: {"status": "ok", "applied": dict(params)},
+        apply,
     )
 
     class FakeSwarm:
@@ -931,10 +939,14 @@ def test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it(
 
 
 def test_numeric_trial_explicit_no_changes_skips_eval(monkeypatch) -> None:
+    def apply(params, *, journal, trial_id):
+        assert journal is None and trial_id is None
+        return {"status": "no_changes"}
+
     monkeypatch.setattr(
         actions,
         "_apply_params",
-        lambda _params: {"status": "no_changes"},
+        apply,
     )
 
     class FakeTower:
@@ -959,10 +971,14 @@ def test_numeric_trial_explicit_no_changes_skips_eval(monkeypatch) -> None:
 def test_numeric_trial_suggested_no_changes_marks_failed_and_skips_eval(
     monkeypatch,
 ) -> None:
+    def apply(params, *, journal, trial_id):
+        assert journal is None and trial_id is None
+        return {"env_result": {"status": "no_changes"}}
+
     monkeypatch.setattr(
         actions,
         "_apply_params",
-        lambda _params: {"env_result": {"status": "no_changes"}},
+        apply,
     )
 
     class FakeSwarm:
@@ -999,7 +1015,8 @@ def test_numeric_trial_suggested_no_changes_marks_failed_and_skips_eval(
 def test_numeric_trial_normalizes_short_explicit_surface_param(monkeypatch) -> None:
     applied: list[dict] = []
 
-    def fake_apply_params(params):
+    def fake_apply_params(params, *, journal, trial_id):
+        assert journal is None and trial_id is None
         applied.append(dict(params))
         return {"status": "ok", "applied": dict(params)}
 

@@ -130,7 +130,6 @@ def test_resolve_journal_paths_honors_explicit_non_base_path(tmp_path: Path) -> 
 
 
 def test_all_report_readers_find_gap_shard_in_numeric_order(tmp_path: Path) -> None:
-    import json
     import sys
 
     root = Path(__file__).resolve().parents[2]
@@ -144,17 +143,19 @@ def test_all_report_readers_find_gap_shard_in_numeric_order(tmp_path: Path) -> N
     _touch(tmp_path / "autopilot_journal_1.jsonl")
     shard3 = _touch(tmp_path / "autopilot_journal_3.jsonl")
     base.write_text('{"trial_id": 0}\n', encoding="utf-8")
-    (tmp_path / "autopilot_journal_1.jsonl").write_text(
-        '{"trial_id": 1}\n', encoding="utf-8"
-    )
+    (tmp_path / "autopilot_journal_1.jsonl").write_text('{"trial_id": 1}\n', encoding="utf-8")
     shard3.write_text('{"trial_id": 3}\n', encoding="utf-8")
 
     assert [row["trial_id"] for row in preflight_audit._load_jsonl(base)] == [0, 1, 3]
     assert core_v2_select._jsonl_batches(tmp_path) == [
-        base, tmp_path / "autopilot_journal_1.jsonl", shard3
+        base,
+        tmp_path / "autopilot_journal_1.jsonl",
+        shard3,
     ]
     assert eval_task_coverage_report.resolve_journal_paths(None, tmp_path) == [
-        base, tmp_path / "autopilot_journal_1.jsonl", shard3
+        base,
+        tmp_path / "autopilot_journal_1.jsonl",
+        shard3,
     ]
     assert [row["trial_id"] for row in phase_status._read_journal_rows(tmp_path)] == [0, 1, 3]
 

@@ -23,13 +23,13 @@ from typing import Any
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 from src.autopilot_core.baseline_pin import (
     BASELINE_PIN_SCHEMA_VERSION,
-    BASELINE_PIN_SOURCE_ABSENT,
-    BASELINE_PIN_SOURCE_LEGACY_REGEX,
+    BASELINE_PIN_SOURCE_ABSENT as BASELINE_PIN_SOURCE_ABSENT,
+    BASELINE_PIN_SOURCE_LEGACY_REGEX as BASELINE_PIN_SOURCE_LEGACY_REGEX,
     BASELINE_PIN_SOURCE_STRUCTURED,
     _BASELINE_QUALITY_RE,
-    _LEGACY_BASELINE_PIN_WARNED,
+    _LEGACY_BASELINE_PIN_WARNED as _LEGACY_BASELINE_PIN_WARNED,
     _MAX_QUALITY_SCALE,
-    baseline_pin_for,
+    baseline_pin_for as baseline_pin_for,
 )
 
 # experiment_journal is imported both as the package path

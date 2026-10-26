@@ -63,12 +63,16 @@ def test_architect_delegation_threads_tool_context_to_both_phases():
     spec = MagicMock(return_value=("report", 0, [], [], False, False, {}, []))
     primitives = MagicMock()
     primitives.total_tokens_generated = 0
-    with patch.object(chat_delegation, "_run_architect_decision", arch), patch.object(
-        chat_delegation, "_run_specialist_loop", spec
+    with (
+        patch.object(chat_delegation, "_run_architect_decision", arch),
+        patch.object(chat_delegation, "_run_specialist_loop", spec),
     ):
         chat_delegation._architect_delegated_answer(
-            question="q", context="", primitives=primitives,
-            state=SimpleNamespace(tool_registry=None), tool_context=NO_WEB,
+            question="q",
+            context="",
+            primitives=primitives,
+            state=SimpleNamespace(tool_registry=None),
+            tool_context=NO_WEB,
         )
     assert arch.call_count == 2
     assert all(c.kwargs.get("tool_context") == NO_WEB for c in arch.call_args_list)
@@ -88,8 +92,13 @@ def test_delegated_stage_derives_tool_context_from_task_ir():
     with patch.object(delegation_stage, "_architect_delegated_answer", record):
         with pytest.raises(_Stop):
             delegation_stage._execute_delegated(
-                ChatRequest(prompt="2+2", real_mode=True), routing, MagicMock(),
-                SimpleNamespace(), time.perf_counter(), "architect_general", "delegated",
+                ChatRequest(prompt="2+2", real_mode=True),
+                routing,
+                MagicMock(),
+                SimpleNamespace(),
+                time.perf_counter(),
+                "architect_general",
+                "delegated",
             )
     assert seen == [NO_WEB]
 

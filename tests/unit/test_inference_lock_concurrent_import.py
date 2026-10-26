@@ -217,15 +217,13 @@ def test_all_compat_aliases_concurrent_first_import_is_safe():
             sys.exit(f"FAILED {{errors[:3]}}" if errors else 0)
             """
         )
-        proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=60
+        )
         return proc.stderr[-500:] if proc.returncode else ""
 
     with ThreadPoolExecutor(max_workers=4) as ex:
-        failures = [
-            err
-            for err in ex.map(_one, *_zip_compat_aliases())
-            if err
-        ]
+        failures = [err for err in ex.map(_one, *_zip_compat_aliases()) if err]
     assert not failures, failures[0]
 
 

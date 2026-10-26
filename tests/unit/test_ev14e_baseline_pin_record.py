@@ -18,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 
 from experiment_journal import (  # noqa: E402
+    BASELINE_PIN_SCHEMA_VERSION,
     BASELINE_PIN_SOURCE_ABSENT,
     BASELINE_PIN_SOURCE_LEGACY_REGEX,
     BASELINE_PIN_SOURCE_STRUCTURED,
@@ -170,7 +171,9 @@ def test_baseline_pin_mapping_preserves_unknown_structured_identity():
         "baseline_quality": 1.5,
         "producer_extension": {"v": 1},
     }
-    assert baseline_pin_for({"baseline_pin": original}, warn=False) == original
+    assert baseline_pin_for({"baseline_pin": original}, warn=False) == {
+        **original, "schema_version": BASELINE_PIN_SCHEMA_VERSION,
+    }
     assert baseline_pin_for({"baseline_pin": {}, "failure_analysis": "none"}, warn=False)[
         "source"
     ] == BASELINE_PIN_SOURCE_ABSENT
