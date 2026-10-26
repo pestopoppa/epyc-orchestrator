@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import shutil
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 _ORCH_ROOT = Path(__file__).resolve().parents[2]
 if str(_ORCH_ROOT) not in sys.path:
