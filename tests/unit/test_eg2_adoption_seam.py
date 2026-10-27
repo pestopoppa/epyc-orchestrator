@@ -404,21 +404,16 @@ def test_parallel_client_flag_off_identical_and_flag_on_truncates(monkeypatch):
 # ── llama-embedding resolution + subprocess argv ─────────────────────────────────────────
 
 
-def test_llama_embedding_resolves_through_the_kernel_store_not_the_in_tree_build(tmp_path):
+def test_llama_embedding_resolves_only_through_the_kernel_store(tmp_path):
     from orchestration.repl_memory import embedder
 
     store = tmp_path / "kernels" / "production" / "cpu"
-    store.mkdir(parents=True)
-    legacy = tmp_path / "build" / "bin" / "llama-embedding"
-    assert embedder.resolve_embedding_binary(store, legacy) == legacy  # store absent: fallback
-    (store / "llama-embedding").write_text("")
-    assert embedder.resolve_embedding_binary(store, legacy) == legacy  # flag OFF: legacy even if store exists
-    assert embedder.resolve_embedding_binary(store, legacy, use_store=True) == store / "llama-embedding"
+    assert embedder.resolve_embedding_binary(store) == store / "llama-embedding"
+    assert not store.exists()  # Resolution stays safe on server-only hosts.
     assert "build/bin" not in str(embedder.KERNEL_STORE_CPU)
-    assert embedder.KERNEL_STORE_CPU.as_posix().endswith("kernels/production/cpu")
 
 
-def test_subprocess_argv_flag_off_unchanged_flag_on_adds_mean_pooling(monkeypatch):
+def test_subprocess_argv_flag_off_unchanged_flag_on_adds_mean_pooling(monkeypatch, tmp_path):
     import subprocess
 
     from orchestration.repl_memory.embedder import EmbeddingConfig, TaskEmbedder
@@ -429,22 +424,29 @@ def test_subprocess_argv_flag_off_unchanged_flag_on_adds_mean_pooling(monkeypatc
     def fake_run(cmd, **kw):
         seen["cmd"], seen["kw"] = cmd, kw
         vec = np.ones(768, dtype=np.float32).tolist()
-        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([{"embedding": vec}]), stderr="")
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout=json.dumps([{"embedding": vec}]), stderr=""
+        )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    legacy = Path("/nonexistent/llama.cpp/build/bin/llama-embedding")
-    off = TaskEmbedder(EmbeddingConfig(embedding_binary=legacy))
+    from orchestration.repl_memory import embedder
+
+    store = tmp_path / "store"
+    store.mkdir()
+    binary = store / "llama-embedding"
+    binary.touch()
+    binary.chmod(0o700)
+    model = tmp_path / "fake.gguf"
+    model.touch()
+    monkeypatch.setattr(embedder, "KERNEL_STORE_CPU", store)
+    config = dict(embedding_binary=binary, model_path=model, allow_subprocess=True)
+    off = TaskEmbedder(EmbeddingConfig(**config))
     off._generate_embedding_llama("t")
-    assert "--pooling" not in seen["cmd"] and "env" not in seen["kw"]  # legacy argv, inherited env
-    on = TaskEmbedder(EmbeddingConfig(embedding_binary=legacy, truncate_dim=256))
+    assert "--pooling" not in seen["cmd"]
+    on = TaskEmbedder(EmbeddingConfig(**config, truncate_dim=256))
     out = on._generate_embedding_llama("t")
     assert seen["cmd"][seen["cmd"].index("--pooling") + 1] == "mean" and out.shape == (256,)
-    # a binary in the kernel store loads ITS OWN ggml (three trees, three generations)
-    from orchestration.repl_memory.embedder import KERNEL_STORE_CPU
-
-    stored = TaskEmbedder(EmbeddingConfig(embedding_binary=KERNEL_STORE_CPU / "llama-embedding"))
-    stored._generate_embedding_llama("t")
-    assert seen["kw"]["env"]["LD_LIBRARY_PATH"] == str(KERNEL_STORE_CPU)
+    assert seen["kw"]["env"]["LD_LIBRARY_PATH"] == str(store.resolve())
 
 
 # ── launch recipe / affinity / gate ──────────────────────────────────────────────────────
@@ -556,12 +558,12 @@ def test_session_store_refusal_names_the_migration_and_keeps_the_file(tmp_path):
     store.close()
 
 
-def test_default_embedding_binary_is_main_legacy_path(monkeypatch):
-    """Zero live-behaviour change: the default resolves to the legacy in-tree binary, as on main."""
+def test_default_embedding_binary_is_kernel_store_path(monkeypatch):
     from orchestration.repl_memory import embedder
 
-    monkeypatch.delenv("EPYC_EMBED_USE_KERNEL_STORE", raising=False)
-    legacy = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedding")
-    assert embedder.resolve_embedding_binary() == legacy
-    assert embedder.DEFAULT_EMBEDDING_BINARY == legacy
-    assert embedder.EmbeddingConfig().embedding_binary == legacy
+    monkeypatch.setenv("EPYC_EMBED_USE_KERNEL_STORE", "0")
+    binary = embedder.KERNEL_STORE_CPU / "llama-embedding"
+    assert embedder.resolve_embedding_binary() == binary
+    assert embedder.DEFAULT_EMBEDDING_BINARY == binary
+    assert embedder.EmbeddingConfig().embedding_binary == binary
+    assert embedder.EmbeddingConfig().allow_subprocess is False

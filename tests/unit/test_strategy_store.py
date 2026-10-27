@@ -1495,12 +1495,12 @@ class TestAP28HybridRetrieval:
             original_embed = live_store._embed
             calls = 0
 
-            def fail_second_embed(text):
+            def fail_second_embed(text, *, side):
                 nonlocal calls
                 calls += 1
                 if calls == 2:
                     raise RuntimeError("simulated embed failure")
-                return original_embed(text)
+                return original_embed(text, side=side)
 
             monkeypatch.setattr(live_store, "_embed", fail_second_embed)
 
