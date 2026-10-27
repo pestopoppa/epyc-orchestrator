@@ -21,6 +21,16 @@ from src.registry.stack_priors import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+@router.get("/health/serving-calls")
+async def serving_calls_health() -> dict[str, Any]:
+    """Return recorder counters from the worker handling this request."""
+    from src.backends import serving_calls
+
+    return {**serving_calls.health(), "provenance": serving_calls.process_provenance()}
+
+
 _RUNTIME_SELECTED_ROLE_ALIASES = {
     # 2026-08-01 W1 CUTOVER — see src/config/models.py for the rationale. A stale
     # entry here reports the role permanently unrealized in /health.

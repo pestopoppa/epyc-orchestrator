@@ -10,6 +10,17 @@ import yaml
 from src.api.routes import health as health_route
 
 
+def test_serving_calls_health_reads_current_worker(monkeypatch) -> None:
+    from src.backends import serving_calls
+
+    expected = {"pid": 123, "recorded": 7, "write_failed": 1}
+    monkeypatch.setattr(serving_calls, "health", lambda: expected)
+    monkeypatch.setattr(serving_calls, "process_provenance", lambda: {"pid": 123})
+    assert asyncio.run(health_route.serving_calls_health()) == {
+        **expected, "provenance": {"pid": 123}
+    }
+
+
 def _write_stack_priors(path: Path, roles: dict) -> Path:
     path.write_text(yaml.safe_dump({"roles": roles}, sort_keys=True), encoding="utf-8")
     return path
