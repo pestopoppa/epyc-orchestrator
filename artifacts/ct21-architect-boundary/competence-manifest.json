@@ -1,0 +1,16 @@
+{
+  "count": 200,
+  "label_counts": {
+    "correct": 108,
+    "incorrect": 92
+  },
+  "max_source_prompt_chars": 2287,
+  "private_fixture_sha256": "fae288b8db0bff2f85a490cf258a0a55cbec91c42a7dc07ea480864d8b8eb862",
+  "qid_sha256": "5acf53276fdf0ea6845ad533f267492e690bfbd3f8be3a4949fd587651164068",
+  "role_mapping": "architect",
+  "seed": 7,
+  "selection": "Existing skill_efficacy_paired_ab.split_questions: sha1(seed NUL qid) ordering, alternating dev/test_normal; first 200 test_normal in hash order, eligible records require native problem, solution, correct/incorrect gold, multiple_choice with configured choices",
+  "source_pool_sha256": "73a2ed5aa87c38e554c818aff4b8c6dd865621c6134b4abacebfa9070a818f8b",
+  "split": "test_normal",
+  "suite": "scoring_verifiers"
+}
