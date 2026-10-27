@@ -2,7 +2,7 @@
 TaskEmbedder: Generate embeddings for TaskIR and related content.
 
 Uses BGE-large-en-v1.5 via llama-server /embedding endpoint for efficient embedding.
-Falls back to subprocess (llama-embedding) if server unavailable.
+Subprocess (llama-embedding) requires explicit opt-in and the production kernel store.
 Falls back to hash-based pseudo-embeddings if model is unavailable.
 
 For parallel fan-out to multiple servers, see parallel_embedder.py.
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 from src.embedding_dims import (
     LEGACY_EMBEDDING_DIM,
-    SideRequiredError,
+    SideRequiredError as SideRequiredError,
     apply_side as _apply_side,
     default_truncate_dim,
     normalise_embedding,
@@ -42,28 +42,13 @@ from .memory_record import embedding_text_for, join_embedding_segments
 # Default model path (BGE-large-en-v1.5 for embeddings)
 # BGE-large produces 1024-dim embeddings, purpose-built for similarity search
 DEFAULT_MODEL_PATH = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
-# REPL-EMB-2.9: llama-embedding is resolved through the production KERNEL STORE, not the frozen
-# tree's in-tree build/bin (which still holds the v9 binaries and has no gemma-embedding2). The
-# legacy in-tree path is only the fallback when the store binary is absent.
+# Subprocess embeddings are opt-in and may only use the production CPU kernel store.
 KERNEL_STORE_CPU = Path("/mnt/raid0/llm/kernels/production/cpu")
-LEGACY_EMBEDDING_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-embedding")
 
 
-def resolve_embedding_binary(
-    store: Path = KERNEL_STORE_CPU,
-    legacy: Path = LEGACY_EMBEDDING_BINARY,
-    use_store: Optional[bool] = None,
-) -> Path:
-    """The legacy in-tree binary by default (zero live-behaviour change).
-
-    ``<kernel store>/llama-embedding`` is returned only when ``use_store`` is true (default:
-    ``EPYC_EMBED_USE_KERNEL_STORE=1``, OFF) AND the store binary exists. Flipping the default is
-    REPL-EMB-2.14, after a per-text cosine parity check.
-    """
-    if use_store is None:
-        use_store = os.environ.get("EPYC_EMBED_USE_KERNEL_STORE", "") == "1"
-    candidate = store / "llama-embedding"
-    return candidate if use_store and candidate.exists() else legacy
+def resolve_embedding_binary(store: Path = KERNEL_STORE_CPU) -> Path:
+    """Name the store binary without probing it during import or server-only use."""
+    return store / "llama-embedding"
 
 
 DEFAULT_EMBEDDING_BINARY = resolve_embedding_binary()
@@ -182,7 +167,7 @@ class EmbeddingConfig:
     server_url: str = DEFAULT_SERVER_URL  # Embedding server URL
     use_server: bool = True  # Try HTTP server first (40x faster)
     use_parallel: bool = True  # Use parallel embedder client (probe-first to 6 servers)
-    allow_subprocess: bool = True  # Maintenance jobs can require server-only embeddings
+    allow_subprocess: bool = False  # Model subprocesses require explicit opt-in
     # REPL-EMB-2.9 EG2 seam. None (OFF) = legacy BGE behaviour, byte-identical. When set (e.g.
     # 256, or via EPYC_EMBEDDING_TRUNCATE_DIM) every raw server vector is sliced to its leading
     # columns and L2 re-normalised, `embedding_dim` follows it, and the EG2 document/query
@@ -203,7 +188,7 @@ class TaskEmbedder:
     Embedding strategy (in priority order):
     1. Parallel HTTP servers (probe-first to ports 8090-8095) - 5-15ms with redundancy
     2. Single HTTP server fallback (port 8090) - 2-5ms
-    3. Subprocess (llama-embedding binary) - 50-200ms
+    3. Explicitly enabled subprocess (kernel-store llama-embedding) - 50-200ms
     4. Hash-based pseudo-embeddings - fallback
 
     Fallback:
@@ -245,7 +230,7 @@ class TaskEmbedder:
         if self._server_available:
             logger.debug("Embedding server available at %s", self.config.server_url)
         else:
-            logger.debug("Embedding server not available, falling back to subprocess")
+            logger.debug("Embedding server not available")
 
         return self._server_available
 
@@ -329,7 +314,10 @@ class TaskEmbedder:
                 ("gate", failure_context.get("gate_name")),
                 ("tier", failure_context.get("agent_tier")),
                 # Truncate message to avoid embedding noise
-                ("message", _head(failure_context.get("failure_message"), FAILURE_MESSAGE_EMBED_CHARS)),
+                (
+                    "message",
+                    _head(failure_context.get("failure_message"), FAILURE_MESSAGE_EMBED_CHARS),
+                ),
             )
         )
 
@@ -381,10 +369,29 @@ class TaskEmbedder:
         text = self._serialize_classification_prompt(prompt, classification_type)
         return self._generate_embedding(text, side)
 
+    def _subprocess_binary(self) -> Path:
+        """Validate explicit subprocess admission before any fallback can hide failure."""
+        if not self.config.allow_subprocess:
+            raise RuntimeError(
+                "Embedding subprocess disabled; set allow_subprocess=True explicitly"
+            )
+        expected = resolve_embedding_binary(KERNEL_STORE_CPU)
+        binary = expected.resolve()
+        if Path(self.config.embedding_binary).resolve() != binary:
+            raise RuntimeError(f"Embedding binary must come from the CPU kernel store: {expected}")
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise RuntimeError(
+                f"CPU kernel-store embedding binary missing or not executable: {expected}"
+            )
+        if not self.config.model_path.is_file():
+            raise RuntimeError(f"Embedding subprocess model missing: {self.config.model_path}")
+        return binary
+
     def _generate_embedding_llama(self, text: str) -> np.ndarray:
-        """Generate embedding using llama-embedding binary."""
+        """Generate embedding with the explicitly admitted CPU kernel-store binary."""
+        binary = self._subprocess_binary()
         cmd = [
-            str(self.config.embedding_binary),
+            str(binary),
             "-m",
             str(self.config.model_path),
             "-p",
@@ -397,13 +404,8 @@ class TaskEmbedder:
         if self.config.truncate_dim:
             # EG2 is mean-pooled; the legacy BGE command (CLS from the GGUF header) is untouched.
             cmd.extend(["--pooling", "mean"])
-        run_kwargs: Dict[str, Any] = {}
-        binary_dir = Path(self.config.embedding_binary).parent
-        if binary_dir == KERNEL_STORE_CPU:
-            # The three trees run three ggml generations: a store binary must load ITS libs.
-            import os
-
-            run_kwargs["env"] = {**os.environ, "LD_LIBRARY_PATH": str(binary_dir)}
+        # The binary and its own ggml libraries must come from the same resolved store.
+        run_kwargs: Dict[str, Any] = {"env": {**os.environ, "LD_LIBRARY_PATH": str(binary.parent)}}
         try:
             result = subprocess.run(
                 cmd,
@@ -566,11 +568,12 @@ class TaskEmbedder:
                 try:
                     return self._generate_embedding_http(text)
                 except Exception as e:
-                    logger.warning("Embedding server failed (%s), falling back to subprocess", e)
+                    logger.warning("Embedding server failed (%s)", e)
                     self._server_available = False  # Reset to retry later
 
-            # Try subprocess (50-200ms)
-            if self.config.allow_subprocess and self._model_available:
+            # An explicit subprocess request must fail loudly on invalid store/model state.
+            if self.config.allow_subprocess:
+                self._subprocess_binary()
                 try:
                     return self._generate_embedding_llama(text)
                 except Exception as e:
@@ -583,7 +586,9 @@ class TaskEmbedder:
             if self.config.use_fallback:
                 return self._generate_embedding_fallback(text)
             else:
-                raise RuntimeError("Embedding model not available and fallback disabled")
+                raise RuntimeError(
+                    "Embedding servers unavailable; subprocess and hash fallback disabled"
+                )
 
     def embed_batch(self, texts: List[str], side: Optional[str] = None) -> np.ndarray:
         """

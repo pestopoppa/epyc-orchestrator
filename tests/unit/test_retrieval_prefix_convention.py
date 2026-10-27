@@ -111,6 +111,18 @@ def test_query_and_document_roles_produce_different_embeddings() -> None:
 
 # ─── index-declares-the-convention invariant ─────────────────────────────────
 
+@pytest.fixture
+def declared_encoder_metadata(monkeypatch):
+    """Pure index tests own their encoder caps; never read a live checkpoint config."""
+    declared = {"query_length": 19, "document_length": 41}
+    monkeypatch.setattr(
+        colbert_encoder, "_load_declared_config", lambda _model_dir: dict(declared)
+    )
+    # Isolate the derived cache so neither prior tests nor this fixture leak caps.
+    monkeypatch.setattr(colbert_encoder, "_declared_lengths_cache", {})
+    return declared
+
+
 def _tiny_corpus(tmp_path: Path) -> tuple[kb_rag.CorpusConfig, Path]:
     root = tmp_path / "corpus"
     root.mkdir()
@@ -154,7 +166,9 @@ def _query(index_dir, text="cats"):
     return rows, seen
 
 
-def test_fresh_index_stamps_the_current_convention_and_encodes_documents(tmp_path: Path) -> None:
+def test_fresh_index_stamps_the_current_convention_and_encodes_documents(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
     cfg, index_dir = _tiny_corpus(tmp_path)
     result, seen = _build(cfg, index_dir)
 
@@ -164,6 +178,8 @@ def test_fresh_index_stamps_the_current_convention_and_encodes_documents(tmp_pat
 
     meta = kb_rag.stats(index_dir=index_dir)["meta"]
     assert meta["prefix_convention"] == colbert_encoder.PREFIX_CONVENTION
+    assert meta["doc_max_tokens"] == str(declared_encoder_metadata["document_length"])
+    assert meta["query_max_tokens"] == str(declared_encoder_metadata["query_length"])
     assert meta["query_prefix"].strip() == "[Q]"
     assert meta["document_prefix"].strip() == "[D]"
     # The store must be able to name the encoder that produced it.
@@ -171,7 +187,9 @@ def test_fresh_index_stamps_the_current_convention_and_encodes_documents(tmp_pat
     assert meta["encoder_model_file"] == colbert_encoder._MODEL_PATH.name
 
 
-def test_query_against_a_prefixed_index_uses_the_query_role(tmp_path: Path) -> None:
+def test_query_against_a_prefixed_index_uses_the_query_role(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
     cfg, index_dir = _tiny_corpus(tmp_path)
     _build(cfg, index_dir)
     rows, seen = _query(index_dir)
@@ -187,7 +205,9 @@ def _strip_meta(index_dir: Path) -> None:
     conn.close()
 
 
-def test_legacy_index_is_queried_prefix_free(tmp_path: Path) -> None:
+def test_legacy_index_is_queried_prefix_free(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
     """THE anti-mismatch guard.
 
     Prefixed queries against unprefixed stored vectors is the one outcome that
@@ -206,7 +226,9 @@ def test_legacy_index_is_queried_prefix_free(tmp_path: Path) -> None:
     )
 
 
-def test_legacy_index_keeps_its_convention_under_force_rebuild(tmp_path: Path) -> None:
+def test_legacy_index_keeps_its_convention_under_force_rebuild(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
     """--force re-encodes but must NOT re-stamp: no half-migrated live index."""
     cfg, index_dir = _tiny_corpus(tmp_path)
     _build(cfg, index_dir)
@@ -219,7 +241,9 @@ def test_legacy_index_keeps_its_convention_under_force_rebuild(tmp_path: Path) -
     assert qseen == [colbert_encoder.ROLE_NONE]
 
 
-def test_incremental_update_follows_the_stored_convention(tmp_path: Path) -> None:
+def test_incremental_update_follows_the_stored_convention(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
     """The post-commit hook must not inject prefixed docs into a legacy index."""
     cfg, index_dir = _tiny_corpus(tmp_path)
     _build(cfg, index_dir)
@@ -236,7 +260,9 @@ def test_incremental_update_follows_the_stored_convention(tmp_path: Path) -> Non
     assert set(seen) == {colbert_encoder.ROLE_NONE}
 
 
-def test_unknown_stored_convention_fails_closed(tmp_path: Path) -> None:
+def test_unknown_stored_convention_fails_closed(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
     """A future convention bump must not be served by old code guessing."""
     cfg, index_dir = _tiny_corpus(tmp_path)
     _build(cfg, index_dir)
