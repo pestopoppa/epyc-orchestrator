@@ -257,6 +257,44 @@ def test_dispatch_record_has_blocks_and_token_counts(monkeypatch, tmp_path):
     serving_calls.clear_staged()
 
 
+@pytest.mark.parametrize("client_class,expected", [("autopilot", "autopilot"), ("benchmark", "benchmark"), ("opencode", None), (None, None)])
+def test_explicit_request_class_reaches_both_layout_records(monkeypatch, tmp_path, client_class, expected):
+    from src.api.models.openai import OpenAIChatRequest
+    from src.api.routes.openai_compat import _request_keys
+    from src.llm_primitives import LLMPrimitives
+    import src.backends.concurrency_aware as CA
+
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "0")
+    dispatch_path = tmp_path / "dispatch.jsonl"
+    serving_path = tmp_path / "serving.jsonl"
+    monkeypatch.setenv(dispatch_log.LOG_ENV, str(dispatch_path))
+    monkeypatch.setenv(serving_calls.LOG_ENV, str(serving_path))
+
+    class Backend:
+        config = SimpleNamespace(base_url="http://localhost:8070")
+
+        @serving_calls.recorded_call("infer")
+        def infer(self, role, request):
+            return SimpleNamespace(success=True, prompt_tokens=11, cached_prompt_tokens=7)
+
+    body = {"model": "orchestrator", "messages": [{"role": "user", "content": "fixture"}]}
+    if client_class is not None:
+        body["x_client_class"] = client_class
+    request = OpenAIChatRequest(**body)
+    primitives = LLMPrimitives(mock_mode=True)
+    primitives.set_request_trace_keys(_request_keys(request))
+    primitives._stage_serving_caller("frontdoor", request, "http://localhost:8070", 8070)
+    prompt_layout.record_prompt("hello world", sections=[("task", 0, 11)], turn_index=0)
+    backend = Backend()
+    cab = CA.ConcurrencyAwareBackend(backend, [backend], role="frontdoor", full_port=8070)
+    cab.infer(SimpleNamespace(name="frontdoor"), SimpleNamespace(prompt="hello world", n_tokens=8, role="frontdoor", session_id="", task_id="t"))
+    dispatch = [json.loads(line) for line in dispatch_path.read_text().splitlines() if '"dispatch"' in line][-1]
+    serving = [json.loads(line) for line in serving_path.read_text().splitlines() if 'serving_call.v1' in line][-1]
+    assert dispatch["source"] == serving["source"] == expected
+    assert dispatch["blocks"] and serving["blocks"]
+    serving_calls.clear_staged()
+
+
 def test_builder_stages_layout_for_root_lm_prompt():
     from src.prompt_builders.builder import PromptBuilder
 

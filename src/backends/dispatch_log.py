@@ -272,7 +272,7 @@ class DispatchLog:
                 "preceding_tool": staged.get("preceding_tool"),
                 "turn_trigger": staged.get("turn_trigger"),
                 "lengths": lengths,
-                "layout": prompt_layout.fields_for_request(request),
+                "layout": prompt_layout.fields_for_request(request, staged=staged),
                 "fleet_at_arrival": self._snapshot(),
                 "_held": False,
             }

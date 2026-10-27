@@ -209,7 +209,8 @@ def record_prompt(prompt: str, **kwargs: Any) -> None:
         pass
 
 
-def fields_for_request(request: Any, layout: dict[str, Any] | None = None) -> dict[str, Any]:
+def fields_for_request(request: Any, layout: dict[str, Any] | None = None, *,
+                       staged: dict[str, Any] | None = None) -> dict[str, Any]:
     """Record fields (``blocks`` ...) for a request, or ``{}``. Never raises."""
     try:
         layout = layout if layout is not None else peek_layout()
@@ -224,7 +225,7 @@ def fields_for_request(request: Any, layout: dict[str, Any] | None = None) -> di
         if match is None and time.time() - float(layout.get("ts") or 0) > MAX_AGE_S:
             return {}
         out: dict[str, Any] = {"layout_match": match, "turn_index": layout.get("turn_index"),
-                               "source": layout.get("source")}
+                               "source": layout.get("source") or resolve_source(staged)}
         out.update(blocks=layout["blocks"], layout_chars=layout["layout_chars"],
                    unlocated_blocks=layout.get("unlocated_blocks", 0),
                    layout_schema=layout["schema"])
