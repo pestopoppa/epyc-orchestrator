@@ -91,6 +91,15 @@
         "native_tool_contract": "internal_repl_execution",
         "response_tool_calls": "not_emitted",
         "role": "frontdoor",
+        "token_budget": {
+          "effective_source": "schema_default",
+          "effective_value": 1024,
+          "interpretation": "turn_count_input",
+          "max_turns": 2,
+          "per_outer_generation_limit": 1024,
+          "requested": null,
+          "total_generation_limit": null
+        },
         "tools_called": [],
         "tools_used": 0
       }
@@ -120,7 +129,7 @@
         }
       }
     ],
-    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"the answer\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 7, \"native_tool_contract\": \"internal_repl_execution\", \"response_tool_calls\": \"not_emitted\", \"tools_used\": 0, \"tools_called\": []}}\n\ndata: [DONE]\n\n",
+    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"the answer\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 7, \"token_budget\": {\"requested\": null, \"effective_value\": 1024, \"effective_source\": \"schema_default\", \"interpretation\": \"turn_count_input\", \"max_turns\": 2, \"per_outer_generation_limit\": 1024, \"total_generation_limit\": null}, \"native_tool_contract\": \"internal_repl_execution\", \"response_tool_calls\": \"not_emitted\", \"tools_used\": 0, \"tools_called\": []}}\n\ndata: [DONE]\n\n",
     "status": 200
   },
   "repl_stream_tools_include_usage": {
@@ -135,7 +144,7 @@
         }
       }
     ],
-    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"the answer\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 7, \"native_tool_contract\": \"internal_repl_execution\", \"response_tool_calls\": \"not_emitted\", \"tools_used\": 0, \"tools_called\": []}}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [], \"usage\": {\"prompt_tokens\": 4, \"completion_tokens\": 7, \"total_tokens\": 11}}\n\ndata: [DONE]\n\n",
+    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"the answer\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 7, \"token_budget\": {\"requested\": null, \"effective_value\": 1024, \"effective_source\": \"schema_default\", \"interpretation\": \"turn_count_input\", \"max_turns\": 2, \"per_outer_generation_limit\": 1024, \"total_generation_limit\": null}, \"native_tool_contract\": \"internal_repl_execution\", \"response_tool_calls\": \"not_emitted\", \"tools_used\": 0, \"tools_called\": []}}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [], \"usage\": {\"prompt_tokens\": 4, \"completion_tokens\": 7, \"total_tokens\": 11}}\n\ndata: [DONE]\n\n",
     "status": 200
   }
 }
