@@ -782,25 +782,19 @@ def _client_usage(backend_usage: Any) -> OpenAIUsage:
 
     ``prompt_tokens`` / ``completion_tokens`` / ``cached_tokens`` are what
     llama-server reported for this call (the same numbers the inference tap
-    records as ``server_terminal``). A count the server did not report is 0 —
-    never re-tokenized or estimated, so a consumer gating on ``>= 1`` refuses
-    an unmeasured turn instead of accepting a guess.
+    records as ``server_terminal``). Missing usage is explicitly unknown.
     """
     usage = backend_usage if isinstance(backend_usage, dict) else {}
     prompt_tokens = _token_count(usage.get("prompt_tokens"))
     completion_tokens = _token_count(usage.get("completion_tokens"))
     cached_tokens = _token_count(usage.get("cached_tokens"))
-    if prompt_tokens is None or completion_tokens is None:
-        logger.warning(
-            "client tool mode: backend reported no %s token count; usage reports 0",
-            "prompt" if prompt_tokens is None else "completion",
-        )
-    prompt_tokens = prompt_tokens or 0
-    completion_tokens = completion_tokens or 0
+    complete = prompt_tokens is not None and completion_tokens is not None
     return OpenAIUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
-        total_tokens=prompt_tokens + completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens if complete else None,
+        usage_status="reported" if complete else "unknown",
+        usage_provenance=["server_reported"] if prompt_tokens is not None or completion_tokens is not None else [],
         prompt_tokens_details=(
             {"cached_tokens": cached_tokens} if cached_tokens is not None else None
         ),
@@ -810,21 +804,25 @@ def _client_usage(backend_usage: Any) -> OpenAIUsage:
 def _default_usage(
     prompt: str, total_tokens: int, response_text: str, primitives: Any
 ) -> OpenAIUsage:
-    """Usage for the default (REPL / direct) path.
+    """Complete request usage from per-call records, including nested calls.
 
-    ``completion_tokens`` is the backend's decode count summed over every call
-    of the request (``total_tokens_generated``). ``prompt_tokens`` is the
-    server-reported prompt-token sum when the backends reported one, else the
-    long-standing chars/4 estimate of the last user message (mock mode, a
-    backend that reports no usage).
+    The route's synthetic response (no primitives) is the only fallback that
+    can estimate. An unmetered real/vision path stays explicitly unknown.
     """
-    measured = _token_count(getattr(primitives, "total_prompt_tokens_reported", None))
-    prompt_tokens = measured if measured else len(prompt) // 4
-    completion_tokens = total_tokens or len(response_text) // 4
+    getter = getattr(primitives, "get_request_usage", None)
+    if callable(getter):
+        summary = getter()
+        if isinstance(summary, dict):
+            return OpenAIUsage(**summary)
+    if primitives is not None:
+        return OpenAIUsage()
+    prompt_tokens = len(prompt) // 4
+    completion_tokens = len(response_text) // 4
     return OpenAIUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        usage_status="estimated", usage_provenance=["estimated"],
     )
 
 
@@ -993,6 +991,8 @@ def _escalated_client_usage(
     """
     if usage is None or plan is None or not plan.fired:
         return usage
+    if usage.prompt_tokens is None or usage.completion_tokens is None:
+        return OpenAIUsage()
     extra_prompt, extra_completion = plan.usage_delta()
     prompt_tokens = usage.prompt_tokens + extra_prompt
     completion_tokens = usage.completion_tokens + extra_completion
@@ -1477,6 +1477,8 @@ async def openai_chat_completions(
             primitives = None
         if primitives is not None and request_keys:
             primitives.set_request_trace_keys(request_keys)
+        if primitives is not None:
+            primitives.bind_request_usage(chat_id)
 
     if request.stream:
         # Streaming mode with real orchestration
@@ -2010,11 +2012,7 @@ async def openai_chat_completions(
             # sends it by default from OpenCode): one extra chunk, empty choices,
             # carrying usage — after the finish_reason chunk, before [DONE].
             if _stream_include_usage(request):
-                stream_usage = (
-                    client_usage
-                    if client_usage is not None
-                    else _default_usage(prompt, total_tokens, response_text, primitives)
-                )
+                stream_usage = _default_usage(prompt, total_tokens, response_text, primitives)
                 usage_chunk = {
                     "id": chat_id,
                     "object": "chat.completion.chunk",
@@ -2309,11 +2307,7 @@ async def openai_chat_completions(
                     finish_reason=finish_reason,
                 )
             ],
-            usage=(
-                client_usage
-                if client_usage is not None
-                else _default_usage(prompt, total_tokens, response_text, primitives)
-            ),
+            usage=_default_usage(prompt, total_tokens, response_text, primitives),
             x_orchestrator_metadata=response_meta,
         )
 

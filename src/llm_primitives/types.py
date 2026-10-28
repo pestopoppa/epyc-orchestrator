@@ -1,6 +1,7 @@
 """Type definitions for LLM primitives."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import uuid
 
 
 @dataclass
@@ -17,6 +18,8 @@ class CallLogEntry:
     result: str | list[str] | None = None
     elapsed_seconds: float = 0.0
     error: str | None = None
+    usage: list[dict[str, object]] = field(default_factory=list)
+    call_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 @dataclass
@@ -60,6 +63,8 @@ class QueryCost:
     elapsed_seconds: float = 0.0
 
     # Cost estimation (per 1M tokens, configurable)
+    usage_status: str = "reported"
+    usage_provenance: list[str] = field(default_factory=list)
     prompt_rate: float = 0.0  # $ per 1M prompt tokens
     completion_rate: float = 0.0  # $ per 1M completion tokens
 

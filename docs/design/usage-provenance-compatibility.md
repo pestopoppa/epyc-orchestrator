@@ -1,0 +1,11 @@
+# Request usage provenance compatibility
+
+This source change records request-wide call usage; it does not enforce a request completion budget or deploy/reload any service. The existing `max_tokens` turn-count metadata remains accurate until the separate completion-budget change is accepted.
+
+API consumers must accept `null` for unknown `prompt_tokens`, `completion_tokens` and `total_tokens`. Missing native usage, interrupted/censored calls and pending attempts remain unknown; an exact native zero remains zero. `usage_status` and `usage_provenance` are additive fields. Mock estimates are labeled estimated. Real responses are never counted from characters or SSE chunk counts.
+
+The disk response cache is mutable, unsigned JSON. Its key selects a request; it does not authenticate the response or usage metadata. Metered replay therefore requires a matching native observation retained in the same cache instance and process: key, response bytes and complete usage metadata must match the in-memory digest and its original TTL. The trusted native-call seam alone records this observation. Disk fields, a plausible source label or a copied call ID cannot create it. Modified entries, new instances, restarts and forked workers miss and dispatch the backend instead. This can reduce cache hits across workers/restarts. A verified hit is logical replay of previously reported counts, never a new physical decode or measurement warrant.
+
+Usage JSONL and lock files are created/hardened to mode 0600 independently of umask, with bounded rotation under an interprocess lock. Completed appends are flushed to the OS; there is no fsync or power-loss durability guarantee. Source/Git capture runs in a background thread. Early events explicitly contain pending/unknown source context; later snapshots describe on-disk bytes at their recorded capture time, not the bytes loaded by the process.
+
+Forked workers reset recorder/ledger mutexes, close only the recorder descriptors they inherited, and discard pending parent source snapshots. An inherited request ledger is explicitly censored: bind a new request ledger in the child before claiming complete request totals. This avoids treating copied parent counters as a new child observation.

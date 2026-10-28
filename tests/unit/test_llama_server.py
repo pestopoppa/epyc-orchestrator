@@ -673,8 +673,8 @@ class TestLlamaServerBackend:
         assert captured_payload["stream"] is True
         assert captured_payload["chat_template_kwargs"] == {"enable_thinking": False}
 
-    def test_chat_completions_stream_token_estimate_respects_request_cap(self, role_config):
-        """Streaming chat-completions telemetry must not exceed max_tokens."""
+    def test_chat_completions_stream_without_counts_stays_unknown(self, role_config):
+        """Text chunks cannot supply token usage when the server omits it."""
         config = ServerConfig(base_url="http://test:8080", use_chat_completions=True)
         backend = LlamaServerBackend(config=config)
         role_config.name = "frontdoor"
@@ -706,10 +706,10 @@ class TestLlamaServerBackend:
 
         assert result.output == chunk
         assert result.completion_reason == "length"
-        assert result.tokens_generated == 8
+        assert result.tokens_generated == 0
         assert result.output_tokens_reported is None
 
-    def test_chat_completions_stream_native_zero_is_reported_without_changing_legacy_estimate(
+    def test_chat_completions_stream_native_zero_is_preserved(
         self, role_config
     ):
         config = ServerConfig(base_url="http://test:8080", use_chat_completions=True)
@@ -740,8 +740,7 @@ class TestLlamaServerBackend:
         assert result.output_tokens_source == (
             "llama_server:/v1/chat/completions.stream.timings.predicted_n"
         )
-        # The new exact field does not reinterpret the legacy text/chunk estimate.
-        assert result.tokens_generated > 0
+        assert result.tokens_generated == 0
 
     def test_health_check_success(self):
         """Test health check with healthy server."""
@@ -910,9 +909,11 @@ class TestEarlyStopTiming:
 
         # Before the fix: generation_ms == 0 because timings dict was empty
         # After the fix: generation_ms > 0 computed from wall clock
-        assert result.tokens_generated == 4  # chunks before stop
+        assert call_count == 4
+        assert result.output == "Hello world! FINAL"
+        assert result.tokens_generated == 0
         assert result.generation_ms > 0, "Early-stop should still produce timing"
-        assert result.predicted_per_second > 0, "Early-stop should still produce TPS"
+        assert result.predicted_per_second == 0
         assert result.prompt_tokens is None
         assert result.cached_prompt_tokens is None
         assert result.output_tokens_reported is None
