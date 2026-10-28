@@ -93,6 +93,9 @@ def client(monkeypatch):
 def _install(monkeypatch, *, result=None, side_effect=None) -> MagicMock:
     primitives = MagicMock()
     primitives.total_tokens_generated = 11
+    primitives.get_request_usage.return_value = openai_compat._client_usage(
+        (result or {}).get("usage")
+    ).model_dump()
     if side_effect is not None:
         primitives.chat_completion_call.side_effect = side_effect
     else:
@@ -840,6 +843,8 @@ class _FakeBackend:
             role="frontdoor",
             output="",
             tokens_generated=5,
+            output_tokens_reported=5,
+            output_tokens_source="llama_server:/v1/chat/completions.usage.completion_tokens",
             generation_speed=10.0,
             elapsed_time=0.1,
             success=True,
@@ -858,6 +863,8 @@ class _FakeBackend:
         self.requests.append(request)
         return InferenceResult(
             role="frontdoor", output="visible content", tokens_generated=5,
+            output_tokens_reported=5,
+            output_tokens_source="llama_server:/v1/chat/completions.usage.completion_tokens",
             generation_speed=10.0, elapsed_time=0.1, success=True,
             completion_reason="tool_calls", tool_calls=list(self.tool_calls),
         )
@@ -956,6 +963,8 @@ EXPECTED_USAGE = {
     "completion_tokens": BACKEND_COMPLETION,
     "total_tokens": BACKEND_PROMPT + BACKEND_COMPLETION,
     "prompt_tokens_details": {"cached_tokens": BACKEND_CACHED},
+    "usage_status": "reported",
+    "usage_provenance": ["server_reported"],
 }
 
 
@@ -977,6 +986,8 @@ class _UsageBackend(_FakeBackend):
             tool_calls=list(self.tool_calls),
             prompt_tokens=BACKEND_PROMPT,
             cached_prompt_tokens=BACKEND_CACHED,
+            output_tokens_reported=BACKEND_COMPLETION,
+            output_tokens_source="llama_server:/v1/chat/completions.usage.completion_tokens",
         )
 
     def infer_stream_text(self, role_config, request, on_chunk=None):
@@ -1119,7 +1130,7 @@ def test_stream_without_include_usage_has_no_usage_chunk(client, monkeypatch, st
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_unreported_prompt_count_is_zero_not_an_estimate(client, monkeypatch, stream):
+def test_unreported_prompt_count_is_unknown_not_zero(client, monkeypatch, stream):
     result = _tool_result(content="ok")
     result["usage"] = {"prompt_tokens": None, "completion_tokens": 4, "cached_tokens": None}
     _install(monkeypatch, result=result)
@@ -1130,7 +1141,10 @@ def test_unreported_prompt_count_is_zero_not_an_estimate(client, monkeypatch, st
     )
 
     usage = _sse_events(r.text)[-1]["usage"] if stream else r.json()["usage"]
-    assert usage == {"prompt_tokens": 0, "completion_tokens": 4, "total_tokens": 4}
+    assert usage == {
+        "prompt_tokens": None, "completion_tokens": 4, "total_tokens": None,
+        "usage_status": "unknown", "usage_provenance": ["server_reported"],
+    }
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1138,6 +1152,11 @@ def test_default_mode_usage_uses_server_reported_prompt_tokens(client, monkeypat
     primitives = _default_mode_primitives(monkeypatch)
     primitives.total_tokens_generated = 9
     primitives.total_prompt_tokens_reported = 321
+    primitives.get_request_usage.return_value = {
+        "prompt_tokens": 321, "completion_tokens": 9, "total_tokens": 330,
+        "usage_status": "reported", "usage_provenance": ["server_reported"],
+        "prompt_tokens_details": None,
+    }
 
     r = client.post(
         "/v1/chat/completions",
@@ -1146,7 +1165,10 @@ def test_default_mode_usage_uses_server_reported_prompt_tokens(client, monkeypat
 
     assert r.status_code == 200, r.text
     usage = _sse_events(r.text)[-1]["usage"] if stream else r.json()["usage"]
-    assert usage == {"prompt_tokens": 321, "completion_tokens": 9, "total_tokens": 330}
+    assert usage == {
+        "prompt_tokens": 321, "completion_tokens": 9, "total_tokens": 330,
+        "usage_status": "reported", "usage_provenance": ["server_reported"],
+    }
 
 
 def test_trace_keys_setter_drops_none_and_copies():

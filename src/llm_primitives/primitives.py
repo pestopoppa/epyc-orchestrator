@@ -9,6 +9,7 @@ import json
 import os
 import threading
 import time
+import weakref
 from dataclasses import replace
 from typing import Any, Callable
 
@@ -22,6 +23,7 @@ from .stats import StatsMixin
 from .tokens import TokensMixin
 from .teleport import TeleportDecision, TeleportInputs, TeleportPolicy, decide_teleport
 from .types import CallLogEntry, LLMResult
+from .usage import NATIVE_OUTPUT_SOURCES, UsageLedger, token_count
 from src.exceptions import AdmissionDenied, AdmissionDeniedText
 from src.roles import Role
 from src.workload_model import infer_workload_class
@@ -29,6 +31,23 @@ from src.workload_model import infer_workload_class
 
 _NO_PROMPT_USAGE_ATTEMPT = object()
 _NO_OUTPUT_USAGE_ATTEMPT = object()
+
+
+_usage_collectors: weakref.WeakSet = weakref.WeakSet()
+
+
+def _reset_usage_collectors_after_fork() -> None:
+    for collector in list(_usage_collectors):
+        collector._lock = threading.Lock()
+        collector._calls = 0
+        collector._total = 0
+        collector._complete = False
+        collector._pending = set()
+        if hasattr(collector, "_sources"):
+            collector._sources = set()
+
+
+os.register_at_fork(after_in_child=_reset_usage_collectors_after_fork)
 
 
 class _RequestPromptUsage:
@@ -40,6 +59,7 @@ class _RequestPromptUsage:
         self._total = 0
         self._complete = True
         self._pending: set[object] = set()
+        _usage_collectors.add(self)
 
     def begin(self) -> object:
         token = object()
@@ -76,6 +96,7 @@ class _RequestOutputUsage:
         self._complete = True
         self._pending: set[object] = set()
         self._sources: set[str] = set()
+        _usage_collectors.add(self)
 
     def begin(self) -> object:
         token = object()
@@ -95,7 +116,7 @@ class _RequestOutputUsage:
                 or not isinstance(value, int)
                 or value < 0
                 or not isinstance(source, str)
-                or not source
+                or source not in NATIVE_OUTPUT_SOURCES | {"content_cache"}
             ):
                 self._complete = False
                 return
@@ -331,6 +352,14 @@ class LLMPrimitives(
         # object per request and its streaming body runs in a different context
         # from the endpoint function.
         self._request_trace_keys: dict[str, Any] = {}
+        self._usage_ledger = UsageLedger()
+        self._bound_request_usage: UsageLedger | None = None
+        self._usage_ledger_ctx: contextvars.ContextVar[UsageLedger | None] = (
+            contextvars.ContextVar("llm_primitives_usage_ledger", default=None)
+        )
+        self._usage_parent_ctx: contextvars.ContextVar[str | None] = (
+            contextvars.ContextVar("llm_primitives_usage_parent", default=None)
+        )
         self._budget_diagnostics: dict[str, Any] = {
             "deadline_present": False,
             "budget_applied": False,
@@ -521,16 +550,51 @@ class LLMPrimitives(
         collector = self._request_output_usage_ctx.get()
         if collector is not None:
             collector.record(None, None)
+        ledger = self._get_usage_ledger()
+        ledger.finish(ledger.begin("unmetered"), censored=True, error="unmetered generation")
 
-    def _begin_request_output_tokens(self) -> tuple[_RequestOutputUsage, object] | None:
+    def bind_request_usage(self, request_id: str | None = None) -> None:
+        """Bind a request-owned instance across separate streaming thread contexts.
+
+        Only call on a primitives instance created for this request, never the
+        shared /chat instance. Ordinary request_context scopes isolate that one.
+        """
+        self._bound_request_usage = UsageLedger(request_id=request_id)
+        self._request_prompt_usage_ctx.set(None)
+        self._request_output_usage_ctx.set(None)
+
+    def _get_usage_ledger(self) -> UsageLedger:
+        return self._bound_request_usage or self._usage_ledger_ctx.get() or self._usage_ledger
+
+    def get_request_usage(self) -> dict[str, Any]:
+        return self._get_usage_ledger().summary()
+
+    def _record_estimated_usage(self, prompt: str, result: str, role: str) -> None:
+        if not self.mock_mode:
+            raise RuntimeError("real generation usage cannot be estimated")
+        ledger = self._get_usage_ledger()
+        ledger.finish(
+            ledger.begin(role, parent_call_id=self._usage_parent_ctx.get()), prompt_tokens=self._estimate_prompt_tokens(prompt),
+            completion_tokens=self._estimate_completion_tokens(result),
+            provenance="estimated", source="mock:chars4", finish_reason="stop",
+        )
+
+    def _begin_request_output_tokens(self, role: str = "unknown") -> tuple:
         collector = self._request_output_usage_ctx.get()
-        return (collector, collector.begin()) if collector is not None else None
+        ledger = self._get_usage_ledger()
+        # Clear stale per-call metadata before the backend can fail.
+        self._last_inference_meta_ctx.set(None)
+        from src.backends.serving_calls import last_call
+
+        return (collector, collector.begin() if collector is not None else None,
+                ledger, ledger.begin(role, parent_call_id=self._usage_parent_ctx.get()),
+                (last_call() or {}).get("record_id"))
 
     def _record_request_output_tokens(
         self,
         value: Any,
         source: Any,
-        attempt: tuple[_RequestOutputUsage, object] | None | object = _NO_OUTPUT_USAGE_ATTEMPT,
+        attempt: tuple | None | object = _NO_OUTPUT_USAGE_ATTEMPT,
     ) -> None:
         if attempt is None:
             return
@@ -538,9 +602,49 @@ class LLMPrimitives(
             collector = self._request_output_usage_ctx.get()
             token = None
         else:
-            collector, token = attempt
+            collector, token, ledger, call_id, previous_backend_id = attempt
+            meta = self.get_last_inference_meta() or {}
+            from src.backends.serving_calls import last_call
+
+            backend_id = (last_call() or {}).get("record_id")
+            native_source = source if isinstance(source, str) and source in NATIVE_OUTPUT_SOURCES else None
+            completion = token_count(value) if native_source is not None else None
+            reason = meta.get("completion_reason")
+            ledger.finish(
+                call_id, prompt_tokens=meta.get("prompt_tokens") if native_source else None,
+                completion_tokens=completion, provenance="server_reported" if native_source else None,
+                cached_tokens=meta.get("cached_prompt_tokens") if native_source else None,
+                source=native_source, finish_reason=reason, error=meta.get("error"),
+                backend_record_id=backend_id if backend_id != previous_backend_id else None,
+                censored=bool(meta.get("usage_censored")) or completion is None or reason in {"read_timeout", "exception"},
+            )
+            meta["usage_call_id"] = call_id
         if collector is not None:
             collector.record(value, source, token)
+
+    def _update_query_usage(self, before: set[str], log_entry: CallLogEntry, *, batch: bool = False) -> None:
+        calls = [c for c in self._get_usage_ledger().records()
+                 if c["call_id"] not in before and c["parent_call_id"] == log_entry.call_id]
+        log_entry.usage = calls
+        query = self._current_query
+        if query is None:
+            return
+        prompt = sum(c["prompt_tokens"] or 0 for c in calls)
+        completion = sum(c["completion_tokens"] or 0 for c in calls)
+        query.prompt_tokens += prompt
+        query.completion_tokens += completion
+        query.total_tokens += prompt + completion
+        provenance = set(query.usage_provenance) | {c["provenance"] for c in calls if c["provenance"]}
+        query.usage_provenance = sorted(provenance)
+        if not calls or any(c["pending"] or c["censored"] or c["prompt_tokens"] is None or c["completion_tokens"] is None for c in calls):
+            query.usage_status = "unknown"
+        elif query.usage_status != "unknown" and "estimated" in provenance:
+            query.usage_status = "estimated"
+        if batch:
+            query.batch_calls_made += 1
+        else:
+            query.calls_made += 1
+        query.elapsed_seconds += log_entry.elapsed_seconds
 
     def get_max_queue_wait_ms(self) -> int | None:
         """Get request-local cross-role contention gate budget, if set.
@@ -629,6 +733,9 @@ class LLMPrimitives(
         token_output_usage = None
         if self._request_output_usage_ctx.get() is None:
             token_output_usage = self._request_output_usage_ctx.set(_RequestOutputUsage())
+        token_usage_ledger = None
+        if self._bound_request_usage is None and self._usage_ledger_ctx.get() is None:
+            token_usage_ledger = self._usage_ledger_ctx.set(UsageLedger(request_id=request_id))
         try:
             yield
         finally:
@@ -653,6 +760,8 @@ class LLMPrimitives(
                 self._request_prompt_usage_ctx.reset(token_prompt_usage)
             if token_output_usage is not None:
                 self._request_output_usage_ctx.reset(token_output_usage)
+            if token_usage_ledger is not None:
+                self._usage_ledger_ctx.reset(token_usage_ledger)
 
     def _remaining_deadline_s(self) -> float | None:
         """Return remaining request deadline in seconds, if any."""
@@ -1004,6 +1113,7 @@ class LLMPrimitives(
         )
         self._last_inference_meta = {}
         token = self._chat_payload_ctx.set(payload)
+        token_usage_parent = self._usage_parent_ctx.set(log_entry.call_id)
         try:
             role_for_call = self._resolve_depth_override_role(role)
             content = self._real_call(
@@ -1015,6 +1125,8 @@ class LLMPrimitives(
             raise
         finally:
             self._chat_payload_ctx.reset(token)
+            log_entry.usage = [c for c in self._get_usage_ledger().records() if c["parent_call_id"] == log_entry.call_id]
+            self._usage_parent_ctx.reset(token_usage_parent)
             log_entry.elapsed_seconds = time.perf_counter() - start_time
             self.call_log.append(log_entry)
 
@@ -1034,7 +1146,7 @@ class LLMPrimitives(
             "finish_reason": str(meta.get("completion_reason") or "stop"),
             "usage": {
                 "prompt_tokens": _count(meta.get("prompt_tokens")),
-                "completion_tokens": _count(meta.get("tokens")),
+                "completion_tokens": _count(meta.get("output_tokens_reported")),
                 "cached_tokens": _count(meta.get("cached_prompt_tokens")),
             },
         }
@@ -1102,10 +1214,9 @@ class LLMPrimitives(
             persona=persona,
         )
 
-        # Snapshot to guard against double-counting model output below: the real
-        # backend path (_real_call -> inference.py) already adds its EXACT completion
-        # token count to total_tokens_generated.
-        _tokens_before = self.total_tokens_generated
+        # Cost accounting consumes the same per-call records as response usage.
+        _usage_before = {c["call_id"] for c in self._get_usage_ledger().records()}
+        token_usage_parent = self._usage_parent_ctx.set(log_entry.call_id)
         streamed_characters = 0
 
         def _capped_chunk(content: str) -> None:
@@ -1121,6 +1232,7 @@ class LLMPrimitives(
         try:
             if self.mock_mode:
                 result = self._mock_call(full_prompt, role)
+                self._record_estimated_usage(full_prompt, result, role)
             else:
                 role_for_call = self._resolve_depth_override_role(role)
                 sampling_kwargs: dict[str, float | int | bool] = {}
@@ -1154,35 +1266,23 @@ class LLMPrimitives(
             log_entry.elapsed_seconds = time.perf_counter() - start_time
             self.call_log.append(log_entry)
 
-            # Track tokens for current query cost
-            completion_tokens = self._estimate_completion_tokens(result)
-            # Count model-decode tokens exactly ONCE. The real backend path already
-            # added its exact completion count (inference.py); re-adding the
-            # char-estimate here was double-counting and ~2x-inflating the speed
-            # objective. Only fall back to the estimate when the backend did NOT count
-            # (mock mode / content-cache hit, which return before the backend add).
-            # INVARIANT: total_tokens_generated == MODEL-decoded tokens, once each.
-            # Tool output is never counted here (it returns as next-turn input);
-            # effective tool-output throughput lives only in eval_log_format.py (logs).
-            if self.total_tokens_generated == _tokens_before:
-                self.total_tokens_generated += completion_tokens
-            if self._current_query is not None:
-                prompt_tokens = self._estimate_prompt_tokens(full_prompt)
-                self._current_query.prompt_tokens += prompt_tokens
-                self._current_query.completion_tokens += completion_tokens
-                self._current_query.total_tokens += prompt_tokens + completion_tokens
-                self._current_query.calls_made += 1
-                self._current_query.elapsed_seconds += log_entry.elapsed_seconds
+            # Real and cache paths already added their reported output count.
+            if self.mock_mode:
+                self.total_tokens_generated += self._estimate_completion_tokens(result)
+            self._update_query_usage(_usage_before, log_entry)
 
             return result
 
         except Exception as e:
             log_entry.error = str(e)
             log_entry.elapsed_seconds = time.perf_counter() - start_time
+            self._update_query_usage(_usage_before, log_entry)
             self.call_log.append(log_entry)
             if isinstance(e, AdmissionDenied):
                 return AdmissionDeniedText(e)
             return f"[ERROR: {e}]"
+        finally:
+            self._usage_parent_ctx.reset(token_usage_parent)
 
     def _should_rag(self, role: str) -> bool:
         """Check if RAG quality injection should be applied for this role."""
@@ -1279,12 +1379,15 @@ class LLMPrimitives(
             persona=persona,
         )
 
-        _tokens_before = self.total_tokens_generated  # double-count guard (see call())
+        _usage_before = {c["call_id"] for c in self._get_usage_ledger().records()}
+        token_usage_parent = self._usage_parent_ctx.set(log_entry.call_id)
         try:
             if self.mock_mode:
                 results = self._mock_batch(
                     prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
                 )
+                for prompt, result in zip(prompts, results):
+                    self._record_estimated_usage(prompt, result, role)
             else:
                 results = self._real_batch(
                     prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
@@ -1305,27 +1408,20 @@ class LLMPrimitives(
             self.call_log.append(log_entry)
 
             # Track tokens for current query cost
-            total_completion_tokens = sum(
-                self._estimate_completion_tokens(r) for r in capped_results
-            )
-            # Count once: skip the char-estimate if the backend already counted (see call()).
-            if self.total_tokens_generated == _tokens_before:
-                self.total_tokens_generated += total_completion_tokens
-            if self._current_query is not None:
-                total_prompt_tokens = sum(self._estimate_prompt_tokens(p) for p in prompts)
-                self._current_query.prompt_tokens += total_prompt_tokens
-                self._current_query.completion_tokens += total_completion_tokens
-                self._current_query.total_tokens += total_prompt_tokens + total_completion_tokens
-                self._current_query.batch_calls_made += 1
-                self._current_query.elapsed_seconds += log_entry.elapsed_seconds
+            if self.mock_mode:
+                self.total_tokens_generated += sum(self._estimate_completion_tokens(r) for r in results)
+            self._update_query_usage(_usage_before, log_entry, batch=True)
 
             return capped_results
 
         except Exception as e:
             log_entry.error = str(e)
             log_entry.elapsed_seconds = time.perf_counter() - start_time
+            self._update_query_usage(_usage_before, log_entry, batch=True)
             self.call_log.append(log_entry)
             return [f"[ERROR: {e}]" for _ in prompts]
+        finally:
+            self._usage_parent_ctx.reset(token_usage_parent)
 
     async def llm_batch_async(
         self,
@@ -1383,13 +1479,16 @@ class LLMPrimitives(
         if n_tokens is not None:
             _extra["n_tokens"] = n_tokens
 
-        _tokens_before = self.total_tokens_generated  # double-count guard (see call())
+        _usage_before = {c["call_id"] for c in self._get_usage_ledger().records()}
+        token_usage_parent = self._usage_parent_ctx.set(log_entry.call_id)
         try:
             if self.mock_mode:
                 # Mock mode: simulate async calls
                 results = self._mock_batch(
                     prompts, role, json_schema=json_schema, grammar=grammar, n_tokens=n_tokens,
                 )
+                for prompt, result in zip(prompts, results):
+                    self._record_estimated_usage(prompt, result, role)
             else:
                 role_limit = self._get_role_limit(role)
                 if role_limit <= 1:
@@ -1429,27 +1528,20 @@ class LLMPrimitives(
             self.call_log.append(log_entry)
 
             # Track tokens for current query cost
-            total_completion_tokens = sum(
-                self._estimate_completion_tokens(r) for r in capped_results
-            )
-            # Count once: skip the char-estimate if the backend already counted (see call()).
-            if self.total_tokens_generated == _tokens_before:
-                self.total_tokens_generated += total_completion_tokens
-            if self._current_query is not None:
-                total_prompt_tokens = sum(self._estimate_prompt_tokens(p) for p in prompts)
-                self._current_query.prompt_tokens += total_prompt_tokens
-                self._current_query.completion_tokens += total_completion_tokens
-                self._current_query.total_tokens += total_prompt_tokens + total_completion_tokens
-                self._current_query.batch_calls_made += 1
-                self._current_query.elapsed_seconds += log_entry.elapsed_seconds
+            if self.mock_mode:
+                self.total_tokens_generated += sum(self._estimate_completion_tokens(r) for r in results)
+            self._update_query_usage(_usage_before, log_entry, batch=True)
 
             return capped_results
 
         except Exception as e:
             log_entry.error = str(e)
             log_entry.elapsed_seconds = time.perf_counter() - start_time
+            self._update_query_usage(_usage_before, log_entry, batch=True)
             self.call_log.append(log_entry)
             return [f"[ERROR: {e}]" for _ in prompts]
+        finally:
+            self._usage_parent_ctx.reset(token_usage_parent)
 
     def llm_call_monitored(
         self,
@@ -1505,6 +1597,7 @@ class LLMPrimitives(
         try:
             if self.mock_mode:
                 result = self._mock_call_monitored(full_prompt, role, monitor)
+                self._record_estimated_usage(full_prompt, result.text, role)
             else:
                 with self._acquire_role(role):
                     result = self._real_call_monitored(full_prompt, role, monitor)

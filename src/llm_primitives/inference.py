@@ -812,9 +812,44 @@ class InferenceMixin:
                 model_hash=getattr(self, "_model_hash", ""),
                 sampling_key=sampling_key,
             )
-            cached = cache.get(cache_key)
-            if cached is not None:
-                return cached
+            # A legacy text-only entry has no measurement warrant. Recompute it;
+            # never convert a previous estimate into server-reported usage.
+            from .usage import NATIVE_OUTPUT_SOURCES, token_count
+
+            cached = cache.get_entry(cache_key)
+            usage = cached.metadata.get("usage") if cached is not None and isinstance(cached.metadata, dict) else None
+            if isinstance(usage, dict) and usage.get("provenance") == "server_reported" and cache.verifies_native_usage(cache_key, cached):
+                prompt_count = token_count(usage.get("prompt_tokens"))
+                completion_count = token_count(usage.get("completion_tokens"))
+                if (
+                    prompt_count is not None and completion_count is not None
+                    and (n_tokens <= 0 or completion_count <= n_tokens)
+                    and isinstance(usage.get("native_source"), str)
+                    and usage["native_source"] in NATIVE_OUTPUT_SOURCES
+                    and isinstance(usage.get("finish_reason"), str)
+                    and isinstance(usage.get("server_call_id"), str) and usage["server_call_id"]
+                ):
+                    ledger = self._get_usage_ledger()
+                    ledger.finish(
+                        ledger.begin(role, parent_call_id=self._usage_parent_ctx.get()), prompt_tokens=prompt_count,
+                        completion_tokens=completion_count,
+                        cached_tokens=usage.get("cached_tokens"),
+                        provenance="cached_replay_of_server_reported",
+                        source="content_cache", finish_reason=usage["finish_reason"],
+                        replay_of_call_id=usage["server_call_id"],
+                    )
+                    self._set_last_inference_meta({
+                        "role": role, "transport": "content_cache", "tokens": completion_count,
+                        "output_tokens_reported": completion_count,
+                        "prompt_tokens": prompt_count, "usage_provenance": "cached_replay_of_server_reported",
+                        "cached_prompt_tokens": usage.get("cached_tokens"),
+                        "completion_reason": usage["finish_reason"],
+                    })
+                    # Replayed logical usage is charged only to the request
+                    # ledger. No model decoded tokens during this cache hit.
+                    self._record_request_prompt_tokens(prompt_count)
+                    self._record_request_output_tokens(completion_count, "content_cache")
+                    return cached.response
 
         result = None
         streamed_chunks = 0
@@ -917,7 +952,22 @@ class InferenceMixin:
 
         # Store in content cache on success
         if result is not None and cache_key is not None and cache is not None:
-            cache.put(cache_key, result, metadata={"role": role})
+            from .usage import NATIVE_OUTPUT_SOURCES, token_count
+
+            meta = self.get_last_inference_meta() or {}
+            prompt_count = token_count(meta.get("prompt_tokens"))
+            completion_count = token_count(meta.get("output_tokens_reported"))
+            if prompt_count is not None and completion_count is not None and isinstance(meta.get("output_tokens_source"), str) and meta["output_tokens_source"] in NATIVE_OUTPUT_SOURCES and not meta.get("usage_censored"):
+                native_usage = {
+                    "prompt_tokens": prompt_count, "completion_tokens": completion_count,
+                    "provenance": "server_reported",
+                    "native_source": meta["output_tokens_source"],
+                    "cached_tokens": token_count(meta.get("cached_prompt_tokens")),
+                    "server_call_id": meta.get("usage_call_id"),
+                    "finish_reason": str(meta.get("completion_reason") or "unknown"),
+                }
+                cache.put(cache_key, result, metadata={"role": role, "usage": native_usage})
+                cache._remember_native_usage(cache_key, result, native_usage)
 
         return result
 
@@ -1006,7 +1056,7 @@ class InferenceMixin:
             _ms_port,
         )
         prompt_usage_attempt = self._begin_request_prompt_tokens()
-        output_usage_attempt = self._begin_request_output_tokens()
+        output_usage_attempt = self._begin_request_output_tokens(role)
         try:
             with inference_lock(
                 role,
@@ -1046,9 +1096,13 @@ class InferenceMixin:
                 role,
                 (self.server_urls or {}).get(role, "") if hasattr(self, "server_urls") else "",
             )
-        except Exception:
+        except Exception as exc:
             # The backend answered, but this path does not expose a finalized per-call
             # usage record when context validation raises. Keep the request total unknown.
+            self._set_last_inference_meta({
+                "role": role, "completion_reason": "context_overflow",
+                "error": str(exc), "usage_censored": True,
+            })
             self._record_request_prompt_tokens(None, prompt_usage_attempt)
             self._record_request_output_tokens(None, None, output_usage_attempt)
             raise
@@ -1060,6 +1114,11 @@ class InferenceMixin:
             "stream_chunks": getattr(result, "stream_chunks", 0),
             "completion_reason": getattr(result, "completion_reason", "") or "unknown",
             "tokens": result.tokens_generated,
+            "output_tokens_reported": getattr(result, "output_tokens_reported", None),
+            "output_tokens_source": getattr(result, "output_tokens_source", None),
+            "prompt_tokens": getattr(result, "prompt_tokens", None),
+            "usage_censored": not result.success or result.partial,
+            "error": getattr(result, "error_message", None),
             "prompt_ms": result.prompt_eval_ms,
             "gen_ms": result.generation_ms,
             "overhead_ms": result.http_overhead_ms,
@@ -1076,10 +1135,8 @@ class InferenceMixin:
                     "prompt_n": prompt_n,
                     "cache_n": cache_n,
                     "prompt_ms": _server_duration(server_timings.get("prompt_ms")),
-                    "prompt_tokens": (
-                        prompt_n + cache_n
-                        if prompt_n is not None and cache_n is not None
-                        else None
+                    "prompt_tokens": call_meta.get("prompt_tokens") if _server_count(call_meta.get("prompt_tokens")) is not None else (
+                        prompt_n + cache_n if prompt_n is not None and cache_n is not None else None
                     ),
                     "cached_prompt_tokens": cache_n,
                 }
@@ -1112,7 +1169,7 @@ class InferenceMixin:
                 result.http_overhead_ms,
             )
 
-        self.total_tokens_generated += result.tokens_generated
+        self.total_tokens_generated += _server_count(getattr(result, "output_tokens_reported", None)) or 0
         self.total_prompt_eval_ms += result.prompt_eval_ms
         self.total_generation_ms += result.generation_ms
         if result.predicted_per_second > 0:
@@ -1493,7 +1550,7 @@ class InferenceMixin:
                     kv_admission=pool_admission.admission_record(pool_ticket)
                 )
             prompt_usage_attempt = self._begin_request_prompt_tokens()
-            output_usage_attempt = self._begin_request_output_tokens()
+            output_usage_attempt = self._begin_request_output_tokens(role)
             try:
                 with lock_ctx:
                     request.timeout = self._clamp_timeout_to_request_budget(request.timeout)
@@ -1727,6 +1784,11 @@ class InferenceMixin:
                 "stream_chunks": getattr(result, "stream_chunks", 0),
                 "completion_reason": getattr(result, "completion_reason", "") or "unknown",
                 "tokens": result.tokens_generated,
+                "output_tokens_reported": getattr(result, "output_tokens_reported", None),
+                "output_tokens_source": getattr(result, "output_tokens_source", None),
+                "prompt_tokens": getattr(result, "prompt_tokens", None),
+                "usage_censored": not result.success or result.partial,
+                "error": getattr(result, "error_message", None),
                 "prompt_ms": result.prompt_eval_ms,
                 "gen_ms": result.generation_ms,
                 "overhead_ms": result.http_overhead_ms,
@@ -1745,10 +1807,8 @@ class InferenceMixin:
                         "prompt_n": prompt_n,
                         "cache_n": cache_n,
                         "prompt_ms": _server_duration(server_timings.get("prompt_ms")),
-                        "prompt_tokens": (
-                            prompt_n + cache_n
-                            if prompt_n is not None and cache_n is not None
-                            else None
+                        "prompt_tokens": call_meta.get("prompt_tokens") if _server_count(call_meta.get("prompt_tokens")) is not None else (
+                            prompt_n + cache_n if prompt_n is not None and cache_n is not None else None
                         ),
                         "cached_prompt_tokens": cache_n,
                     }
@@ -1808,7 +1868,13 @@ class InferenceMixin:
                 get_shared_pool_admission().report_pool_exhausted(backend_url)
             # The context-overflow branch is a failed generation attempt even if its
             # backend-shaped result happens to carry a token count.
-            _raise_if_context_overflow(result, role, backend_url)
+            try:
+                _raise_if_context_overflow(result, role, backend_url)
+            except Exception as exc:
+                call_meta["error"] = str(exc)
+                call_meta["usage_censored"] = True
+                self._record_request_output_tokens(None, None, output_usage_attempt)
+                raise
             self._record_request_output_tokens(
                 getattr(result, "output_tokens_reported", None)
                 if result.success
@@ -1850,7 +1916,7 @@ class InferenceMixin:
             # Pareto/HV speed objective is derived from this count, so it must equal
             # MODEL-decoded tokens counted exactly once — tool output is never included
             # here (effective tool-output throughput is log-only, eval_log_format.py).
-            self.total_tokens_generated += result.tokens_generated
+            self.total_tokens_generated += _server_count(getattr(result, "output_tokens_reported", None)) or 0
             self.total_prompt_eval_ms += result.prompt_eval_ms
             self.total_generation_ms += result.generation_ms
             self.total_http_overhead_ms += result.http_overhead_ms
@@ -2118,7 +2184,7 @@ class InferenceMixin:
             stream=True,  # Enable streaming for per-token monitoring
         )
         request.timeout = self._clamp_timeout_to_request_budget(request.timeout)
-        output_usage_attempt = self._begin_request_output_tokens()
+        output_usage_attempt = self._begin_request_output_tokens(role)
 
         output_tokens = []
         from src.inference_lock import inference_lock

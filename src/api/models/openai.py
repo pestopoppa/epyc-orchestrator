@@ -431,9 +431,13 @@ class OpenAIChoice(BaseModel):
 class OpenAIUsage(BaseModel):
     """OpenAI usage statistics."""
 
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    usage_status: Literal["reported", "estimated", "unknown"] = "unknown"
+    usage_provenance: list[Literal[
+        "server_reported", "cached_replay_of_server_reported", "estimated"
+    ]] = Field(default_factory=list)
     # {"cached_tokens": N} — present only when the backend reported a KV-cache
     # reuse count (client tool mode); omitted from the JSON otherwise.
     prompt_tokens_details: dict[str, int] | None = None

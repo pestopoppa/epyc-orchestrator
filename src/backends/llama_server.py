@@ -898,9 +898,10 @@ class LlamaServerBackend(ModelBackend):
                         row for row in _lp["content"] if isinstance(row, dict)
                     ]
 
-            usage = data.get("usage", {}) or {}
-            prompt_tokens = int(usage.get("prompt_tokens", 0))
-            tokens_generated = int(usage.get("completion_tokens", 0))
+            raw_usage = data.get("usage")
+            usage = raw_usage if isinstance(raw_usage, dict) else {}
+            prompt_tokens = _server_count(usage.get("prompt_tokens"))
+            tokens_generated = _server_count(usage.get("completion_tokens")) or 0
             output_tokens_reported = _server_count(usage.get("completion_tokens"))
             # KV-reuse count: usage.prompt_tokens_details.cached_tokens (the
             # server's n_prompt_tokens_cache), else timings.cache_n — the same
@@ -909,18 +910,14 @@ class LlamaServerBackend(ModelBackend):
             _cached_raw = _details.get("cached_tokens") if isinstance(_details, dict) else None
             if _cached_raw is None:
                 _cached_raw = (data.get("timings") or {}).get("cache_n")
-            cached_prompt_tokens = (
-                int(_cached_raw)
-                if isinstance(_cached_raw, (int, float)) and not isinstance(_cached_raw, bool)
-                else None
-            )
+            cached_prompt_tokens = _server_count(_cached_raw)
             if completion_reason == "length" and 0 < tokens_generated < int(payload["max_tokens"]):
                 # The OpenAI shim has no `truncated` field, but a length stop
                 # BELOW max_tokens can only be the slot's n_ctx running out
                 # (ctx shift off → stop at n_ctx - 1, server-context.cpp:1929-1936).
                 # Measured: split KV -np 2 -c 4096 → 271 + 1777 = 2048 = n_ctx/np.
                 logger.warning(
-                    "chat_completions truncated by context limit role=%s prompt=%d completion=%d max_tokens=%s",
+                    "chat_completions truncated by context limit role=%s prompt=%s completion=%d max_tokens=%s",
                     role_config.name, prompt_tokens, tokens_generated, payload["max_tokens"],
                 )
                 completion_reason = "context_limit"
@@ -935,7 +932,8 @@ class LlamaServerBackend(ModelBackend):
             inference_ms = prompt_eval_ms + generation_ms
             http_overhead_ms = max(0.0, http_elapsed_ms - inference_ms)
 
-            self.cache_stats.total_prompt_tokens += prompt_tokens
+            if prompt_tokens is not None:
+                self.cache_stats.total_prompt_tokens += prompt_tokens
             speed = (
                 predicted_per_second if predicted_per_second > 0
                 else (tokens_generated / elapsed if elapsed > 0 else 0.0)
@@ -1307,7 +1305,7 @@ class LlamaServerBackend(ModelBackend):
                         except StopIteration:
                             early_stopped = True
                     if early_stopped:
-                        tokens_generated = len(chunks)  # approximate
+                        tokens_generated = 0  # unknown; chunk boundaries are not tokens
                         _es_elapsed = (time.perf_counter() - http_start) * 1000
                         timings = {
                             "predicted_ms": _es_elapsed,
@@ -1352,18 +1350,9 @@ class LlamaServerBackend(ModelBackend):
             generation_ms = timings.get("predicted_ms", 0.0)
             predicted_per_second = timings.get("predicted_per_second", 0.0)
 
-            # TIMINGS-zero fallback: llama-server occasionally emits a stop
-            # event with `tokens_predicted=0` and an empty `timings` dict —
-            # most commonly for thinking-mode responses that exhaust their
-            # budget inside a `<think>` block, slot-kill / OOM aborts, and
-            # certain spec-decode edge cases. The tap's per-chunk writer has
-            # already streamed real content to disk by then, so reporting
-            # "TIMINGS: 0 tokens in 0.00s" is misleading. Fall back to chunk
-            # count + http elapsed when content exists but the server's
-            # numbers are zero — preserves operator signal in the tap.
+            # Missing timing durations may use observed HTTP wall time. Token
+            # usage stays server-reported: chunks cannot replace exact zero.
             if stream_chunks > 0:
-                if tokens_generated == 0:
-                    tokens_generated = stream_chunks
                 if generation_ms == 0.0:
                     generation_ms = http_elapsed_ms
                 if predicted_per_second == 0.0 and generation_ms > 0.0:
@@ -1486,11 +1475,11 @@ class LlamaServerBackend(ModelBackend):
                 # Populate the timing fields the tap writer reads so the
                 # TIMINGS line reflects what actually happened during the
                 # partial stream instead of falling back to dataclass zeros.
-                _partial_tps = (len(chunks) / _elapsed) if _elapsed > 0 else 0.0
+                _partial_tps = 0.0  # no terminal server count
                 return InferenceResult(
                     role=role_config.name,
                     output=_partial,
-                    tokens_generated=len(chunks),
+                    tokens_generated=0,
                     generation_speed=_partial_tps,
                     elapsed_time=_elapsed,
                     success=False,
@@ -1861,8 +1850,11 @@ class LlamaServerBackend(ModelBackend):
         chunks: list[str] = []
         reasoning_chunks: list[str] = []
         tool_call_parts: dict[int, dict[str, Any]] = {}
+        payload["stream_options"] = {"include_usage": True}
         completion_reason = "stop"
         terminal_event_seen = False
+        interrupted = False
+        stream_usage: dict[str, Any] = {}
         # llama-server attaches its `timings` object to the LAST chunk of a chat
         # stream (server-task.cpp to_json_oaicompat_chat_stream: `if (timings.prompt_n
         # >= 0) deltas.back().push_back({"timings", ...})`). This path used to ignore
@@ -1922,6 +1914,9 @@ class LlamaServerBackend(ModelBackend):
                                 _evt_timings = evt.get("timings")
                                 if isinstance(_evt_timings, dict) and _evt_timings:
                                     stream_timings = _evt_timings
+                                _evt_usage = evt.get("usage")
+                                if isinstance(_evt_usage, dict) and _evt_usage:
+                                    stream_usage = _evt_usage
                                 choices = evt.get("choices") or []
                                 if choices:
                                     delta = choices[0].get("delta") or {}
@@ -1941,6 +1936,7 @@ class LlamaServerBackend(ModelBackend):
                                                 logger.debug(
                                                     "chat_completions stream aborted by on_chunk"
                                                 )
+                                                interrupted = True
                                                 break
                                     raw_tool_deltas = delta.get("tool_calls")
                                     if isinstance(raw_tool_deltas, list):
@@ -1978,19 +1974,11 @@ class LlamaServerBackend(ModelBackend):
                         role_config.name, len(chunks),
                     )
                     completion_reason = "read_timeout"
+                    interrupted = True
 
             output = "".join(chunks)
             elapsed = time.time() - start_time
-            tokens_generated = len(output) // 4 + len(chunks)  # rough estimate from chunks
-            if reasoning_chunks:
-                # RI-23: reasoning tokens are model-decoded too (Pareto speed objective).
-                _reasoning = "".join(reasoning_chunks)
-                tokens_generated += len(_reasoning) // 4 + len(reasoning_chunks)
-            if request.n_tokens > 0:
-                # The streaming OpenAI shim does not send final usage/timings.
-                # llama-server still enforces max_tokens, so keep telemetry from
-                # overstating capped generations on chunk-heavy text.
-                tokens_generated = min(tokens_generated, request.n_tokens)
+            tokens_generated = 0  # legacy numeric carrier; strict usage below stays None
             serving_calls.note_timings(
                 stream_timings, endpoint="/v1/chat/completions", stream=True
             )
@@ -2000,33 +1988,40 @@ class LlamaServerBackend(ModelBackend):
             cached_prompt_tokens: int | None = None
             n_drafted = n_accepted = 0
             if stream_timings:
-                # Server-measured figures replace the client-side estimates.
+                # Native terminal timings can supply counts on older servers.
                 prompt_eval_ms = float(stream_timings.get("prompt_ms", 0.0) or 0.0)
                 if stream_timings.get("predicted_ms") is not None:
                     generation_ms = float(stream_timings.get("predicted_ms") or 0.0)
                 predicted_per_second = float(
                     stream_timings.get("predicted_per_second", 0.0) or 0.0
                 )
-                if terminal_event_seen and completion_reason != "read_timeout":
+                if terminal_event_seen and not interrupted:
                     output_tokens_reported = _server_count(
                         stream_timings.get("predicted_n")
                     )
-                if (
-                    isinstance(stream_timings.get("predicted_n"), int)
-                    and stream_timings["predicted_n"] > 0
-                ):
-                    # Keep the old positive-only override unchanged, including its
-                    # legacy handling of malformed Python bool values.
-                    tokens_generated = int(stream_timings["predicted_n"])
-                _prompt_n = stream_timings.get("prompt_n")
-                _cache_n = stream_timings.get("cache_n")
-                if isinstance(_cache_n, int) and _cache_n >= 0:
-                    cached_prompt_tokens = _cache_n
-                if isinstance(_prompt_n, int) and _prompt_n >= 0:
-                    prompt_tokens = _prompt_n + (cached_prompt_tokens or 0)
+                _prompt_n = _server_count(stream_timings.get("prompt_n"))
+                cached_prompt_tokens = _server_count(stream_timings.get("cache_n"))
+                if _prompt_n is not None and cached_prompt_tokens is not None:
+                    prompt_tokens = _prompt_n + cached_prompt_tokens
                 n_drafted = int(stream_timings.get("draft_n", 0) or 0)
                 n_accepted = int(stream_timings.get("draft_n_accepted", 0) or 0)
                 http_overhead_ms = max(0.0, elapsed * 1000 - (prompt_eval_ms + generation_ms))
+            output_source = "llama_server:/v1/chat/completions.stream.timings.predicted_n"
+            if terminal_event_seen and not interrupted:
+                # Usage-only final chunks have choices=[] and must still be read.
+                if "completion_tokens" in stream_usage:
+                    output_tokens_reported = _server_count(stream_usage.get("completion_tokens"))
+                    output_source = "llama_server:/v1/chat/completions.stream.usage.completion_tokens"
+                if "prompt_tokens" in stream_usage:
+                    prompt_tokens = _server_count(stream_usage.get("prompt_tokens"))
+                details = stream_usage.get("prompt_tokens_details")
+                if isinstance(details, dict) and "cached_tokens" in details:
+                    cached_prompt_tokens = _server_count(details.get("cached_tokens"))
+            else:
+                prompt_tokens = None
+                output_tokens_reported = None
+            tokens_generated = output_tokens_reported or 0
+            serving_calls.note_usage(stream_usage)
             speed = (
                 predicted_per_second if predicted_per_second > 0
                 else (tokens_generated / elapsed if elapsed > 0 else 0.0)
@@ -2057,7 +2052,7 @@ class LlamaServerBackend(ModelBackend):
                     f"Empty generation after {elapsed:.1f}s"
                     if empty_generation else None
                 ),
-                partial=False,
+                partial=interrupted,
                 degraded=empty_generation,
                 failure_stage="generation" if empty_generation else "",
                 failure_reason="empty_generation" if empty_generation else "",
@@ -2077,7 +2072,7 @@ class LlamaServerBackend(ModelBackend):
                 tool_calls=[tool_call_parts[index] for index in sorted(tool_call_parts)],
                 output_tokens_reported=output_tokens_reported,
                 output_tokens_source=(
-                    "llama_server:/v1/chat/completions.stream.timings.predicted_n"
+                    output_source
                     if output_tokens_reported is not None else None
                 ),
             )
@@ -2086,7 +2081,7 @@ class LlamaServerBackend(ModelBackend):
             return InferenceResult(
                 role=role_config.name,
                 output="".join(chunks),
-                tokens_generated=len(chunks),
+                tokens_generated=0,
                 generation_speed=0.0, elapsed_time=elapsed, success=False,
                 error_message=f"chat_completions stream failed: {e}",
                 failure_stage="transport", failure_reason="request_error",

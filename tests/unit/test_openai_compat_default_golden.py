@@ -193,6 +193,27 @@ def _capture(client, monkeypatch, name: str) -> dict[str, Any]:
     return record
 
 
+def _without_usage(record: Any) -> Any:
+    """Keep the historical non-usage contract; usage now has its own tests.
+
+    This fixture uses an unmetered primitives double. Its old token estimates
+    are deliberately superseded by explicit unknown usage.
+    """
+    if isinstance(record, dict):
+        return {key: _without_usage(value) for key, value in record.items() if key != "usage"}
+    if isinstance(record, list):
+        return [_without_usage(value) for value in record]
+    if isinstance(record, str) and record.startswith("data: "):
+        lines = []
+        for line in record.splitlines():
+            if line.startswith("data: ") and line != "data: [DONE]":
+                lines.append("data: " + json.dumps(_without_usage(json.loads(line[6:])), sort_keys=True))
+            else:
+                lines.append(line)
+        return "\n".join(lines)
+    return record
+
+
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_default_mode_matches_pre_client_mode_golden(client, monkeypatch, name):
     got = _capture(client, monkeypatch, name)
@@ -209,4 +230,6 @@ def test_default_mode_matches_pre_client_mode_golden(client, monkeypatch, name):
         "direct_stream_tools_include_usage",
     } else 200
     assert got["status"] == expected_status
-    assert got == expected
+    if got["status"] == 200 and "json" in got:
+        assert got["json"]["usage"]["usage_status"] == "unknown"
+    assert _without_usage(got) == _without_usage(expected)

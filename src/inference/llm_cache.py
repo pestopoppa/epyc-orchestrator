@@ -39,6 +39,7 @@ import json
 import logging
 import os
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,9 @@ class ContentAddressableCache:
         self._model_hash = model_hash
         self._hits = 0
         self._misses = 0
+        self._usage_lock = threading.Lock()
+        self._usage_pid = os.getpid()
+        self._native_usage_observations: dict[str, tuple[str, float]] = {}
         self._dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -113,6 +117,11 @@ class ContentAddressableCache:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def get(self, key: str) -> str | None:
+        """Return text for legacy callers; metered callers use get_entry()."""
+        entry = self.get_entry(key)
+        return entry.response if entry is not None else None
+
+    def get_entry(self, key: str) -> CacheEntry | None:
         """Look up a cached response.
 
         Args:
@@ -138,13 +147,50 @@ class ContentAddressableCache:
             # Update access time for LRU
             os.utime(path, None)
             self._hits += 1
-            return entry.response
+            return entry
 
         except (json.JSONDecodeError, TypeError, KeyError) as e:
             logger.debug("Cache read error for %s: %s", key[:12], e)
             path.unlink(missing_ok=True)
             self._misses += 1
             return None
+
+    @staticmethod
+    def _usage_digest(key: str, response: str, usage: dict[str, Any]) -> str:
+        return hashlib.sha256(json.dumps(
+            {"key": key, "response": response, "usage": usage},
+            sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+
+    def _remember_native_usage(self, key: str, response: str, usage: dict[str, Any]) -> None:
+        """Trusted native-call seam only; disk metadata cannot create this observation."""
+        digest = self._usage_digest(key, response, usage)
+        if self._usage_pid != os.getpid():
+            # A fork can inherit a locked mutex from a vanished parent thread.
+            self._usage_lock = threading.Lock()
+            self._native_usage_observations = {}
+            self._usage_pid = os.getpid()
+        with self._usage_lock:
+            self._native_usage_observations[key] = (digest, time.monotonic() + self._ttl)
+            while len(self._native_usage_observations) > max(0, self._max_entries):
+                self._native_usage_observations.pop(next(iter(self._native_usage_observations)))
+
+    def verifies_native_usage(self, key: str, entry: CacheEntry) -> bool:
+        """Bind replay to this instance/process's native observation, not a disk claim.
+
+        Restarts, new instances, forked workers and unsigned/modified entries miss.
+        This supports logical accounting; it is not a new physical measurement warrant.
+        """
+        if self._usage_pid != os.getpid():
+            return False  # never touch an inherited mutex or parent observation
+        usage = entry.metadata.get("usage") if isinstance(entry.metadata, dict) else None
+        if not isinstance(usage, dict) or entry.key != key:
+            return False
+        digest = self._usage_digest(key, entry.response, usage)
+        with self._usage_lock:
+            observed = self._native_usage_observations.get(key)
+            return bool(self._usage_pid == os.getpid() and observed
+                        and time.monotonic() < observed[1] and digest == observed[0])
 
     def put(
         self,
@@ -208,6 +254,11 @@ class ContentAddressableCache:
             path.unlink(missing_ok=True)
         self._hits = 0
         self._misses = 0
+        if self._usage_pid != os.getpid():
+            self._usage_lock = threading.Lock()
+            self._usage_pid = os.getpid()
+        with self._usage_lock:
+            self._native_usage_observations.clear()
 
     def stats(self) -> dict[str, Any]:
         """Get cache statistics.

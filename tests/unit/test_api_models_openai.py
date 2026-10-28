@@ -223,9 +223,11 @@ class TestOpenAIUsage:
 
     def test_defaults(self):
         usage = OpenAIUsage()
-        assert usage.prompt_tokens == 0
-        assert usage.completion_tokens == 0
-        assert usage.total_tokens == 0
+        assert usage.prompt_tokens is None
+        assert usage.completion_tokens is None
+        assert usage.total_tokens is None
+        assert usage.usage_status == "unknown"
+        assert usage.usage_provenance == []
 
 
 class TestOpenAIModelsResponse:
