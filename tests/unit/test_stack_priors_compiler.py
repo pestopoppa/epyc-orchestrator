@@ -333,9 +333,11 @@ def test_regenerated_worker_math_url_byte_equals_fix_a_delegated_value(
     fix_a_delegated = _LEGACY_SERVER_URL_FALLBACKS[host]
     assert regenerated == fix_a_delegated
     # Not a literal: the generated URL is the host's whole declared fleet, in
-    # order, in the `full:` wire form the operative layer emits.
-    assert regenerated == "full:" + ",".join(
-        f"http://localhost:{port}" for port in _declared_fleet_ports("worker_math", "both")
+    # order, in the wire form the operative layer emits. A single-instance host
+    # has a plain URL; only a fleet has the `full:` prefix.
+    fleet = _declared_fleet_ports("worker_math", "both")
+    assert regenerated == ("full:" if len(fleet) > 1 else "") + ",".join(
+        f"http://localhost:{port}" for port in fleet
     )
     # DELIBERATE PIN, do not "modernise": `full:` is the wire prefix the operative
     # layer and the generator must both emit for a multi-instance fleet. A single
@@ -1083,10 +1085,14 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
         == priors["roles"]["worker_general"]["serving"]["ports"]
         == priors["roles"]["toolrunner"]["serving"]["ports"]
     )
-    # 16384 -> 262144 (2026-08-02): both aliases ride worker's process and inherit
-    # its serving_shape.n_ctx, which is the property this test asserts.
-    assert priors["roles"]["worker_math"]["serving"]["effective_context_tokens"] == 262144
-    assert priors["roles"]["toolrunner"]["serving"]["effective_context_tokens"] == 262144
+    # Both aliases inherit their declared host's context, including after a
+    # lineup move. 262144 was frontdoor's value, not an alias invariant.
+    from scripts.server.stack_manifest import LAUNCH_CONTEXT_TOKENS
+
+    for role in ("worker_math", "toolrunner"):
+        assert priors["roles"][role]["serving"]["effective_context_tokens"] == (
+            LAUNCH_CONTEXT_TOKENS[_lineup_host_of(role)]
+        )
     assert priors["roles"]["worker_math"]["serving"]["binding"] == "server_mode.shared_with"
     assert priors["roles"]["toolrunner"]["serving"]["binding"] == "server_mode.shared_with"
     assert priors["roles"]["worker_math"]["serving"]["launch"]["requirements"] == (
@@ -1614,7 +1620,11 @@ def test_compile_require_realized_mode_derives_quarter_lineup(
     # appear, and the fleet must be exactly that host's sub-full siblings. The
     # literals were [8082, 8182] (2 halves on worker_general's own server) and,
     # before the 2026-07-30 quarter retirement, four quarters.
-    for dead in _declared_fleet_ports("worker_math", "full"):
+    from scripts.server.realized_fleet import full_instance_ports
+
+    # A single-instance destination is present in every mode. Only a real
+    # full/sub-full fleet has a dead full-mode port under this probe.
+    for dead in set(_declared_fleet_ports("worker_math", "full")) & full_instance_ports():
         assert dead not in ports, dead
     assert ports == _declared_fleet_ports("worker_math", "quarter")
     assert ports, "sub-full lineup resolved empty: the probe derived nothing"

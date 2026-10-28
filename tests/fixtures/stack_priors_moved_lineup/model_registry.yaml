@@ -1,0 +1,7 @@
+# Test overlay, not a serving registry: relocate aliases onto another live host.
+host: architect_critic
+shared_roles:
+  - worker_general
+  - worker_explore
+  - worker_math
+  - toolrunner

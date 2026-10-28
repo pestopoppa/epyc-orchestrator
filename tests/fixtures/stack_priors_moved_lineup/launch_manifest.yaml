@@ -1,0 +1,2 @@
+# Derive the alias ports from the destination host, never from today's literals.
+inherit_port_from: architect_critic
