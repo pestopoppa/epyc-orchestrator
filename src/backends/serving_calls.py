@@ -1005,6 +1005,8 @@ def recorded_call(method: str) -> Callable:
             if _IN_CALL.get():
                 _bump("skipped_nested")
                 return fn(self, role_config, request, *args, **kwargs)
+            # Do not attribute a previous or unpersisted record to this call.
+            _LAST_CALL.set(None)
             if log_path() is None:
                 _bump("skipped_disabled")
                 return fn(self, role_config, request, *args, **kwargs)
@@ -1049,8 +1051,8 @@ def recorded_call(method: str) -> Callable:
                         staged=staged,
                         notes=notes,
                     )
-                    _LAST_CALL.set(_last_call_summary(record))
-                    write_record(record)
+                    if write_record(record):
+                        _LAST_CALL.set(_last_call_summary(record))
                     try:
                         from src.backends import prompt_layout
 
