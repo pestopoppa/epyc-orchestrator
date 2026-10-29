@@ -342,6 +342,12 @@ def _aux_service(entry: dict[str, Any]) -> AuxService:
         if required not in entry:
             raise ValueError(f"aux_services: entry {entry.get('name', entry)!r} lacks {required!r}")
     backend = entry.get("backend")
+    verify_linkage = entry.get("verify_ggml_linkage", False)
+    if backend and verify_linkage is not True:
+        raise ValueError(
+            f"aux_services: {entry['name']!r} with backend={backend!r} "
+            "requires verify_ggml_linkage: true"
+        )
     # A backend-resolved service is by definition running a foreign ggml
     # generation, so `replace` is its default: `prepend` would leave the ambient
     # llama.cpp tree reachable behind it, and a mixed-generation resolution does
@@ -366,7 +372,7 @@ def _aux_service(entry: dict[str, Any]) -> AuxService:
         pythonpath=tuple(str(path) for path in (entry.get("pythonpath") or ())),
         ld_library_path=tuple(str(path) for path in (entry.get("ld_library_path") or ())),
         ld_library_path_mode=mode,
-        verify_ggml_linkage=bool(entry.get("verify_ggml_linkage", False)),
+        verify_ggml_linkage=bool(verify_linkage),
         health_path=str(entry.get("health_path", "/health")),
         health_timeout=int(entry.get("health_timeout", 60)),
         smoke=entry.get("smoke") if isinstance(entry.get("smoke"), dict) else None,

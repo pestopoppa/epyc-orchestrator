@@ -27,7 +27,7 @@ import subprocess
 import pytest
 
 from scripts.server.stack_env import build_launch_env, build_service_env, compose_ld_library_path
-from scripts.server.stack_manifest import AUX_SERVICES
+from scripts.server.stack_manifest import AUX_SERVICES, _MANIFEST, _aux_service
 from src.registry.kernel_paths import backend_dir, backend_ld_library_path, server_binary
 
 # The FOREIGN tree — llama.cpp's CPU build, ggml 0.16.0. This is not a synthetic
@@ -40,6 +40,50 @@ ADVERSARIAL_AMBIENT = (
 )
 
 BACKEND_SERVICES = [name for name, svc in AUX_SERVICES.items() if svc.backend]
+
+
+def _aux_declaration(**overrides):
+    return {
+        "name": "fixture",
+        "port": 19999,
+        "argv": ["/bin/true"],
+        "cwd": "/",
+        "log": "/unused.log",
+        "model_label": "fixture",
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize("backend", ["stt", "tts"])
+@pytest.mark.parametrize("value", [False, None, 0, 1, "false", "true"])
+def test_backend_declaration_requires_literal_linkage_true(backend, value):
+    with pytest.raises(ValueError, match="fixture.*verify_ggml_linkage.*true"):
+        _aux_service(_aux_declaration(backend=backend, verify_ggml_linkage=value))
+
+
+@pytest.mark.parametrize("backend", ["stt", "tts"])
+def test_backend_declaration_cannot_omit_linkage_check(backend):
+    with pytest.raises(ValueError, match="fixture.*verify_ggml_linkage.*true"):
+        _aux_service(_aux_declaration(backend=backend))
+
+
+@pytest.mark.parametrize("backend", ["stt", "tts"])
+def test_backend_declaration_accepts_explicit_linkage_true(backend):
+    service = _aux_service(_aux_declaration(backend=backend, verify_ggml_linkage=True))
+    assert service.verify_ggml_linkage is True
+    assert service.ld_library_path_mode == "replace"
+
+
+def test_non_backend_declaration_keeps_linkage_default_off():
+    service = _aux_service(_aux_declaration())
+    assert service.verify_ggml_linkage is False
+    assert service.ld_library_path_mode == "prepend"
+
+
+def test_current_backend_declarations_already_explicitly_enable_linkage():
+    entries = [entry for entry in _MANIFEST["aux_services"] if entry.get("backend")]
+    assert entries
+    assert all(entry.get("verify_ggml_linkage") is True for entry in entries)
 
 
 def _composed_env(name: str, ambient: str) -> dict[str, str]:

@@ -803,10 +803,9 @@ docker_services:
 #                       weakly degrade — orchestrator_stack.py aborts that service's
 #                       launch ("requests a linkage check but declares no backend").
 #                       On a non-optional service that is a stack-start outage.
-#                     * NOT implied by `backend:`. The loader defaults it to False;
-#                       only tests/unit/test_aux_service_env.py asserts backend =>
-#                       flag, so deleting a line below is silent to the loader and
-#                       caught only by that test.
+#                     * A `backend:` declaration REQUIRES literal `true`. The loader
+#                       rejects an omitted/false/non-boolean flag before import
+#                       succeeds. Services without a backend still default to False.
 #                     * Only meaningful when argv[0] IS the ggml binary. The check
 #                       reads `ldd argv[0]`; a wrapper (`bash`, `{python}`) or a
 #                       statically-linked ggml yields ZERO libraries and the verifier
