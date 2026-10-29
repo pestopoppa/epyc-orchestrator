@@ -3566,6 +3566,12 @@ def main() -> int:
         "(required with either)",
     )
     reload_parser.add_argument(
+        "--override-owner",
+        default=None,
+        help="Session-bus roster id responsible for restoring a diagnostic override "
+        "(required with --diag-env-override; receives one expiry nudge)",
+    )
+    reload_parser.add_argument(
         "--override-ttl-s",
         type=float,
         default=5400.0,

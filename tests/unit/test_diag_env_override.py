@@ -251,7 +251,7 @@ def test_embedder_attestation_path_is_unchanged(fake_proc):
 def _reload_args(**kw):
     base = {"components": ["architect_critic"], "profile": None, "allow_during_bench": False,
             "embedder_env_override": [], "diag_env_override": [f"{KEY}=1"], "experiment_id": "UFH14-A7",
-            "override_ttl_s": 5400.0}
+            "override_ttl_s": 5400.0, "override_owner": "test-owner"}
     base.update(kw)
     return Namespace(**base)
 
@@ -265,6 +265,8 @@ def _reload_args(**kw):
     {"components": ["whisper"]},                                           # an aux service
     {"components": ["no_such_role"]},                                      # unresolvable
     {"diag_env_override": ["GGML_IQK=0"]},                                 # not allow-listed
+    {"override_owner": None},                                             # no restoring session
+    {"override_owner": "   "},                                            # blank restoring session
     {"diag_env_override": [f"{KEY}=2"]},                                   # bad value
     {"diag_env_override": ["OMP_WAIT_POLICY=passive"]},                    # embedder key, wrong class
     {"override_ttl_s": 0.0},                                               # unbounded
@@ -322,6 +324,7 @@ def test_reload_records_then_plain_reload_restores_and_archives(reload_env):
     assert first["port"] == 8083 and first["diag_env_override"] == {KEY: "1"}
     rec = dov.read_record("architect_critic", reload_env.log_dir)
     assert rec["experiment_id"] == "UFH14-A7" and rec["env"] == {KEY: "1"}
+    assert rec["owner"] == "test-owner"
     assert rec["pids"] == {"8083": 501} and rec["port"] == 8083 and rec["component_class"] == dov.LLAMA_SERVER
     assert rec["ttl_s"] == 5400.0 and reload_env.killed == [400]
 

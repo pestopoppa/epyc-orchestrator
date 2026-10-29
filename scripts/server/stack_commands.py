@@ -2322,6 +2322,10 @@ def cmd_reload(args: argparse.Namespace) -> int:
         if not (experiment_id and str(experiment_id).strip()):
             print("[REFUSED] --diag-env-override needs --experiment-id")
             return 2
+        override_owner = str(getattr(args, "override_owner", None) or "").strip()
+        if not override_owner:
+            print("[REFUSED] --diag-env-override needs --override-owner (session-bus roster id)")
+            return 2
         ttl_s = float(getattr(args, "override_ttl_s", _env_override.DEFAULT_TTL_S))
         if not 0 < ttl_s <= _env_override.MAX_TTL_S:
             print(f"[REFUSED] --override-ttl-s must be in (0, {_env_override.MAX_TTL_S:.0f}]")
@@ -2543,6 +2547,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     component=record_key, component_class=_env_override.LLAMA_SERVER,
                     experiment_id=str(experiment_id), env=diag_env, pids={int(port): int(info.pid)},
                     port=port, ttl_s=ttl_s, argv=list(sys.argv),
+                    owner=override_owner,
                     restore=f"orchestrator_stack.py reload {component} (no override flags)")
                 print(f"  [EXPERIMENT {experiment_id}] diagnostic env override {diag_env} recorded in "
                       f"{_env_override.record_path(record_key)} (expires_at {rec['expires_at']}; "

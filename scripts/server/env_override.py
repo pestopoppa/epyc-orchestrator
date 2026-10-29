@@ -12,14 +12,15 @@ Declaring the env in ``stack_env._ROLE_ENV_BLOCKS`` would persist it across ever
 own, so the override:
 
 * lives only on the command line of ONE ``orchestrator_stack.py reload <component>`` call
-  (``--diag-env-override KEY=VALUE --experiment-id ID [--override-ttl-s N]``). Nothing reads it
+  (``--diag-env-override KEY=VALUE --experiment-id ID --override-owner ROSTER_ID
+  [--override-ttl-s N]``). Nothing reads it
   back at launch, and every llama-server launch STRIPS the allow-listed diagnostic keys from its
   inherited env before applying an override, so any later ``start`` or plain ``reload`` launches
   the declared env again;
 * is restricted, per component class, by :data:`ALLOWLISTS` -- the single table of what may be
   overridden. Anything not in it is refused before anything is killed or launched;
 * is RECORDED in ``<log_dir>/env_overrides/<component>.json`` with the experiment id, the env, the
-  pid it reached, and an expiry, so that ``env_attestation`` (and the stack-change pipeline's
+  pid it reached, its restoring owner, and an expiry, so that ``env_attestation`` (and the stack-change pipeline's
   ``declared_env_attestation`` step) reports the live deviation as a DECLARED, time-bound
   deviation (a warning naming the experiment) while unexpired, and as an ERROR once expired or on
   a pid / value the record does not name;
@@ -240,7 +241,8 @@ def history_path(component: str, log_dir: Path | None = None) -> Path:
 def write_active(*, component: str, component_class: str, experiment_id: str, env: Mapping[str, str],
                  pids: Mapping[int, int], port: int | None = None, ttl_s: float = DEFAULT_TTL_S,
                  restore: str | None = None, log_dir: Path | None = None,
-                 now: datetime | None = None, argv: list[str] | None = None) -> dict[str, Any]:
+                 now: datetime | None = None, argv: list[str] | None = None,
+                 owner: str | None = None) -> dict[str, Any]:
     """Record an applied override (after the relaunch, with the pid(s) it reached)."""
     if not experiment_id or not experiment_id.strip():
         raise OverrideError("an env override needs --experiment-id")
@@ -258,6 +260,7 @@ def write_active(*, component: str, component_class: str, experiment_id: str, en
         "component_class": component_class,
         "port": int(port) if port is not None else None,
         "experiment_id": experiment_id.strip(),
+        "owner": owner.strip() if owner else None,
         "env": dict(sorted(env.items())),
         "applied_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=float(ttl_s))).isoformat(),
