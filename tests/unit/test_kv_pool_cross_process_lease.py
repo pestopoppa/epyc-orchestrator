@@ -46,6 +46,10 @@ def _env(monkeypatch):
                  kpa.KV_POOL_RATIO_INIT_ENV, kpa.KV_POOL_CROSS_PROCESS_LEASE_ENV,
                  kpa.KV_POOL_CACHE_CREDIT_MARGIN_ENV):
         monkeypatch.delenv(name, raising=False)
+    from src.backends import serving_params
+
+    resolver = serving_params.ServingParamsResolver(record_lines=lambda: (), launch_id=lambda _: None)
+    monkeypatch.setattr(serving_params, "get_serving_params_resolver", lambda: resolver)
 
 
 def _wait_until(pred, timeout=5.0):
