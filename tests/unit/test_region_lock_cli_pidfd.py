@@ -161,6 +161,91 @@ def test_pidfd_open_refusal_without_signal_still_returns_nonzero():
     assert "cannot pin child pidfd" in stderr.getvalue()
 
 
+def test_unexpected_pidfd_open_exception_keeps_lease_until_child_reaped():
+    handlers = {}
+    child = WaitFailureChild()
+    lease_released_after_reap = []
+
+    class Lease:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            lease_released_after_reap.append(child.reaped)
+
+    with mock.patch.object(region_lock_cli, "_SPAWN_WAIT_POLL_S", 0.001), \
+         mock.patch.object(region_lock_cli.subprocess, "Popen", return_value=child), \
+         mock.patch.object(region_lock_cli.signal, "signal", side_effect=fake_signal_registration(handlers)), \
+         mock.patch.object(region_lock_cli.os, "pidfd_open", side_effect=RuntimeError("injected pidfd fault")), \
+         mock.patch.object(region_lock_cli.signal, "pidfd_send_signal", side_effect=AssertionError("no pidfd")):
+        try:
+            with Lease():
+                region_lock_cli._spawn(["owned-child"])
+        except RuntimeError as exc:
+            assert str(exc) == "simulated wait interruption"
+        else:
+            raise AssertionError("the initial wait failure was swallowed")
+
+    assert child.reaped
+    assert lease_released_after_reap == [True]
+
+
+def test_cleanup_clock_and_signal_exceptions_do_not_release_lease_early():
+    handlers, sends = {}, []
+    lease_released_after_reap = []
+    stderr = io.StringIO()
+
+    class EventuallyExitedChild:
+        pid = 4647
+
+        def __init__(self):
+            self.wait_calls = 0
+            self.reaped = False
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if timeout is None:
+                raise RuntimeError("enter cleanup")
+            if self.wait_calls == 2:
+                raise subprocess.TimeoutExpired(["owned-child"], timeout)
+            self.reaped = True
+            return 0
+
+    child = EventuallyExitedChild()
+
+    class Lease:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            lease_released_after_reap.append(child.reaped)
+
+    def unusual_signal(fd, signum, _info, _flags):
+        sends.append((fd, signum))
+        raise RuntimeError("injected pidfd-send fault")
+
+    with mock.patch.object(region_lock_cli, "_SPAWN_WAIT_POLL_S", 0.001), \
+         mock.patch.object(region_lock_cli.subprocess, "Popen", return_value=child), \
+         mock.patch.object(region_lock_cli.signal, "signal", side_effect=fake_signal_registration(handlers)), \
+         mock.patch.object(region_lock_cli.os, "pidfd_open", return_value=75), \
+         mock.patch.object(region_lock_cli.signal, "pidfd_send_signal", side_effect=unusual_signal), \
+         mock.patch.object(region_lock_cli.time, "monotonic", side_effect=RuntimeError("clock fault")), \
+         mock.patch.object(region_lock_cli.os, "close"), \
+         contextlib.redirect_stderr(stderr):
+        try:
+            with Lease():
+                region_lock_cli._spawn(["owned-child"])
+        except RuntimeError as exc:
+            assert str(exc) == "enter cleanup"
+        else:
+            raise AssertionError("the initial wait failure was swallowed")
+
+    assert child.reaped
+    assert lease_released_after_reap == [True]
+    assert sends == [(75, signal.SIGTERM), (75, signal.SIGKILL)]
+    assert child.wait_calls >= 3
+
+
 def test_missing_pidfd_api_refuses_before_spawning_child():
     popen_calls = []
     stderr = io.StringIO()

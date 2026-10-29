@@ -294,14 +294,25 @@ def _spawn(command: list[str]) -> int:
     pending: list[int] = []
     forwarding_errors: list[str] = []
     pidfd_error: str | None = None
+    child_wait_completed = False
     wait_error_summary: dict[str, tuple[int, str]] = {}
     wait_poll_s = _SPAWN_WAIT_POLL_S
     term_grace_s = _SPAWN_TERM_GRACE_S
 
     def _record_wait_error(stage: str, exc: BaseException) -> None:
-        message = f"{type(exc).__name__}: {exc}"[:240]
+        try:
+            message = f"{type(exc).__name__}: {exc}"[:240]
+        except BaseException:
+            message = f"{type(exc).__name__}: <exception formatting failed>"
         count, sample = wait_error_summary.get(stage, (0, message))
         wait_error_summary[stage] = (count + 1, sample)
+
+    def _record_forwarding_error(prefix: str, exc: BaseException) -> None:
+        try:
+            detail = f"{type(exc).__name__}: {exc}"[:240]
+        except BaseException:
+            detail = f"{type(exc).__name__}: <exception formatting failed>"
+        forwarding_errors.append(f"{prefix}: {detail}")
 
     def _cleanup_backoff() -> None:
         # Even an interrupted/backoff exception must not unwind the drain
@@ -315,10 +326,15 @@ def _spawn(command: list[str]) -> int:
 
     def _report_wait_errors() -> None:
         for stage, (count, sample) in wait_error_summary.items():
-            print(
-                f"[region-lock] child-reap retry stage={stage} count={count} first={sample}",
-                file=sys.stderr,
-            )
+            try:
+                print(
+                    f"[region-lock] child-reap retry stage={stage} count={count} first={sample}",
+                    file=sys.stderr,
+                )
+            except BaseException:
+                # The child is already reaped at every call site. Logging must
+                # not turn a completed drain into a lock-release traceback.
+                pass
 
     def _forward(signum, _frame):
         # Signals can arrive after Popen returns but before pidfd_open. Queue
@@ -332,11 +348,12 @@ def _spawn(command: list[str]) -> int:
             forwarded.append(signum)
         except ProcessLookupError:
             pass
-        except (AttributeError, OSError) as exc:
-            forwarding_errors.append(f"signal {signum}: {type(exc).__name__}: {exc}")
+        except BaseException as exc:
+            _record_forwarding_error(f"signal {signum}", exc)
 
     def _reap_owned_child_after_wait_error() -> None:
         """Keep the lease until this exact Popen child is reaped."""
+        nonlocal child_wait_completed
         if proc is None:
             return
         if child_pidfd is None:
@@ -347,6 +364,7 @@ def _spawn(command: list[str]) -> int:
             while True:
                 try:
                     proc.wait(timeout=wait_poll_s)
+                    child_wait_completed = True
                     _report_wait_errors()
                     return
                 except subprocess.TimeoutExpired:
@@ -361,23 +379,39 @@ def _spawn(command: list[str]) -> int:
                 signal.pidfd_send_signal(child_pidfd, signum, None, 0)
             except ProcessLookupError:
                 pass
-            except (AttributeError, OSError) as exc:
-                forwarding_errors.append(
-                    f"cleanup signal {signum}: {type(exc).__name__}: {exc}"
-                )
-            deadline = time.monotonic() + (term_grace_s if signum == signal.SIGTERM else 0.0)
+            except BaseException as exc:
+                _record_forwarding_error(f"cleanup signal {signum}", exc)
+            try:
+                deadline = time.monotonic() + (term_grace_s if signum == signal.SIGTERM else 0.0)
+            except BaseException as exc:
+                _record_wait_error(f"monotonic after signal {signum}", exc)
+                # Skip an unreliable TERM grace calculation and proceed to
+                # the pidfd-bound KILL attempt; never let clock failure unwind
+                # the region lease while the child may still be alive.
+                continue
             while True:
                 try:
                     proc.wait(timeout=wait_poll_s)
+                    child_wait_completed = True
                     _report_wait_errors()
                     return
                 except subprocess.TimeoutExpired:
-                    if time.monotonic() < deadline:
+                    try:
+                        before_deadline = time.monotonic() < deadline
+                    except BaseException as exc:
+                        _record_wait_error(f"monotonic after signal {signum}", exc)
+                        break
+                    if before_deadline:
                         continue
                     break
                 except BaseException as exc:
                     _record_wait_error(f"wait after signal {signum}", exc)
-                    if time.monotonic() < deadline:
+                    try:
+                        before_deadline = time.monotonic() < deadline
+                    except BaseException as clock_exc:
+                        _record_wait_error(f"monotonic after signal {signum}", clock_exc)
+                        break
+                    if before_deadline:
                         _cleanup_backoff()
                         continue
                     break
@@ -387,6 +421,7 @@ def _spawn(command: list[str]) -> int:
         while True:
             try:
                 proc.wait(timeout=wait_poll_s)
+                child_wait_completed = True
                 _report_wait_errors()
                 return
             except subprocess.TimeoutExpired:
@@ -430,17 +465,28 @@ def _spawn(command: list[str]) -> int:
             # The child is still our unreaped Popen child, so this PID cannot
             # be reused before wait(); bind signaling to the opened pidfd.
             child_pidfd = os.pidfd_open(proc.pid, 0)
-        except (AttributeError, OSError) as exc:
-            pidfd_error = f"cannot pin child pidfd: {type(exc).__name__}: {exc}"
+        except BaseException as exc:
+            # Popen has already created the direct child. Every exception from
+            # opening its pidfd must take the wait-only drain path rather than
+            # escaping through finally and releasing the region lease.
+            try:
+                detail = f"{type(exc).__name__}: {exc}"
+            except BaseException:
+                detail = f"{type(exc).__name__}: <exception formatting failed>"
+            pidfd_error = f"cannot pin child pidfd: {detail}"
         else:
             queued, pending = pending, []
             for signum in queued:
                 _forward(signum, None)
-        try:
-            rc = proc.wait()
-        except BaseException:
+        rc = proc.wait()
+        child_wait_completed = True
+    except BaseException:
+        # Cover every exceptional operation after Popen, not only wait itself
+        # (pidfd setup and pending-signal forwarding included). Until Popen
+        # has confirmed this exact child reaped, the caller retains the lease.
+        if proc is not None and not child_wait_completed:
             _reap_owned_child_after_wait_error()
-            raise
+        raise
     finally:
         # Disable the handler's reference before closing its descriptor, so a
         # late signal cannot target a recycled FD number.
