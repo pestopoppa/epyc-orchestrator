@@ -107,6 +107,7 @@ class LiveServerPrimitives:
         self.timeout = timeout
         self.usage_log: list[dict[str, Any]] = []
         self.call_attempts = 0
+        self.http_attempt_wall_ms: list[float] = []
 
     def llm_call(
         self,
@@ -153,6 +154,7 @@ class LiveServerPrimitives:
             method="POST",
         )
         self.call_attempts += 1
+        http_started = time.perf_counter()
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 - operator-pinned URL
                 data = json.loads(resp.read().decode("utf-8"))
@@ -160,6 +162,8 @@ class LiveServerPrimitives:
             raise RuntimeError(f"server {exc.code}: {exc.read()[:200]!r}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"server unreachable at {self.base_url}: {exc.reason}") from exc
+        finally:
+            self.http_attempt_wall_ms.append((time.perf_counter() - http_started) * 1000.0)
         text = str((data.get("choices") or [{}])[0].get("message", {}).get("content", "") or "")
         usage = data.get("usage") or {}
         self.usage_log.append(
@@ -285,6 +289,7 @@ def run_shadow(
         executor = q.get("executor_model_id")
         usage_before = len(primitives.usage_log)
         attempts_before = getattr(primitives, "call_attempts", None)
+        http_before = len(getattr(primitives, "http_attempt_wall_ms", []))
         t0 = time.perf_counter()
         review = svc.review_candidate(
             view,
@@ -323,6 +328,7 @@ def run_shadow(
                 "model_calls_observed": len(primitives.usage_log) - usage_before,
                 "model_call_attempts": (primitives.call_attempts - attempts_before
                                         if isinstance(attempts_before, int) else None),
+                "http_attempt_wall_ms": getattr(primitives, "http_attempt_wall_ms", [])[http_before:],
             }
         )
         # TM-8: reminder events — exercise the cheap knob with emit=True (intake-835).
@@ -399,13 +405,17 @@ def run_off(
 
 
 def summarize_model_calls(questions: list[dict[str, Any]], usage: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize sequential harness calls once; never substitute text estimates for usage."""
+    """Summarize sequential calls and candidate-review intervals once, preserving their distinction."""
     if not questions or len(questions) != len(usage) or any(q.get("model_calls_observed") != 1 or q.get("model_call_attempts") != 1 for q in questions):
         return {"status": "unavailable", "reason": "question/model-call count mismatch",
                 "question_count": len(questions), "observed_usage_count": len(usage)}
     latency = [q.get("latency_ms") for q in questions]
     if any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v <= 0 for v in latency):
-        return {"status": "unavailable", "reason": "missing or invalid model-call latency",
+        return {"status": "unavailable", "reason": "missing or invalid review-candidate latency",
+                "question_count": len(questions), "observed_usage_count": len(usage)}
+    http = [q.get("http_attempt_wall_ms") for q in questions]
+    if any(not isinstance(v, list) or len(v) != 1 or not isinstance(v[0], (int, float)) or isinstance(v[0], bool) or not math.isfinite(v[0]) or v[0] <= 0 for v in http):
+        return {"status": "unavailable", "reason": "missing or invalid HTTP attempt duration",
                 "question_count": len(questions), "observed_usage_count": len(usage)}
     def total(key: str) -> int | None:
         values = [u.get(key) for u in usage]
@@ -415,11 +425,14 @@ def summarize_model_calls(questions: list[dict[str, Any]], usage: list[dict[str,
     return {
         "status": "available",
         "n_calls": len(questions),
-        "latency_ms_total": sum(latency),
-        "latency_ms_mean": sum(latency) / len(latency) if latency else None,
+        "review_candidate_latency_ms_total": sum(latency),
+        "review_candidate_latency_ms_mean": sum(latency) / len(latency) if latency else None,
+        "http_attempt_wall_ms_total": sum(v[0] for v in http),
+        "http_attempt_wall_ms_mean": sum(v[0] for v in http) / len(http),
         "endpoint_prompt_tokens": total("prompt_tokens"),
         "endpoint_completion_tokens": total("completion_tokens"),
         "usage_alignment": "sequential harness order; no request-ID join",
+        "http_timing_scope": "client HTTP attempt including response JSON decode; not server queue or model compute time",
     }
 
 
@@ -431,13 +444,14 @@ def run_delta(on_report: Path, off_report: Path, report_out: Path) -> dict[str, 
     if calls.get("status") != "available":
         calls = {}
     off_mean = off.get("loop_ms_mean", 0.0)
-    on_mean = calls.get("latency_ms_mean")
+    on_mean = calls.get("review_candidate_latency_ms_mean")
     report = {
         "run": "delta",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "on_report": str(on_report),
         "off_report": str(off_report),
         "reviewer_on_mean_latency_ms": on_mean,
+        "http_attempt_wall_ms_mean": calls.get("http_attempt_wall_ms_mean"),
         "reviewer_off_loop_mean_ms": off_mean,
         "overhead_delta_ms": (on_mean - off_mean) if on_mean is not None else None,
         "overhead_ratio": (on_mean / off_mean) if (on_mean and off_mean) else None,
