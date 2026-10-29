@@ -124,6 +124,8 @@ class SlotState:
     last_access: float = field(default_factory=time.time)
     hit_count: int = 0
     miss_count: int = 0
+    last_role: str | None = None
+    last_session_id: str | None = None
 
     @property
     def hit_rate(self) -> float:
@@ -184,6 +186,9 @@ class PrefixRouter:
         self,
         prompt: str,
         canonicalize: bool = True,
+        *,
+        role: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """Get the optimal slot for a prompt.
 
@@ -194,6 +199,9 @@ class PrefixRouter:
         Args:
             prompt: The prompt to route.
             canonicalize: Whether to canonicalize the prompt first.
+            role: Role of this caller, retained as slot metadata.
+            session_id: Session of this caller, retained as slot metadata.
+                Identity does not partition prefixes or change LRU selection.
 
         Returns:
             Slot ID (0 to num_slots-1).
@@ -211,6 +219,8 @@ class PrefixRouter:
         if prefix_hash in self.prefix_to_slot:
             slot_id = self.prefix_to_slot[prefix_hash]
             slot = self.slots[slot_id]
+            slot.last_role = role
+            slot.last_session_id = session_id
             slot.hit_count += 1
             slot.last_access = time.time()
             self._touch_lru(slot_id)
@@ -220,6 +230,8 @@ class PrefixRouter:
 
         # Cache miss - allocate LRU slot
         slot_id = self._allocate_slot(prefix_hash)
+        self.slots[slot_id].last_role = role
+        self.slots[slot_id].last_session_id = session_id
         self.cache_misses += 1
         logger.debug(f"Cache MISS: allocated slot {slot_id} for prefix {prefix_hash[:8]}...")
         return slot_id
@@ -287,7 +299,7 @@ class PrefixRouter:
             "hit_rate_pct": hit_rate * 100,
         }
 
-    def get_slot_stats(self) -> list[dict[str, int | float | str]]:
+    def get_slot_stats(self) -> list[dict[str, int | float | str | None]]:
         """Get per-slot statistics.
 
         Returns:
@@ -301,6 +313,8 @@ class PrefixRouter:
                 "miss_count": slot.miss_count,
                 "hit_rate": slot.hit_rate,
                 "last_access": slot.last_access,
+                "last_role": slot.last_role,
+                "last_session_id": slot.last_session_id,
             }
             for slot in self.slots.values()
         ]
@@ -321,6 +335,8 @@ class PrefixRouter:
         for slot in self.slots.values():
             slot.prefix_hash = ""
             slot.prefix_length = 0
+            slot.last_role = None
+            slot.last_session_id = None
 
 
 # =============================================================================
@@ -438,10 +454,12 @@ class CachingBackend:
             idx.reconcile(get_context_limit_resolver().pool_occupancy(url))
             return idx.pin_candidate(
                 prefix_index.key_text_for_request(request),
-                min_tokens=prefix_index._env_int(prefix_index.PIN_MIN_TOKENS_ENV,
-                                                 prefix_index.DEFAULT_PIN_MIN_TOKENS),
-                fresh_s=prefix_index._env_float(prefix_index.PIN_FRESH_S_ENV,
-                                                prefix_index.DEFAULT_PIN_FRESH_S),
+                min_tokens=prefix_index._env_int(
+                    prefix_index.PIN_MIN_TOKENS_ENV, prefix_index.DEFAULT_PIN_MIN_TOKENS
+                ),
+                fresh_s=prefix_index._env_float(
+                    prefix_index.PIN_FRESH_S_ENV, prefix_index.DEFAULT_PIN_FRESH_S
+                ),
             )
         except Exception:
             return None
@@ -506,7 +524,12 @@ class CachingBackend:
 
         # Get optimal slot from prefix router
         prompt = request.prompt or ""
-        slot_id = self.router.get_slot_for_prompt(prompt, canonicalize=self.canonicalize)
+        slot_id = self.router.get_slot_for_prompt(
+            prompt,
+            canonicalize=self.canonicalize,
+            role=request.role,
+            session_id=getattr(request, "session_id", None),
+        )
 
         # Pass computed slot_id to backend via request (id_slot in llama-server)
         routed_request = self._request_with_slot(request, slot_id)
@@ -539,13 +562,19 @@ class CachingBackend:
         pinned = self._prefix_index_pin(request)
         if pinned is not None:
             return self.backend.infer_stream_text(
-                role_config, self._request_with_slot(request, pinned), on_chunk=on_chunk)
+                role_config, self._request_with_slot(request, pinned), on_chunk=on_chunk
+            )
 
         if not self._pin_slots_enabled():
             return self.backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
 
         prompt = request.prompt or ""
-        slot_id = self.router.get_slot_for_prompt(prompt, canonicalize=self.canonicalize)
+        slot_id = self.router.get_slot_for_prompt(
+            prompt,
+            canonicalize=self.canonicalize,
+            role=request.role,
+            session_id=getattr(request, "session_id", None),
+        )
         routed_request = self._request_with_slot(request, slot_id)
         return self.backend.infer_stream_text(role_config, routed_request, on_chunk=on_chunk)
 
@@ -585,6 +614,7 @@ class CachingBackend:
             "frontdoor_repl_bypass_enabled": self._frontdoor_repl_bypass_enabled(),
             "frontdoor_repl_bypass_count": self.frontdoor_repl_bypass_count,
         }
+
 
 # =============================================================================
 # Utility Functions
