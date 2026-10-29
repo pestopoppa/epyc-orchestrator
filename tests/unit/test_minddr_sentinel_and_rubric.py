@@ -1,8 +1,7 @@
-"""Tests for NIB2-45 Week 3: sentinel suite + EvalResult rubric stubs."""
+"""Tests for the NIB2-45 Week 3 sentinel suite."""
 
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -51,30 +50,3 @@ def test_sentinel_prompts_trigger_research_like_detector():
     data = yaml.safe_load(SENTINEL_PATH.read_text())
     failures = [e["id"] for e in data if not is_research_like(e["prompt"])]
     assert not failures, f"Sentinels not classified research-like: {failures}"
-
-
-def test_eval_result_has_rubric_stub_fields():
-    from src.diversity_gate import EvalResult
-
-    r = EvalResult(quality=1.0, speed=20.0, cost=0.5, reliability=0.9)
-    assert math.isnan(r.rubric_reasoning_trajectory)
-    assert math.isnan(r.rubric_tool_calls)
-    assert math.isnan(r.rubric_outline)
-    assert math.isnan(r.rubric_content_stage)
-
-
-def test_rubric_fields_populatable():
-    """Fields accept float values without affecting SafetyGate's core logic."""
-    from src.diversity_gate import EvalResult, SafetyGate, Verdict
-
-    baseline = EvalResult(quality=1.0, speed=20.0, cost=0.5, reliability=0.9)
-    trial = EvalResult(
-        quality=1.1, speed=20.0, cost=0.5, reliability=0.9,
-        rubric_reasoning_trajectory=0.85,
-        rubric_tool_calls=0.70,
-        rubric_outline=0.90,
-        rubric_content_stage=0.75,
-    )
-    gate = SafetyGate(baseline=baseline, warn_only=False)
-    v = gate.evaluate(trial)
-    assert v.verdict == Verdict.PASS  # quality up, nothing else changed

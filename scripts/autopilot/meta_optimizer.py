@@ -24,10 +24,9 @@ DEFAULT_INTERVAL = 50  # Rebalance every N trials
 # status="signal_missing", so it persisted a growing all-null blob into
 # autopilot_state.json that read as a live guardrail. See the audit finding M5 in
 # handoffs/active/autopilot-decision-plane-audit-2026-07-22.md. The EV-8 metric
-# library (scripts/autopilot/diversity_metrics.py), the EvalResult.diversity_*
-# fields, and src/diversity_gate.py are deliberately UNTOUCHED — they are the
-# honest, explicitly-NaN measurement surface this detector was supposed to sit on
-# top of once EV-8 lands. Rebuild the detector then, on real data.
+# library (scripts/autopilot/diversity_metrics.py) remains available for real
+# measurements. The unused src diversity gate was retired under SG-W3.
+# Rebuild the detector on real data once EV-8 lands.
 
 
 @dataclass

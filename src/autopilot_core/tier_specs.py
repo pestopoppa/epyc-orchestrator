@@ -70,7 +70,7 @@ def _measured_float(value: Any) -> float | None:
 
     Absence has several shapes in journal rows and result objects: a missing key
     (``None``), an empty string, a non-numeric value, and NaN (the codebase's
-    "signal unavailable this trial" marker — see `src/diversity_gate.py`). All are
+    "signal unavailable this trial" marker). All are
     absence. A real ``0.0`` is a measurement and is returned as ``0.0``.
     """
     if value is None or isinstance(value, bool):

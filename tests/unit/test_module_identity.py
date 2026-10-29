@@ -2,9 +2,8 @@
 
 Two historical hazards are locked down here:
 
-  (i)  ``src/safety_gate.py`` was renamed to ``src/diversity_gate.py`` so it no
-       longer collides, by bare name, with ``scripts/autopilot/safety_gate.py``
-       (the module the autopilot actually imports as ``safety_gate``).
+  (i)  The unused ``src/safety_gate.py`` / ``src/diversity_gate.py`` surface is
+       retired. The autopilot imports ``scripts/autopilot/safety_gate.py``.
 
   (ii) ``scripts/autopilot/species/structural_lab.py`` used to run
        ``sys.path.insert(0, str(ORCH_ROOT / "src"))``, putting ``src/`` AHEAD of
@@ -23,11 +22,10 @@ from pathlib import Path
 ORCH_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_src_safety_gate_renamed_to_diversity_gate() -> None:
-    # (i) The colliding module name must be gone; the diversity gate lives on
-    # under its new, unambiguous name.
+def test_retired_src_safety_gates_are_absent() -> None:
+    # (i) Neither obsolete gate may reappear as a second acceptance surface.
     assert not (ORCH_ROOT / "src" / "safety_gate.py").exists()
-    assert (ORCH_ROOT / "src" / "diversity_gate.py").exists()
+    assert not (ORCH_ROOT / "src" / "diversity_gate.py").exists()
 
 
 def test_bare_import_safety_gate_resolves_autopilot_module() -> None:
