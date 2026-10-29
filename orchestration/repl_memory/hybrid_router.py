@@ -52,7 +52,11 @@ class HybridRouter:
         exploration_epsilon: float = 0.0,
         frontdoor_verifier: Optional[Any] = None,
         frontdoor_verifier_threshold: float = 0.5,
+        action_outcome_scorer: Optional[Any] = None,
+        admissible_roles_provider: Optional[Any] = None,
     ):
+        self.action_outcome_scorer = action_outcome_scorer
+        self.admissible_roles_provider = admissible_roles_provider
         self.retriever = retriever
         self.rule_based = rule_based_router
         self.graph_router = graph_router
@@ -385,6 +389,145 @@ class HybridRouter:
 
         return np.concatenate([emb, tt_vec, [norm_ctx_len], [has_images]])
 
+    def _outcome_features(self, task_ir: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Build the same columns with decision-time values; absent fields stay missing."""
+        try:
+            embedding = np.asarray(
+                self.retriever.embedder.embed_task_ir(task_ir, side="query"), dtype=float
+            )
+            if (
+                embedding.shape != (1024,)
+                or not np.isfinite(embedding).all()
+                or not np.any(embedding)
+            ):
+                return None
+            task_type = task_ir.get("task_type")
+            types = np.full(5, np.nan)
+            if isinstance(task_type, str) and task_type:
+                types[:] = 0
+                lower = task_type.lower()
+                index = next(
+                    (i for i, name in enumerate(self._CLASSIFIER_TASK_TYPES) if name in lower), 4
+                )
+                types[index] = 1
+            context = task_ir.get("context_length")
+            context = (
+                np.log1p(float(context)) / 12
+                if context is not None and float(context) >= 0
+                else np.nan
+            )
+            images = task_ir.get("has_images")
+            images = float(images) if isinstance(images, bool) else np.nan
+            return np.concatenate((embedding, types, [context, images]))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        except Exception:
+            logger.debug("outcome feature extraction failed", exc_info=True)
+            return None
+
+    def _outcome_choice(
+        self, task_ir: Dict[str, Any], results: List[RetrievalResult]
+    ) -> Optional[str]:
+        """Use only explicitly admissible single-role candidates with known costs."""
+        if self.action_outcome_scorer is None or self.admissible_roles_provider is None:
+            return None
+        try:
+            from src.features import features
+
+            if not features().routing_classifier:
+                return None
+            menu = set(self.admissible_roles_provider(task_ir)) & self._live_routing_roles
+            by_role = {}
+            for result in results:
+                parsed = self._parse_routing_action(result.memory.action)
+                # A role-only outcome does not establish a mode-specific outcome.
+                if len(parsed) == 1 and parsed[0] in menu and result.memory.action == parsed[0]:
+                    by_role.setdefault(parsed[0], result)
+            features_row = self._outcome_features(task_ir)
+            if features_row is None or not by_role:
+                return None
+            predictions = self.action_outcome_scorer.score_candidates(features_row, list(by_role))
+            floor = float(self.action_outcome_scorer.quality_floor)
+            if not np.isfinite(floor) or not 0 <= floor <= 1:
+                return None
+            from .retriever import _scalarized_selection_score
+
+            choices = []
+            for role, result in by_role.items():
+                score = predictions.get(role)
+                if score is None or not score.supported or score.rate is None:
+                    continue
+                rate = float(score.rate)
+                if not np.isfinite(rate) or not floor <= rate <= 1:
+                    continue
+                cost = self._normalized_cost(result)
+                if not np.isfinite(cost) or cost < 0 or result.cold_cost_s <= 0:
+                    continue
+                value, _, _ = _scalarized_selection_score(
+                    q_value=rate,
+                    normalized_cost=cost,
+                    cost_lambda=float(self.retriever.config.cost_lambda),
+                    cost_tau=float(result.routing_cost_tau),
+                    pref_perf=float(result.routing_pref_perf),
+                    pref_cost=float(result.routing_pref_cost),
+                )
+                if np.isfinite(value):
+                    choices.append((value, role))
+            return max(choices)[1] if choices else None
+        except Exception:
+            logger.debug("outcome scorer abstained", exc_info=True)
+            return None
+
+    def _try_outcome_route(
+        self, task_ir: Dict[str, Any], priors: Optional[Dict[str, float]]
+    ) -> Optional[str]:
+        if self.action_outcome_scorer is None or self.admissible_roles_provider is None:
+            return None
+        try:
+            from src.features import features
+
+            if not features().routing_classifier:
+                return None
+            results = self._apply_priors(
+                self._filter_routable_results(self.retriever.retrieve_for_routing(task_ir)), priors
+            )
+            route_key = str(task_ir.get("task_id", task_ir.get("objective", "")))
+            risk_gate = self.retriever.evaluate_risk_gate(results, route_key=route_key)
+            if risk_gate.get("enforced") and not risk_gate.get("passed"):
+                return None
+            role = self._outcome_choice(task_ir, results)
+            verifier_meta = {}
+            if role == "frontdoor" and self.frontdoor_verifier is not None:
+                verifier_features = self._build_classifier_features(task_ir)
+                if verifier_features is None:
+                    return None
+                verifier_p = float(self.frontdoor_verifier.predict(verifier_features, action_idx=0))
+                if not np.isfinite(verifier_p) or not 0 <= verifier_p <= 1:
+                    return None
+                verdict = "accept" if verifier_p >= self.frontdoor_verifier_threshold else "reject"
+                if verdict == "reject" and not self.frontdoor_verifier_shadow:
+                    return None
+                verifier_meta = {
+                    "verifier_p_success": round(verifier_p, 4),
+                    "verifier_threshold": self.frontdoor_verifier_threshold,
+                    "verifier_verdict": verdict,
+                    "verifier_shadow": self.frontdoor_verifier_shadow,
+                }
+            if role:
+                self.retriever.update_last_role(role)
+                self._record_decision_meta(
+                    strategy="action_outcome",
+                    chosen_action=role,
+                    results=results,
+                    risk_gate=risk_gate,
+                )
+                if verifier_meta:
+                    self.last_decision_meta.update(verifier_meta)
+            return role
+        except Exception:
+            logger.debug("outcome routing abstained", exc_info=True)
+            return None
+
     def route(
         self,
         task_ir: Dict[str, Any],
@@ -400,6 +543,10 @@ class HybridRouter:
             (routing_decision, strategy_used) tuple
             strategy_used is "learned" or "rules"
         """
+        outcome_role = self._try_outcome_route(task_ir, priors)
+        if outcome_role:
+            return ([outcome_role], "action_outcome")
+
         # Classifier fast-path: skip full retrieval if confident
         preference_override = isinstance(task_ir.get("routing_preferences"), dict)
         if self.routing_classifier is not None and not preference_override:
@@ -596,6 +743,10 @@ class HybridRouter:
             (routing_decision, strategy_used, mode) tuple
             mode is "direct", "react", or "repl"
         """
+        outcome_role = self._try_outcome_route(task_ir, priors)
+        if outcome_role:
+            return ([outcome_role], "action_outcome", "direct")
+
         # Classifier fast-path
         preference_override = isinstance(task_ir.get("routing_preferences"), dict)
         if self.routing_classifier is not None and not preference_override:
