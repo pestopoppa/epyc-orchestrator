@@ -6310,7 +6310,8 @@ function _autopilotPhaseHealthClass(status) {
 
 function _autopilotPhaseHealthLabel(health) {
     if (!health || !health.status) return 'phase health unknown';
-    const bits = [`phase health ${health.status}`];
+    const statusLabel = health.status === 'health_escalated' ? 'escalated' : health.status;
+    const bits = [`phase health ${statusLabel}`];
     if (health.heartbeat_age_s != null) bits.push(`heartbeat ${formatShortDuration(health.heartbeat_age_s)} ago`);
     if (health.pid_alive === false) bits.push('pid not alive');
     if (Array.isArray(health.blockers) && health.blockers.length) {
