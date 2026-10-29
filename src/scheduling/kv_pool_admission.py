@@ -161,10 +161,9 @@ DEFAULT_NEW_TOKEN_RATIO_DECAY = 0.05
 # (8-32k solo prefill ~658 tok/s), and leaves ordinary agentic turns alone.
 KV_POOL_LONG_PREFILL_ENV = "ORCHESTRATOR_KV_POOL_LONG_PREFILL_TOKENS"
 DEFAULT_LONG_PREFILL_TOKENS = 16384
-# Prefill-rate floor (tok/s) that bounds how long a lease is held when the caller
-# never reports the first output. 250 is below every measured :8083 long-prefill
-# rate (all-traffic 32-64k: 257, >=64k: 325). <= 0: hold until prefill_done or
-# release.
+# Default leases use the conservative measured rate at the whole prompt's
+# context, with this fallback/minimum. An explicit env rate wins; <= 0 holds
+# until prefill_done or release.
 KV_POOL_PREFILL_FLOOR_TPS_ENV = "ORCHESTRATOR_KV_POOL_PREFILL_FLOOR_TPS"
 DEFAULT_PREFILL_FLOOR_TPS = 250.0
 # A /slots prefill that has already processed this many uncached tokens is a
@@ -737,6 +736,11 @@ class SharedKVPoolAdmission:
                         url, ticket, pidx, prefix_key, tokens, want, prefill_tokens, credit,
                         first=pview is None, hashes=phashes, caps=caps,
                         slots_up=observed is not None)
+                # The resolver may refresh its log tail; keep that I/O outside
+                # the shared admission lock, like the server observation above.
+                lease_rate = (self._prefill_lease_rate(url, tokens)
+                              if self.is_long_prefill(prefill_tokens)
+                              else DEFAULT_PREFILL_FLOOR_TPS)
                 with self._cond:
                     is_long = self.is_long_prefill(prefill_tokens)
                     want_eff = pview["want"] if pview is not None else want
@@ -759,7 +763,7 @@ class SharedKVPoolAdmission:
                         verdict = self._admissible(url, ticket, queue, want_eff, is_long,
                                                    pool_tokens, observed)
                     if verdict == "head" and is_long and not self._take_lease(
-                            url, ticket, self._lease_expiry(prefill_tokens)):
+                            url, ticket, self._lease_expiry(prefill_tokens, rate=lease_rate)):
                         verdict = "lease"  # another worker took it first
                     if verdict in ("head", "pass", "pass_trunk", "lpm"):
                         want = want_eff
@@ -872,11 +876,38 @@ class SharedKVPoolAdmission:
                     self._queue.pop(url, None)
                 self._cond.notify_all()
 
-    def _lease_expiry(self, prompt_tokens: int) -> float | None:
-        floor = _env_float(KV_POOL_PREFILL_FLOOR_TPS_ENV, DEFAULT_PREFILL_FLOOR_TPS)
-        if floor <= 0:
+    def _prefill_lease_rate(self, url: str, context_tokens: int) -> float:
+        """Resolve the whole context's rate without holding the admission lock."""
+        rate = None
+        try:
+            override = float(os.environ[KV_POOL_PREFILL_FLOOR_TPS_ENV])
+            if math.isfinite(override):
+                rate = override
+        except (KeyError, ValueError):
+            pass
+        if rate is None:
+            rate = DEFAULT_PREFILL_FLOOR_TPS
+            if url:
+                try:
+                    from urllib.parse import urlparse
+                    from src.backends.serving_params import get_serving_params_resolver, rate_at
+
+                    port = urlparse(url).port
+                    if port is not None:
+                        samples = get_serving_params_resolver().samples_for_port(port)
+                        context = max(1, int(context_tokens))
+                        measured = rate_at(samples, context)
+                        if measured is not None and math.isfinite(measured):
+                            rate = max(rate, measured)
+                except Exception:
+                    logger.debug("KV pool admission: measured prefill rate unavailable", exc_info=True)
+        return rate
+
+    def _lease_expiry(self, prompt_tokens: int, *, rate: float = DEFAULT_PREFILL_FLOOR_TPS) -> float | None:
+        """Time the uncached work from actual lease acquisition."""
+        if rate <= 0:
             return None
-        return self._clock() + max(1, int(prompt_tokens)) / floor
+        return self._clock() + max(1, int(prompt_tokens)) / rate
 
     def _admissible(
         self,

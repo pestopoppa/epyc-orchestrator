@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -40,6 +41,11 @@ def _env(monkeypatch):
                  kpa.KV_POOL_LONG_PREFILL_OBSERVE_ENV, kpa.KV_POOL_MAX_QUEUED_ENV,
                  kpa.KV_POOL_RATIO_INIT_ENV):
         monkeypatch.delenv(name, raising=False)
+    from src.backends import serving_params
+
+    resolver = serving_params.ServingParamsResolver(record_lines=lambda: (), launch_id=lambda _: None)
+    monkeypatch.setattr(serving_params, "get_serving_params_resolver", lambda: resolver)
+    return resolver
 
 
 @pytest.fixture
@@ -135,6 +141,110 @@ class TestLongPrefillRule:
         now[0] += 1.5
         assert pool.long_prefill_holder(URL) is None, "a batch caller never reports prefill"
         assert pool.acquire(URL, 20_000, POOL, timeout_s=0) is not None
+
+    @pytest.mark.parametrize("measured_tps, expiry_s", [
+        (1000.0, 50.0), (100.0, 200.0), (float("nan"), 200.0),
+    ])
+    def test_lease_uses_measured_rate_with_floor(self, _env, measured_tps, expiry_s):
+        from src.backends.serving_params import MIN_PREFILL_SAMPLES
+
+        for i in range(MIN_PREFILL_SAMPLES):
+            _env.observe_record({
+                "record_id": f"rate-{i}", "server": {"port": 8083},
+                "timings": {"prompt_n": 50_000, "prompt_ms": 50_000 / measured_tps * 1000},
+            })
+        now = [1000.0]
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None, clock=lambda: now[0])
+        ticket = pool.acquire(URL, 50_000, POOL, timeout_s=0)
+        assert ticket is not None
+        now[0] += expiry_s - .1
+        assert pool.long_prefill_holder(URL) == ticket
+        now[0] += .2
+        assert pool.long_prefill_holder(URL) is None
+
+    @pytest.mark.parametrize("override, expiry_s", [("125", 400.0), ("0", None)])
+    def test_explicit_rate_override_wins_over_measurements(self, _env, monkeypatch,
+                                                          override, expiry_s):
+        from src.backends.serving_params import MIN_PREFILL_SAMPLES
+
+        for i in range(MIN_PREFILL_SAMPLES):
+            _env.observe_record({
+                "record_id": f"rate-{i}", "server": {"port": 8083},
+                "timings": {"prompt_n": 50_000, "prompt_ms": 50_000},
+            })
+        monkeypatch.setenv(kpa.KV_POOL_PREFILL_FLOOR_TPS_ENV, override)
+        now = [1000.0]
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None, clock=lambda: now[0])
+        ticket = pool.acquire(URL, 50_000, POOL, timeout_s=0)
+        if expiry_s is None:
+            now[0] += 1e6
+            assert pool.long_prefill_holder(URL) == ticket
+            return
+        now[0] += expiry_s - .1
+        assert pool.long_prefill_holder(URL) == ticket
+        now[0] += .2
+        assert pool.long_prefill_holder(URL) is None
+
+    @pytest.mark.parametrize("record_port", [None, 8070])
+    def test_missing_or_other_server_rates_use_the_floor(self, _env, record_port):
+        from src.backends.serving_params import MIN_PREFILL_SAMPLES
+
+        for i in range(MIN_PREFILL_SAMPLES if record_port is not None else 0):
+            _env.observe_record({
+                "record_id": f"other-{i}", "server": {"port": record_port},
+                "timings": {"prompt_n": 50_000, "prompt_ms": 50_000},
+            })
+        now = [1000.0]
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None, clock=lambda: now[0])
+        ticket = pool.acquire(URL, 50_000, POOL, timeout_s=0)
+        now[0] += 199.9
+        assert pool.long_prefill_holder(URL) == ticket
+        now[0] += .2
+        assert pool.long_prefill_holder(URL) is None
+
+    def test_cached_suffix_uses_the_whole_prompt_rate(self, _env, monkeypatch):
+        from src.backends.serving_params import MIN_PREFILL_SAMPLES
+
+        for i in range(MIN_PREFILL_SAMPLES):
+            _env.observe_record({
+                "record_id": f"short-context-{i}", "server": {"port": 8083},
+                "timings": {"prompt_n": 20_000, "prompt_ms": 20_000},
+            })
+        now = [1000.0]
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None, clock=lambda: now[0])
+        # A reliable cache estimate leaves 20k uncached in an 80k-token prompt.
+        monkeypatch.setattr(pool, "_credit", lambda *_args: (20_000, {}))
+        ticket = pool.acquire(URL, 80_000, POOL, timeout_s=0)
+        # Existing rate_at scales 1000 t/s at 20k down to 500 t/s at 80k: 40 s, not 20 s.
+        now[0] += 39.9
+        assert pool.long_prefill_holder(URL) == ticket
+        now[0] += .2
+        assert pool.long_prefill_holder(URL) is None
+
+    def test_rate_refresh_does_not_block_another_server(self, monkeypatch):
+        from src.backends import serving_params
+
+        entered, resume = threading.Event(), threading.Event()
+
+        class SlowResolver:
+            def samples_for_port(self, port):
+                assert port == 8083
+                entered.set()
+                assert resume.wait(5)
+                return []
+
+        monkeypatch.setattr(serving_params, "get_serving_params_resolver", SlowResolver)
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            long = workers.submit(pool.acquire, URL, 50_000, POOL, timeout_s=0)
+            try:
+                assert entered.wait(2)
+                other = workers.submit(pool.acquire, "http://localhost:8070", 2000, POOL,
+                                       timeout_s=0)
+                assert other.result(timeout=2) is not None
+            finally:
+                resume.set()
+            assert long.result(timeout=2) is not None
 
     def test_floor_zero_holds_until_prefill_done_or_release(self, monkeypatch):
         now = [0.0]

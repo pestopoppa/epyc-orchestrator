@@ -121,6 +121,29 @@ class TestSlotState:
 class TestPrefixRouter:
     """Tests for PrefixRouter class."""
 
+    def test_identity_tracks_latest_caller_without_partitioning_shared_prefix(self):
+        router = PrefixRouter(num_slots=2)
+        first = router.get_slot_for_prompt("shared prefix", role="coder", session_id="s1")
+        second = router.get_slot_for_prompt("shared prefix", role="critic", session_id="s2")
+
+        assert second == first
+        assert router.cache_hits == 1
+        assert router.get_slot_stats()[second]["last_role"] == "critic"
+        assert router.get_slot_stats()[second]["last_session_id"] == "s2"
+
+    def test_eviction_and_clear_remove_previous_caller_identity(self):
+        router = PrefixRouter(num_slots=1)
+        router.get_slot_for_prompt("old prefix", role="coder", session_id="s1")
+        # A legacy caller on the reused slot must not inherit the previous session.
+        router.get_slot_for_prompt("new prefix")
+        assert router.slots[0].last_role is None
+        assert router.slots[0].last_session_id is None
+
+        router.get_slot_for_prompt("new prefix", role="critic", session_id="s2")
+        router.clear()
+        assert router.slots[0].last_role is None
+        assert router.slots[0].last_session_id is None
+
     def test_initialization(self):
         """Should initialize with correct number of slots."""
         router = PrefixRouter(num_slots=4)
@@ -281,6 +304,38 @@ class TestCachingBackend:
         # Router should have tracked the request
         assert router.total_routes == 1
 
+    @pytest.mark.parametrize("method", ["infer", "infer_stream_text"])
+    @pytest.mark.parametrize("session_id", [None, "session-123"])
+    def test_passes_request_identity_to_router(self, method, session_id):
+        seen = []
+
+        class Backend:
+            def infer(self, role_config, request):
+                seen.append(request)
+                return "result"
+
+            def infer_stream_text(self, role_config, request, on_chunk=None):
+                seen.append(request)
+                on_chunk("chunk")
+                return "result"
+
+        router = PrefixRouter(num_slots=2)
+        caching = CachingBackend(Backend(), router)
+        request = InferenceRequest(role="coder", prompt="Time: 2024-01-15T10:00:00Z")
+        # Session identity is attached by the inference primitive at request time.
+        if session_id is not None:
+            request.session_id = session_id
+        chunks = []
+        kwargs = {"on_chunk": chunks.append} if method == "infer_stream_text" else {}
+        assert getattr(caching, method)(MagicMock(), request, **kwargs) == "result"
+
+        slot = router.slots[seen[0].slot_id]
+        assert slot.last_role == "coder"
+        assert slot.last_session_id == session_id
+        assert router.get_slot_stats()[slot.slot_id]["last_session_id"] == session_id
+        assert seen[0].prompt == request.prompt
+        assert chunks == (["chunk"] if method == "infer_stream_text" else [])
+
     def test_canonicalizes_prompt(self, mock_backend):
         """Should canonicalize prompts when enabled."""
         caching = CachingBackend(mock_backend, canonicalize=True)
@@ -392,8 +447,7 @@ class TestSharedServerSlotAllocation:
         slot_role_b = shared.get_slot_for_prompt("role B prompt " + "b" * 400)
 
         assert slot_role_a != slot_role_b, (
-            "two roles on one server were handed the same id_slot; "
-            "they would evict each other"
+            "two roles on one server were handed the same id_slot; they would evict each other"
         )
 
     def test_separate_routers_collide(self):
@@ -433,7 +487,9 @@ class TestSlotPinningDefaultOff:
     def backend(self):
         backend = MagicMock()
         backend.infer.return_value = MagicMock(role="test", output="r", tokens_generated=1)
-        backend.infer_stream_text.return_value = MagicMock(role="test", output="r", tokens_generated=1)
+        backend.infer_stream_text.return_value = MagicMock(
+            role="test", output="r", tokens_generated=1
+        )
         return backend
 
     def test_infer_sends_no_slot_and_skips_router(self, backend, monkeypatch):
@@ -458,7 +514,9 @@ class TestSlotPinningDefaultOff:
 
         router = PrefixRouter(num_slots=4)
         caching = CachingBackend(_StreamBackend(), router)
-        caching.infer_stream_text(MagicMock(), InferenceRequest(role="x", prompt="q" * 600), on_chunk=None)
+        caching.infer_stream_text(
+            MagicMock(), InferenceRequest(role="x", prompt="q" * 600), on_chunk=None
+        )
         assert router.total_routes == 0
         assert seen == [None]
 

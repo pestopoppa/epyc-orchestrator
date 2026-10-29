@@ -6893,9 +6893,8 @@ def _build_exploration_block(
 
 # State / blacklist / signatures helpers moved to state_store.py (2026-05-22 refactor).
 # Wrappers below preserve the original autopilot.py API by supplying STATE_PATH,
-# BLACKLIST_PATH, and the model-quality-signatures path.
+# BLACKLIST_PATH, and the compiled model-descriptors path.
 
-_MODEL_SIGNATURES_PATH = ORCH_ROOT / "orchestration" / "model_quality_signatures.yaml"
 _MODEL_DESCRIPTORS_PATH = ORCH_ROOT / "orchestration" / "model_descriptors.yaml"
 
 
@@ -8176,7 +8175,7 @@ def load_blacklist() -> list[dict[str, Any]]:
 
 def load_model_signatures() -> dict[str, Any]:
     """Load descriptor-backed model signatures for planner context."""
-    return _load_model_signatures_impl(_MODEL_SIGNATURES_PATH, _MODEL_DESCRIPTORS_PATH)
+    return _load_model_signatures_impl(descriptors_path=_MODEL_DESCRIPTORS_PATH)
 
 
 def append_blacklist(
