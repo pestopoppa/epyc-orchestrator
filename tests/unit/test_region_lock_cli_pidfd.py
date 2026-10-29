@@ -52,6 +52,42 @@ class WaitFailureChild:
         return -signal.SIGTERM
 
 
+class PersistentWaitFailureChild:
+    pid = 4545
+
+    def __init__(self):
+        self.wait_calls = 0
+        self.kill_sent = False
+        self.reaped = False
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        if not self.kill_sent or self.wait_calls < 6:
+            raise RuntimeError("persistent simulated wait failure")
+        self.reaped = True
+        return -signal.SIGKILL
+
+
+class SustainedWaitFailureChild:
+    pid = 4555
+
+    def __init__(self):
+        self.wait_calls = 0
+        self.kill_sent = False
+        self.post_kill_failures = 0
+        self.reaped = False
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        if not self.kill_sent:
+            raise RuntimeError("initial wait failure with a long diagnostic " + "x" * 500)
+        self.post_kill_failures += 1
+        if self.post_kill_failures <= 1000:
+            raise RuntimeError("persistent final wait error")
+        self.reaped = True
+        return -signal.SIGKILL
+
+
 def fake_signal_registration(handlers):
     def set_handler(signum, handler):
         previous = handlers.get(signum, ("previous", signum))
@@ -138,6 +174,30 @@ def test_missing_pidfd_api_refuses_before_spawning_child():
     assert rc == region_lock_cli.EX_TEMPFAIL
     assert popen_calls == []
     assert "pidfd signaling unavailable" in stderr.getvalue()
+
+
+def test_partial_signal_handler_registration_failure_refuses_before_spawn():
+    handlers, popen_calls = {}, []
+
+    def set_handler(signum, handler):
+        if signum == signal.SIGTERM:
+            raise ValueError("not main thread")
+        previous = handlers.get(signum, ("previous", signum))
+        handlers[signum] = handler
+        return previous
+
+    stderr = io.StringIO()
+    with mock.patch.object(region_lock_cli.signal, "signal", side_effect=set_handler), \
+         mock.patch.object(region_lock_cli.subprocess, "Popen",
+                           side_effect=lambda *args, **kwargs: popen_calls.append(args)), \
+         contextlib.redirect_stderr(stderr):
+        rc = region_lock_cli._spawn(["must-not-start"])
+
+    assert rc == region_lock_cli.EX_TEMPFAIL
+    assert popen_calls == []
+    assert handlers.get(signal.SIGINT) == ("previous", signal.SIGINT)
+    assert "cannot install signal handler" in stderr.getvalue()
+    assert "refusing child start" in stderr.getvalue()
 
 
 def test_pidfd_send_error_is_reported_after_child_wait():
@@ -242,6 +302,138 @@ def test_wait_exception_drains_only_captured_child_via_pidfd_before_return():
     assert child.reaped, "_spawn returned before its owned child was drained"
     assert sends == [(72, signal.SIGTERM)]
     assert closed == [72]
+
+
+def test_persistent_wait_errors_keep_lease_until_pidfd_kill_and_reap():
+    handlers, sends, closed = {}, [], []
+    child = PersistentWaitFailureChild()
+    stderr = io.StringIO()
+    lease_released_after_reap = []
+
+    def send(fd, signum, _info, _flags):
+        sends.append((fd, signum))
+        if signum == signal.SIGKILL:
+            child.kill_sent = True
+
+    class Lease:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            lease_released_after_reap.append(child.reaped)
+
+    with mock.patch.object(region_lock_cli, "_SPAWN_WAIT_POLL_S", 0.001), \
+         mock.patch.object(region_lock_cli, "_SPAWN_TERM_GRACE_S", 0.005), \
+         mock.patch.object(region_lock_cli.subprocess, "Popen", return_value=child), \
+         mock.patch.object(region_lock_cli.signal, "signal", side_effect=fake_signal_registration(handlers)), \
+         mock.patch.object(region_lock_cli.os, "pidfd_open", return_value=73), \
+         mock.patch.object(region_lock_cli.signal, "pidfd_send_signal", side_effect=send), \
+         mock.patch.object(region_lock_cli.os, "close", side_effect=lambda fd: closed.append(fd)), \
+         contextlib.redirect_stderr(stderr):
+        try:
+            with Lease():
+                region_lock_cli._spawn(["owned-child"])
+        except RuntimeError as exc:
+            assert str(exc) == "persistent simulated wait failure"
+        else:
+            raise AssertionError("original wait failure was swallowed")
+
+    assert child.reaped
+    assert lease_released_after_reap == [True]
+    assert sends == [(73, signal.SIGTERM), (73, signal.SIGKILL)]
+    assert closed == [73]
+
+
+def test_pidfd_open_failure_retries_wait_errors_without_numeric_signal():
+    handlers = {}
+
+    class OpenFailureWaitChild:
+        pid = 4646
+
+        def __init__(self):
+            self.wait_calls = 0
+            self.reaped = False
+
+        def wait(self, timeout=None):
+            self.wait_calls += 1
+            if self.wait_calls <= 3:
+                raise RuntimeError("transient wait failure without pidfd")
+            self.reaped = True
+            return 0
+
+    child = OpenFailureWaitChild()
+    numeric_calls, sends = [], []
+    stderr = io.StringIO()
+    with mock.patch.object(region_lock_cli, "_SPAWN_WAIT_POLL_S", 0.001), \
+         mock.patch.object(region_lock_cli.subprocess, "Popen", return_value=child), \
+         mock.patch.object(region_lock_cli.signal, "signal", side_effect=fake_signal_registration(handlers)), \
+         mock.patch.object(region_lock_cli.os, "pidfd_open", side_effect=PermissionError("pidfd denied")), \
+         mock.patch.object(region_lock_cli.signal, "pidfd_send_signal", side_effect=lambda *a: sends.append(a)), \
+         mock.patch.object(region_lock_cli.os, "kill", side_effect=lambda *a: numeric_calls.append(a)), \
+         contextlib.redirect_stderr(stderr):
+        try:
+            region_lock_cli._spawn(["owned-child"])
+        except RuntimeError as exc:
+            assert str(exc) == "transient wait failure without pidfd"
+        else:
+            raise AssertionError("original wait failure was swallowed")
+
+    assert child.reaped and child.wait_calls >= 4
+    assert numeric_calls == []
+    assert sends == []
+
+
+def test_sustained_wait_and_backoff_errors_are_bounded_until_reap():
+    handlers, sends = {}, []
+    child = SustainedWaitFailureChild()
+    stderr = io.StringIO()
+    lease_released_after_reap = []
+    sleep_calls = []
+
+    def send(fd, signum, _info, _flags):
+        sends.append((fd, signum))
+        if signum == signal.SIGKILL:
+            child.kill_sent = True
+
+    def interrupted_backoff(_delay):
+        sleep_calls.append(1)
+        if len(sleep_calls) <= 5:
+            raise InterruptedError("backoff interrupted")
+
+    class Lease:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            lease_released_after_reap.append(child.reaped)
+
+    with mock.patch.object(region_lock_cli, "_SPAWN_WAIT_POLL_S", 0.0001), \
+         mock.patch.object(region_lock_cli, "_SPAWN_TERM_GRACE_S", 0.001), \
+         mock.patch.object(region_lock_cli.time, "sleep", side_effect=interrupted_backoff), \
+         mock.patch.object(region_lock_cli.subprocess, "Popen", return_value=child), \
+         mock.patch.object(region_lock_cli.signal, "signal", side_effect=fake_signal_registration(handlers)), \
+         mock.patch.object(region_lock_cli.os, "pidfd_open", return_value=74), \
+         mock.patch.object(region_lock_cli.signal, "pidfd_send_signal", side_effect=send), \
+         mock.patch.object(region_lock_cli.os, "close"), \
+         contextlib.redirect_stderr(stderr):
+        try:
+            with Lease():
+                region_lock_cli._spawn(["owned-child"])
+        except RuntimeError as exc:
+            assert str(exc).startswith("initial wait failure")
+        else:
+            raise AssertionError("original wait failure was swallowed")
+
+    assert child.reaped
+    assert child.post_kill_failures == 1001
+    assert lease_released_after_reap == [True]
+    assert sends == [(74, signal.SIGTERM), (74, signal.SIGKILL)]
+    assert len(sleep_calls) >= 5
+    summary = [line for line in stderr.getvalue().splitlines() if "child-reap retry" in line]
+    assert len(summary) <= 4
+    assert all(len(line) < 400 for line in summary)
+    assert any("final wait after SIGKILL" in line and "count=999" in line for line in summary)
+    assert any("wait after signal 9" in line and "count=1" in line for line in summary)
 
 
 def test_source_has_no_numeric_child_signal_fallback():

@@ -80,6 +80,8 @@ from src.runtime.lock_queue import queue_dir as _fifo_queue_dir  # noqa: E402
 from src.runtime.lock_queue import queue_status as _fifo_queue_status  # noqa: E402
 
 EX_TEMPFAIL = 75
+_SPAWN_WAIT_POLL_S = 0.1
+_SPAWN_TERM_GRACE_S = 5.0
 EX_USAGE = 64
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -292,6 +294,31 @@ def _spawn(command: list[str]) -> int:
     pending: list[int] = []
     forwarding_errors: list[str] = []
     pidfd_error: str | None = None
+    wait_error_summary: dict[str, tuple[int, str]] = {}
+    wait_poll_s = _SPAWN_WAIT_POLL_S
+    term_grace_s = _SPAWN_TERM_GRACE_S
+
+    def _record_wait_error(stage: str, exc: BaseException) -> None:
+        message = f"{type(exc).__name__}: {exc}"[:240]
+        count, sample = wait_error_summary.get(stage, (0, message))
+        wait_error_summary[stage] = (count + 1, sample)
+
+    def _cleanup_backoff() -> None:
+        # Even an interrupted/backoff exception must not unwind the drain
+        # guard and release the region lease while the child is unreaped.
+        while True:
+            try:
+                time.sleep(wait_poll_s)
+                return
+            except BaseException as exc:
+                _record_wait_error("cleanup backoff", exc)
+
+    def _report_wait_errors() -> None:
+        for stage, (count, sample) in wait_error_summary.items():
+            print(
+                f"[region-lock] child-reap retry stage={stage} count={count} first={sample}",
+                file=sys.stderr,
+            )
 
     def _forward(signum, _frame):
         # Signals can arrive after Popen returns but before pidfd_open. Queue
@@ -314,12 +341,22 @@ def _spawn(command: list[str]) -> int:
             return
         if child_pidfd is None:
             # No safe signal handle exists. Waiting is the only way to retain
-            # the region lease without leaving an unowned child behind.
-            proc.wait()
+            # the region lease without leaving an unowned child behind. A
+            # wait error is retried indefinitely; releasing the caller's
+            # region lock is never an option while reaping is unconfirmed.
+            while True:
+                try:
+                    proc.wait(timeout=wait_poll_s)
+                    _report_wait_errors()
+                    return
+                except subprocess.TimeoutExpired:
+                    continue
+                except BaseException as exc:
+                    _record_wait_error("wait without pidfd", exc)
+                    _cleanup_backoff()
             return
+
         for signum in (signal.SIGTERM, signal.SIGKILL):
-            if proc.poll() is not None:
-                return
             try:
                 signal.pidfd_send_signal(child_pidfd, signum, None, 0)
             except ProcessLookupError:
@@ -328,14 +365,35 @@ def _spawn(command: list[str]) -> int:
                 forwarding_errors.append(
                     f"cleanup signal {signum}: {type(exc).__name__}: {exc}"
                 )
+            deadline = time.monotonic() + (term_grace_s if signum == signal.SIGTERM else 0.0)
+            while True:
+                try:
+                    proc.wait(timeout=wait_poll_s)
+                    _report_wait_errors()
+                    return
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() < deadline:
+                        continue
+                    break
+                except BaseException as exc:
+                    _record_wait_error(f"wait after signal {signum}", exc)
+                    if time.monotonic() < deadline:
+                        _cleanup_backoff()
+                        continue
+                    break
+        # SIGKILL has been attempted through the pinned descriptor. Keep the
+        # region lease until Popen confirms the direct child is reaped. If
+        # wait keeps failing, fail closed by retaining the lease indefinitely.
+        while True:
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=wait_poll_s)
+                _report_wait_errors()
                 return
             except subprocess.TimeoutExpired:
                 continue
-        # Do not release the caller's lock while this child is still alive,
-        # even if both bounded pidfd cleanup attempts were refused.
-        proc.wait()
+            except BaseException as exc:
+                _record_wait_error("final wait after SIGKILL", exc)
+                _cleanup_backoff()
 
     previous = {}
     # Refuse before creating an unmanageable child when this platform cannot
@@ -348,8 +406,23 @@ def _spawn(command: list[str]) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         try:
             previous[sig] = signal.signal(sig, _forward)
-        except (OSError, ValueError):
-            pass
+        except BaseException as exc:
+            restore_errors = []
+            for installed_sig, handler in reversed(tuple(previous.items())):
+                try:
+                    signal.signal(installed_sig, handler)
+                except BaseException as restore_exc:
+                    restore_errors.append(
+                        f"restore {installed_sig}: {type(restore_exc).__name__}: {restore_exc}"
+                    )
+            detail = f"{type(exc).__name__}: {exc}"
+            if restore_errors:
+                detail += "; " + "; ".join(restore_errors)
+            print(
+                f"[region-lock] refusing child start: cannot install signal handler {sig}: {detail}",
+                file=sys.stderr,
+            )
+            return EX_TEMPFAIL
     rc = EX_TEMPFAIL
     try:
         proc = subprocess.Popen(command)
