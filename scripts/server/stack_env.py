@@ -188,9 +188,7 @@ def compose_ld_library_path(
     repeated entry in it can only mislead a reader about precedence.
     """
     if mode not in _LD_PATH_MODES:
-        raise ValueError(
-            f"unknown LD_LIBRARY_PATH mode {mode!r}; valid: {list(_LD_PATH_MODES)}"
-        )
+        raise ValueError(f"unknown LD_LIBRARY_PATH mode {mode!r}; valid: {list(_LD_PATH_MODES)}")
     declared_paths = [str(path) for path in (declared or []) if str(path)]
     if mode == "prepend":
         return ":".join(declared_paths) + (f":{ambient}" if ambient else "")
@@ -232,9 +230,7 @@ def strip_ambient_ggml(
     return stripped
 
 
-def build_service_env(
-    spec: "object", base_env: dict[str, str] | None = None
-) -> dict[str, str]:
+def build_service_env(spec: "object", base_env: dict[str, str] | None = None) -> dict[str, str]:
     """Compose the launch env for an AUX SERVICE (not a llama-server role).
 
     Deliberately does NOT apply `_CANONICAL_OMP_ENV` or any per-role GGML_* block.
@@ -252,7 +248,13 @@ def build_service_env(
     paths, so a declared plain env var cannot accidentally reintroduce the ambient
     value it was meant to drop.
     """
-    env: dict[str, str] = dict(base_env) if base_env else {}
+    # Command-line attestation cannot observe llama.cpp's environment defaults.
+    # Aux services may opt into these knobs only in their declared env below.
+    env: dict[str, str] = {
+        key: value
+        for key, value in (base_env or {}).items()
+        if not key.startswith("LLAMA_ARG_") and key not in {"LD_PRELOAD", "SHIM_NPROCS"}
+    }
     declared_env = {key: str(value) for key, value in (getattr(spec, "env", None) or {}).items()}
     env.update(declared_env)
     # Ambient GGML_* must not reach a different kernel (whisper.cpp / qwentts.cpp run
@@ -291,15 +293,15 @@ def _role_env_overrides(role: str) -> dict[str, str]:
         # full-CPU env block.
         "coder_escalation": "architect_critic",
         "vision_escalation": "worker_vision",  # one MI210 :8086 process serves both
-        "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
+        "worker_summarize": "frontdoor",  # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
         "general_gemma_3_27b_it_qat": "dense_q4",
         # 2026-09-27: ingest_long_context is an alias on the MI210 27B (host
         # architect_critic since the 2026-09-27 ARCHITECT SWAP); Qwen3-Next-80B-A3B,
         # which the old hybrid_ssm_moe mapping described, was retired 2026-09-22.
         # Follow the host process, like coder_escalation above.
         "ingest_long_context": "architect_critic",
-        "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
-        "toolrunner": "worker_general",           # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
+        "formalizer": "dense_q8",  # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
+        "toolrunner": "worker_general",  # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
     }
     aliased = arch_aliases.get(normalized)
     if aliased and aliased in _ROLE_ENV_BLOCKS:
@@ -320,7 +322,11 @@ def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[
     The per-role block is allowed to override OMP if it must, though no current
     role does so.
     """
-    env: dict[str, str] = dict(base_env) if base_env else {}
+    # Keep parent-provided llama.cpp defaults from silently changing the argv
+    # recipe (notably LLAMA_ARG_N_PARALLEL and KV-unified defaults).
+    env: dict[str, str] = {
+        key: value for key, value in (base_env or {}).items() if not key.startswith("LLAMA_ARG_")
+    }
     # LLVM-20 libomp must win over AOCC libomp at runtime. Prepend to LD_LIBRARY_PATH
     # so the dynamic loader resolves libomp.so to clang-20's. AOCC libomp has different
     # thread-pinning + dynamic-team behavior that breaks ik_llama.cpp PR #1744's MTP
