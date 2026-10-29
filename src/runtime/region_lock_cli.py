@@ -286,30 +286,111 @@ def _spawn(command: list[str]) -> int:
     reach the benchmark so it can stop at its own boundary (fabric axiom 4 —
     no forcible mid-flight preemption).
     """
-    proc = subprocess.Popen(command)
+    proc = None
+    child_pidfd: int | None = None
     forwarded: list[int] = []
+    pending: list[int] = []
+    forwarding_errors: list[str] = []
+    pidfd_error: str | None = None
 
     def _forward(signum, _frame):
-        forwarded.append(signum)
+        # Signals can arrive after Popen returns but before pidfd_open. Queue
+        # them until the direct child handle is pinned; never fall back to a
+        # numeric PID signal.
+        if child_pidfd is None:
+            pending.append(signum)
+            return
         try:
-            proc.send_signal(signum)
+            signal.pidfd_send_signal(child_pidfd, signum, None, 0)
+            forwarded.append(signum)
         except ProcessLookupError:
             pass
+        except (AttributeError, OSError) as exc:
+            forwarding_errors.append(f"signal {signum}: {type(exc).__name__}: {exc}")
+
+    def _reap_owned_child_after_wait_error() -> None:
+        """Keep the lease until this exact Popen child is reaped."""
+        if proc is None:
+            return
+        if child_pidfd is None:
+            # No safe signal handle exists. Waiting is the only way to retain
+            # the region lease without leaving an unowned child behind.
+            proc.wait()
+            return
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            if proc.poll() is not None:
+                return
+            try:
+                signal.pidfd_send_signal(child_pidfd, signum, None, 0)
+            except ProcessLookupError:
+                pass
+            except (AttributeError, OSError) as exc:
+                forwarding_errors.append(
+                    f"cleanup signal {signum}: {type(exc).__name__}: {exc}"
+                )
+            try:
+                proc.wait(timeout=5)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+        # Do not release the caller's lock while this child is still alive,
+        # even if both bounded pidfd cleanup attempts were refused.
+        proc.wait()
 
     previous = {}
+    # Refuse before creating an unmanageable child when this platform cannot
+    # forward signals through a stable process handle.
+    if not callable(getattr(os, "pidfd_open", None)) or not callable(
+        getattr(signal, "pidfd_send_signal", None)
+    ):
+        print("[region-lock] refusing child start: pidfd signaling unavailable", file=sys.stderr)
+        return EX_TEMPFAIL
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         try:
             previous[sig] = signal.signal(sig, _forward)
         except (OSError, ValueError):
             pass
+    rc = EX_TEMPFAIL
     try:
-        rc = proc.wait()
+        proc = subprocess.Popen(command)
+        try:
+            # The child is still our unreaped Popen child, so this PID cannot
+            # be reused before wait(); bind signaling to the opened pidfd.
+            child_pidfd = os.pidfd_open(proc.pid, 0)
+        except (AttributeError, OSError) as exc:
+            pidfd_error = f"cannot pin child pidfd: {type(exc).__name__}: {exc}"
+        else:
+            queued, pending = pending, []
+            for signum in queued:
+                _forward(signum, None)
+        try:
+            rc = proc.wait()
+        except BaseException:
+            _reap_owned_child_after_wait_error()
+            raise
     finally:
+        # Disable the handler's reference before closing its descriptor, so a
+        # late signal cannot target a recycled FD number.
+        pidfd_to_close, child_pidfd = child_pidfd, None
         for sig, handler in previous.items():
             try:
                 signal.signal(sig, handler)
             except (OSError, ValueError):
                 pass
+        if pidfd_to_close is not None:
+            try:
+                os.close(pidfd_to_close)
+            except OSError as exc:
+                forwarding_errors.append(f"pidfd close: {type(exc).__name__}: {exc}")
+    if pending:
+        forwarding_errors.append(
+            f"signals not forwarded without child pidfd: {pending}; {pidfd_error or 'pidfd unavailable'}"
+        )
+    if pidfd_error:
+        forwarding_errors.append(pidfd_error)
+    if forwarding_errors:
+        print(f"[region-lock] signal forwarding refused: {'; '.join(forwarding_errors)}", file=sys.stderr)
+        return EX_TEMPFAIL
     if rc < 0:  # died on signal N
         rc = 128 + (-rc)
     if forwarded:
