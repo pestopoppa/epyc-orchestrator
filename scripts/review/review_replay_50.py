@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 import urllib.error
@@ -105,6 +106,7 @@ class LiveServerPrimitives:
         self.model = model
         self.timeout = timeout
         self.usage_log: list[dict[str, Any]] = []
+        self.call_attempts = 0
 
     def llm_call(
         self,
@@ -150,6 +152,7 @@ class LiveServerPrimitives:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        self.call_attempts += 1
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 - operator-pinned URL
                 data = json.loads(resp.read().decode("utf-8"))
@@ -280,6 +283,8 @@ def run_shadow(
         sessions.append(session_id)
         view = build_sanitized_view(q)
         executor = q.get("executor_model_id")
+        usage_before = len(primitives.usage_log)
+        attempts_before = getattr(primitives, "call_attempts", None)
         t0 = time.perf_counter()
         review = svc.review_candidate(
             view,
@@ -315,6 +320,9 @@ def run_shadow(
                 "wall_ms": wall_ms,
                 "tokens_in": (tokens or {}).get("tokens_in", 0),
                 "tokens_out": (tokens or {}).get("tokens_out", 0),
+                "model_calls_observed": len(primitives.usage_log) - usage_before,
+                "model_call_attempts": (primitives.call_attempts - attempts_before
+                                        if isinstance(attempts_before, int) else None),
             }
         )
         # TM-8: reminder events — exercise the cheap knob with emit=True (intake-835).
@@ -333,6 +341,9 @@ def run_shadow(
     phase_meta = verify_phase_metadata(trace_db, sessions)
     server_usage = primitives.usage_log
 
+    # These are the actual sequential model calls. Review events also include
+    # shadow/decision emissions that mirror one call's latency and tokens.
+    call_metrics = summarize_model_calls(decisions, server_usage)
     report = {
         "run": "shadow",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -344,6 +355,7 @@ def run_shadow(
         },
         "trace_coverage": coverage,
         "decision_metrics": metrics,
+        "model_call_metrics": call_metrics,
         "enforcement_side_effect_count": len(enforcement),
         "enforcement_side_effects": enforcement,
         "phase_metadata": phase_meta,
@@ -386,15 +398,40 @@ def run_off(
     return report
 
 
+def summarize_model_calls(questions: list[dict[str, Any]], usage: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize sequential harness calls once; never substitute text estimates for usage."""
+    if not questions or len(questions) != len(usage) or any(q.get("model_calls_observed") != 1 or q.get("model_call_attempts") != 1 for q in questions):
+        return {"status": "unavailable", "reason": "question/model-call count mismatch",
+                "question_count": len(questions), "observed_usage_count": len(usage)}
+    latency = [q.get("latency_ms") for q in questions]
+    if any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or v <= 0 for v in latency):
+        return {"status": "unavailable", "reason": "missing or invalid model-call latency",
+                "question_count": len(questions), "observed_usage_count": len(usage)}
+    def total(key: str) -> int | None:
+        values = [u.get(key) for u in usage]
+        if any(not isinstance(v, int) or isinstance(v, bool) or v < 0 for v in values):
+            return None
+        return sum(values)
+    return {
+        "status": "available",
+        "n_calls": len(questions),
+        "latency_ms_total": sum(latency),
+        "latency_ms_mean": sum(latency) / len(latency) if latency else None,
+        "endpoint_prompt_tokens": total("prompt_tokens"),
+        "endpoint_completion_tokens": total("completion_tokens"),
+        "usage_alignment": "sequential harness order; no request-ID join",
+    }
+
+
 def run_delta(on_report: Path, off_report: Path, report_out: Path) -> dict[str, Any]:
     """Overhead-delta scaffold for H-LB: reviewer-ON mean latency vs reviewer-OFF."""
     on = json.loads(Path(on_report).read_text(encoding="utf-8"))
     off = json.loads(Path(off_report).read_text(encoding="utf-8"))
-    on_lat = (on.get("decision_metrics") or {}).get("latency_ms", {}) or {}
+    calls = on.get("model_call_metrics") or {}
+    if calls.get("status") != "available":
+        calls = {}
     off_mean = off.get("loop_ms_mean", 0.0)
-    on_mean = on_lat.get("mean")
-    tokens_in = (on.get("decision_metrics") or {}).get("tokens_in", {}) or {}
-    tokens_out = (on.get("decision_metrics") or {}).get("tokens_out", {}) or {}
+    on_mean = calls.get("latency_ms_mean")
     report = {
         "run": "delta",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -404,12 +441,14 @@ def run_delta(on_report: Path, off_report: Path, report_out: Path) -> dict[str, 
         "reviewer_off_loop_mean_ms": off_mean,
         "overhead_delta_ms": (on_mean - off_mean) if on_mean is not None else None,
         "overhead_ratio": (on_mean / off_mean) if (on_mean and off_mean) else None,
-        "tokens_in_total": tokens_in.get("sum"),
-        "tokens_out_total": tokens_out.get("sum"),
+        "tokens_in_total": calls.get("endpoint_prompt_tokens"),
+        "tokens_out_total": calls.get("endpoint_completion_tokens"),
+        "accounting_scope": "one sequential model call per question; endpoint-reported token usage",
         "note": (
             "Observation-grade scaffold (P-AB-1/P-SPEED-OBJ pending). The H-LB "
             "baseline is reviewer-on mean per-decision latency_ms vs reviewer-off "
-            "mean loop cost on the same pinned set; paired task-rate A/B is LB-4."
+            "mean loop cost on the same pinned set; paired task-rate A/B is LB-4. "
+            "Legacy reports without model_call_metrics remain unscored."
         ),
     }
     _write_report(report, report_out)
