@@ -97,13 +97,6 @@ def axis_refuted(wealth: float | None, k: int, pol) -> bool:
     return _seq_module().axis_refutation("quality", wealth, k, pol).refuted
 
 
-def _axis_refuted_factory(pol):
-    """Bind `axis_refuted` to a policy for use inside the report loop."""
-    def _bound(wealth: float | None, k: int) -> bool:
-        return axis_refuted(wealth, k, pol)
-    return _bound
-
-
 def refutation_of(row: dict, pol) -> tuple[dict, str]:
     """SEQ-B2: the refutation record for a stopped candidate's final journal row.
 
