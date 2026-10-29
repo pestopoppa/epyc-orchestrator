@@ -797,10 +797,33 @@ class TestStrategyStore:
         results = store.retrieve_conventions(species="prompt_forge")
 
         result_ids = [entry.id for entry in results]
-        assert result_ids == [prompt_id, global_id]
+        assert result_ids == [global_id, prompt_id]
         assert all(entry.entry_type == "convention" for entry in results)
         assert all(entry.validity_score == 0.5 for entry in results)
         assert all(entry.staleness == 1.0 for entry in results)
+
+    @pytest.mark.parametrize("limit", [None, 1, 3])
+    def test_retrieve_conventions_orders_newest_first_before_limit(self, store, limit):
+        ids = {}
+        dates = {"old": 1, "newest": 4, "middle": 2, "newer": 3}
+        for label, day in dates.items():
+            ids[label] = store.store(
+                f"Convention {label}",
+                f"Guidance {label}",
+                source_trial_id=day,
+                species="prompt_forge",
+                entry_type="convention",
+            )
+            store._conn.execute(
+                "UPDATE strategies SET created_at = ? WHERE id = ?",
+                (f"2026-01-0{day}T00:00:00+00:00", ids[label]),
+            )
+        store._conn.commit()
+
+        results = store.retrieve_conventions(species="prompt_forge", limit=limit)
+
+        expected = [ids[label] for label in ("newest", "newer", "middle", "old")]
+        assert [entry.id for entry in results] == expected[:limit]
 
     def test_retrieve_conventions_applies_folded_evidence_exclusions(self, store):
         excluded_id = store.store(

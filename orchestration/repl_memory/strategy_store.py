@@ -1914,7 +1914,7 @@ class StrategyStore:
         stale_penalty: float = 0.5,
         limit: int | None = None,
     ) -> list[StrategyEntry]:
-        """Return planner-usable convention strategy rows.
+        """Return planner-usable convention strategy rows, newest first.
 
         This reads ``strategies.entry_type='convention'`` rows, not the
         separate MDL ``strategy_conventions`` compression table. Species
@@ -1932,7 +1932,7 @@ class StrategyStore:
 
         rows = self._conn.execute(
             "SELECT * FROM strategies WHERE entry_type = ?"
-            f"{species_clause} ORDER BY created_at ASC",
+            f"{species_clause} ORDER BY created_at DESC",
             tuple(params),
         ).fetchall()
 
