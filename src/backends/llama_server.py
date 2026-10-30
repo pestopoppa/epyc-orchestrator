@@ -2021,6 +2021,15 @@ class LlamaServerBackend(ModelBackend):
                 prompt_tokens = None
                 output_tokens_reported = None
             tokens_generated = output_tokens_reported or 0
+            if completion_reason == "length" and 0 < tokens_generated < int(payload["max_tokens"]):
+                # Same native-count rule as non-streaming chat: a length stop
+                # below the requested budget signals the slot context limit.
+                logger.warning(
+                    "chat_completions stream truncated by context limit role=%s "
+                    "prompt=%s completion=%d max_tokens=%s",
+                    role_config.name, prompt_tokens, tokens_generated, payload["max_tokens"],
+                )
+                completion_reason = "context_limit"
             serving_calls.note_usage(stream_usage)
             speed = (
                 predicted_per_second if predicted_per_second > 0

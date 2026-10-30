@@ -83,14 +83,14 @@ def _role_config():
     )
 
 
-def _run(lines, on_chunk=None):
+def _run(lines, on_chunk=None, *, n_tokens=256):
     from src.backends.llama_server import LlamaServerBackend, ServerConfig
     from src.model_server import InferenceRequest
 
     backend = LlamaServerBackend(
         config=ServerConfig(base_url="http://localhost:8070", use_chat_completions=True)
     )
-    request = InferenceRequest(role="frontdoor", prompt="hello", n_tokens=256)
+    request = InferenceRequest(role="frontdoor", prompt="hello", n_tokens=n_tokens)
     with patch.object(backend.client, "stream", return_value=_FakeStream(lines)):
         return backend.infer_stream_text(_role_config(), request, on_chunk=on_chunk)
 
@@ -147,3 +147,113 @@ def test_progress_completion_meta_now_carries_prompt_eval_ms():
 
     meta = llm_completion_meta(_Primitives())
     assert meta["prompt_eval_ms"] == pytest.approx(1234.5)
+
+
+@pytest.mark.parametrize(
+    "requested,finish,reported,expected",
+    [
+        (4096, "length", 1777, "context_limit"),
+        (0, "length", 1777, "context_limit"),  # effective wire budget is 4096
+        (64, "length", 64, "length"),
+        (0, "length", 4096, "length"),
+        (64, "stop", 37, "stop"),
+        (64, "length", None, "length"),
+        (64, "length", 0, "length"),
+        (64, "length", True, "length"),
+        (64, "length", "37", "length"),
+    ],
+)
+def test_chat_stream_context_limit_uses_native_count_and_effective_wire_budget(
+    requested, finish, reported, expected,
+):
+    # Actual public stream path and real frame ordering: content, finish,
+    # separate usage-only frame, DONE. A final choices=[] frame is not skipped.
+    usage = {"prompt_tokens": 271, "completion_tokens": reported} if reported is not None else None
+    lines = [
+        _chunk({"content": "partial"}),
+        _chunk({}, finish),
+        "data: " + json.dumps({"choices": [], "usage": usage}),
+        "data: [DONE]",
+    ]
+    result = _run(lines, on_chunk=lambda text: None, n_tokens=requested)
+    assert result.completion_reason == expected
+    assert result.output == "partial" and not result.partial
+    known = reported if type(reported) is int and reported >= 0 else None
+    assert result.output_tokens_reported == known
+    assert result.tokens_generated == (known or 0)
+
+
+def test_chat_stream_length_without_usage_or_timings_remains_unclassified():
+    result = _run([
+        _chunk({"content": "partial"}), _chunk({}, "length"), "data: [DONE]",
+    ], on_chunk=lambda text: None)
+    assert result.completion_reason == "length"
+    assert result.output_tokens_reported is None and result.output_tokens_source is None
+
+
+def test_chat_stream_length_uses_existing_native_timings_fallback():
+    result = _run([
+        _chunk({"content": "partial"}),
+        _chunk({}, "length", timings=TIMINGS), "data: [DONE]",
+    ], on_chunk=lambda text: None)
+    assert result.completion_reason == "context_limit"
+    assert result.output_tokens_reported == TIMINGS["predicted_n"]
+    assert result.output_tokens_source.endswith("timings.predicted_n")
+    assert result.prompt_tokens == TIMINGS["prompt_n"] + TIMINGS["cache_n"]
+    assert result.n_tokens_drafted == TIMINGS["draft_n"]
+    assert result.n_tokens_accepted == TIMINGS["draft_n_accepted"]
+
+
+def test_chat_stream_context_limit_preserves_total_including_reasoning_tokens():
+    result = _run([
+        _chunk({"reasoning_content": "thinking"}), _chunk({"content": "partial"}),
+        _chunk({}, "length"),
+        "data: " + json.dumps({"choices": [], "usage": {
+            "prompt_tokens": 271, "completion_tokens": 1777,
+            "completion_tokens_details": {"reasoning_tokens": 1600},
+        }}), "data: [DONE]",
+    ], on_chunk=lambda text: None, n_tokens=4096)
+    assert result.completion_reason == "context_limit"
+    assert result.output_tokens_reported == 1777 and result.tokens_generated == 1777
+    assert result.output == "partial" and result.reasoning_content == "thinking"
+
+
+@pytest.mark.parametrize("interruption", ["consumer", "read_timeout"])
+def test_chat_stream_interruption_closes_stream_without_context_limit_inference(interruption):
+    import httpx
+
+    lines = [
+        _chunk({"content": "partial"}), _chunk({}, "length"),
+        "data: " + json.dumps({"choices": [], "usage": {"completion_tokens": 37}}),
+    ]
+    class ObservedStream(_FakeStream):
+        def __init__(self, frames):
+            super().__init__(frames)
+            self.closed = False
+            self.consumed = []
+
+        def __exit__(self, *exc):
+            self.closed = True
+            return False
+
+        def iter_lines(self):
+            for line in self._lines:
+                self.consumed.append(line)
+                yield line
+            if interruption == "read_timeout":
+                raise httpx.ReadTimeout("fixture stream interrupted after terminal usage")
+
+    stream = ObservedStream(lines)
+    def on_chunk(text):
+        if interruption == "consumer":
+            raise StopIteration
+
+    with patch(__name__ + "._FakeStream", return_value=stream):
+        result = _run(lines, on_chunk=on_chunk)
+    assert stream.closed and result.partial
+    assert result.completion_reason != "context_limit"
+    assert result.output_tokens_reported is None and result.output_tokens_source is None
+    if interruption == "consumer":
+        assert stream.consumed == lines[:1]
+    else:
+        assert stream.consumed == lines and result.completion_reason == "read_timeout"
