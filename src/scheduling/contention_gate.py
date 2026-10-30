@@ -89,7 +89,7 @@ class GateMetrics:
     contention_degraded_allow_count: int = 0
     contention_admitted_count: int = 0
     contention_timeout_count: int = 0
-    contention_nway_restricted_count: int = 0  # J4c: N-way set more restrictive than pairwise
+    contention_nway_non_allow_count: int = 0  # J4c: N-way check returned a non-ALLOW verdict
     # active_decodes_by_role: {role: count} for back-compat;
     # active_instances_by_role: {role: [instance_idx, ...]} for richer dashboard rendering
     active_decodes_by_role: dict[str, int] = field(default_factory=dict)
@@ -322,7 +322,7 @@ class ContentionGate:
                 if not blocking:
                     blocking = [r for r in active_set if r != role]
                 with self._lock:
-                    self._metrics.contention_nway_restricted_count += 1
+                    self._metrics.contention_nway_non_allow_count += 1
 
         # B wiring (shape-keyed-contention-gating): placement-aware admission.
         # ONLY when the caller supplied a candidate instance AND both dual flags
@@ -479,11 +479,10 @@ class ContentionGate:
                 "contention_degraded_allow_count": self._metrics.contention_degraded_allow_count,
                 "contention_admitted_count": self._metrics.contention_admitted_count,
                 "contention_timeout_count": self._metrics.contention_timeout_count,
-                # J4c: incremented in evaluate() but was never surfaced here, so the
-                # only counter that reports "the N-way layer overrode pairwise" was
-                # unreadable by /dashboard and by any exporter. Write-only telemetry
-                # is the same as none.
-                "contention_nway_restricted_count": self._metrics.contention_nway_restricted_count,
+                # Counts each evaluated N-way check that returned non-ALLOW. This
+                # intentionally does not claim the N-way verdict changed the final
+                # decision relative to pairwise checks.
+                "contention_nway_non_allow_count": self._metrics.contention_nway_non_allow_count,
                 "active_decodes_by_role": dict(self._metrics.active_decodes_by_role),
                 "active_instances_by_role": {r: list(idxs) for r, idxs in self._metrics.active_instances_by_role.items()},
                 "matrix_status": self.matrix_health().value,

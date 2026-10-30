@@ -269,7 +269,21 @@ def test_gate_nway_block_restricts_a_pairwise_allowed_set(matrix) -> None:
     assert not d.admitted
     assert d.decision == contention.PairDecision.QUEUE
     assert d.blocking_roles == ["worker_summarize"]
-    assert gate.metrics_snapshot()["contention_nway_restricted_count"] == 1
+    assert gate.metrics_snapshot()["contention_nway_non_allow_count"] == 1
+
+
+def test_nway_non_allow_counter_counts_check_even_when_pairwise_is_stricter(monkeypatch) -> None:
+    """The counter reports N-way non-ALLOW checks, not N-way-caused restrictions."""
+    m = gate_fixture_matrix()
+    monkeypatch.setattr(gate_mod, "pair_policy", lambda *args, **kwargs: contention.PairDecision.BLOCK)
+    monkeypatch.setattr(gate_mod, "nway_policy", lambda *args, **kwargs: contention.PairDecision.QUEUE)
+    gate = make_gate(gate_mod, {"worker_summarize": [0]}, matrix=m)
+
+    decision = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
+
+    assert not decision.admitted
+    assert decision.decision == contention.PairDecision.BLOCK
+    assert gate.metrics_snapshot()["contention_nway_non_allow_count"] == 1
 
 
 # ── ContentionGate.admit (waiting behavior) ───────────────────────────
@@ -343,7 +357,7 @@ def test_metrics_snapshot_includes_required_keys(matrix) -> None:
         "contention_wait_seconds",
         "contention_unknown_pair_count",
         "contention_admitted_count",
-        "contention_nway_restricted_count",
+        "contention_nway_non_allow_count",
         "active_decodes_by_role",
         "matrix_status",
     ):

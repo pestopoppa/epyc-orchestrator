@@ -1,20 +1,20 @@
-"""`contention_nway_restricted_count` must reach the contention-gate panel.
+"""`contention_nway_non_allow_count` must reach the contention-gate panel.
 
 The counter is computed in `src/scheduling/contention_gate.py::ContentionGate.evaluate()`
-(J4c: the measured N-way matrix can restrict an active role set even when every
-pairwise combination in it is ALLOW) and was already wired into
+(J4c: the measured N-way matrix can return non-ALLOW even when every pairwise
+combination in the active set is ALLOW) and was already wired into
 `ContentionGate.metrics_snapshot()` and the `/dashboard/api/contention` JSON payload
 (`src/api/routes/dashboard.py::contention_gate_snapshot`). It stopped one layer short
 of the operator: `updateContentionGate()` in `dashboard.html` read every other key off
 that same payload (`contention_admitted_count`, `contention_timeout_count`,
 `contention_degraded_allow_count`, `contention_unknown_pair_count`,
-`contention_wait_seconds`) but never `contention_nway_restricted_count` — a number
-computed correctly and then dropped by the one function that renders it for a human.
+`contention_wait_seconds`) but never `contention_nway_non_allow_count` — a number
+computed and then dropped by the one function that renders it for a human.
 
 These tests exercise the REAL browser-side renderer (via `node`), not a description of
-it, and require the count to carry its denominator (admitted decisions this window) per
-`agents/shared/OPERATING_CONSTRAINTS.md` ## Reporting Units — a bare count is a
-producer's tick rate, not a claim about the fleet.
+it. They require the label and tooltip to state exactly what is counted. There is no
+matching denominator for N-way checks, so the display does not use the unrelated
+admitted-decision counter as one.
 """
 from __future__ import annotations
 
@@ -70,29 +70,29 @@ _BASE_PAYLOAD = {
 }
 
 
-def test_dashboard_html_reads_nway_restricted_key() -> None:
+def test_dashboard_html_reads_nway_non_allow_key() -> None:
     """Static guard: the renderer source must reference the payload key at all."""
     fn = _extract_update_contention_gate()
-    assert "contention_nway_restricted_count" in fn
+    assert "contention_nway_non_allow_count" in fn
+    assert "contention_nway_restricted_count" not in fn
 
 
-def test_nway_restricted_count_reaches_rendered_panel_html() -> None:
-    """The real JS renderer must put the count (and its denominator) in the DOM."""
-    payload = dict(_BASE_PAYLOAD, contention_nway_restricted_count=3)
+def test_nway_non_allow_count_reaches_rendered_panel_html() -> None:
+    """The real JS renderer must put the count and accurate tooltip in the DOM."""
+    payload = dict(_BASE_PAYLOAD, contention_nway_non_allow_count=3)
     html = _run_with_payload(payload)
 
-    assert "nway-restricted" in html
+    assert "nway-non-allow" in html
     assert ">3<" in html
-    # Reporting Units: the bare count must carry its denominator (admitted
-    # decisions this window), not appear as an unscoped tally.
-    assert "3 of 42 admitted decision" in html
+    assert "3 N-way check(s) returned non-ALLOW" in html
+    assert "pairwise decision" in html
+    assert "of 42 admitted decision" not in html
 
 
-def test_nway_restricted_count_zero_does_not_fabricate_a_denominator_mismatch() -> None:
+def test_nway_non_allow_count_zero_still_renders_without_warning() -> None:
     """Zero case: still rendered (not silently dropped), not colored as a warning."""
-    payload = dict(_BASE_PAYLOAD, contention_nway_restricted_count=0)
+    payload = dict(_BASE_PAYLOAD, contention_nway_non_allow_count=0)
     html = _run_with_payload(payload)
 
-    assert "nway-restricted" in html
+    assert "nway-non-allow" in html
     assert ">0<" in html
-    assert "0 of 42 admitted decision" in html
