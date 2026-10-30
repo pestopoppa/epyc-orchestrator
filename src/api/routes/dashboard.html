@@ -7236,7 +7236,9 @@ async function updateContentionGate(refreshSeq = _regionLocksRefreshSeq) {
             // non-ALLOW verdict, regardless of the pairwise result. Computed in
             // contention_gate.py:evaluate() and exposed through metrics_snapshot().
             // No matching N-way-check denominator is currently recorded.
-            const nwayNonAllow = d.contention_nway_non_allow_count || 0;
+            // Prefer the accurately named key, but keep rolling compatibility
+            // with older API servers that still emit the former field name.
+            const nwayNonAllow = d.contention_nway_non_allow_count ?? d.contention_nway_restricted_count ?? 0;
             const warn = 'var(--warn,#fbbf24)';
 
             const lines = [];

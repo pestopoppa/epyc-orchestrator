@@ -291,7 +291,10 @@ def test_nway_non_allow_counter_counts_check_even_when_pairwise_is_stricter(monk
 
     assert not decision.admitted
     assert decision.decision == contention.PairDecision.BLOCK
-    assert gate.metrics_snapshot()["contention_nway_non_allow_count"] == 1
+    metrics = gate.metrics_snapshot()
+    assert metrics["contention_nway_non_allow_count"] == 1
+    # Old clients keep reading the deprecated field during rolling upgrades.
+    assert metrics["contention_nway_restricted_count"] == 1
 
 
 # ── ContentionGate.admit (waiting behavior) ───────────────────────────

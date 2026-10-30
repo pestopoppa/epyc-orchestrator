@@ -483,6 +483,9 @@ class ContentionGate:
                 # intentionally does not claim the N-way verdict changed the final
                 # decision relative to pairwise checks.
                 "contention_nway_non_allow_count": self._metrics.contention_nway_non_allow_count,
+                # Deprecated wire alias for dashboards that have not rolled yet.
+                # Remove only with a versioned API change after the compatibility window.
+                "contention_nway_restricted_count": self._metrics.contention_nway_non_allow_count,
                 "active_decodes_by_role": dict(self._metrics.active_decodes_by_role),
                 "active_instances_by_role": {r: list(idxs) for r, idxs in self._metrics.active_instances_by_role.items()},
                 "matrix_status": self.matrix_health().value,

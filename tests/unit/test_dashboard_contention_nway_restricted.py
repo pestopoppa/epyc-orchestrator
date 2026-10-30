@@ -1,18 +1,16 @@
-"""`contention_nway_non_allow_count` must reach the contention-gate panel.
+"""The N-way non-ALLOW counter reaches the contention-gate panel compatibly.
 
 The counter is computed in `src/scheduling/contention_gate.py::ContentionGate.evaluate()`
 (J4c: the measured N-way matrix can return non-ALLOW even when every pairwise
 combination in the active set is ALLOW) and was already wired into
 `ContentionGate.metrics_snapshot()` and the `/dashboard/api/contention` JSON payload
-(`src/api/routes/dashboard.py::contention_gate_snapshot`). It stopped one layer short
-of the operator: `updateContentionGate()` in `dashboard.html` read every other key off
-that same payload (`contention_admitted_count`, `contention_timeout_count`,
-`contention_degraded_allow_count`, `contention_unknown_pair_count`,
-`contention_wait_seconds`) but never `contention_nway_non_allow_count` — a number
-computed and then dropped by the one function that renders it for a human.
+(`src/api/routes/dashboard.py::contention_gate_snapshot`). The producer keeps the old
+wire key as an alias during rolling upgrades; updated dashboards prefer the accurate
+new key and fall back to the alias while older servers are still running.
 
 These tests exercise the REAL browser-side renderer (via `node`), not a description of
-it. They require the label and tooltip to state exactly what is counted. There is no
+it. They require the label and tooltip to state exactly what is counted and cover old,
+new, and mixed-version payloads. There is no
 matching denominator for N-way checks, so the display does not use the unrelated
 admitted-decision counter as one.
 """
@@ -71,10 +69,10 @@ _BASE_PAYLOAD = {
 
 
 def test_dashboard_html_reads_nway_non_allow_key() -> None:
-    """Static guard: the renderer source must reference the payload key at all."""
+    """The new key is preferred, while old servers remain readable during rollout."""
     fn = _extract_update_contention_gate()
     assert "contention_nway_non_allow_count" in fn
-    assert "contention_nway_restricted_count" not in fn
+    assert "contention_nway_restricted_count" in fn
 
 
 def test_nway_non_allow_count_reaches_rendered_panel_html() -> None:
@@ -96,3 +94,40 @@ def test_nway_non_allow_count_zero_still_renders_without_warning() -> None:
 
     assert "nway-non-allow" in html
     assert ">0<" in html
+
+
+def test_new_dashboard_reads_old_api_server_alias_during_rolling_upgrade() -> None:
+    """New browser code can run against an old server that only emits the old key."""
+    payload = dict(_BASE_PAYLOAD, contention_nway_restricted_count=4)
+    html = _run_with_payload(payload)
+
+    assert "nway-non-allow" in html
+    assert ">4<" in html
+    assert "4 N-way check(s) returned non-ALLOW" in html
+
+
+def test_new_dashboard_key_wins_when_both_versions_are_present() -> None:
+    """The deprecated alias cannot override the new field during mixed rollout."""
+    payload = dict(
+        _BASE_PAYLOAD,
+        contention_nway_non_allow_count=2,
+        contention_nway_restricted_count=9,
+    )
+    html = _run_with_payload(payload)
+
+    assert ">2<" in html
+    assert "2 N-way check(s) returned non-ALLOW" in html
+    assert ">9<" not in html
+
+
+def test_new_zero_value_is_not_replaced_by_nonzero_deprecated_alias() -> None:
+    """Zero is a valid new-server value, not a cue to fall back to the old alias."""
+    payload = dict(
+        _BASE_PAYLOAD,
+        contention_nway_non_allow_count=0,
+        contention_nway_restricted_count=9,
+    )
+    html = _run_with_payload(payload)
+
+    assert ">0<" in html
+    assert ">9<" not in html
