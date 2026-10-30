@@ -7,6 +7,7 @@ from unittest.mock import patch, MagicMock
 
 from src.builtin_tools import register_builtin_tools
 from src.tool_registry import ToolRegistry, ToolCategory
+from src.registry.tool_registry import load_from_yaml
 
 
 class TestRegisterBuiltinTools:
@@ -37,6 +38,27 @@ class TestRegisterBuiltinTools:
         ]
         for tool_name in expected_tools:
             assert tool_name in registry._tools, f"Tool {tool_name} not registered"
+
+    def test_yaml_file_handlers_keep_their_guards_after_builtin_registration(self):
+        """Lifespan order must not replace the permissioned YAML read_file."""
+        from pathlib import Path
+
+        registry = ToolRegistry()
+        load_from_yaml(registry, Path(__file__).parents[2] / "orchestration" / "tool_registry.yaml")
+        yaml_read_file = registry._tools["read_file"].handler
+        yaml_lint = registry._tools["lint_python"].handler
+
+        register_builtin_tools(registry)
+
+        assert registry._tools["read_file"].handler is yaml_read_file
+        assert registry._tools["read_file"].handler.__module__ == "orchestration.tools.system"
+        assert registry._tools["lint_python"].handler is yaml_lint
+        denied = registry._tools["read_file"].handler(path="/etc/hostname")
+        assert "error" in denied
+        denied_eval_path = registry._tools["read_file"].handler(
+            path="/dev/shm/epyc_eval_secrets.json"
+        )
+        assert "error" in denied_eval_path
 
     def test_register_builtin_tools_sets_categories(self):
         """Registered tools should have correct categories."""
