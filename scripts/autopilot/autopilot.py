@@ -5015,6 +5015,12 @@ def _build_prior_planner_decision_digest(
 
         if record.get("type") == "planner_coordinator":
             critique = record.get("critique_decision") or "none"
+            if "critique_kind" not in record:
+                critique_kind = "unknown_legacy"
+            elif record.get("critique_kind") == "proposal_filter":
+                critique_kind = "proposal_filter"
+            else:
+                critique_kind = "unknown"
             degraded = "degraded" if record.get("degraded") else "clean"
             fallback = str(record.get("fallback_reason") or "").strip()
             issues = record.get("critique_issues") or []
@@ -5025,7 +5031,7 @@ def _build_prior_planner_decision_digest(
                 f"  - action={record.get('action_type') or '?'} "
                 f"draft={record.get('draft_provider') or '?'} "
                 f"critic={record.get('critic_provider') or 'none'} "
-                f"verdict={critique} kind={record.get('critique_kind') or 'unknown_legacy'} "
+                f"verdict={critique} kind={critique_kind} "
                 f"status={degraded}"
             )
             if fallback:

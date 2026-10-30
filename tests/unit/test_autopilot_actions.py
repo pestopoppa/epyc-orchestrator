@@ -3728,13 +3728,22 @@ def test_prior_planner_decision_digest_labels_legacy_kind_unknown(tmp_path) -> N
         '"draft_provider":"claude","critic_provider":"codex",'
         '"critique_decision":"reject","critique_kind":"proposal_filter",'
         '"degraded":false}\n'
+        '{"type":"planner_coordinator","action_type":"validation_label",'
+        '"critique_decision":"approve","critique_kind":"validation",'
+        '"degraded":false}\n'
+        '{"type":"planner_coordinator","action_type":"malformed_kind",'
+        '"critique_decision":"revise","critique_kind":["proposal_filter"],'
+        '"degraded":true}\n'
     )
 
-    text = autopilot._build_prior_planner_decision_digest(archive, limit=2)
+    text = autopilot._build_prior_planner_decision_digest(archive, limit=4)
 
     assert "kind=proposal_filter" in text
     assert "kind=unknown_legacy" in text
-    assert "kind=validation" not in text
+    assert text.count("kind=unknown status") == 2
+    assert "verdict=approve kind=unknown" in text
+    assert "verdict=revise kind=unknown" in text
+    assert "verdict=reject kind=proposal_filter" in text
 
 
 def test_repo_readiness_advisory_disabled_without_env(monkeypatch) -> None:
