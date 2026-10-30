@@ -198,6 +198,59 @@ async def test_checkpoint_write_and_rehydrate(tmp_path):
     assert state.next == ()  # run is complete, nothing pending
 
 
+async def test_compaction_quality_monitor_survives_durable_checkpoint_restart(tmp_path):
+    from langgraph.graph import END, StateGraph
+
+    from src.graph.langgraph.state import (
+        OrchestratorState,
+        lg_to_task_state,
+        task_state_to_lg,
+    )
+    from src.graph.session_log import CompactionQualityMonitor
+    from src.graph.state import TaskState
+
+    cp = tmp_path / "compaction-quality.sqlite"
+    tid = "thread-compaction-quality"
+
+    task_state = TaskState(task_id=tid)
+    monitor = CompactionQualityMonitor()
+    monitor.record_compaction(4)
+    monitor.record_reference_miss()
+    task_state.compaction_quality_monitor = monitor
+    projected = task_state_to_lg(task_state)
+
+    async def finish(state, config):
+        return {}
+
+    def build_graph():
+        graph = StateGraph(OrchestratorState)
+        graph.add_node("finish", finish)
+        graph.set_entry_point("finish")
+        graph.add_edge("finish", END)
+        return graph
+
+    # First reader writes the real projected graph state into the SQLite saver.
+    async with open_async_checkpointer(cp) as saver:
+        graph = build_graph().compile(checkpointer=saver)
+        await graph.ainvoke(projected, config=build_run_config(tid))
+
+    # A fresh saver/graph reopens the file and reads the persisted monitor payload.
+    async with open_async_checkpointer(cp) as saver:
+        graph = build_graph().compile(checkpointer=saver)
+        snapshot = await graph.aget_state(build_run_config(tid))
+
+    assert snapshot.values["compaction_quality_monitor"] == {
+        "compactions_performed": 1,
+        "segments_compacted": 4,
+        "post_compaction_references": 1,
+        "quality_checks": 0,
+    }
+    restored = TaskState(task_id=tid)
+    lg_to_task_state(snapshot.values, restored)
+    assert isinstance(restored.compaction_quality_monitor, CompactionQualityMonitor)
+    assert restored.compaction_quality_monitor.to_dict() == monitor.to_dict()
+
+
 # ---------------------------------------------------------------------------
 # TM-7: cross-restart resume of a crashed run
 # ---------------------------------------------------------------------------

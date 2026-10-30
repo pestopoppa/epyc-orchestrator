@@ -167,6 +167,7 @@ class OrchestratorState(TypedDict, total=False):
     session_log_path: str
     session_summary_cache: str
     session_summary_turn: int
+    compaction_quality_monitor: dict[str, int] | None
 
     # --- Two-level condensation (CF Phase 1) ---
     consolidated_segments: Annotated[list[Any], operator.add]
@@ -207,7 +208,7 @@ class OrchestratorState(TypedDict, total=False):
 # Fields to skip when converting TaskState -> OrchestratorState
 _SKIP_TO_LG = frozenset({
     "task_manager", "pending_approval",
-    "segment_cache", "compaction_quality_monitor",
+    "segment_cache",
 })
 
 # Config constants that moved to LangGraphConfig
@@ -276,6 +277,15 @@ def task_state_to_lg(state) -> dict[str, Any]:
         val = getattr(state, f.name)
         if isinstance(val, Enum):
             val = str(val)
+        elif f.name == "compaction_quality_monitor" and val is not None:
+            from src.graph.session_log import CompactionQualityMonitor
+
+            if not isinstance(val, CompactionQualityMonitor):
+                raise TypeError(
+                    "compaction_quality_monitor must be a "
+                    "CompactionQualityMonitor or None"
+                )
+            val = val.to_dict()
         result[f.name] = val
     return result
 
@@ -298,5 +308,11 @@ def lg_to_task_state(lg_state: dict[str, Any], state) -> None:
             continue
         if key == "next_node":
             continue  # Internal graph control field
+        if key == "compaction_quality_monitor" and val is not None:
+            from src.graph.session_log import CompactionQualityMonitor
+
+            if not isinstance(val, dict):
+                raise TypeError("checkpointed compaction_quality_monitor must be a dict")
+            val = CompactionQualityMonitor.from_dict(val)
         if key in field_names:
             setattr(state, key, val)

@@ -169,13 +169,49 @@ class TestSkipToLG:
         lg = task_state_to_lg(state)
         assert "segment_cache" not in lg
 
-    def test_compaction_quality_monitor_excluded(self):
+    def test_compaction_quality_monitor_is_checkpointed_as_plain_data(self):
         from src.graph.langgraph.state import task_state_to_lg
+        from src.graph.session_log import CompactionQualityMonitor
 
         state = TaskState()
-        state.compaction_quality_monitor = object()
+        monitor = CompactionQualityMonitor()
+        monitor.record_compaction(3)
+        monitor.record_reference_miss()
+        state.compaction_quality_monitor = monitor
+
         lg = task_state_to_lg(state)
-        assert "compaction_quality_monitor" not in lg
+        assert lg["compaction_quality_monitor"] == {
+            "compactions_performed": 1,
+            "segments_compacted": 3,
+            "post_compaction_references": 1,
+            "quality_checks": 0,
+        }
+        assert isinstance(lg["compaction_quality_monitor"], dict)
+
+    def test_checkpointed_compaction_quality_monitor_restores_to_task_state(self):
+        from src.graph.langgraph.state import lg_to_task_state
+        from src.graph.session_log import CompactionQualityMonitor
+
+        state = TaskState()
+        lg_to_task_state(
+            {
+                "compaction_quality_monitor": {
+                    "compactions_performed": 2,
+                    "segments_compacted": 5,
+                    "post_compaction_references": 1,
+                    "quality_checks": 3,
+                }
+            },
+            state,
+        )
+
+        assert isinstance(state.compaction_quality_monitor, CompactionQualityMonitor)
+        assert state.compaction_quality_monitor.to_dict() == {
+            "compactions_performed": 2,
+            "segments_compacted": 5,
+            "post_compaction_references": 1,
+            "quality_checks": 3,
+        }
 
     def test_task_manager_excluded(self):
         from src.graph.langgraph.state import task_state_to_lg
