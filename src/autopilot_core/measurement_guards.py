@@ -25,6 +25,7 @@ outcome on either path.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 __all__ = [
@@ -249,6 +250,14 @@ INFRA_ERROR_PATTERNS = (
     "forced_role_fallback",
 )
 
+# Numeric HTTP codes are retained as a legacy compatibility signal, but they
+# must be standalone tokens. A plain substring match classifies measurements
+# such as ``1.503s`` as infrastructure failures because they contain ``503``.
+# Excluding dots as well as letters/digits also prevents decimal fragments and
+# embedded identifiers from becoming status codes.
+_LEGACY_HTTP_STATUS_PATTERN = re.compile(r"(?<![A-Za-z0-9_.])(?:502|503|504)(?![A-Za-z0-9_.])")
+_LEGACY_HTTP_STATUS_TEXT = frozenset({"502", "503", "504"})
+
 _LEGACY_ERROR_TYPE = {
     DISPOSITION_SCORED: "none",
     DISPOSITION_INFRA_FAILED: "infrastructure",
@@ -396,7 +405,11 @@ def infra_failure_reason(
         tail = lowered.split(":", 1)[1].strip() if ":" in lowered else ""
         return tail.split()[0] if tail else "infra_failed"
 
-    if any(pattern in lowered for pattern in INFRA_ERROR_PATTERNS):
+    if _LEGACY_HTTP_STATUS_PATTERN.search(lowered) or any(
+        pattern in lowered
+        for pattern in INFRA_ERROR_PATTERNS
+        if pattern not in _LEGACY_HTTP_STATUS_TEXT
+    ):
         return "legacy_error_text_match"
     return None
 

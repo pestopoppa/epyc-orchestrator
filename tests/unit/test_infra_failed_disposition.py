@@ -587,3 +587,38 @@ def test_aggregate_treats_a_row_with_no_disposition_as_scored():
     assert result.infra_failed_count == 0
     assert result.details["n_scored"] == 2
     assert result.quality == pytest.approx(1.5)  # 1/2 on the 0-3 scale
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["1.503s", "0.502s", "1.504", "1503", "foo503bar", "503s"],
+)
+def test_legacy_status_substrings_inside_numbers_or_durations_are_not_infra(message):
+    """Only a standalone legacy HTTP code is a status; decimal/duration text is not."""
+    resp = {"answer": "A generated answer with a real token count.", "tokens_generated": 9}
+    assert infra_failure_reason(resp, error=message) is None
+    assert measurement_disposition(resp, error=message) == DISPOSITION_TASK_FAILED
+
+
+@pytest.mark.parametrize("message", ["503", "HTTP 503 Service Unavailable", "status 503"])
+def test_standalone_legacy_http_status_tokens_remain_infra(message):
+    resp = {"answer": "A generated answer with a real token count.", "tokens_generated": 9}
+    assert infra_failure_reason(resp, error=message) == "legacy_error_text_match"
+    assert measurement_disposition(resp, error=message) == DISPOSITION_INFRA_FAILED
+
+
+def test_structured_status_and_anchored_error_precedence_remain_infra():
+    generated = {"answer": "A generated answer with a real token count.", "tokens_generated": 9}
+    status = {**generated, "http_status": 503}
+    assert infra_failure_reason(status) == "http_status"
+    assert measurement_disposition(status) == DISPOSITION_INFRA_FAILED
+
+    banner = {"answer": "  [ERROR: backend unavailable]", "tokens_generated": 0}
+    assert infra_failure_reason(banner) == "inband_error"
+    assert measurement_disposition(banner) == DISPOSITION_INFRA_FAILED
+
+
+def test_legacy_connection_text_fallback_remains_infra():
+    resp = {"answer": "A generated answer with a real token count.", "tokens_generated": 9}
+    assert infra_failure_reason(resp, error="connection refused") == "legacy_error_text_match"
+    assert measurement_disposition(resp, error="connection refused") == DISPOSITION_INFRA_FAILED
