@@ -562,6 +562,20 @@ class REPLEnvironment(
             globals_dict["SCRIPT"] = self._invoke_script
             globals_dict["find_scripts"] = self._find_scripts
 
+        # The experimental ledger covers only our own primitives.  Until
+        # independent tool/subprocess/model paths carry the ledger, refuse
+        # every other REPL helper rather than silently bypassing the cap.
+        from src.llm_primitives.request_token_budget import current_budget, BudgetUnavailable
+        if current_budget() is not None:
+            allowed = {"peek", "grep", "list_dir", "file_info", "context_len",
+                       "chunk_context", "list_findings", "FINAL", "FINAL_VAR", "STUCK",
+                       "llm_call", "llm_batch"}
+            def refuse_unmetered(*args, **kwargs):
+                raise BudgetUnavailable("REPL helper lacks experimental budget provenance")
+            for name, value in list(globals_dict.items()):
+                if getattr(value, "__self__", None) is self and name not in allowed:
+                    globals_dict[name] = refuse_unmetered
+
         # CT-12.3c: REPL data functions return RAW text (the agent's code may write
         # it back to files / tool args). Neutralisation happens only at model-bound
         # boundaries: last_output in the prompt builder, llm_call/llm_batch args.

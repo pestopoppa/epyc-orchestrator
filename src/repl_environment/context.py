@@ -475,6 +475,9 @@ class _ContextMixin:
         The records expose the same attribute interface as ToolInvocation so the
         downstream consumers are unchanged. Covers every dispatch path below.
         """
+        from src.llm_primitives.request_token_budget import current_budget, BudgetUnavailable
+        if current_budget() is not None:
+            raise BudgetUnavailable("registered tools lack experimental budget provenance")
         if self.tool_registry is None:
             raise RuntimeError("No tool registry configured")
 
@@ -929,6 +932,9 @@ class _ContextMixin:
         Returns:
             Script result.
         """
+        from src.llm_primitives.request_token_budget import current_budget, BudgetUnavailable
+        if current_budget() is not None:
+            raise BudgetUnavailable("scripts lack experimental budget provenance")
         # INF-78 OAB-1: unavailable in a task_root-scoped request (no-op otherwise).
         from src.repl_environment.task_root import scope_refusal as _scope_refusal
 

@@ -532,6 +532,8 @@ class LLMPrimitives(
         source: Any,
         attempt: tuple[_RequestOutputUsage, object] | None | object = _NO_OUTPUT_USAGE_ATTEMPT,
     ) -> None:
+        from .request_token_budget import note_usage
+        note_usage(value, source)
         if attempt is None:
             return
         if attempt is _NO_OUTPUT_USAGE_ATTEMPT:

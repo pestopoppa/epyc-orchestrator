@@ -135,6 +135,9 @@ class OpenAIChatRequest(BaseModel):
         "max_completion_tokens is "
         "accepted as an alias (422 if both are sent).",
     )
+    x_experimental_total_token_budget: bool = Field(
+        default=False, description="Experimental total generation budget for default text REPL."
+    )
     stream: bool = Field(default=False, description="Enable streaming")
     stream_options: dict[str, Any] | None = Field(
         default=None,

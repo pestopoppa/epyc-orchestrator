@@ -787,6 +787,17 @@ class InferenceMixin:
         on_chunk: Callable[[str], None] | None = None,
     ) -> str:
         """Internal real call implementation (no concurrency gating)."""
+        from .request_token_budget import current_budget
+        if current_budget() is not None:
+            # Bypass cache and its lack of an attempt record. Each fallback
+            # enters the single-call reservation boundary separately.
+            return self._real_call_single(
+                prompt, role, n_tokens, stop_sequences, json_schema=json_schema,
+                grammar=grammar, temperature=temperature, seed=seed, top_p=top_p,
+                top_k=top_k, n_probs=n_probs, post_sampling_probs=post_sampling_probs,
+                on_chunk=on_chunk,
+            )
+
         # Content-addressable cache check
         from src.features import features as _get_features
 
@@ -921,7 +932,30 @@ class InferenceMixin:
 
         return result
 
-    def _real_call_single(
+    def _real_call_single(self, prompt, role, n_tokens=-1, *args, **kwargs):
+        # Experimental request scope only. Reserve once per actual attempt,
+        # including fallback attempts, before entering any backend path.
+        from .request_token_budget import current_budget, _attempt_receipt
+        budget = current_budget()
+        if budget is None:
+            return self._unbudgeted_real_call_single(prompt, role, n_tokens, *args, **kwargs)
+        desired = n_tokens if isinstance(n_tokens, int) and n_tokens > 0 else budget.snapshot().limit
+        ticket, cap = budget.reserve(desired)
+        receipt = []
+        context_token = _attempt_receipt.set(receipt)
+        completed = False
+        try:
+            result = self._unbudgeted_real_call_single(prompt, role, cap, *args, **kwargs)
+            completed = True
+            return result
+        finally:
+            _attempt_receipt.reset(context_token)
+            valid_source = (len(receipt) == 1 and isinstance(receipt[0][1], str)
+                            and bool(receipt[0][1]))
+            value = receipt[0][0] if valid_source else None
+            budget.settle(ticket, exact_usage=value, complete=completed and valid_source)
+
+    def _unbudgeted_real_call_single(
         self,
         prompt: str,
         role: str,
@@ -1983,6 +2017,10 @@ class InferenceMixin:
         Returns:
             List of model responses in order.
         """
+        from .request_token_budget import current_budget, BudgetUnavailable
+        if current_budget() is not None:
+            raise BudgetUnavailable("worker-pool batch has no exact output usage")
+
         # Determine task type from role.
         # Canonical worker aliases collapse to their live task families
         # (e.g. worker_general -> explore, worker_coder -> coder, etc.).
@@ -2102,6 +2140,9 @@ class InferenceMixin:
         Raises:
             RuntimeError: If model server not configured.
         """
+        from .request_token_budget import current_budget, BudgetUnavailable
+        if current_budget() is not None:
+            raise BudgetUnavailable("monitored generation lacks budgeted dispatch")
         if self.model_server is None:
             raise RuntimeError("ModelServer not configured for real inference")
 

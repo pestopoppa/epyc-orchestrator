@@ -808,7 +808,8 @@ def _client_usage(backend_usage: Any) -> OpenAIUsage:
 
 
 def _default_usage(
-    prompt: str, total_tokens: int, response_text: str, primitives: Any
+    prompt: str, total_tokens: int, response_text: str, primitives: Any,
+    *, exact_completion: bool = False,
 ) -> OpenAIUsage:
     """Usage for the default (REPL / direct) path.
 
@@ -820,7 +821,7 @@ def _default_usage(
     """
     measured = _token_count(getattr(primitives, "total_prompt_tokens_reported", None))
     prompt_tokens = measured if measured else len(prompt) // 4
-    completion_tokens = total_tokens or len(response_text) // 4
+    completion_tokens = total_tokens if exact_completion else total_tokens or len(response_text) // 4
     return OpenAIUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -1247,6 +1248,24 @@ async def list_models() -> OpenAIModelsResponse:
     return OpenAIModelsResponse(data=infos)
 
 
+def _experimental_budget_snapshot(request: OpenAIChatRequest):
+    if not request.x_experimental_total_token_budget:
+        return None
+    from src.llm_primitives.request_token_budget import current_budget
+    budget = current_budget()
+    if budget is None:
+        raise RuntimeError("experimental request budget context missing")
+    snapshot = budget.snapshot()
+    if snapshot.unknown:
+        raise RuntimeError("experimental request budget usage unknown")
+    return snapshot
+
+
+def _request_generated_tokens(request: OpenAIChatRequest, primitives: Any) -> int:
+    snapshot = _experimental_budget_snapshot(request)
+    return snapshot.used_exact if snapshot is not None else primitives.total_tokens_generated
+
+
 def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
     """Execute one /v1 REPL turn, rescuing an unquoted one-word ``FINAL(OK)``.
 
@@ -1267,6 +1286,40 @@ def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
 
 @router.post("/chat/completions", response_model=None)
 async def openai_chat_completions(
+    request: OpenAIChatRequest,
+    http_request: Request,
+    state: AppState = Depends(dep_app_state),
+):
+    if not request.x_experimental_total_token_budget:
+        return await _openai_chat_completions_impl(request, http_request, state)
+    from src.llm_primitives.request_token_budget import RequestTokenBudget, bind_budget, reset_budget
+    if request.x_disable_repl or request.x_tool_mode == "client":
+        raise HTTPException(status_code=422, detail="experimental budget requires default text REPL")
+    budget = RequestTokenBudget(request.max_tokens)
+    token = bind_budget(budget)
+    try:
+        response = await _openai_chat_completions_impl(request, http_request, state)
+    finally:
+        reset_budget(token)
+    if isinstance(response, StreamingResponse):
+        original = response.body_iterator
+        async def budgeted_stream():
+            stream_token = bind_budget(budget)
+            try:
+                async for part in original:
+                    yield part
+            finally:
+                try:
+                    close = getattr(original, "aclose", None)
+                    if close is not None:
+                        await close()
+                finally:
+                    reset_budget(stream_token)
+        response.body_iterator = budgeted_stream()
+    return response
+
+
+async def _openai_chat_completions_impl(
     request: OpenAIChatRequest,
     http_request: Request,
     state: AppState = Depends(dep_app_state),
@@ -1343,6 +1396,9 @@ async def openai_chat_completions(
                 "available"
             ),
         )
+
+    if request.x_experimental_total_token_budget and prompt_parts.image_base64:
+        raise HTTPException(status_code=422, detail="experimental budget does not support vision")
 
     if prompt_parts.image_base64:
         unsupported_sampling_field = _unsupported_vision_sampling_field(request)
@@ -1435,6 +1491,8 @@ async def openai_chat_completions(
     use_real_mode = (
         state.registry is not None and not f.mock_mode  # Respect mock_mode feature flag
     )
+    if request.x_experimental_total_token_budget and not use_real_mode:
+        raise HTTPException(status_code=422, detail="experimental budget requires real primitives")
     # TE-1: None (nothing changes) unless flag v1_escalation is on or x_escalation was sent.
     escalation_plan = _plan_escalation(
         request,
@@ -1628,7 +1686,7 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
-                        total_tokens = primitives.total_tokens_generated
+                        total_tokens = _request_generated_tokens(request, primitives)
                     elif prompt_parts.image_base64:
                         try:
                             response_text = await _run_openai_vision_completion(
@@ -1670,7 +1728,7 @@ async def openai_chat_completions(
                             )
                             yield "data: [DONE]\n\n"
                             return
-                        total_tokens = primitives.total_tokens_generated
+                        total_tokens = _request_generated_tokens(request, primitives)
                     elif disable_repl:
                         # Direct LLM call — no REPL, no code execution.
                         # /chat's direct-stage prompt contract (_direct_call_prompt).
@@ -1754,7 +1812,7 @@ async def openai_chat_completions(
                         if response_reasoning is None:
                             # RI-23: chat lane — the server already split it off.
                             response_reasoning = _last_call_reasoning(primitives)
-                        total_tokens = primitives.total_tokens_generated
+                        total_tokens = _request_generated_tokens(request, primitives)
                     else:
                         # Create REPL environment
                         repl = REPLEnvironment(
@@ -1768,7 +1826,7 @@ async def openai_chat_completions(
                         repl_for_metadata = repl
 
                         # Run orchestration loop (simplified for streaming)
-                        max_turns = request.max_tokens // 500 if request.max_tokens else 3
+                        max_turns = 5 if request.x_experimental_total_token_budget else (request.max_tokens // 500 if request.max_tokens else 3)
                         max_turns = min(max(max_turns, 1), 5)
 
                         for turn in range(max_turns):
@@ -1789,6 +1847,7 @@ async def openai_chat_completions(
                                     **sampling_kwargs,
                                 )
                                 _raise_admission_denied_text(code)
+                                _experimental_budget_snapshot(request)
                                 turn_reasoning = _last_call_reasoning(primitives)
                                 # In-band guard: "[ERROR: ...]" at start-of-answer
                                 # is a backend failure, not a generation — do not
@@ -1844,6 +1903,11 @@ async def openai_chat_completions(
 
                             # Execute in REPL
                             result = _execute_repl_turn(repl, code)
+                            budget_snapshot = _experimental_budget_snapshot(request)
+                            if budget_snapshot is not None and budget_snapshot.exhausted and not result.is_final:
+                                finish_reason = "length"
+                                response_text = result.output or ""
+                                break
 
                             if result.is_final:
                                 response_text = result.final_answer or ""
@@ -1857,10 +1921,12 @@ async def openai_chat_completions(
                             # Max turns reached
                             response_text = response_text or f"[Completed {max_turns} turns]"
 
-                        total_tokens = primitives.total_tokens_generated
+                        total_tokens = _request_generated_tokens(request, primitives)
 
                     # TE-1: /chat's post-answer escalation hooks (flag v1_escalation).
-                    if escalation_plan is not None and escalation_plan.enabled:
+                    if (escalation_plan is not None and escalation_plan.enabled
+                            and not (request.x_experimental_total_token_budget
+                                     and _experimental_budget_snapshot(request).exhausted)):
                         escalated_text = await _escalate_v1_answer(
                             escalation_plan,
                             _escalation_stage(
@@ -1881,7 +1947,7 @@ async def openai_chat_completions(
                             response_text = escalated_text
                             response_reasoning = None  # belonged to the replaced answer
                             finish_reason = "stop"
-                        total_tokens = primitives.total_tokens_generated
+                        total_tokens = _request_generated_tokens(request, primitives)
                         client_usage = _escalated_client_usage(client_usage, escalation_plan)
 
                     first_chunk = not streamed_content
@@ -1997,7 +2063,7 @@ async def openai_chat_completions(
                 stream_usage = (
                     client_usage
                     if client_usage is not None
-                    else _default_usage(prompt, total_tokens, response_text, primitives)
+                    else _default_usage(prompt, total_tokens, response_text, primitives, exact_completion=request.x_experimental_total_token_budget)
                 )
                 usage_chunk = {
                     "id": chat_id,
@@ -2138,7 +2204,7 @@ async def openai_chat_completions(
                     )
                     repl_for_metadata = repl
 
-                    max_turns = request.max_tokens // 500 if request.max_tokens else 3
+                    max_turns = 5 if request.x_experimental_total_token_budget else (request.max_tokens // 500 if request.max_tokens else 3)
                     max_turns = min(max(max_turns, 1), 5)
 
                     response_text = ""
@@ -2159,6 +2225,7 @@ async def openai_chat_completions(
                             **sampling_kwargs,
                         )
                         _raise_admission_denied_text(code)
+                        _experimental_budget_snapshot(request)
                         turn_reasoning = _last_call_reasoning(primitives)
                         # Same in-band guard as the direct path: an "[ERROR: ...]"
                         # generation is a backend failure, not code to auto-wrap
@@ -2173,6 +2240,11 @@ async def openai_chat_completions(
                         code = auto_wrap_final(code)
 
                         result = _execute_repl_turn(repl, code)
+                        budget_snapshot = _experimental_budget_snapshot(request)
+                        if budget_snapshot is not None and budget_snapshot.exhausted and not result.is_final:
+                            finish_reason = "length"
+                            response_text = result.output or ""
+                            break
 
                         if result.is_final:
                             response_text = result.final_answer or ""
@@ -2184,7 +2256,9 @@ async def openai_chat_completions(
                             response_text = result.output
 
                 # TE-1: /chat's post-answer escalation hooks (flag v1_escalation).
-                if escalation_plan is not None and escalation_plan.enabled:
+                if (escalation_plan is not None and escalation_plan.enabled
+                        and not (request.x_experimental_total_token_budget
+                                 and _experimental_budget_snapshot(request).exhausted)):
                     escalated_text = await _escalate_v1_answer(
                         escalation_plan,
                         _escalation_stage(
@@ -2207,7 +2281,7 @@ async def openai_chat_completions(
                         finish_reason = "stop"
                     client_usage = _escalated_client_usage(client_usage, escalation_plan)
 
-                total_tokens = primitives.total_tokens_generated
+                total_tokens = _request_generated_tokens(request, primitives)
 
             except HTTPException:
                 # Already carries its own status — including the 503 raised a few
@@ -2294,7 +2368,7 @@ async def openai_chat_completions(
             usage=(
                 client_usage
                 if client_usage is not None
-                else _default_usage(prompt, total_tokens, response_text, primitives)
+                else _default_usage(prompt, total_tokens, response_text, primitives, exact_completion=request.x_experimental_total_token_budget)
             ),
             x_orchestrator_metadata=response_meta,
         )
