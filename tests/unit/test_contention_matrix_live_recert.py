@@ -51,7 +51,7 @@ def test_pair_enumeration_excludes_eval_batch_auxiliary_role() -> None:
     assert all("eval_batch_frontdoor" not in pair for pair in pairs)
 
 
-def test_live_pair_selection_uses_healthy_quarters_when_primary_ports_are_down(
+def test_live_pair_selection_marks_healthy_alternates_when_primary_ports_are_down(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -66,7 +66,7 @@ def test_live_pair_selection_uses_healthy_quarters_when_primary_ports_are_down(
         "worker_general",
     )
 
-    assert reason is None
+    assert reason == "primary_instance_unavailable:frontdoor,worker_general"
     assert frontdoor is not None and frontdoor["port"] == 8080
     assert frontdoor["label"] == "q0"
     assert worker is not None and worker["port"] == 8282
@@ -93,7 +93,7 @@ def test_live_pair_selection_reports_missing_role_instead_of_zero_measurement(
     assert reason == "missing_live_instance:worker_general"
 
 
-def test_live_pair_selection_uses_secondary_live_ports_for_nonquarterable_role(
+def test_live_pair_selection_marks_secondary_ports_for_nonquarterable_role(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -108,7 +108,7 @@ def test_live_pair_selection_uses_secondary_live_ports_for_nonquarterable_role(
         "ingest_long_context",
     )
 
-    assert reason is None
+    assert reason == "primary_instance_unavailable:frontdoor,ingest_long_context"
     assert frontdoor is not None and frontdoor["port"] == 8380
     assert frontdoor["label"] == "q3"
     assert ingest is not None and ingest["port"] == 8185
@@ -125,7 +125,7 @@ def test_cmd_run_writes_live_instance_geometry_and_excludes_auxiliary_hash(
     monkeypatch.setattr(
         matrix_tool,
         "_port_healthy",
-        lambda port, timeout_s=0.5: int(port) in {8080, 8282},
+        lambda port, timeout_s=0.5: int(port) in {8070, 8072},
     )
 
     def fake_bench_pair(
@@ -167,10 +167,10 @@ def test_cmd_run_writes_live_instance_geometry_and_excludes_auxiliary_hash(
         }
     )
     assert data["topology_hash"] != topology_fingerprint(cfg)
-    assert data["pairs"][0]["instance_a"]["port"] == 8080
-    assert data["pairs"][0]["instance_a"]["label"] == "q0"
-    assert data["pairs"][0]["instance_b"]["port"] == 8282
-    assert data["pairs"][0]["instance_b"]["label"] == "q2"
+    assert data["pairs"][0]["instance_a"]["port"] == 8070
+    assert data["pairs"][0]["instance_a"]["label"] == "half0"
+    assert data["pairs"][0]["instance_b"]["port"] == 8072
+    assert data["pairs"][0]["instance_b"]["label"] == "full"
 
 
 def test_cmd_run_refuses_to_write_zero_throughput_matrix(
@@ -183,7 +183,7 @@ def test_cmd_run_refuses_to_write_zero_throughput_matrix(
     monkeypatch.setattr(
         matrix_tool,
         "_port_healthy",
-        lambda port, timeout_s=0.5: int(port) in {8080, 8282},
+        lambda port, timeout_s=0.5: int(port) in {8070, 8072},
     )
 
     def zero_bench_pair(
@@ -218,24 +218,13 @@ def test_cmd_run_refuses_to_write_zero_throughput_matrix(
     assert not output.exists()
 
 
-def test_cmd_run_refuses_overlap_substituted_pairs_as_unknown(
+def test_cmd_run_measures_primary_overlap_and_refuses_alternate_geometries(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """The overlapping fallback (no disjoint live placement exists) must NOT be
-    recorded as a measured pair row.
-
-    Regression for the APPEND 2026-08-12 inverted-marker-polarity defect: the
-    marker fired on the honest overlap fallback while substituted rows entered
-    the matrix unmarked, so an overlapping-geometry number could be read by the
-    role-keyed gate as the pair's (disjoint-geometry) verdict — the class of
-    the shipped frontdoor+ingest 1.89 row. The safest fix is to REFUSE the
-    substituted overlapping pair into `unknown_pairs`, where the gate's
-    unknown-pair policy (fail-closed for background) applies.
-    """
+    """Disjoint alternates cannot qualify any configured-primary role pair."""
     cfg = {
-        # A full-only role can never be disjoint from a half: every pair it
-        # forms falls back to the overlap substitution.
+        # halves_b has a live primary; only halves_c needs a substitute.
         "full_only": {"instances": [("0-95", 8070, 96)]},
         "halves_b": {
             "instances": [
@@ -257,7 +246,7 @@ def test_cmd_run_refuses_overlap_substituted_pairs_as_unknown(
     monkeypatch.setattr(
         matrix_tool,
         "_port_healthy",
-        lambda port, timeout_s=0.5: int(port) in {8070, 8082, 8183},
+        lambda port, timeout_s=0.5: int(port) in {8070, 8072, 8082, 8183},
     )
 
     def fake_bench_pair(
@@ -296,28 +285,22 @@ def test_cmd_run_refuses_overlap_substituted_pairs_as_unknown(
 
     assert rc == 0
     data = yaml.safe_load(output.read_text(encoding="utf-8"))
-    # The only recordable pair is the disjoint halves_b + halves_c one; neither
-    # full_only pair may enter `pairs` in any form.
     assert len(data["pairs"]) == 1
-    assert tuple(sorted(data["pairs"][0]["roles"])) == ("halves_b", "halves_c")
-    # Both overlap substitutions were refused into unknown_pairs with an
-    # explicit reason, so the gate's unknown-pair policy applies to them.
+    assert data["pairs"][0]["roles"] == ["full_only", "halves_b"]
     assert len(data["unknown_pairs"]) == 2
     assert {tuple(sorted(e["roles"])) for e in data["unknown_pairs"]} == {
-        ("full_only", "halves_b"),
         ("full_only", "halves_c"),
+        ("halves_b", "halves_c"),
     }
-    assert all("overlap_substituted" in e["reason"] for e in data["unknown_pairs"])
+    assert all("geometry_substituted" in e["reason"] for e in data["unknown_pairs"])
 
 
-def test_cmd_run_dry_run_reports_overlap_refusal_without_writing(
+
+def test_cmd_run_dry_run_reports_geometry_refusal_without_writing(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    """A dry run must say what a real run would do: the overlap substitution is
-    REFUSED, not promised as a measurement — a dry run that lies about the run
-    it previews is the exact trap that produced the 2026-08-12 dry-run finding.
-    """
+    """A dry run must not promise a measurement of substitute instances."""
     cfg = {
         "full_only": {"instances": [("0-95", 8070, 96)]},
         "halves_b": {
@@ -387,7 +370,7 @@ nway_light_roles: ["frontdoor"]
     monkeypatch.setattr(
         matrix_tool,
         "_port_healthy",
-        lambda port, timeout_s=0.5: int(port) in {8080, 8282},
+        lambda port, timeout_s=0.5: int(port) in {8070, 8072},
     )
 
     def fake_bench_pair(
@@ -426,8 +409,8 @@ nway_light_roles: ["frontdoor"]
     measured_row = next(
         r for r in data["pairs"] if tuple(sorted(r["roles"])) == ("frontdoor", "worker_general")
     )
-    assert measured_row["instance_a"]["port"] == 8080
-    assert measured_row["instance_b"]["port"] == 8282
+    assert measured_row["instance_a"]["port"] == 8070
+    assert measured_row["instance_b"]["port"] == 8072
     assert measured_row["ratio"] == 1.67
     # ...and the unmeasured pair survives VERBATIM instead of being truncated.
     preserved_row = next(

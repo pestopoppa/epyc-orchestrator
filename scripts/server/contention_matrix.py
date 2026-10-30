@@ -370,44 +370,27 @@ def _select_live_pair_instances(
     role_a: str,
     role_b: str,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
-    """Choose live instances for a pair, preferring disjoint CPU regions.
+    """Select both configured primaries, regardless of their CPU overlap.
 
-    This is the v7/quarter-mode recert path: instance-0/full ports may be
-    intentionally offline while quarter ports are live. A role with no healthy
-    live instance is an infra blocker, not a zero-throughput measurement.
-
-    The third element is the geometry marker: None for a DISJOINT placement
-    (the geometry the gate's role-keyed lookup is read as), and
-    "overlap_measured" for the overlapping fallback. A caller MUST NOT record
-    the fallback as a plain `pairs:` row: an overlapping-geometry number
-    substituted into the matrix is exactly what put the frontdoor+ingest 1.89
-    "disjoint" row in front of the role-keyed gate (shape-keyed handoff APPEND
-    2026-08-12, inverted marker polarity — the gate cannot tell the two
-    geometries apart). `cmd_run` refuses the fallback into `unknown_pairs`.
+    The role-keyed gate cannot distinguish a primary measurement from one
+    using alternate instances. Return a marker when either primary is down,
+    so `cmd_run` records that pair as unknown instead of benchmarking a more
+    favourable live placement. Missing every instance remains an infra error.
     """
     a_live = _live_role_instances(numa_config, role_a)
     b_live = _live_role_instances(numa_config, role_b)
     if not a_live or not b_live:
-        missing = [
-            role
-            for role, live in ((role_a, a_live), (role_b, b_live))
-            if not live
-        ]
+        missing = [role for role, live in ((role_a, a_live), (role_b, b_live)) if not live]
         return None, None, f"missing_live_instance:{','.join(missing)}"
 
-    def _sort_key(item: dict[str, Any]) -> tuple[int, int]:
-        return (len(item["regions"]), int(item["instance_idx"]))
-
-    for a in sorted(a_live, key=_sort_key):
-        for b in sorted(b_live, key=_sort_key):
-            if set(a["regions"]).isdisjoint(set(b["regions"])):
-                return a, b, None
-    # No disjoint placement exists (e.g. architect_full against a quarter role).
-    # Measure the least-broad live pair so the matrix records the live contention
-    # rather than silently using a dead primary port. The marker names the
-    # substituted geometry; `cmd_run` refuses this fallback into `unknown_pairs`
-    # rather than recording it as a measured pair row.
-    return sorted(a_live, key=_sort_key)[0], sorted(b_live, key=_sort_key)[0], "overlap_measured"
+    primary_a = next((item for item in a_live if item["instance_idx"] == 0), None)
+    primary_b = next((item for item in b_live if item["instance_idx"] == 0), None)
+    if primary_a is not None and primary_b is not None:
+        return primary_a, primary_b, None
+    missing = [
+        role for role, primary in ((role_a, primary_a), (role_b, primary_b)) if primary is None
+    ]
+    return a_live[0], b_live[0], f"primary_instance_unavailable:{','.join(missing)}"
 
 
 # ── Environment metadata ────────────────────────────────────────────
@@ -2115,32 +2098,23 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     selected: list[tuple[str, str, dict[str, Any], dict[str, Any], str | None]] = []
     missing_live: list[tuple[str, str, str]] = []
-    overlap_refused: list[tuple[str, str, str]] = []
+    geometry_refused: list[tuple[str, str, str]] = []
     for a, b in pairs_to_bench:
         inst_a, inst_b, reason = _select_live_pair_instances(NUMA_CONFIG, a, b)
         if inst_a is None or inst_b is None:
             missing_live.append((a, b, reason or "missing_live_instance"))
             continue
         if reason:
-            # The overlap fallback SUBSTITUTES an overlapping placement for a
-            # role pair that has no disjoint live arrangement. Recording it as
-            # a measured pair row would let the role-keyed gate read an
-            # overlapping-geometry number as the pair's verdict — the exact
-            # class of the shipped frontdoor+ingest 1.89 "disjoint" row (APPEND
-            # 2026-08-12, inverted marker polarity: the marker fired on the
-            # honest fallback while the substituted rows entered unmarked).
-            # REFUSE: the pair lands in `unknown_pairs` and the gate's
-            # unknown-pair policy applies. To measure a specific geometry,
-            # use `bench-nway` with a hand-authored manifest that pins ports.
-            overlap_refused.append(
+            # Alternate live instances cannot qualify the configured-primary
+            # role-pair verdict. Preserve the existing unknown-pair policy;
+            # explicit alternate geometries belong in `bench-nway` manifests.
+            geometry_refused.append(
                 (
                     a,
                     b,
-                    "overlap_substituted"
-                    f" ({reason}): no disjoint live placement exists for this "
-                    "role pair; an overlapping-geometry number must not enter "
-                    "the role-keyed gate as the pair's verdict — re-bench the "
-                    "geometry you want with `bench-nway` from a manifest",
+                    f"geometry_substituted ({reason}): both configured primary "
+                    "instances are required for this role-pair measurement; "
+                    "use `bench-nway` for an explicit alternate placement",
                 )
             )
             continue
@@ -2162,8 +2136,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             )
         for a, b, reason in missing_live:
             log.error("  %s + %s cannot be measured: %s", a, b, reason)
-        for a, b, reason in overlap_refused:
-            log.error("  %s + %s REFUSED (overlap substitution): %s", a, b, reason)
+        for a, b, reason in geometry_refused:
+            log.error("  %s + %s REFUSED (geometry substitution): %s", a, b, reason)
         return 0
 
     if missing_live:
@@ -2174,15 +2148,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             "a healthy live instance; HTTP failures are not throughput evidence"
         )
         return 2
-    if pairs_to_bench and not selected:
+    if pairs_to_bench and not selected and not geometry_refused:
         log.error("refusing to write contention matrix: no live pairs selected")
         return 2
 
     measured: list[PairBench] = []
     blocked_pairs: list[tuple[str, str]] = []  # known catastrophic pairs
-    # Overlap-substituted selections are refused, so `selected` can only carry
-    # disjoint placements and no geometry marker survives into a pair row.
-    skipped: list[tuple[str, str, str]] = list(overlap_refused)
+    # Only configured-primary measurements enter the role-keyed pair table.
+    skipped: list[tuple[str, str, str]] = list(geometry_refused)
 
     for a, b, inst_a, inst_b, reason in selected:
         try:
@@ -2219,11 +2192,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     bin_meta = _binary_metadata(binary_path)
     host_meta = _host_metadata()
     measured_roles = {role for pb in measured for role in pb.roles}
-    if not measured_roles:
+    if not measured_roles and not geometry_refused:
         log.error("refusing to write contention matrix: no pairs were measured")
         return 2
+    # The loader compares the roles in both emitted sections to this stamp.
+    stamped_roles = measured_roles | {role for a, b, _ in skipped for role in (a, b)}
     topo_hash = topology_fingerprint(
-        {role: NUMA_CONFIG[role] for role in _matrix_roles(NUMA_CONFIG, measured_roles)}
+        {role: NUMA_CONFIG[role] for role in _matrix_roles(NUMA_CONFIG, stamped_roles)}
     )
 
     out_path = Path(args.output) if args.output else DEFAULT_OUTPUT
@@ -2268,6 +2243,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         if role_filter
         else []
     )
+    if not measured_roles:
+        restriction_blockers.append("no configured-primary pair was measured; unknown pairs only")
     host_health = _host_health_probe(
         host_meta=host_meta, extra_blockers=restriction_blockers
     )
