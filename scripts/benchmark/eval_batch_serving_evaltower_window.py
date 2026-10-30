@@ -961,6 +961,11 @@ def build_verifier_report(
                 f"--min-eval-concurrency {min_eval_concurrency}; refresh the "
                 "contention matrix/topology certification or intentionally run a serial entry"
             )
+        if args.verifier:
+            blockers.append(
+                "process_verification_not_executed: --verifier is not supported by "
+                "calibration/math_rebaseline; use the explicit T2 process-verifier path"
+            )
         if args.verifier and gate and not gate["on_disk"]:
             blockers.append(
                 f"{gate['required_download']} required: verifier model "

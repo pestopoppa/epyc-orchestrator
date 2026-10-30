@@ -439,6 +439,7 @@ def test_verifier_mode_apply_requires_explicit_fanout_floor(tmp_path, monkeypatc
 
 
 def test_verifier_model_pass_is_download_gated(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window, "MODEL_ROOTS", (tmp_path / "empty-models",))
     monkeypatch.setattr(window.activation_window, "build_preflight", lambda _a: _healthy_preflight())
     monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 3)
     monkeypatch.setattr(window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []})
@@ -471,7 +472,8 @@ def test_verifier_model_pass_is_download_gated(tmp_path, monkeypatch) -> None:
     assert any("MODEL-DOWNLOAD-THINKPRM-1.5B" in b for b in report["blockers"])
 
 
-def test_require_verifier_on_disk_raises_model_download() -> None:
+def test_require_verifier_on_disk_raises_model_download(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(window, "MODEL_ROOTS", (tmp_path / "empty-models",))
     with pytest.raises(RuntimeError) as exc:
         window.require_verifier_on_disk("ouro-2.6b")
     assert "MODEL-DOWNLOAD-OURO-2.6B" in str(exc.value)
@@ -1200,3 +1202,36 @@ def test_retry_mode_missing_source_dir_is_blocked(tmp_path, monkeypatch) -> None
     report, rc = window.build_retry_report(args, output_dir=tmp_path / "out")
     assert report["decision_grade"] is False
     assert any("source dir not found" in b for b in report["blockers"])
+
+
+def test_present_verifier_cannot_silently_skip_process_pass(tmp_path, monkeypatch) -> None:
+    model_root = tmp_path / "models"
+    (model_root / "ThinkPRM-1.5B").mkdir(parents=True)
+    monkeypatch.setattr(window, "MODEL_ROOTS", (model_root,))
+    monkeypatch.setattr(
+        window.activation_window, "build_preflight", lambda _a: _healthy_preflight()
+    )
+    monkeypatch.setattr(window, "_resolved_eval_concurrency", lambda _roles=None: 3)
+    monkeypatch.setattr(
+        window, "_optimized_live_stack_status", lambda: {"ok": True, "warnings": []}
+    )
+    monkeypatch.setattr(window, "EvalTower", _ExplodingTower)
+    args = window.parse_args(
+        [
+            "--mode",
+            "math_rebaseline",
+            "--full",
+            "--verifier",
+            "thinkprm",
+            "--min-eval-concurrency",
+            "3",
+            "--apply",
+            "--confirm-clean-window",
+            "--output-dir",
+            str(tmp_path / "output"),
+        ]
+    )
+    report, rc = window.build_verifier_report(args, output_dir=tmp_path)
+    assert rc != 0 and report["result"] is None
+    assert report["verifier_gate"]["on_disk"]
+    assert any("process_verification_not_executed" in blocker for blocker in report["blockers"])

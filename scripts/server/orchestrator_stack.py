@@ -1905,6 +1905,24 @@ def _post_health_affinity_gate(
     return False
 
 
+def thinkprm_eval_config(*, log_path: Path, generation_drained: bool = False):
+    """Explicit T2-only CPU recipe; never included in HOT/WARM fleet startup.
+
+    The serving owner must drain generation at its boundary. This recipe does
+    not unload or reload any shared model, and the native session owns only its
+    private dynamic port and captured PID.
+    """
+    from src.config import get_config
+    from scripts.server.eval_process_verifier import ProcessVerifierConfig
+
+    paths = get_config().paths
+    return ProcessVerifierConfig(
+        model=paths.models_dir / "ThinkPRM-1.5B" / "ThinkPRM-1.5B-Q4_K_M.gguf",
+        server=Path(LLAMA_SERVER), library_dir=Path(LLAMA_SERVER).parent,
+        log_path=log_path, generation_drained=generation_drained,
+    )
+
+
 @_refuse_on_artifact_integrity_error
 def start_server(
     port: int,

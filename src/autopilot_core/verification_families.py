@@ -74,7 +74,8 @@ def _served_model_for_role(registry: dict[str, Any], role: str) -> str | None:
 # eval-tower-verification.md for research basis (confirmation bias amplifies
 # 52%->87%).
 VERIFICATION_FAMILIES: dict[str, set[str]] = {
-    "qwen": {"Qwen", "qwen", "QwQ"},
+    # ThinkPRM-1.5B is fine-tuned from R1-Distill-Qwen-1.5B.
+    "qwen": {"Qwen", "qwen", "QwQ", "ThinkPRM", "thinkprm"},
     "llama": {"Llama", "llama", "Meta-Llama"},
     "deepseek": {"DeepSeek", "deepseek"},
     "ouro": {"Ouro", "ouro", "ByteDance"},

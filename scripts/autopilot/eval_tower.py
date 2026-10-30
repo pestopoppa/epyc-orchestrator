@@ -1514,6 +1514,8 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["scoring_method"] = r.scoring_method
     if r.route_used:
         item["route"] = r.route_used
+    if getattr(r, "details", None):
+        item["details"] = dict(r.details)
     if r.tools_called:
         item["tools_called"] = list(r.tools_called[:5])
     # AP-54: fence state and touched paths (paths only, bounded). getattr: this
@@ -3347,6 +3349,8 @@ class QuestionResult:
     token_logprobs: dict[str, Any] | None = None
     # Append-only to preserve the positional layout of the existing result type.
     eval_reconnect: EvalReconnectCost | None = None
+    # EV-5: additive diagnostic process attribution; never a scorer override.
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class _EvalBatchResults(list[QuestionResult]):
@@ -7138,6 +7142,8 @@ class EvalTower:
         promotion_eval: bool = False,
         trial_id: int | None = None,
         exclude_qids: set[str] | None = None,
+        process_verifier: Any | None = None,
+        verification_n: int = 10,
     ) -> EvalResult:
         """Tier 2: 500+ full benchmark, ~30min."""
         pool = self._load_pool()
@@ -7307,6 +7313,17 @@ class EvalTower:
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=50, label="T2")
 
+        process_summary = None
+        if process_verifier is not None:
+            from scripts.autopilot.process_verification import verify_results
+
+            artifact_root, _ = _eval_artifact_root(self._trial_path_context)
+            process_root = self._question_artifact_dir or artifact_root
+            process_summary = verify_results(
+                results, process_verifier, n=verification_n,
+                artifact_path=Path(process_root) / f"process_verification.T2.{uuid.uuid4().hex}.jsonl",
+            )
+
         excluded_partitions: set[str] = set()
         exclusion_reasons: dict[str, str] = {}
         if tool_sentinel_questions:
@@ -7318,6 +7335,8 @@ class EvalTower:
             excluded_partitions=excluded_partitions,
             exclusion_reasons=exclusion_reasons,
         )
+        if process_summary is not None:
+            result.details["process_verification"] = process_summary
         if tool_sentinel_questions:
             result.details.update(
                 {
