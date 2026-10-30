@@ -239,6 +239,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # turn_ended_in_unclosed_think is recorded regardless.
     FeatureSpec("repl_think_fence_continue", False, False, "REPL_THINK_FENCE_CONTINUE", "UFH14-LB11.1: continue a REPL turn once when the fence stop sequence cut it inside an unclosed <think> (thinking roles on raw /completion); default off"),
     FeatureSpec("thinking_roles_chat_lane", False, False, "THINKING_ROLES_CHAT_LANE", "RI-23: thinking-on roles (jinja + enable_thinking) route through /v1/chat/completions so chat_template_kwargs apply and reasoning_content is split and surfaced; short structured calls (review verdict, plan review/plan JSON) run thinking-off per call; default off pending the RI-23b A/B"),
+    FeatureSpec("repl_thinking_budget", False, False, "REPL_THINKING_BUDGET", "UFH14-B1f: carry ChatRequest.thinking_budget to REPL chat-lane turns; default off"),
     # Q38-T10 / Q38-T10.1 (operator ruling 2026-10-20, per-role parity): eval, judge, replay and
     # machine-parsed roles must emit output identical to non-speculative decoding. When ON, those
     # callers (eval_tower llm_judge + rubric judge, model_grader, coherence_judge, the judge_redundancy
@@ -825,6 +826,8 @@ class Features:
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
+
+    repl_thinking_budget: bool = False  # UFH14-B1f: caller budget on REPL chat turns; default off
 
     def validate(self) -> list[str]:
         """Validate feature dependencies.

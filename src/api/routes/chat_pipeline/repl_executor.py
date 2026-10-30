@@ -743,7 +743,10 @@ async def _execute_repl_body(
     # `turns` (INF-78 OAB-2 found retried calls undercounted).
     _turns_all_attempts = 0
     for _attempt in range(_max_validation_attempts):
-        graph_result = await run_task(task_state, task_deps, start_role=initial_role)
+        from src.backends.repl_thinking_budget import budget_scope
+
+        with budget_scope(request.thinking_budget):
+            graph_result = await run_task(task_state, task_deps, start_role=initial_role)
         _turns_all_attempts += int(getattr(graph_result, "turns", 0) or 0)
         if not _schema or not graph_result.answer:
             break

@@ -256,6 +256,7 @@ def _sampling_cache_key(
     seed: int | None = None,
     top_p: float | None = None,
     top_k: int | None = None,
+    thinking_budget: int | None = None,
 ) -> str:
     sampling = {
         "temperature": temperature,
@@ -264,6 +265,10 @@ def _sampling_cache_key(
         "top_k": top_k,
     }
     active = {key: value for key, value in sampling.items() if value is not None}
+    # UFH14-B1f: a positive caller budget changes the response. Off/unset/zero
+    # retain the legacy key, matching thinking_budget_fields()'s empty payload.
+    if thinking_budget:
+        active["thinking_budget"] = thinking_budget
     if not active:
         return ""
     return json.dumps(active, sort_keys=True, separators=(",", ":"))
@@ -802,8 +807,11 @@ class InferenceMixin:
         ):
             from src.llm_cache import ContentAddressableCache
 
+            from src.backends.repl_thinking_budget import current_budget
+
             sampling_key = _sampling_cache_key(
-                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k
+                temperature=temperature, seed=seed, top_p=top_p, top_k=top_k,
+                thinking_budget=current_budget(),
             )
             cache_key = ContentAddressableCache.make_key(
                 prompt,
@@ -1227,6 +1235,9 @@ class InferenceMixin:
         from src.chat_completions_roles import current_chat_template_kwargs_override
 
         ctk_override = current_chat_template_kwargs_override()
+        from src.backends.repl_thinking_budget import current_budget
+
+        thinking_budget = current_budget()
         request = InferenceRequest(
             role=role,
             prompt=prompt,
@@ -1246,6 +1257,7 @@ class InferenceMixin:
             # constructed exactly as before.
             **({"chat_payload": chat_payload} if chat_payload is not None else {}),
             **({"chat_template_kwargs": ctk_override} if ctk_override is not None else {}),
+            **({"thinking_budget": thinking_budget} if thinking_budget is not None else {}),
         )
         # Dynamic attrs consumed by ConcurrencyAwareBackend's dispatch-time
         # placement-aware contention gate. The local dataclass has no slots.

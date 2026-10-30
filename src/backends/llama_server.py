@@ -837,6 +837,10 @@ class LlamaServerBackend(ModelBackend):
         if ctk:
             payload["chat_template_kwargs"] = ctk
 
+        from src.backends.repl_thinking_budget import request_fields
+
+        payload.update(request_fields(request, ctk))
+
         try:
             http_start = time.perf_counter()
             _overall = request.timeout or self.config.timeout
@@ -1848,6 +1852,10 @@ class LlamaServerBackend(ModelBackend):
         ctk = _chat_template_kwargs(role_config, request)
         if ctk:
             payload["chat_template_kwargs"] = ctk
+
+        from src.backends.repl_thinking_budget import request_fields
+
+        payload.update(request_fields(request, ctk))
 
         chunks: list[str] = []
         reasoning_chunks: list[str] = []

@@ -1568,7 +1568,10 @@ async def chat_stream(
 
             # Call Root LM with current role
             try:
-                code = primitives.llm_call(root_prompt, role=current_role, n_tokens=1024)
+                from src.backends.repl_thinking_budget import budget_scope
+
+                with budget_scope(request.thinking_budget):
+                    code = primitives.llm_call(root_prompt, role=current_role, n_tokens=1024)
             except Exception as e:
                 # Log failure (MemRL)
                 if state.progress_logger:

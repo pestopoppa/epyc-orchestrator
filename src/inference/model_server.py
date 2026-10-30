@@ -133,6 +133,8 @@ class InferenceRequest:
     # event. A closed/failed/early-aborted stream leaves this unknown.
     stream_output_tokens_reported: int | None = field(default=None, repr=False)
     stream_output_tokens_source: str | None = field(default=None, repr=False)
+    # UFH14-B1f: request-local caller budget; real field survives cache-router replace.
+    thinking_budget: int | None = field(default=None, repr=False)
 
     def __post_init__(self):
         """Sync max_tokens ↔ n_tokens bidirectionally.
