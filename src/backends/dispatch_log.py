@@ -429,6 +429,9 @@ def record_standalone(
     preceding_tool: str | None = None,
     turn_trigger: str | None = None,
     finish_reason: str | None = None,
+    layout: dict[str, Any] | None = None,
+    prompt_tokens: int | None = None,
+    cached_prompt_tokens: int | None = None,
 ) -> None:
     """One ``dispatch.v1`` record for a lane with no fleet placement.
 
@@ -504,6 +507,14 @@ def record_standalone(
                     "model": model_identity(port),
                     "backend_url": base_url,
                 },
+                # RTE-LOG-1: forward only the existing hashes/lengths projection.
+                # Native counts retain None when the backend did not report them.
+                **({key: layout[key] for key in (
+                    "blocks", "layout_chars", "layout_match", "layout_schema",
+                    "unlocated_blocks", "turn_index", "source", "tail_chars", "rebased",
+                ) if key in layout} if layout and prompt_layout.enabled() else {}),
+                "prompt_tokens": prompt_tokens,
+                "cached_prompt_tokens": cached_prompt_tokens,
                 "fleet_at_arrival": None,
                 "fleet_at_dispatch": None,
                 "provenance": serving_calls.process_provenance(),

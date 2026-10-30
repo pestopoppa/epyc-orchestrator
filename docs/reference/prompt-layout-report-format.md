@@ -6,6 +6,10 @@ records, plus `prompt_tokens` / `cached_prompt_tokens` on `dispatch.v1`. Kill sw
 `ORCHESTRATOR_PROMPT_LAYOUT_LOG=off`. Privacy: kind, character offset, length and a 12-hex
 sha256 prefix only; chunks add a hash, rank and length. `source` is set by
 `ORCHESTRATOR_REQUEST_SOURCE` (interactive, autopilot, benchmark, repl_experiment), never inferred.
+Standalone direct calls now copy the existing serving record's layout projection into
+`dispatch.v1` through an explicit field whitelist. They carry the serving record's
+native prompt/cache counts, preserving `null` when the backend supplied no count.
+Fleet calls retain their existing dispatch path; the direct path emits no duplicate.
 
 Reader: `scripts/analysis/prompt_layout_reader.py [--format json|md] [--window N] [--role R] [--source S] FILES_OR_DIRS`.
 

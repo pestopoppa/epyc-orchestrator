@@ -951,6 +951,7 @@ def _wrap_on_chunk(on_chunk: Callable[[str], Any] | None, notes: dict[str, Any])
 def _dispatch_direct(
     staged: dict[str, Any] | None, request: Any, role_config: Any, backend: Any,
     ts_start: float, result: Any, error: BaseException | None,
+    record: dict[str, Any] | None = None,
 ) -> None:
     """dispatch.v1 for a call that did NOT go through ``ConcurrencyAwareBackend``
     (single-server GPU / non-fleet roles). Fleet calls staged an ``instance_idx`` and
@@ -987,6 +988,9 @@ def _dispatch_direct(
             preceding_tool=st.get("preceding_tool"),
             turn_trigger=st.get("turn_trigger"),
             finish_reason=getattr(result, "completion_reason", None) or None,
+            layout=record,
+            prompt_tokens=(record or {}).get("result", {}).get("prompt_tokens"),
+            cached_prompt_tokens=(record or {}).get("result", {}).get("cached_prompt_tokens"),
         )
     except Exception:
         pass
@@ -1059,7 +1063,7 @@ def recorded_call(method: str) -> Callable:
                         prompt_layout.clear_layout()  # consumed by this record
                     except Exception:
                         pass
-                    _dispatch_direct(staged, request, role_config, self, ts_start, result, error)
+                    _dispatch_direct(staged, request, role_config, self, ts_start, result, error, record)
                     remember_served(record, prefix_ladder(request))
                     observe_prefix_index(record, request)
                 except Exception as exc:
