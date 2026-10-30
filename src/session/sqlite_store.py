@@ -119,6 +119,8 @@ from src.config import get_config as _get_config
 DEFAULT_SESSIONS_DIR = _get_config().paths.sessions_dir
 DEFAULT_DB_PATH = DEFAULT_SESSIONS_DIR / "sessions.db"
 DEFAULT_EMBEDDINGS_PATH = DEFAULT_SESSIONS_DIR / "session_embeddings.npy"
+DEFAULT_GRAPH_SNAPSHOT_RETENTION_RUNS = 100
+DEFAULT_GRAPH_SNAPSHOT_RETENTION_PER_RUN = 100
 
 
 class _ClosingSQLiteConnection(sqlite3.Connection):
@@ -159,10 +161,20 @@ class SQLiteSessionStore(BaseSessionStore):
         db_path: Path | str = DEFAULT_DB_PATH,
         embeddings_path: Path | str = DEFAULT_EMBEDDINGS_PATH,
         embedding_dim: int = LEGACY_EMBEDDING_DIM,  # BGE-large embedding dim (matches TaskEmbedder)
+        graph_snapshot_retention_runs: int = DEFAULT_GRAPH_SNAPSHOT_RETENTION_RUNS,
+        graph_snapshot_retention_per_run: int = DEFAULT_GRAPH_SNAPSHOT_RETENTION_PER_RUN,
     ):
+        for name, value in (
+            ("graph_snapshot_retention_runs", graph_snapshot_retention_runs),
+            ("graph_snapshot_retention_per_run", graph_snapshot_retention_per_run),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         self.db_path = Path(db_path)
         self.embeddings_path = Path(embeddings_path)
         self.embedding_dim = embedding_dim
+        self.graph_snapshot_retention_runs = graph_snapshot_retention_runs
+        self.graph_snapshot_retention_per_run = graph_snapshot_retention_per_run
         self._embeddings_lock = threading.Lock()
 
         # Ensure directories exist
@@ -307,10 +319,10 @@ class SQLiteSessionStore(BaseSessionStore):
                 )
             """)
 
-            # Graph snapshots (D-f3): append-only per-run TaskState snapshots
-            # written by the graph layer. Deliberately NOT the checkpoints
-            # table: get_latest_checkpoint() drives REPL restore, and a
-            # snapshot row there would shadow the real globals checkpoint.
+            # Graph snapshots (D-f3): bounded observational history written
+            # by the graph layer. Retention is global across sessions and
+            # applies only to this table; these rows are not REPL checkpoints
+            # or native measurement/result records.
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS graph_snapshots (
                     id TEXT PRIMARY KEY,
@@ -1262,7 +1274,11 @@ class SQLiteSessionStore(BaseSessionStore):
         session, pass ``session_id`` and the live lease ``fencing_token``: the
         fence check and the insert share one write transaction, so a turn that
         lost its lease cannot attribute snapshots to the session. With no
-        ``session_id`` the row is run-scoped and unfenced.
+        ``session_id`` the row is run-scoped and unfenced. The same transaction
+        enforces global table-history retention: the newest configured number
+        of runs are kept, with at most the configured number of newest rows per
+        run. This history is separate from checkpoints and result/measurement
+        artifacts.
         """
         snapshot_id = str(uuid.uuid4())
         with self._get_connection() as conn:
@@ -1286,8 +1302,50 @@ class SQLiteSessionStore(BaseSessionStore):
                     data,
                 ),
             )
+            self._prune_graph_snapshots(conn)
             conn.commit()
         return snapshot_id
+
+    def _prune_graph_snapshots(self, conn: sqlite3.Connection) -> None:
+        """Bound observational history globally, preserving newest rows.
+
+        Call only inside the ``save_graph_snapshot`` write transaction, after
+        its optional session fence check and insert. First discard runs outside
+        the global run window, then cap every retained run (including rows
+        predating this policy) to its newest snapshots. ``created_at`` is the
+        primary recency key; SQLite ``rowid`` breaks ties deterministically in
+        favor of the latest inserted snapshot/run. This policy can prune rows
+        belonging to other sessions because retention is deliberately global
+        to ``graph_snapshots``.
+        """
+        conn.execute(
+            """
+            DELETE FROM graph_snapshots WHERE run_id NOT IN (
+                SELECT run_id FROM graph_snapshots
+                GROUP BY run_id
+                ORDER BY MAX(created_at) DESC, MAX(rowid) DESC
+                LIMIT ?
+            )
+            """,
+            (self.graph_snapshot_retention_runs,),
+        )
+        conn.execute(
+            """
+            DELETE FROM graph_snapshots
+            WHERE rowid IN (
+                SELECT rowid FROM (
+                    SELECT rowid,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY run_id
+                               ORDER BY created_at DESC, rowid DESC
+                           ) AS run_rank
+                    FROM graph_snapshots
+                )
+                WHERE run_rank > ?
+            )
+            """,
+            (self.graph_snapshot_retention_per_run,),
+        )
 
     def get_graph_snapshots(self, run_id: str, limit: int = 100) -> list[dict]:
         """Return a run's graph snapshots, oldest first."""
