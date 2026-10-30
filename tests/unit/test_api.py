@@ -10,10 +10,15 @@ from src.api import app
 from src.api.state import get_state, reset_state
 from src.gate_runner import GateResult
 
+pytestmark = pytest.mark.usefixtures("owned_backend_health")
+
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     """Create a test client."""
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     # Reset state before each test
     reset_state()
     get_state()
@@ -60,16 +65,18 @@ def mock_gate_runner():
 
 
 @pytest.fixture
-def client_with_mock_gates(mock_gate_runner):
+def client_with_mock_gates(mock_gate_runner, monkeypatch):
     """Create a test client with mocked gate runner.
 
-    The mock is injected AFTER the TestClient starts (which runs the lifespan
-    handler that creates the real GateRunner). We then replace it with our mock.
+    The route-only client receives the explicit mock without host startup hooks.
     """
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     reset_state()
 
     with TestClient(app) as client:
-        # Inject mock AFTER lifespan has run (overwrites the real gate_runner)
+        # Inject the explicit gate dependency used by this route test.
         state = get_state()
         state.gate_runner = mock_gate_runner
         yield client

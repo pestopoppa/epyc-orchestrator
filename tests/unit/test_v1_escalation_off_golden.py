@@ -86,6 +86,10 @@ _BACKEND_USAGE = {"prompt_tokens": 91, "completion_tokens": 17, "cached_tokens":
 def client(monkeypatch, request):
     """Flag off, and flag ON with no x_escalation (opt-in): both pinned to one golden."""
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     if request.param == "flag_off":
         monkeypatch.delenv("ORCHESTRATOR_V1_ESCALATION", raising=False)
     else:

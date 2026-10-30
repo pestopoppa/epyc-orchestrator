@@ -287,6 +287,10 @@ def test_v1_chat_completions_returns_503_role_parked(window, monkeypatch):
     import src.llm_primitives as llm_primitives_module
 
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     reset_features()
     reset_state()
     get_state()

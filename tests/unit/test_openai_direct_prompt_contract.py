@@ -117,6 +117,10 @@ def test_message_omits_absent_reasoning_content():
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     monkeypatch.delenv("ORCHESTRATOR_V1_ESCALATION", raising=False)
     reset_features()
     reset_state()

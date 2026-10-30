@@ -12,6 +12,8 @@ import pytest
 
 from src.config import ApiConfig, OrchestratorConfigData, reset_config
 
+pytestmark = pytest.mark.usefixtures("owned_backend_health")
+
 
 @pytest.fixture(autouse=True)
 def _clean_config():

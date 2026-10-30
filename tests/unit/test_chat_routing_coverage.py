@@ -13,6 +13,8 @@ from src.api.routes.chat_routing import (
 from src.classifiers import should_use_direct_mode as _should_use_direct_mode
 from src.roles import Role
 
+pytestmark = pytest.mark.usefixtures("owned_classification_memory")
+
 
 class TestShouldUseDirectMode:
     """Tests for should_use_direct_mode classifier (was in chat_routing, now in classifiers)."""

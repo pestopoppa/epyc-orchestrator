@@ -27,6 +27,7 @@ from src.gate_runner import GateRunner
 
 pytestmark = [
     pytest.mark.integration,
+    pytest.mark.usefixtures("owned_backend_health"),
     pytest.mark.filterwarnings(
         r"ignore:Exception ignored in.*socket\.socket.*family=1, type=1, proto=0:pytest.PytestUnraisableExceptionWarning"
     ),

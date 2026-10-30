@@ -113,6 +113,10 @@ def test_v1_repl_gets_tool_context_for_math_role(monkeypatch):
     import src.llm_primitives as llm_primitives_module
 
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     reset_features()
     reset_state()
     primitives = MagicMock()

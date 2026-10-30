@@ -2,8 +2,23 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 
 from src.repl_environment import REPLEnvironment
+from tests.fixtures.research_embeddings import ResearchEmbeddingFixture
+
+
+@pytest.fixture(autouse=True)
+def owned_exploration_embeddings(monkeypatch):
+    """Keep real legacy recall/store behavior with an explicit model-free vector."""
+    from orchestration.repl_memory.embedder import TaskEmbedder
+
+    vectors = ResearchEmbeddingFixture()
+
+    def generate(self, text, side=None):
+        return vectors.embed_sync(text, side)
+
+    monkeypatch.setattr(TaskEmbedder, '_generate_embedding', generate)
 
 
 def _make_repl():

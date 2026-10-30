@@ -284,7 +284,7 @@ class TestParallelEmbedderSync:
             use_fallback=True,
         )
 
-    def test_embed_sync_uses_fallback(self, mock_config):
+    def test_embed_sync_uses_fallback(self, mock_config, offline_embedding_http):
         """Test sync wrapper falls back to hash when servers unavailable."""
         from orchestration.repl_memory.parallel_embedder import ParallelEmbedderClient
 
@@ -305,7 +305,7 @@ class TestIntegrationWithFAISSStore:
         """Create a temporary directory for test data."""
         return tmp_path
 
-    def test_parallel_embedder_with_faiss_store(self, temp_dir):
+    def test_parallel_embedder_with_faiss_store(self, temp_dir, offline_embedding_http):
         """Test that parallel embedder embeddings work with FAISS store."""
         from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
         from orchestration.repl_memory.parallel_embedder import (
@@ -334,7 +334,7 @@ class TestIntegrationWithFAISSStore:
         assert results[0][0] == "memory_1"
         assert results[0][1] > 0.9  # High similarity for same embedding
 
-    def test_dimension_consistency(self, temp_dir):
+    def test_dimension_consistency(self, temp_dir, offline_embedding_http):
         """Test dimension consistency between embedder and store."""
         from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
         from orchestration.repl_memory.parallel_embedder import (

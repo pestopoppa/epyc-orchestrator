@@ -19,7 +19,7 @@ from src.api.dependencies import dep_app_state, dep_health_tracker
 from src.api.routes import health as health_route
 from src.api.state import AppState
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("owned_backend_health")]
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
@@ -87,6 +87,20 @@ def client(app):
 
 class TestHealthEndpoint:
     """Tests for GET /health."""
+
+    def test_owned_http_failures_still_degrade_health(self, client, owned_backend_health):
+        owned_backend_health.statuses['frontdoor'] = 503
+        response = client.get('/health')
+        assert response.status_code == 200
+        data = response.json()
+        assert data['status'] == 'degraded'
+        assert data['models_loaded'] == 1
+        probe = data['backend_probes']['frontdoor']
+        assert probe['status_code'] == 503
+        assert probe['failure_reason'] == 'http_status'
+        assert sorted(owned_backend_health.requests) == sorted(
+            f'{url}/health' for url in owned_backend_health.urls.values()
+        )
 
     def test_health_returns_ok(self, client):
         """Basic health check returns 200 with status."""

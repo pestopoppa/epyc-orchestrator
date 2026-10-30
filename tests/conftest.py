@@ -655,3 +655,58 @@ def mock_llm_primitives():
     primitives.get_cache_stats.return_value = {"hits": 5, "misses": 2}
     primitives.llm_call.return_value = "Test response"
     return primitives
+
+
+@pytest.fixture
+def owned_backend_health():
+    """Opt-in health consumers use owned HTTP responses, never live backend probes."""
+    from tests.fixtures.backend_health import install_owned_backend_health
+
+    with pytest.MonkeyPatch.context() as isolation:
+        fixture = install_owned_backend_health(isolation)
+        yield fixture
+        fixture.assert_no_unexpected_requests()
+
+
+@pytest.fixture
+def owned_classification_memory(tmp_path):
+    """Exercise real classifier/retriever/FAISS with private memory and fake vectors."""
+    from tests.fixtures.classification_memory import install_classification_memory
+
+    with pytest.MonkeyPatch.context() as isolation:
+        classifier, store = install_classification_memory(isolation, tmp_path)
+        try:
+            yield classifier
+        finally:
+            store.close()
+
+
+@pytest.fixture
+def offline_embedding_http():
+    """Exact fallback tests receive transport failures without contacting any server."""
+    from tests.fixtures.offline_embedding_http import install_offline_embedding_http
+
+    with pytest.MonkeyPatch.context() as isolation:
+        calls, unexpected = install_offline_embedding_http(isolation)
+        yield calls
+        assert calls, 'fallback test did not exercise the HTTP failure input'
+        assert not unexpected, unexpected
+
+
+@pytest.fixture(autouse=True)
+def owned_research_producer_embeddings(request):
+    """Known model-free graph/REPL producers retain real context logic with fake vectors."""
+    if os.environ.get('EPYC_MODEL_FREE_CI') != '1':
+        yield
+        return
+    from tests.fixtures.research_embeddings import install_research_embeddings
+
+    root = Path(__file__).resolve().parents[1]
+    scope = set((root / 'tests/fixtures/research_embedding_scope.txt').read_text().splitlines())
+    path = Path(request.node.path).resolve()
+    if not path.is_relative_to(root) or path.relative_to(root).as_posix() not in scope:
+        yield
+        return
+    with pytest.MonkeyPatch.context() as isolation:
+        install_research_embeddings(isolation)
+        yield

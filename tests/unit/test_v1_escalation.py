@@ -133,6 +133,10 @@ class FakePrimitives:
 def env(monkeypatch, tmp_path):
     """Flag ON, tap on (events to tmp)."""
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     monkeypatch.setenv("ORCHESTRATOR_V1_ESCALATION", "1")
     monkeypatch.setenv("ORCHESTRATOR_V1_CLIENT_SESSION_GUARD", "0")
     monkeypatch.setenv("INFERENCE_TAP_FILE", str(tmp_path / "tap.log"))

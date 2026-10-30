@@ -28,6 +28,7 @@ from src.graph.state import TaskResult
 from src.roles import Role
 
 pytestmark = [
+    pytest.mark.usefixtures("owned_classification_memory"),
     pytest.mark.filterwarnings(
         "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning"
     ),

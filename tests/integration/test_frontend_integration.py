@@ -16,10 +16,15 @@ from src.api import app
 from src.api.state import get_state, reset_state
 from src.api.routes.sessions import _pending_permissions
 
+pytestmark = pytest.mark.usefixtures("owned_backend_health")
+
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
     """Create a test client with state reset and temp session store."""
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     # Reset API state
     reset_state()
 

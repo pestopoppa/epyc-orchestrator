@@ -16,6 +16,8 @@ from src.classifiers import (
 from src.classifiers.config_loader import reset_classifier_config
 from src.classifiers.types import MatcherConfig, RoutingDecision
 
+pytestmark = pytest.mark.usefixtures("owned_classification_memory")
+
 
 @pytest.fixture(autouse=True)
 def reset_config():

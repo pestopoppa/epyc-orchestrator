@@ -14,6 +14,9 @@ jobs:
     env:
       CI: "true"
       ORCHESTRATOR_MOCK_MODE: "1"
+      EPYC_MODEL_FREE_CI: "1"
+      MODEL_LAUNCH_GUARD_OUTPUT: ${{ runner.temp }}/model-free-guard
+      MODEL_FREE_MODEL_REGISTRY: ${{ github.workspace }}/app/orchestration/model_registry.yaml
       PYTHONDONTWRITEBYTECODE: "1"
       TMPDIR: ${{ runner.temp }}
       RUFF_CACHE_DIR: ${{ runner.temp }}/ruff-cache
@@ -24,6 +27,9 @@ jobs:
       COVERAGE_FILE: ${{ runner.temp }}/orchestrator-coverage-data
       CI_NATIVE_DIR: ${{ runner.temp }}/orchestrator-ci-native
       CI_CONTEXT: ${{ runner.temp }}/orchestrator-ci-context.json
+      CI_DEPENDENCIES: ${{ runner.temp }}/orchestrator-ci-dependencies.txt
+      CI_EXPORTER_PATHS: ${{ runner.temp }}/orchestrator-ci-exporter-paths.txt
+      PYTHONPATH: ${{ github.workspace }}/carrier/scripts/ci
       APP_DIR: ${{ github.workspace }}/app
       EPYC_ROOT: ${{ github.workspace }}/carrier
     defaults:
@@ -40,7 +46,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: pestopoppa/epyc-root
-          ref: dbf3cc506a55e3aff5a48246ce44d34b677622da
+          ref: b4e48011d4d935f2d83c373827245bd64b38b92d
           path: carrier
           persist-credentials: false
 
@@ -60,11 +66,31 @@ jobs:
           echo "FORMAT_BASE=$baseline_head" >> "$GITHUB_ENV"
           echo "ORCHESTRATOR_BASELINE_HEAD=$baseline_head" >> "$GITHUB_ENV"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install gate tools
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes shellcheck shfmt
-          npm install --global markdownlint-cli
+          gate_tools="$RUNNER_TEMP/ci-gate-tools"
+          mkdir -p "$gate_tools/bin"
+          curl --fail --location --silent --show-error \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz \
+            --output "$gate_tools/shellcheck.tar.xz"
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $gate_tools/shellcheck.tar.xz" | sha256sum --check
+          tar -xJf "$gate_tools/shellcheck.tar.xz" -C "$gate_tools" shellcheck-v0.11.0/shellcheck
+          cp "$gate_tools/shellcheck-v0.11.0/shellcheck" "$gate_tools/bin/shellcheck"
+          curl --fail --location --silent --show-error \
+            https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_linux_amd64 \
+            --output "$gate_tools/bin/shfmt"
+          echo "76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf  $gate_tools/bin/shfmt" | sha256sum --check
+          chmod +x "$gate_tools/bin/shfmt"
+          node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
+          npm install --prefix "$gate_tools" --cache "$RUNNER_TEMP/npm-cache" \
+            --no-audit --no-fund markdownlint-cli@0.45.0
+          echo "$gate_tools/bin" >> "$GITHUB_PATH"
+          echo "$gate_tools/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Run repository gates
         run: uv run --locked make gates
@@ -89,12 +115,15 @@ jobs:
           export PYTEST_VERSION="$pytest_version" RUFF_VERSION="$ruff_version"
           export SHELLCHECK_VERSION="$shellcheck_version" SHFMT_VERSION="$shfmt_version"
           export MARKDOWNLINT_VERSION="$markdownlint_version"
-          python - <<'PY'
+          uv pip freeze --python "$UV_PROJECT_ENVIRONMENT/bin/python" > "$CI_DEPENDENCIES"
+          uv run --locked python - <<'PY'
           import hashlib
           import json
           import os
           from pathlib import Path
           import subprocess
+          import _pytest.junitxml
+          import _pytest.subtests
 
           baseline = json.loads(Path("tests/ci/orchestrator-baseline.json").read_text())
           lock_hash = hashlib.sha256(Path("uv.lock").read_bytes()).hexdigest()
@@ -102,7 +131,8 @@ jobs:
               "CI", "ORCHESTRATOR_MOCK_MODE", "PYTHONDONTWRITEBYTECODE", "PYTHONHASHSEED", "TMPDIR",
               "RUFF_CACHE_DIR", "UV_CACHE_DIR", "COVERAGE_FILE", "PYTEST_XML", "CI_NATIVE_DIR", "CI_CONTEXT",
               "UV_PROJECT_ENVIRONMENT", "APP_DIR", "APP_PYTHON_VERSION",
-              "EPYC_ROOT",
+              "EPYC_ROOT", "PYTHONPATH", "CI_DEPENDENCIES", "CI_EXPORTER_PATHS",
+              "EPYC_MODEL_FREE_CI", "MODEL_LAUNCH_GUARD_OUTPUT", "MODEL_FREE_MODEL_REGISTRY",
               "SHELLCHECK_VERSION", "SHFMT_VERSION", "MARKDOWNLINT_VERSION",
               "FORMAT_BASE", "ORCHESTRATOR_BASELINE_HEAD",
               "PATH", "HOME", "GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_JOB",
@@ -112,8 +142,12 @@ jobs:
           test_argv = [
               "uv", "run", "--locked", "make", "test",
               "PYTEST_ARGS=-n 2 -m 'not requires_server and not requires_live_models and not requires_materialized_trace' "
-              "-p no:cacheprovider --junitxml=" + os.environ["PYTEST_XML"],
+              "-p no:cacheprovider -p epyc_pytest_junit_compat -p tests.fixtures.model_free_guard --junitxml=" + os.environ["PYTEST_XML"],
           ]
+          exporter_paths = [Path(_pytest.junitxml.__file__).resolve(), Path(_pytest.subtests.__file__).resolve()]
+          Path(os.environ["CI_EXPORTER_PATHS"]).write_text(
+              "".join(str(path) + "\n" for path in exporter_paths), encoding="utf-8"
+          )
           context = {
               "schema": "orchestrator-ci-context.v1",
               "tested_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -124,6 +158,9 @@ jobs:
               "project_installation": "editable project in isolated UV_PROJECT_ENVIRONMENT",
               "uv": os.environ["UV_VERSION"],
               "pytest": os.environ["PYTEST_VERSION"],
+              "junit_compatibility_plugin": "epyc_pytest_junit_compat",
+              "junit_exporter_sources": {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in exporter_paths},
+              "dependency_inventory_sha256": hashlib.sha256(Path(os.environ["CI_DEPENDENCIES"]).read_bytes()).hexdigest(),
               "ruff": os.environ["RUFF_VERSION"],
               "shellcheck": os.environ["SHELLCHECK_VERSION"],
               "shfmt": os.environ["SHFMT_VERSION"],
@@ -145,6 +182,8 @@ jobs:
         continue-on-error: true
         shell: bash
         run: |
+          mapfile -t exporter_paths < "$CI_EXPORTER_PATHS"
+          test "${#exporter_paths[@]}" -eq 2
           uv run --locked python "$EPYC_ROOT/scripts/ci/native_conformance.py" \
             --cwd "$APP_DIR" \
             --junit "$PYTEST_XML" \
@@ -152,12 +191,20 @@ jobs:
             --repo "app=$APP_DIR" \
             --repo "carrier=$EPYC_ROOT" \
             --read-path "$CI_CONTEXT" \
+            --read-path "$CI_DEPENDENCIES" \
+            --read-path "$CI_EXPORTER_PATHS" \
+            --read-path "${exporter_paths[0]}" \
+            --read-path "${exporter_paths[1]}" \
+            --read-path "$EPYC_ROOT/scripts/ci/epyc_pytest_junit_compat.py" \
             --read-path "$APP_DIR/.github/workflows/orchestrator-ci.yml" \
             --read-path "$APP_DIR/Makefile" \
             --read-path "$APP_DIR/Justfile" \
             --read-path "$APP_DIR/pyproject.toml" \
             --read-path "$APP_DIR/uv.lock" \
             --read-path "$APP_DIR/tests/README.md" \
+            --read-path "$APP_DIR/tests/fixtures/model_free_guard.py" \
+            --read-path "$APP_DIR/tests/fixtures/api_startup.py" \
+            --read-path "$APP_DIR/orchestration/model_registry.yaml" \
             --read-path "$APP_DIR/tests/fixtures/ni63_capacity_child/source_clone.py" \
             --read-path "$APP_DIR/tests/unit/test_orchestrator_stack_import_is_argv_safe.py" \
             --read-path "$APP_DIR/scripts/ci/check_pytest_baseline.py" \
@@ -168,7 +215,16 @@ jobs:
             --select "baseline source ${{ env.ORCHESTRATOR_BASELINE_HEAD }}" \
             -- \
             uv run --locked make test \
-            "PYTEST_ARGS=-n 2 -m 'not requires_server and not requires_live_models and not requires_materialized_trace' -p no:cacheprovider --junitxml=$PYTEST_XML"
+            "PYTEST_ARGS=-n 2 -m 'not requires_server and not requires_live_models and not requires_materialized_trace' -p no:cacheprovider -p epyc_pytest_junit_compat -p tests.fixtures.model_free_guard --junitxml=$PYTEST_XML"
+
+      - name: Reject model-free guard violations
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "$MODEL_LAUNCH_GUARD_OUTPUT" ] && [ -n "$(find "$MODEL_LAUNCH_GUARD_OUTPUT" -type f -name 'violation-*.json' -print -quit)" ]; then
+            echo "Model-free CI guard refused a production model operation."
+            exit 1
+          fi
 
       - name: Enforce collection floor and fail only on new test IDs
         if: always()

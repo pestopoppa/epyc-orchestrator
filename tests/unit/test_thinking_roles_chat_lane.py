@@ -414,6 +414,10 @@ def v1_client(monkeypatch):
     from src.api.state import get_state, reset_state
 
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     monkeypatch.delenv("ORCHESTRATOR_V1_ESCALATION", raising=False)
     monkeypatch.setenv("ORCHESTRATOR_THINKING_ROLES_CHAT_LANE", "1")
     reset_features()

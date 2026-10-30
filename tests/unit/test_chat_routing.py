@@ -6,6 +6,7 @@ tool requirement detection.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 import src.api.routes.chat_routing as chat_routing
 from src.api.routes.chat_routing import (
@@ -18,6 +19,8 @@ from src.api.routes.chat_routing import (
 )
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
+pytestmark = pytest.mark.usefixtures("owned_classification_memory")
 
 
 # ── _should_use_direct ───────────────────────────────────────────────────

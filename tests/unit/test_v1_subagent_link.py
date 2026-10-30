@@ -325,6 +325,10 @@ def progress_log():
 
 def _make_client(monkeypatch, progress_log, *, flag_on: bool):
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     if flag_on:
         monkeypatch.setenv("ORCHESTRATOR_V1_SUBAGENT_LINK", "1")
     else:

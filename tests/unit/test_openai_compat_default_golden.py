@@ -124,6 +124,10 @@ def client(monkeypatch, request):
     # TE-1: escalation is opt-in per request, so turning the flag on must not move
     # these bytes for a request that sends no x_escalation.
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     if request.param == "v1_escalation_off":
         monkeypatch.delenv("ORCHESTRATOR_V1_ESCALATION", raising=False)
     else:

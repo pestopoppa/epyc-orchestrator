@@ -64,6 +64,10 @@ def raising_compressor(monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     reset_state()
     get_state()
     with TestClient(app, raise_server_exceptions=False) as c:

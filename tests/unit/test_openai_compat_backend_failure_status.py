@@ -52,6 +52,10 @@ def client(monkeypatch):
     # ORCHESTRATOR_MOCK_MODE. Plain MOCK_MODE is silently ignored and the route
     # keeps serving [MOCK] completions, which is a green-looking no-op test.
     monkeypatch.setenv("ORCHESTRATOR_MOCK_MODE", "false")
+    monkeypatch.setenv("ORCHESTRATOR_MEMRL", "false")  # No real startup seeding.
+    from tests.fixtures.api_startup import route_only_lifespan
+
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
     reset_features()
     reset_state()
     get_state()
