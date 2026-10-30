@@ -7,11 +7,14 @@ then delegates via ProactiveDelegator for wave-based execution.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json as _json
 import logging
 import os
 import re as _re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 
 from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_pipeline.telemetry import (
@@ -35,20 +38,64 @@ log = logging.getLogger(__name__)
 PLAN_STEPS_PARSED_ACTION_CAP = 2000
 
 
-def _log_plan_steps_parsed(state, task_id: str, steps: list[dict]) -> None:
-    """KPF-26.1h: emit one `plan_steps_parsed` progress event per parsed plan.
-
-    Accumulates a real sample of planner step `action` strings from normal
-    traffic. Action text is credential-redacted (redact_if_enabled) and capped.
-    Never raises: logging must not affect the delegation path.
-    """
+def _append_plan_journal(log_dir: Path, record: dict) -> None:
+    """Append a complete plan under a cross-process lock and sync it to disk."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / "plan_steps_parsed.jsonl"
+    payload = (_json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        pl = getattr(state, "progress_logger", None)
-        if not pl:
-            return
-        from orchestration.repl_memory.progress_logger import EventType, ProgressEntry
-        from src.repl_environment.redaction import redact_if_enabled
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        offset = os.lseek(fd, 0, os.SEEK_END)
+        # A killed writer can leave a partial last line. Remove only that tail
+        # while holding the lock, so the next record cannot join corrupt bytes.
+        if offset and os.pread(fd, 1, offset - 1) != b"\n":
+            cursor = offset
+            while cursor:
+                start = max(0, cursor - 4096)
+                chunk = os.pread(fd, cursor - start, start)
+                newline = chunk.rfind(b"\n")
+                if newline >= 0:
+                    cursor = start + newline + 1
+                    break
+                cursor = start
+            os.ftruncate(fd, cursor)
+            offset = cursor
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("plan journal write made no progress")
+                view = view[written:]
+            os.fsync(fd)
+        except Exception:
+            os.ftruncate(fd, offset)
+            os.fsync(fd)
+            raise
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+    directory_fd = os.open(log_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
+
+def _log_plan_steps_parsed(state, task_id: str, steps: list[dict]) -> None:
+    """Capture parsed steps durably and emit the existing progress event.
+
+    The journal is prospective, redacted and truncated like the progress event;
+    failures are visible but do not change delegation behavior.
+    """
+    from orchestration.repl_memory.progress_logger import (
+        DEFAULT_LOG_PATH, LOG_DIR_ENV, EventType, ProgressEntry,
+    )
+    from src.repl_environment.redaction import redact_if_enabled
+
+    try:
         rows = []
         for st in steps:
             action = st.get("action")
@@ -60,18 +107,27 @@ def _log_plan_steps_parsed(state, task_id: str, steps: list[dict]) -> None:
                 "actor": st.get("actor"),
                 "persona": st.get("persona") or st.get("persona_hint"),
             })
-        pl.log(ProgressEntry(
-            event_type=EventType.PLAN_STEPS_PARSED,
-            task_id=task_id,
-            data={
-                "plan_id": task_id,
-                "n_steps": len(steps),
-                "step_ids": [r["step_id"] for r in rows],
-                "steps": rows,
-            },
-        ))
-    except Exception as e:  # noqa: BLE001
-        log.debug("plan_steps_parsed log failed: %s", e)
+        data = {"plan_id": task_id, "n_steps": len(rows),
+                "step_ids": [r["step_id"] for r in rows], "steps": rows}
+        pl = getattr(state, "progress_logger", None)
+        configured = os.environ.get(LOG_DIR_ENV)
+        log_dir = Path(configured) if configured else Path(DEFAULT_LOG_PATH)
+        if pl and isinstance(getattr(pl, "log_dir", None), (str, Path)):
+            log_dir = Path(pl.log_dir)
+        _append_plan_journal(log_dir, {
+            "schema": "epyc.plan_steps_parsed.v1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "task_id": task_id, "data": data,
+        })
+    except Exception:  # noqa: BLE001
+        log.exception("plan_steps_parsed journal capture failed for task %s", task_id)
+        return
+    if pl:
+        try:
+            pl.log(ProgressEntry(event_type=EventType.PLAN_STEPS_PARSED,
+                                 task_id=task_id, data=data))
+        except Exception:  # noqa: BLE001
+            log.exception("plan_steps_parsed progress event failed for task %s", task_id)
 
 
 def _should_inline_plan_call_for_test(primitives: LLMPrimitives) -> bool:
@@ -331,6 +387,8 @@ async def _execute_proactive(
         return None
 
     steps = await _decompose_plan_steps(plan_json_str, primitives=primitives, task_id=routing.task_id)
+    if steps:
+        _log_plan_steps_parsed(state, routing.task_id, steps)
     if not steps or len(steps) < 2:
         log.info(
             "Proactive delegation: plan has %d steps (need >= 2), falling through",
@@ -338,8 +396,6 @@ async def _execute_proactive(
             extra=task_extra(task_id=routing.task_id, stage="execute", mode="proactive"),
         )
         return None
-
-    _log_plan_steps_parsed(state, routing.task_id, steps)
 
     # Build TaskIR from parsed steps
     task_ir = canonicalize_task_ir({
