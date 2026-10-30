@@ -291,8 +291,11 @@ def evaluate_question(
                 f"  → {key} (heavy model, expect 30-120s, timeout={role_timeout}s)..."
             )
         q_start = time.perf_counter()
+        from src.backends.prompt_layout import producer_source
+
         response = call_orchestrator_forced(
             prompt, role, mode, url, role_timeout,
+            request_source=producer_source("benchmark"),
             image_path=image_path, cache_prompt=cache_prompt_val,
             client=client,
             max_tokens=max_tokens,

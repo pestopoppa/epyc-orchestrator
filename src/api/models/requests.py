@@ -113,6 +113,18 @@ class ScoutsSpec(BaseModel):
 class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
 
+    x_request_source: str | None = Field(
+        default=None, description="Optional prompt-log source label; never affects routing."
+    )
+
+    @field_validator("x_request_source", mode="before")
+    @classmethod
+    def _normalize_request_source(cls, value) -> str | None:
+        """Ignore invalid logging metadata before Pydantic validates its type."""
+        from src.backends.prompt_layout import normalize_source
+
+        return normalize_source(value)
+
     prompt: str = Field(..., description="The user prompt to process")
     context: str = Field(default="", description="Optional context to include")
     mock_mode: bool = Field(

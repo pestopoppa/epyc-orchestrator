@@ -29,6 +29,8 @@ to another request.  Text appended after the builder returned (riders) lies beyo
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import threading
 import time
@@ -50,6 +52,48 @@ MAX_AGE_S = 600.0
 
 _lock = threading.Lock()
 _current: dict[str, Any] | None = None
+_request_source: ContextVar[str | None] = ContextVar("prompt_layout_source", default=None)
+
+
+def normalize_source(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip().lower() in SOURCES:
+        return value.strip().lower()
+    return None
+
+
+def producer_source(default: str, explicit: str | None = None) -> str | None:
+    """Serialize the producer's source across HTTP without changing its environment."""
+    return (normalize_source(explicit) or normalize_source(os.environ.get(SOURCE_ENV))
+            or normalize_source(default))
+
+
+@contextmanager
+def source_scope(source: str | None):
+    """Bind one native request, restoring its caller even on cancellation."""
+    token = _request_source.set(normalize_source(source))
+    try:
+        yield
+    finally:
+        _request_source.reset(token)
+
+
+async def source_stream(iterator: Any, source: str | None):
+    """Bind each generator operation; never hold a ContextVar token across yield.
+
+    A streaming response can be advanced and closed by different tasks. Each
+    operation owns and resets its own token in the task that created it.
+    """
+    try:
+        while True:
+            try:
+                with source_scope(source):
+                    item = await anext(iterator)
+            except StopAsyncIteration:
+                return
+            yield item
+    finally:
+        with source_scope(source):
+            await iterator.aclose()
 
 
 def enabled() -> bool:
@@ -63,13 +107,14 @@ def h12(text: str) -> str:
 def resolve_source(staged: dict[str, Any] | None = None) -> str | None:
     """The request source label, never regex-inferred.
 
-    Explicit ``ORCHESTRATOR_REQUEST_SOURCE`` (set by the autopilot / benchmark /
-    experiment launcher), else a staged ``x_client_class`` that is itself one of
-    the labels, else None.  An unknown value is dropped, not guessed.
+    Native request carrier, then an accepted staged client class, then the API
+    process environment. An unknown value is dropped, never guessed. Producer
+    environments must be serialized across HTTP; they are not API environments.
     """
-    for cand in (os.environ.get(SOURCE_ENV), (staged or {}).get("client_class")):
-        if isinstance(cand, str) and cand.strip().lower() in SOURCES:
-            return cand.strip().lower()
+    for cand in (_request_source.get(), (staged or {}).get("client_class"),
+                 os.environ.get(SOURCE_ENV)):
+        if label := normalize_source(cand):
+            return label
     return None
 
 
@@ -137,7 +182,8 @@ def build_layout(
         "layout_chars": len(prompt),
         "head_sha256_12": h12(prompt[:HEAD_CHARS]),
         "turn_index": turn_index,
-        "source": source if source in SOURCES else resolve_source(None),
+        "source": normalize_source(source) or resolve_source(None),
+        "_explicit_source": normalize_source(source),
         "ts": time.time(),
     }
 
@@ -209,7 +255,10 @@ def record_prompt(prompt: str, **kwargs: Any) -> None:
         pass
 
 
-def fields_for_request(request: Any, layout: dict[str, Any] | None = None) -> dict[str, Any]:
+def fields_for_request(
+    request: Any, layout: dict[str, Any] | None = None,
+    *, staged: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Record fields (``blocks`` ...) for a request, or ``{}``. Never raises."""
     try:
         layout = layout if layout is not None else peek_layout()
@@ -224,7 +273,9 @@ def fields_for_request(request: Any, layout: dict[str, Any] | None = None) -> di
         if match is None and time.time() - float(layout.get("ts") or 0) > MAX_AGE_S:
             return {}
         out: dict[str, Any] = {"layout_match": match, "turn_index": layout.get("turn_index"),
-                               "source": layout.get("source")}
+                               "source": _request_source.get()
+                               or normalize_source(layout.get("_explicit_source"))
+                               or resolve_source(staged)}
         out.update(blocks=layout["blocks"], layout_chars=layout["layout_chars"],
                    unlocated_blocks=layout.get("unlocated_blocks", 0),
                    layout_schema=layout["schema"])

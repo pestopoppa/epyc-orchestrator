@@ -412,6 +412,7 @@ def _call_orchestrator_with_slot_poll(
     batch_id: int | str | None = None,
     batch_placement_mode: str | None = None,
     watcher: Any | None = None,
+    request_source: str | None = None,
 ) -> tuple[dict[str, Any], float, dict[str, Any]]:
     """Call orchestrator while polling slot progress for live visibility.
 
@@ -454,6 +455,7 @@ def _call_orchestrator_with_slot_poll(
 
     def _run() -> dict[str, Any]:
         return call_orchestrator_forced(
+            **({"request_source": request_source} if request_source is not None else {}),
             prompt=prompt,
             force_role=force_role,
             force_mode=force_mode,
@@ -815,6 +817,7 @@ def call_orchestrator_forced(
     llama_port: int | None = None,
     eval_fence: bool | None = None,
     speculative_n_max: int | None = None,
+    request_source: str | None = None,
 ) -> dict[str, Any]:
     """Call orchestrator with forced role and mode routing.
 
@@ -966,6 +969,11 @@ def call_orchestrator_forced(
     }
     if image_path:
         payload["image_path"] = image_path
+    if request_source is not None:
+        from src.backends.prompt_layout import normalize_source
+
+        if source := normalize_source(request_source):
+            payload["x_request_source"] = source
     if cache_prompt is not None:
         payload["cache_prompt"] = cache_prompt
     if allow_delegation is not None:

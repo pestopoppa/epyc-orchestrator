@@ -750,7 +750,7 @@ def build_record(
         try:
             from src.backends import prompt_layout
 
-            record.update(prompt_layout.fields_for_request(request))
+            record.update(prompt_layout.fields_for_request(request, staged=staged))
         except Exception:
             pass
     if notes:

@@ -3107,6 +3107,7 @@ sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 sys.path.insert(0, str(_orch_root))
 
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
+from src.backends.prompt_layout import producer_source  # noqa: E402
 from seeding_scoring import (  # noqa: E402
     score_answer_deterministic,
     score_answer_or_error,
@@ -3460,7 +3461,7 @@ class _GenOutcome:
 # judgment is visible and can never be misread as a confirmed cross-family
 # verdict, without silently discarding the measurement.
 from src.autopilot_core.verification_families import (  # noqa: E402
-    VERIFICATION_FAMILIES,
+    VERIFICATION_FAMILIES as VERIFICATION_FAMILIES,
     cross_family_status as _cross_family_status,
 )
 
@@ -4634,6 +4635,7 @@ class EvalTower:
                 )
                 continue
             resp = call_orchestrator_forced(
+                request_source=producer_source("autopilot"),
                 prompt=prompt.prompt,
                 force_role=role,
                 force_mode="direct",
@@ -4683,6 +4685,7 @@ class EvalTower:
                     f"[{m.get('role', 'user')}]\n{m.get('content', '')}" for m in messages
                 )
                 repair_resp = call_orchestrator_forced(
+                    request_source=producer_source("autopilot"),
                     prompt=repair_prompt,
                     force_role=_role,
                     force_mode="direct",
@@ -4828,7 +4831,10 @@ class EvalTower:
             prompt_root = str(q.get("_prompt_root") or "").strip()
             if prompt_root:
                 call_kwargs["prompt_root"] = prompt_root
-            resp = call_orchestrator_forced(**call_kwargs, **_bitwise_generation_spec_kwargs())
+            resp = call_orchestrator_forced(
+                **call_kwargs, **_bitwise_generation_spec_kwargs(),
+                request_source=producer_source("autopilot"),
+            )
             elapsed = time.time() - start
             answer = resp.get("answer", "")
             error = resp.get("error")

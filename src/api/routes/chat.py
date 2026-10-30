@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.api.dependencies import dep_app_state
 from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.state import AppState
+from src.backends.prompt_layout import source_scope, source_stream
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.repl_environment import knowledge_fence
@@ -314,7 +315,9 @@ async def chat(
             request_id=request.request_id or "",
             budget_s=request.timeout_s,
         )
-        with prompt_dir_override(prompt_dir), speculative_n_max_override(request.speculative_n_max):
+        with (prompt_dir_override(prompt_dir),
+              speculative_n_max_override(request.speculative_n_max),
+              source_scope(request.x_request_source)):
             response = await _handle_chat(request, state, cancel_event=cancel_event)
         response.contention_gate = gate_observation.snapshot()
         if fence_carrier is not None:
@@ -1387,7 +1390,7 @@ async def chat_stream(
     if features().unified_streaming:
         from src.api.routes.chat_pipeline.stream_adapter import generate_stream
 
-        return create_sse_response(generate_stream(request, state))
+        return create_sse_response(source_stream(generate_stream(request, state), request.x_request_source))
 
     # Legacy inline streaming path (preserved until unified_streaming is validated)
     # Generate task ID for MemRL tracking (outside generator for closure)
@@ -1765,4 +1768,4 @@ async def chat_stream(
         yield done_event()
 
     # Use SSE utilities for response (handles sse-starlette vs manual fallback)
-    return create_sse_response(generate())
+    return create_sse_response(source_stream(generate(), request.x_request_source))

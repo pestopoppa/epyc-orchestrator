@@ -690,6 +690,8 @@ class LocalChatPlannerProvider:
                     pass
 
     def _payload(self, prompt: str, *, planner_role: str | None = None) -> dict[str, Any]:
+        from src.backends.prompt_layout import producer_source
+
         payload: dict[str, Any] = {
             "prompt": prompt,
             "mock_mode": False,
@@ -699,6 +701,7 @@ class LocalChatPlannerProvider:
             "request_priority": "background",
             "workload_class": "campaign",
             "request_id": f"planner-local-chat-{uuid.uuid4().hex[:8]}",
+            "x_request_source": producer_source("autopilot"),
         }
         if planner_role == "draft" and self._force_role:
             payload["force_role"] = self._force_role

@@ -564,7 +564,10 @@ def _eval_single_config(
     logger.info(f"  → {log_label} ({role}:{mode}, timeout={timeout}s)...")
     tap_before = _tap_size()
     repl_tap_before = _repl_tap_size()
+    from src.backends.prompt_layout import producer_source
+
     resp, elapsed, slot_progress = _call_orchestrator_with_slot_poll(
+        request_source=producer_source("benchmark"),
         prompt=prompt,
         force_role=role,
         force_mode=mode,
@@ -626,6 +629,7 @@ def _eval_single_config(
             if _recover_heavy_ports_if_stuck(url, busy_now):
                 logger.info(f"  [retry] {log_label} retry after recovery")
                 resp2, elapsed2, slot_progress2 = _call_orchestrator_with_slot_poll(
+                    request_source=producer_source("benchmark"),
                     prompt=prompt,
                     force_role=role,
                     force_mode=mode,
