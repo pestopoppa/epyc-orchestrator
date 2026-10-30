@@ -806,7 +806,9 @@ class LlamaServerBackend(ModelBackend):
             _n_probs = int(_req_probs) if _req_probs else None
         if _n_probs and _n_probs > 0:
             payload["logprobs"] = True
-            payload["top_logprobs"] = max(1, min(int(_n_probs), 20))
+            # TD-15a: match the native lane's bounded top-k capture. llama-server
+            # maps top_logprobs directly to n_probs; 20 is its default, not a limit.
+            payload["top_logprobs"] = max(1, min(int(_n_probs), 128))
             # TD-1d.2: post_sampling_probs=false (server default) reports the
             # PRE-sampling raw-vocab top-k (tools/server/server-context.cpp
             # populate_token_probs, post_sampling=false branch reads

@@ -1051,6 +1051,47 @@ class TestChatCompletionsLogprobs:
             {"token": "4", "logprob": -0.05, "top_logprobs": []}
         ]
 
+    @pytest.mark.parametrize("requested,expected", [(1, 1), (20, 20), (21, 21), (64, 64), (128, 128), (129, 128)])
+    def test_chat_logprob_capture_matches_native_cap(self, role_config, requested, expected):
+        """Public infer must not silently drop requested alternatives above twenty."""
+        backend = self._backend()
+        request = InferenceRequest(
+            role="frontdoor", prompt="fixture probability capture", n_tokens=1,
+            n_probs=requested, post_sampling_probs=True,
+        )
+        captured = []
+        top_logprobs = [
+            {"token": str(i), "logprob": -float(i + 1)} for i in range(expected)
+        ]
+        rows = [{"token": "0", "logprob": -1.0, "top_logprobs": top_logprobs}]
+
+        def handler(http_request):
+            captured.append((http_request.url.path, json.loads(http_request.content)))
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "0"}, "finish_reason": "stop",
+                             "logprobs": {"content": rows}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+            })
+
+        backend.client.close()
+        backend.client = httpx.Client(
+            transport=httpx.MockTransport(handler), base_url="http://MOCK_ONLY.invalid"
+        )
+        try:
+            result = backend.infer(role_config, request)
+            assert result.success is True
+            assert captured[0][0] == "/v1/chat/completions"
+            payload = captured[0][1]
+            assert payload["logprobs"] is True
+            assert payload["post_sampling_probs"] is True
+            assert "n_probs" not in payload
+            assert payload["top_logprobs"] == expected
+            assert payload["top_logprobs"] == backend._build_payload(role_config, request)["n_probs"]
+            assert result.completion_probabilities == rows
+            assert len(result.completion_probabilities[0]["top_logprobs"]) == expected
+        finally:
+            backend.close()
+
     def test_post_sampling_probs_translates_to_openai_chat_params(self, role_config):
         """TD-1d.2: forwarded on the /v1 lane the same way as /completion."""
         backend = self._backend()
@@ -1070,9 +1111,12 @@ class TestChatCompletionsLogprobs:
 
         assert captured["post_sampling_probs"] is True
 
-    def test_no_n_probs_leaves_payload_and_result_clean(self, role_config):
+    @pytest.mark.parametrize("requested", [None, 0, -1])
+    def test_no_n_probs_leaves_payload_and_result_clean(self, role_config, requested):
         backend = self._backend()
-        request = InferenceRequest(role="frontdoor", prompt="2+2?", n_tokens=16)
+        request = InferenceRequest(
+            role="frontdoor", prompt="2+2?", n_tokens=16, n_probs=requested
+        )
         captured = {}
 
         def _post(_path, json=None, timeout=None):
