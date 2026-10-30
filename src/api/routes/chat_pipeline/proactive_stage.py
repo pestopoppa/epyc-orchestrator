@@ -185,6 +185,27 @@ def _parse_plan_steps(raw: str) -> list[dict]:
 #: this is "the code's existing valid set", not an invented one.
 _PLAN_STEP_ACTORS: tuple[str, ...] = ("worker", "coder", "architect")
 
+# Primary grammar follows the decomposition prompt. Optional fields retain parser
+# defaults, while an empty or one-step array can still fall through normally.
+_PLAN_STEPS_SCHEMA: dict = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "action": {"type": "string"},
+            "actor": {"type": "string", "enum": list(_PLAN_STEP_ACTORS)},
+            "parallel_group": {"type": "string"},
+            "persona": {"type": "string"},
+            "persona_hint": {"type": "string"},
+            "depends_on": {"type": "array", "items": {"type": "string"}},
+            "outputs": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["id", "action"],
+        "additionalProperties": False,
+    },
+}
+
 _PLAN_STEPS_REPAIR_SCHEMA: dict = {
     "type": "array",
     "items": {
@@ -246,6 +267,9 @@ async def _decompose_plan_steps(
     lost to formatting drift" -- exactly the audit's complaint about today's
     silent `[]`.
     """
+    # Nothing was produced: a repair model cannot recover an unseen plan.
+    if not raw.strip():
+        return []
     steps = _parse_plan_steps(raw)
     if steps:
         return steps
@@ -289,6 +313,24 @@ async def _decompose_plan_steps(
         return []
 
     return [s for s in (_finalize_plan_step(item) for item in result.value) if s is not None]
+
+
+async def _request_plan_steps(primitives, plan_prompt: str, planner_role: str) -> str:
+    """Use the same native planner request in production and capture."""
+    from src.chat_completions_roles import thinking_off
+
+    # RI-23 remains a no-op when the chat-lane flag is disabled. to_thread
+    # copies the context, including any thinking override.
+    with thinking_off():
+        if _should_inline_plan_call_for_test(primitives):
+            return primitives.llm_call(
+                plan_prompt, role=planner_role, n_tokens=256,
+                json_schema=_PLAN_STEPS_SCHEMA, skip_suffix=True,
+            )
+        return await asyncio.to_thread(
+            primitives.llm_call, plan_prompt, role=planner_role, n_tokens=256,
+            json_schema=_PLAN_STEPS_SCHEMA, skip_suffix=True,
+        )
 
 
 async def _execute_proactive(
@@ -352,27 +394,8 @@ async def _execute_proactive(
         request.context or "",
     )
 
-    from src.chat_completions_roles import thinking_off
-
     try:
-        # RI-23: a 256-token plan JSON is not a reasoning budget — thinking OFF on the
-        # chat lane (no-op while thinking_roles_chat_lane is off). asyncio.to_thread
-        # copies this context, so the override reaches the offloaded call.
-        with thinking_off():
-            if _should_inline_plan_call_for_test(primitives):
-                plan_json_str = primitives.llm_call(
-                    plan_prompt,
-                    role=planner_role,
-                    n_tokens=256,
-                )
-            else:
-                # Keep model I/O off the event loop in production runtime paths.
-                plan_json_str = await asyncio.to_thread(
-                    primitives.llm_call,
-                    plan_prompt,
-                    role=planner_role,
-                    n_tokens=256,
-                )
+        plan_json_str = await _request_plan_steps(primitives, plan_prompt, planner_role)
     except Exception as e:
         log.warning(
             "Proactive delegation: architect plan call failed: %s",

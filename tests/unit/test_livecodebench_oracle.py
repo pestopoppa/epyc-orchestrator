@@ -394,8 +394,8 @@ def test_the_prompt_does_not_leak_the_reference_solution() -> None:
 # ── why the unfenced reference variant is measured but does not gate ─────
 
 
-def test_the_scorer_truncates_unfenced_code_at_the_first_blank_line() -> None:
-    """Evidence for `GATING_CORRECT_VARIANTS`, not an assertion about it.
+def test_the_scorer_preserves_complete_unfenced_modules() -> None:
+    """Fix the parser defect without changing `GATING_CORRECT_VARIANTS`.
 
     `_extract_code_block`'s unfenced fallback stops at `\\n\\n`. A raw answer that
     defines a helper, a blank line, then the entry point loses the entry point.
@@ -403,8 +403,60 @@ def test_the_scorer_truncates_unfenced_code_at_the_first_blank_line() -> None:
     nothing to do with their oracle — coverage 15.85% instead of 29.83%.
     """
     raw = "def helper(n):\n    return n + 1\n\ndef solve(n):\n    return helper(n)\n"
-    assert scorer._extract_code_block(raw, "python") == "def helper(n):\n    return n + 1"
+    assert scorer._extract_code_block(raw, "python") == raw.strip()
     assert "def solve" in scorer._extract_code_block(f"```python\n{raw}```", "python")
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_full_program_executes_the_same_oracle_with_or_without_fences(fenced: bool) -> None:
+    raw = "import math\n\ndef helper(n):\n    return math.isqrt(n)\n\ndef solve(n):\n    return helper(n) + 1\n"
+    answer = f"```python\n{raw}```" if fenced else raw
+    config = {"entry_point": "solve", "entry_point_cases": [([16], 5), ([25], 6)]}
+    assert scorer.score_answer(answer, "", "code_execution", config) is True
+    wrong = answer.replace("helper(n) + 1", "helper(n) - 1")
+    assert scorer.score_answer(wrong, "", "code_execution", config) is False
+
+
+def test_raw_module_preserves_decorators_and_blank_lines_inside_a_definition() -> None:
+    raw = "def decorate(fn):\n    return fn\n\n@decorate\ndef solve(n):\n\n    return n + 1\n"
+    config = {"entry_point": "solve", "entry_point_cases": [([4], 5)]}
+    assert scorer.score_answer(raw, "", "code_execution", config) is True
+
+
+def test_fenced_code_still_takes_precedence_over_surrounding_raw_code() -> None:
+    answer = "def solve(n): return 0\n\n```python\ndef solve(n): return n + 1\n```"
+    config = {"entry_point": "solve", "entry_point_cases": [([4], 5)]}
+    assert scorer.score_answer(answer, "", "code_execution", config) is True
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+def test_complete_modules_keep_future_imports_before_runtime_preamble(fenced: bool) -> None:
+    raw = ('"""solution"""\nfrom __future__ import annotations\n\n'
+           'def solve(n: MissingType):\n    return n + 1\n')
+    answer = f"```python\n{raw}```" if fenced else raw
+    config = {"entry_point": "solve", "entry_point_cases": [([4], 5)]}
+    assert scorer.score_answer(answer, "", "code_execution", config) is True
+
+
+def test_future_import_after_runtime_code_is_not_repaired() -> None:
+    raw = "print('before')\nfrom __future__ import annotations\ndef solve(n): return n + 1\n"
+    config = {"entry_point": "solve", "entry_point_cases": [([4], 5)]}
+    assert scorer.score_answer(raw, "", "code_execution", config) is False
+
+
+def test_stdin_module_with_future_import_uses_the_same_oracle() -> None:
+    raw = ("from __future__ import annotations\n\ndef solve(n):\n    return n + 1\n\n"
+           "print(solve(int(input())))\n")
+    config = {"test_code": "TEST_CASES = [('4\\n', '5'), ('8\\n', '9')]"}
+    assert scorer.score_answer(raw, "", "code_execution", config) is True
+
+
+def test_future_line_cannot_run_user_statements_before_the_guard() -> None:
+    raw = '\"é\"; from __future__ import annotations  ; events.append("user")\n'
+    prepared = scorer._prepend_code_preamble(raw, 'events = ["guard"]\n')
+    namespace = {}
+    exec(prepared, namespace)
+    assert namespace["events"] == ["guard", "user"]
 
 
 def test_the_unfenced_reference_is_still_scored_and_reported() -> None:

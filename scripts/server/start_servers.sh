@@ -151,6 +151,10 @@ main() {
   log_info "  Threads: $DEFAULT_THREADS"
   log_info "  Log:     $log_file"
 
+  # Preserve earlier runs for this port. The stack launcher writes to the same
+  # path in append mode; truncating here destroys the only raw server evidence.
+  printf "\n=== launch %s port=%s source=start_servers.sh ===\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$port" >>"$log_file"
+
   # Start server with prefix caching enabled
   # Key flags:
   #   -np N       : Number of parallel slots (for concurrent requests)
@@ -171,7 +175,7 @@ main() {
     -np "$slots" \
     -c "$DEFAULT_CONTEXT" \
     -t "$DEFAULT_THREADS" \
-    >"$log_file" 2>&1 &
+    >>"$log_file" 2>&1 &
 
   local server_pid=$!
   log_info "Server started with PID: $server_pid"
