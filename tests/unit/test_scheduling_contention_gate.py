@@ -275,8 +275,16 @@ def test_gate_nway_block_restricts_a_pairwise_allowed_set(matrix) -> None:
 def test_nway_non_allow_counter_counts_check_even_when_pairwise_is_stricter(monkeypatch) -> None:
     """The counter reports N-way non-ALLOW checks, not N-way-caused restrictions."""
     m = gate_fixture_matrix()
-    monkeypatch.setattr(gate_mod, "pair_policy", lambda *args, **kwargs: contention.PairDecision.BLOCK)
-    monkeypatch.setattr(gate_mod, "nway_policy", lambda *args, **kwargs: contention.PairDecision.QUEUE)
+    monkeypatch.setattr(
+        gate_mod,
+        "pair_policy",
+        lambda *args, **kwargs: contention.PairDecision.BLOCK,
+    )
+    monkeypatch.setattr(
+        gate_mod,
+        "nway_policy",
+        lambda *args, **kwargs: contention.PairDecision.QUEUE,
+    )
     gate = make_gate(gate_mod, {"worker_summarize": [0]}, matrix=m)
 
     decision = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
