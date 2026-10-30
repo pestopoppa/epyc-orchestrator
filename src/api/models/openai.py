@@ -128,10 +128,10 @@ class OpenAIChatRequest(BaseModel):
         default=1024,
         ge=1,
         le=32768,
-        description="Generation cap ONLY with x_tool_mode='client' or x_disable_repl=true. In the "
-        "default REPL mode it is NOT the token budget: each REPL turn generates up to a "
-        "fixed 1024 tokens and max_tokens only sets the turn count (max_tokens // 500, "
-        "clamped to 1..5). Explicit values are rejected on image (vision) requests. "
+        description="Generation cap with x_tool_mode='client' or x_disable_repl=true. "
+        "Explicit values are rejected in default REPL and image (vision) requests. "
+        "When omitted in default REPL, the legacy default allows two turns, each "
+        "with a 1024-token generation cap; this is not a total request budget. "
         "max_completion_tokens is "
         "accepted as an alias (422 if both are sent).",
     )

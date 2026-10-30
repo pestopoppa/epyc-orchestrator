@@ -944,6 +944,20 @@ def _sampling_metadata(sampling_kwargs: dict[str, Any]) -> dict[str, Any]:
     return {"sampling": dict(sorted(sampling_kwargs.items()))}
 
 
+def _repl_token_contract_metadata(request: OpenAIChatRequest) -> dict[str, Any]:
+    """Report the legacy outer-turn limits, which are not a request budget."""
+    explicit = "max_tokens" in request.model_fields_set
+    return {"token_budget": {
+        "requested": request.max_tokens if explicit else None,
+        "effective_value": request.max_tokens,
+        "effective_source": "request" if explicit else "schema_default",
+        "interpretation": "turn_count_input",
+        "max_turns": min(max(request.max_tokens // 500, 1), 5),
+        "per_outer_generation_limit": 1024,
+        "total_generation_limit": None,
+    }}
+
+
 def _role_name(role: str | Role) -> str:
     return role.value if isinstance(role, Role) else str(role)
 
@@ -1354,6 +1368,16 @@ async def openai_chat_completions(
                     "requests"
                 ),
             )
+
+    # Explicit caps cannot be honored by the legacy REPL token contract.
+    if (not prompt_parts.image_base64 and request.x_tool_mode != "client"
+            and not request.x_disable_repl and "max_tokens" in request.model_fields_set):
+        raise HTTPException(
+            status_code=422,
+            detail=("'max_tokens' (including 'max_completion_tokens') is not supported "
+                    "as a generation budget in default REPL mode; omit it or use "
+                    "x_disable_repl=true or x_tool_mode='client'"),
+        )
 
     # Build conversation context from message history
     # B2: Apply context compression on structured messages before flattening.
@@ -1977,6 +2001,8 @@ async def openai_chat_completions(
                 if disable_repl:
                     meta["repl_disabled"] = True
                 meta.update(_sampling_metadata(sampling_kwargs))
+                if locals().get("repl_for_metadata") is not None:
+                    meta.update(_repl_token_contract_metadata(request))
                 if client_mode and use_real_mode:
                     _apply_client_tool_contract_metadata(meta, client_tool_calls)
                 else:
@@ -2266,6 +2292,8 @@ async def openai_chat_completions(
                 **({"repl_disabled": True} if disable_repl else {}),
                 **_sampling_metadata(sampling_kwargs),
             }
+            if repl_for_metadata is not None:
+                response_meta.update(_repl_token_contract_metadata(request))
             if client_mode and use_real_mode:
                 _apply_client_tool_contract_metadata(response_meta, client_tool_calls)
             else:

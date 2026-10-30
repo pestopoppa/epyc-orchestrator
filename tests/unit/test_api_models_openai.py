@@ -341,10 +341,10 @@ class TestFieldDescriptionsMatchSeamBehaviour:
         assert "422" in d and "400" in d
         assert "neither mode escalates" in d
 
-    def test_max_tokens_says_it_is_not_the_repl_token_budget(self):
+    def test_max_tokens_names_repl_refusal_and_legacy_default(self):
         d = self._desc("max_tokens")
-        assert "not the token budget" in d
-        assert "1024" in d and "500" in d
+        assert "explicit values are rejected" in d and "default repl" in d
+        assert "two turns" in d and "1024" in d and "not a total request budget" in d
         assert "vision" in d
         assert "max_completion_tokens" in d
 
