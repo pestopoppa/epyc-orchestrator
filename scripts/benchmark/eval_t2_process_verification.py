@@ -84,21 +84,19 @@ def main(argv=None):
         raise ValueError("bounded uncertain-n [0,100] and budget-s (0,86400] required")
     if not args.generation_drained and not args.dry_run:
         raise ValueError("--generation-drained is required for actual verifier loading")
-    from src.config import get_config
-    from scripts.server.eval_process_verifier import NativeProcessVerifier, ProcessVerifierConfig
+    from dataclasses import replace
+    from scripts.server.orchestrator_stack import thinkprm_eval_config
+    from scripts.server.eval_process_verifier import NativeProcessVerifier
 
-    paths = get_config().paths
-    kernel = paths.llm_root / "kernels/production/cpu"
-    config = ProcessVerifierConfig(
-        model=paths.models_dir / "ThinkPRM-1.5B/ThinkPRM-1.5B-Q4_K_M.gguf",
-        server=kernel / "llama-server",
-        library_dir=kernel,
-        log_path=args.output_dir / "private-verifier.log",
+    config = replace(
+        thinkprm_eval_config(
+            log_path=args.output_dir / "private-verifier.log",
+            generation_drained=args.generation_drained,
+        ),
         max_tokens=args.max_tokens,
         context_tokens=args.context_tokens,
         timeout_s=args.request_timeout_s,
         seed=args.seed,
-        generation_drained=args.generation_drained,
     )
     if args.dry_run:
         print(

@@ -1916,11 +1916,29 @@ def thinkprm_eval_config(*, log_path: Path, generation_drained: bool = False):
     from scripts.server.eval_process_verifier import ProcessVerifierConfig
 
     paths = get_config().paths
+    # Resolve the CPU store from this invocation's configured root. The global
+    # fleet LLAMA_SERVER may be a role-specific override; EV-5 is CPU-only.
+    cpu_store = paths.llm_root / "kernels/production/cpu"
     return ProcessVerifierConfig(
         model=paths.models_dir / "ThinkPRM-1.5B" / "ThinkPRM-1.5B-Q4_K_M.gguf",
-        server=Path(LLAMA_SERVER), library_dir=Path(LLAMA_SERVER).parent,
+        server=cpu_store / "llama-server", library_dir=cpu_store,
         log_path=log_path, generation_drained=generation_drained,
     )
+
+
+def thinkprm_owned_t2_verifier(
+    generation_proc: subprocess.Popen, *, log_path: Path, receipt_path: Path
+):
+    """Opt-in T2 verifier for a generator launched by this eval owner.
+
+    Pass the returned object to ``EvalTower.eval_t2(process_verifier=...)``.
+    The T2 batch completes first; the verifier then drains only its captured
+    generation child and loads ThinkPRM. Fleet start/reload never calls this.
+    """
+    from scripts.server.eval_process_verifier import OwnedT2Verifier
+
+    config = thinkprm_eval_config(log_path=log_path, generation_drained=True)
+    return OwnedT2Verifier(generation_proc, config=config, receipt_path=receipt_path)
 
 
 @_refuse_on_artifact_integrity_error

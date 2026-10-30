@@ -7145,6 +7145,33 @@ class EvalTower:
         process_verifier: Any | None = None,
         verification_n: int = 10,
     ) -> EvalResult:
+        """Tier 2 with an opt-in whole-call owned-process drain boundary."""
+        try:
+            return self._eval_t2_impl(
+                n=n,
+                seed=seed,
+                promotion_eval=promotion_eval,
+                trial_id=trial_id,
+                exclude_qids=exclude_qids,
+                process_verifier=process_verifier,
+                verification_n=verification_n,
+            )
+        finally:
+            finalize = getattr(process_verifier, "finalize", None)
+            if finalize is not None:
+                finalize()
+
+    def _eval_t2_impl(
+        self,
+        n: int = 500,
+        seed: int = 42,
+        *,
+        promotion_eval: bool = False,
+        trial_id: int | None = None,
+        exclude_qids: set[str] | None = None,
+        process_verifier: Any | None = None,
+        verification_n: int = 10,
+    ) -> EvalResult:
         """Tier 2: 500+ full benchmark, ~30min."""
         pool = self._load_pool()
         if not pool:

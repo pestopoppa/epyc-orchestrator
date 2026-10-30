@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
+import signal
 import socket
 import subprocess
 import time
@@ -222,3 +224,125 @@ class NativeProcessVerifier:
             },
             "native_cot_response": cot,
         }
+
+
+def _proc_identity(pid: int) -> tuple[int, int] | None:
+    """Return (parent PID, start ticks), disambiguating PID reuse."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    fields = stat.rsplit(")", 1)[1].split()
+    return int(fields[1]), int(fields[19])
+
+
+class OwnedT2Verifier:
+    """Drain this eval's captured generator before loading a private T2 verifier.
+
+    Construct in the process that launched ``generation_proc`` and pass to
+    ``EvalTower.eval_t2(process_verifier=...)``. The existing T2 path calls this
+    only after its generation/scoring batch; its default None remains inert.
+    """
+
+    model_identity = "ThinkPRM-1.5B"
+
+    def __init__(
+        self,
+        generation_proc: subprocess.Popen,
+        *,
+        config: ProcessVerifierConfig,
+        receipt_path: Path,
+    ) -> None:
+        if not isinstance(generation_proc, subprocess.Popen):
+            raise TypeError("an owned subprocess.Popen handle is required")
+        self.proc = generation_proc
+        self.owner_pid = os.getpid()
+        self.identity = _proc_identity(generation_proc.pid)
+        if self.identity is None or self.identity[0] != self.owner_pid:
+            raise ValueError("generator must be a live direct child of this eval owner")
+        # A pidfd binds the signal target to this process even if its numeric
+        # PID is recycled between the identity check and TERM/KILL.
+        self.pidfd = os.pidfd_open(generation_proc.pid)
+        if _proc_identity(generation_proc.pid) != self.identity:
+            os.close(self.pidfd)
+            raise ValueError("generator identity changed while acquiring pidfd")
+        self.config = config
+        self.receipt_path = Path(receipt_path)
+        self.backend: NativeProcessVerifier | None = None
+        self.lifecycle = {"generator_drained": False, "verifier_drained": True}
+
+    def drain_generation(self) -> None:
+        """Stop only the direct child captured by this eval owner, once."""
+        if self.lifecycle["generator_drained"]:
+            return
+        if os.getpid() != self.owner_pid:
+            raise ValueError("eval ownership changed before verifier load")
+        current = _proc_identity(self.proc.pid)
+        if self.proc.poll() is None:
+            if current != self.identity:
+                raise ValueError("generator PID identity changed; refusing signal")
+            signal.pidfd_send_signal(self.pidfd, signal.SIGTERM)
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                if _proc_identity(self.proc.pid) != self.identity:
+                    raise ValueError("generator PID identity changed; refusing kill")
+                signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
+                self.proc.wait(timeout=5)
+        if _proc_identity(self.proc.pid) == self.identity:
+            raise RuntimeError("owned generator remains alive after drain")
+        self.lifecycle["generator_drained"] = True
+        receipt = {
+            "schema": "ev5_owned_t2_drain.v1",
+            "owner_pid": self.owner_pid,
+            "generator_pid": self.proc.pid,
+            "generator_start_ticks": self.identity[1],
+            "generator_returncode": self.proc.returncode,
+            "verified_dead": True,
+        }
+        self.receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.receipt_path.open("x") as fh:
+            json.dump(receipt, fh, sort_keys=True)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def __enter__(self):
+        if not self.config.generation_drained:
+            raise ValueError("ThinkPRM config must require generation_drained")
+        self.drain_generation()
+        self.backend = NativeProcessVerifier(self.config)
+        try:
+            self.backend.__enter__()
+        except BaseException:
+            self.backend = None
+            raise
+        self.lifecycle["verifier_drained"] = False
+        return self
+
+    def __exit__(self, *exc):
+        if self.backend is not None:
+            try:
+                self.backend.__exit__(*exc)
+            finally:
+                self.lifecycle.update(
+                    verifier_drained=self.backend.lifecycle["drained"],
+                    verifier_pid=self.backend.lifecycle.get("pid"),
+                    verifier_returncode=self.backend.lifecycle.get("returncode"),
+                )
+                self.backend = None
+
+    def finalize(self) -> None:
+        """T2 end boundary, including no eligible rows or preflight rejection."""
+        try:
+            self.__exit__(None, None, None)
+            self.drain_generation()
+        finally:
+            if self.pidfd is not None:
+                os.close(self.pidfd)
+                self.pidfd = None
+
+    def verify(self, problem: str, solution: str) -> dict:
+        if self.backend is None:
+            raise RuntimeError("ThinkPRM is not loaded")
+        return self.backend.verify(problem, solution)
