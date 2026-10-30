@@ -281,6 +281,12 @@ def _baseline_quality_by_role(priors: dict | None = None) -> Dict[str, float]:
     for role, record in (priors.get("roles") or {}).items():
         if not isinstance(record, dict):
             continue
+        if record.get("deployment_status") != "live_stack":
+            # Candidate/benchmark records can carry real quality measurements,
+            # but they are not serving roles. Keep them out of the live scorer
+            # and its degraded fallback; absent live-role evidence skips the
+            # quality-gap dimension rather than borrowing a candidate's score.
+            continue
         if role in _NON_SCORING_HOST_ALIASES:
             # Host-only alias (e.g. "worker"): never a q_scorer scoring role,
             # see _NON_SCORING_HOST_ALIASES. Its measurement is carried by its

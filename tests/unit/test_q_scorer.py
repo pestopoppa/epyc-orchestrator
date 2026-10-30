@@ -341,6 +341,7 @@ class TestScoringConfigDefaults:
         assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
         assert priors.degraded_reason is None
         assert "candidate_arch" not in priors.baseline_tps_by_role
+        assert "candidate_arch" not in priors.baseline_quality_by_role
         retired_role = "architect" + "_coding"
         assert retired_role not in priors.baseline_tps_by_role
         assert validate_live_q_scorer_prior_sources(priors_path) == []
@@ -1023,7 +1024,7 @@ def _compiled_quality_prior(
 
     Mirrors the loader's two layers in orchestration/repl_memory/q_scorer.py:
 
-    * `_baseline_quality_by_role()` (~line 205) projects every record: a
+    * `_baseline_quality_by_role()` projects only `live_stack` records: a
       numeric `quality_for_role.value` (0..1) wins, else the model-keyed
       table keyed by model_path basename, else the role is OMITTED. Its
       docstring states the contract this test enforces: "A role whose model
@@ -1032,7 +1033,7 @@ def _compiled_quality_prior(
       skips `_NON_SCORING_HOST_ALIASES` (e.g. "worker") entirely — a host-only
       registry/launch-manifest alias, not a `Role`.
     * `stack_prior_q_scorer_priors_by_role()` then overrides live_stack
-      records with a numeric `quality_for_role.value` or `quality_overall`,
+      live records with a numeric `quality_for_role.value` or `quality_overall`,
       stamping PRIOR_SOURCE_STACK_PRIORS. Anything else that survives does so
       through the degraded-fallback base layer (PRIOR_SOURCE_DEGRADED_FALLBACK).
       Same host-alias skip applies here.
@@ -1043,6 +1044,8 @@ def _compiled_quality_prior(
     if role in _NON_SCORING_HOST_ALIASES:
         return None, None
     if not isinstance(record, dict):
+        return None, None
+    if record.get("deployment_status") != "live_stack":
         return None, None
     priors = record.get("priors") or {}
     if not isinstance(priors, dict):
@@ -1055,13 +1058,12 @@ def _compiled_quality_prior(
         if isinstance(value, (int, float)) and 0 <= float(value) <= 1:
             qfr = float(value)
 
-    is_live = record.get("deployment_status") == "live_stack"
-    if is_live and qfr is None:
+    if qfr is None:
         overall = priors.get("quality_overall")
         if isinstance(overall, (int, float)) and 0 <= float(overall) <= 1:
             return float(overall), PRIOR_SOURCE_STACK_PRIORS
     if qfr is not None:
-        return qfr, PRIOR_SOURCE_STACK_PRIORS if is_live else PRIOR_SOURCE_DEGRADED_FALLBACK
+        return qfr, PRIOR_SOURCE_STACK_PRIORS
 
     model_path = (
         ((record.get("serving") or {}).get("launch") or {}).get("requirements") or {}
@@ -1071,6 +1073,49 @@ def _compiled_quality_prior(
         if quality is not None:
             return float(quality), PRIOR_SOURCE_DEGRADED_FALLBACK
     return None, None
+
+
+def test_non_live_quality_never_enters_live_or_degraded_role_maps(tmp_path):
+    from orchestration.repl_memory.q_scorer import (
+        _baseline_quality_by_role,
+        _fallback_q_scorer_priors,
+    )
+
+    candidate = {
+        "deployment_status": "benchmark_or_candidate",
+        "priors": {"quality_for_role": {"value": 0.99}},
+        "serving": {"launch": {"requirements": {"model_path": "/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf"}}},
+    }
+    priors = {
+        "roles": {
+            "candidate_structured": candidate,
+            "candidate_filename_fallback": {
+                **candidate,
+                "priors": {"quality_for_role": None},
+            },
+            "live_quality": {
+                "deployment_status": "live_stack",
+                "priors": {"quality_for_role": {"value": 0.81}},
+            },
+        }
+    }
+
+    projected = _baseline_quality_by_role(priors)
+    assert projected == {"live_quality": pytest.approx(0.81)}
+
+    # The real compiled artifact currently contains a measured candidate
+    # record. It must not leak through either degraded construction path.
+    candidate_role = "qwen36_35b_a3b_mtp_q8_local"
+    fallback = _fallback_q_scorer_priors()
+    assert candidate_role not in fallback.baseline_quality_by_role
+    assert candidate_role not in fallback.baseline_quality_source_by_role
+
+    descriptor_fallback = descriptor_q_scorer_priors_by_role(
+        descriptor_path=tmp_path / "missing-descriptors.yaml",
+        registry_path=tmp_path / "missing-registry.yaml",
+    )
+    assert candidate_role not in descriptor_fallback.baseline_quality_by_role
+    assert candidate_role not in descriptor_fallback.baseline_quality_source_by_role
 
 
 def _compiled_tps_prior(role: str, record: dict[str, Any]) -> float | None:
@@ -1102,11 +1147,11 @@ class TestMultiDimensionalCost:
         rather than defaulted. Falling back to a number would reinstate
         exactly the defect this replaced."
 
-        * A role whose record carries a numeric quality_for_role.value (0..1)
-          — or whose model path hits the model-keyed fallback — IS projected;
-          live roles carry the PRIOR_SOURCE_STACK_PRIORS source.
-        * A role whose quality is null/absent with no model-path fallback is
-          OMITTED, never defaulted.
+        * A live role whose record carries a numeric quality_for_role.value
+          (0..1) — or whose model path hits the model-keyed fallback — IS
+          projected.
+        * A live role whose quality is null/absent with no model-path fallback
+          is OMITTED, never defaulted. Non-live records are always omitted.
 
         The expectation is DERIVED from the same compiled priors file the
         loader reads (orchestration/derived/stack_priors.yaml), never from a
