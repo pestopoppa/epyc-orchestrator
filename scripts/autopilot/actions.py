@@ -1572,6 +1572,13 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         )
         _discard_mutation_diversity_coverage(ctx)
         return None, "prompt_forge"
+    if getattr(mutation, "mutated_content", None) == getattr(mutation, "original_content", None):
+        log.warning("Prompt mutation produced no file changes, skipping eval")
+        _discard_mutation_diversity_coverage(ctx)
+        return (
+            SkipOutcome("skipped", "prompt_mutation produced no file changes", "prompt_mutation"),
+            "prompt_forge",
+        )
     _stash_prompt_interference(ctx, mutation)
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
@@ -1707,11 +1714,13 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         log.warning("Prompt file not found: %s", target)
         return None, "prompt_forge"
 
-    # No-op mutation means GEPA failed
+    # An unchanged candidate cannot be promoted on evaluation noise.
     if mutation.original_content == mutation.mutated_content:
         log.warning("GEPA produced no mutation for %s", target)
-        eval_result = ctx.tower.hybrid_eval()
-        return eval_result, "prompt_forge"
+        return (
+            SkipOutcome("skipped", "gepa_optimize produced no file changes", "gepa_optimize"),
+            "prompt_forge",
+        )
 
     _stash_prompt_interference(ctx, mutation)
     skill_without = _skill_efficacy_without_result(ctx)
