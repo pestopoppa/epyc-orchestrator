@@ -1908,55 +1908,40 @@ def validate_model_paths() -> list[str]:
     if not Path(EMBEDDING_MODEL_PATH).exists():
         errors.append(f"[HOT] Embedding: {EMBEDDING_MODEL_PATH}")
 
-    for worker_type, path in WORKER_POOL_MODELS.items():
-        if not Path(path).exists():
-            errors.append(f"[HOT] Worker '{worker_type}': {path}")
+    # The launcher consumes generated requirements, including external drafters
+    # and vision projectors. Legacy model constants may name retired files that
+    # happen to exist while the file actually passed to the server is missing.
+    from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
 
-    # Draft model for explore worker spec decode. `models.explore_draft_model` is
-    # NULLABLE by design (launch_manifest.yaml): a NEXTN/MTP lane FUSES its draft head
-    # into the base GGUF, so there is no separate drafter file to validate. `None` means
-    # "no external drafter", not "a missing file". Unguarded this raised
-    # `TypeError: expected str, bytes or os.PathLike object, not NoneType` inside the
-    # `[0.5] Validating model paths` preflight (stack_commands.py), i.e. a non-dev stack
-    # start crashed before launching anything. Every other consumer of the constant
-    # already treats it as nullable (stack_change_guard.py, stack_priors.py,
-    # orchestrator_stack.py); this was the one site that did not.
-    if EXPLORE_DRAFT_MODEL and not Path(EXPLORE_DRAFT_MODEL).exists():
-        errors.append(f"[HOT] Explore draft: {EXPLORE_DRAFT_MODEL}")
-
-    # Serving artifacts for the fleet-hosting roles, DERIVED from the row master says
-    # governs each one -- the same binding the compiled priors use.
-    #
-    # 2026-09-23 (SSU-F8). All three were hardcoded literals and all three were wrong:
-    #   frontdoor            named .../Qwen_Qwen3.6-35B-A3B-Q8_0.gguf, NOT the
-    #                        ...-MTP-Q8_0.gguf it actually serves. The file it named
-    #                        happened to exist, so the preflight reported green while
-    #                        validating the wrong artifact.
-    #   architect_general    named .../unsloth/Qwen3.5-122B-A10B-GGUF/
-    #   ingest_long_context  named .../lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/
-    #                        -- both retired directories that no longer exist on disk, so
-    #                        once the EXPLORE_DRAFT_MODEL TypeError above stopped masking
-    #                        this function, the `[0.5] Validating model paths` preflight
-    #                        would have failed a non-dev stack start on two phantom paths.
-    # A role whose master row declares no path is not this check's business; the
-    # declaration-parity guard owns that.
-    # 2026-05-06: architect_coding REMOVED (REAP-246B role eliminated; 139 GB freed).
-    # 2026-09-27 ARCHITECT SWAP: architect_critic added — it is now the host row
-    # of the :8083 27B GGUF; architect_general is the :8074 Flash-Next row.
-    for role in ("frontdoor", "architect_general", "architect_critic", "ingest_long_context"):
-        declared = _master_declared_model_path(role)
-        if declared and not Path(declared).exists():
-            errors.append(f"[HOT] {role}: {declared}")
-
-    # Vision models (VL with multimodal projector)
-    for label, path in [
-        ("worker_vision model", VISION_WORKER_MODEL),
-        ("worker_vision mmproj", VISION_WORKER_MMPROJ),
-        ("vision_escalation model", VISION_ESCALATION_MODEL),
-        ("vision_escalation mmproj", VISION_ESCALATION_MMPROJ),
-    ]:
-        if not Path(path).exists():
-            errors.append(f"[HOT] {label}: {path}")
+    priors_path = _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+    records = live_stack_role_records(priors_path)
+    if not records:
+        errors.append(f"[HOT] Live generated launch requirements unavailable: {priors_path}")
+    checked: set[str] = set()
+    for role, record in sorted(records.items()):
+        serving = stack_prior_serving(record)
+        launch = serving.get("launch")
+        requirements = launch.get("requirements") if isinstance(launch, dict) else None
+        runtime = launch.get("runtime") if isinstance(launch, dict) else None
+        if not isinstance(requirements, dict):
+            errors.append(f"[HOT] {role}: missing or malformed generated launch requirements")
+            continue
+        family = runtime.get("binary_family") if isinstance(runtime, dict) else None
+        needs_model = not family or family == "llama.cpp"
+        for kind in ("model_path", "draft_model_path", "mmproj_path"):
+            value = requirements.get(kind)
+            # An absent/null external drafter is intentional for fused MTP; a
+            # backend without a local llama model need not declare model_path.
+            if value is None and (kind != "model_path" or not needs_model):
+                continue
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"[HOT] {role}: invalid generated {kind}")
+                continue
+            if value in checked:
+                continue
+            checked.add(value)
+            if not Path(value).is_file():
+                errors.append(f"[HOT] {role} {kind}: {value}")
 
     # Auxiliary services
     formalizer = _PATHS["models_dir"] / "LightOnOCR-2-1B-bbox-Q4_K_M.gguf"

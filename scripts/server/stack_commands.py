@@ -1661,6 +1661,20 @@ def cmd_start(args: argparse.Namespace) -> int:
     print("=" * 60)
     print()
 
+    # Validate model paths (prevents hallucinations about missing models)
+    if not args.dev:
+        print("[0.5] Validating model paths...")
+        errors = validate_model_paths()
+        if errors:
+            print("[!] MODEL VALIDATION FAILED:")
+            for err in errors:
+                print(f"    - {err}")
+            print("\nFix missing models or regenerate the declared launch requirements")
+            print(f"Check {_PATHS['models_dir']} and {_PATHS['model_base']}")
+            return 1
+        print("  [OK] All model paths validated")
+        print()
+
     # Host prerequisites — applied before any llama-server launch.
     # See cpu-kernel-env-flags-inventory.md §211 + model-registry-v5-deployment-draft.yaml.
     skip_host_prereqs = getattr(args, "skip_host_prereqs", False)
@@ -1690,20 +1704,6 @@ def cmd_start(args: argparse.Namespace) -> int:
     # untracked (stop/reload can no longer find them). A full start (no --only)
     # rebuilds from scratch, which is correct since it (re)launches everything.
     state: dict[str, ProcessInfo] = load_state() if getattr(args, "only", None) else {}
-
-    # Validate model paths (prevents hallucinations about missing models)
-    if not args.dev:
-        print("[0.5] Validating model paths...")
-        errors = validate_model_paths()
-        if errors:
-            print("[!] MODEL VALIDATION FAILED:")
-            for err in errors:
-                print(f"    - {err}")
-            print("\nFix missing models or update paths in orchestrator_stack.py")
-            print(f"Check {_PATHS['models_dir']} and {_PATHS['model_base']}")
-            return 1
-        print("  [OK] All model paths validated")
-        print()
 
     # Cross-check launcher classification vs registry process_layout / server_mode.
     # Non-fatal: prints warnings but does not abort. Useful for catching drift
