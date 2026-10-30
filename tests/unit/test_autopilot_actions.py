@@ -1547,6 +1547,45 @@ class _QueuedTower:
         return self.results.pop(0)
 
 
+@pytest.mark.parametrize(
+    ("handler", "action_type"),
+    [
+        (actions._action_prompt_mutation, "prompt_mutation"),
+        (actions._action_gepa_optimize, "gepa_optimize"),
+    ],
+)
+def test_unchanged_prompt_candidate_skips_eval_and_promotion(handler, action_type) -> None:
+    class FakeForge:
+        def __init__(self):
+            self.applied = 0
+
+        def propose_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                original_content="same bytes",
+                mutated_content="same bytes",
+                safety_valid=True,
+            )
+
+        def apply_mutation(self, mutation):
+            self.applied += 1
+
+    forge = FakeForge()
+    tower = _QueuedTower([])
+    result, species = handler(
+        {"type": action_type, "file": "frontdoor.md"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=_FakeSwarm(), journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert result.action_type == action_type
+    assert forge.applied == 0
+    assert tower.calls == 0
+
+
 def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
     monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
