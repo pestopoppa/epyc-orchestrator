@@ -41,7 +41,17 @@ def test_native_call_schema_suffix_and_single_step(monkeypatch, inline):
     )
     primitive = SimpleNamespace(
         llm_call=MagicMock(
-            return_value=json.dumps([{"id": "S1", "action": "work", "parallel_group": "g"}])
+            return_value=json.dumps(
+                [
+                    {
+                        "id": "S1",
+                        "action": "work",
+                        "parallel_group": "g",
+                        "persona": "reviewer",
+                        "persona_hint": "review",
+                    }
+                ]
+            )
         )
     )
     req, routing = request_and_routing()
@@ -58,6 +68,8 @@ def test_native_call_schema_suffix_and_single_step(monkeypatch, inline):
         "action",
         "actor",
         "parallel_group",
+        "persona",
+        "persona_hint",
         "depends_on",
         "outputs",
     }
@@ -67,6 +79,8 @@ def test_native_call_schema_suffix_and_single_step(monkeypatch, inline):
             "id": "S1",
             "action": "work",
             "parallel_group": "g",
+            "persona": "reviewer",
+            "persona_hint": "review",
             "actor": "worker",
             "depends_on": [],
             "outputs": [],

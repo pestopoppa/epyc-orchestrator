@@ -196,6 +196,8 @@ _PLAN_STEPS_SCHEMA: dict = {
             "action": {"type": "string"},
             "actor": {"type": "string", "enum": list(_PLAN_STEP_ACTORS)},
             "parallel_group": {"type": "string"},
+            "persona": {"type": "string"},
+            "persona_hint": {"type": "string"},
             "depends_on": {"type": "array", "items": {"type": "string"}},
             "outputs": {"type": "array", "items": {"type": "string"}},
         },
