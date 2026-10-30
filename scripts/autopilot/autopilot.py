@@ -134,6 +134,7 @@ from planner_coordinator import (
 )
 import loop_beliefs_bridge as _loop_beliefs
 from state_store import (
+    BLACKLIST_PATH,
     OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST,
     _auto_blacklist_reason_class,
     _blacklist_expires_at,
@@ -281,7 +282,6 @@ _config_fingerprint = config_fingerprint
 
 STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
-BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
 OPERATOR_OUTBOX_PATH = ORCH_ROOT / "orchestration" / "autopilot_operator_outbox.jsonl"
 EXIT_BREADCRUMB_PATH = ORCH_ROOT / "logs" / "autopilot_exit_breadcrumb.jsonl"
 # Prompt-budget cap (2026-06-10): only the most-recent N blacklist entries are
@@ -5121,12 +5121,40 @@ def _build_repo_readiness_advisory(
 def _latest_model_gate_report_path(reports_dir: Path | None = None) -> Path | None:
     """Return the newest generated model gate report artifact, if present."""
     base = reports_dir or ORCH_ROOT / "orchestration" / "reports"
-    candidates: list[Path] = []
+    candidates: set[Path] = set()
     for pattern in MODEL_GATE_REPORT_GLOBS:
-        candidates.extend(path for path in base.glob(pattern) if path.is_file())
+        candidates.update(path for path in base.glob(pattern) if path.is_file())
     if not candidates:
         return None
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+    def report_timestamp(path: Path) -> float:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        generated_at = payload.get("generated_at") if isinstance(payload, dict) else None
+        if isinstance(generated_at, str):
+            try:
+                parsed = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.timestamp()
+            except ValueError:
+                pass
+        match = re.search(r"(?:model|fable5)_gate(?:_report)?_(\d{8}T\d{6}Z)", path.name)
+        if match:
+            try:
+                return datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=timezone.utc
+                ).timestamp()
+            except ValueError:
+                pass
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return float("-inf")
+
+    return max(candidates, key=report_timestamp)
 
 
 def _model_gate_evidence_brief(action: dict[str, Any]) -> str:
@@ -5193,8 +5221,27 @@ def _build_model_gate_advisory(
     if not isinstance(actions, list):
         actions = []
 
+    timestamp = None
+    generated_at = payload.get("generated_at") if isinstance(payload, dict) else None
+    if isinstance(generated_at, str):
+        try:
+            timestamp = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+        except ValueError:
+            timestamp = None
+    if timestamp is None:
+        match = re.search(r"(?:model|fable5)_gate(?:_report)?_(\d{8}T\d{6}Z)", path.name)
+        if match:
+            try:
+                timestamp = datetime.strptime(match.group(1), "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+            except ValueError:
+                timestamp = None
+    report_time_s = timestamp.timestamp() if timestamp else stat.st_mtime
     now_s = datetime.now(timezone.utc).timestamp()
-    age_s = max(0, int(now_s - stat.st_mtime))
+    age_s = max(0, int(now_s - report_time_s))
     freshness = "fresh" if age_s <= MODEL_GATE_ADVISORY_MAX_AGE_S else "stale"
     lines = [
         "  Planner context only. This is NOT an acceptance gate and MUST NOT "
@@ -5769,16 +5816,8 @@ STARTUP_ATTESTATION_PATHS = (
     BLACKLIST_PATH,
 )
 MODEL_GATE_REPORT_GLOBS = (
-    # New name FIRST — the generator is `scripts/autopilot/model_gate_report.py` as of the
-    # 2026-08-04 de-FABLE rename, so reports it writes from now on carry the new prefix.
-    # Matching only the old spelling would have made every future report invisible here
-    # while the freshness check kept passing on the last pre-rename artifact: a stale-
-    # evidence failure that looks exactly like "no new reports", not like a bug.
-    "model_gate_report_*.json",
+    # The broad prefix patterns also match the `_report_` names and avoid double-counting.
     "model_gate_*.json",
-    # Old spelling still READ so the existing artifacts under orchestration/reports/
-    # keep resolving. Same doctrine as the env-var alias immediately below.
-    "fable5_gate_report_*.json",
     "fable5_gate_*.json",
 )
 MODEL_GATE_ADVISORY_MAX_AGE_S = int(
@@ -6375,7 +6414,7 @@ def _render_system_card(state: dict[str, Any] | None = None) -> str:
             "handoffs, memories, or old logs as authoritative stack truth.\n"
             "- Choose an observational or no-stack-change action, or pause for "
             "operator repair, until `scripts/autopilot/gen_system_card.py --check` "
-            "passes again.\n"
+            "confirms a complete generated card.\n"
         )
 
 

@@ -19,8 +19,13 @@ from typing import Any
 
 import yaml
 
+try:
+    from state_store import BLACKLIST_PATH, migrate_legacy_blacklist
+except ImportError:  # package import in tests and tools
+    from scripts.autopilot.state_store import BLACKLIST_PATH, migrate_legacy_blacklist
+
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_BLACKLIST = SCRIPT_DIR / "failure_blacklist.yaml"
+DEFAULT_BLACKLIST = BLACKLIST_PATH
 APPROVAL_TOKEN = "ERA_FENCED_BLACKLIST_PURGE_2026_07_11"
 
 
@@ -371,6 +376,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-md", type=Path, default=None)
     parser.add_argument("--print-md", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.blacklist == BLACKLIST_PATH:
+        migrate_legacy_blacklist(args.blacklist)
 
     document = load_blacklist_document(args.blacklist)
     entries = document.get("blacklist") or []

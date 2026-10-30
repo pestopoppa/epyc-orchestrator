@@ -49,6 +49,85 @@ def test_load_blacklist_returns_empty_when_missing(tmp_path) -> None:
     assert state_store.load_blacklist(tmp_path / "no_such.yaml") == []
 
 
+def test_default_blacklist_migrates_legacy_runtime_file_once(tmp_path, monkeypatch) -> None:
+    legacy = tmp_path / "scripts" / "autopilot" / "failure_blacklist.yaml"
+    target = tmp_path / "orchestration" / "autopilot_failure_blacklist.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "blacklist:\n"
+        "  - pattern: {type: structural_experiment, flags: {x: true}}\n"
+        "    reason: legacy\n"
+    )
+    monkeypatch.setattr(state_store, "BLACKLIST_PATH", target)
+    monkeypatch.setattr(state_store, "LEGACY_BLACKLIST_PATH", legacy)
+
+    rows = state_store.load_blacklist(target)
+
+    assert [row["reason"] for row in rows] == ["legacy"]
+    assert target.read_text() == legacy.read_text()
+    legacy.write_text("blacklist: []\n")
+    assert [row["reason"] for row in state_store.load_blacklist(target)] == ["legacy"]
+
+
+def test_first_default_blacklist_append_preserves_legacy_entries_once(
+    tmp_path, monkeypatch
+) -> None:
+    legacy = tmp_path / "scripts" / "autopilot" / "failure_blacklist.yaml"
+    target = tmp_path / "orchestration" / "autopilot_failure_blacklist.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "blacklist:\n"
+        "  - pattern: {type: prompt_mutation, file: old.md}\n"
+        "    reason: legacy ban\n"
+    )
+    monkeypatch.setattr(state_store, "BLACKLIST_PATH", target)
+    monkeypatch.setattr(state_store, "LEGACY_BLACKLIST_PATH", legacy)
+
+    state_store.append_blacklist(
+        {"type": "code_mutation", "file": "new.py", "mutation": "targeted_fix"},
+        7,
+        "new failure",
+        target,
+    )
+    legacy.write_text(
+        legacy.read_text() + "  - {pattern: {type: late}, reason: late copy}\n"
+    )
+    state_store.append_blacklist(
+        {"type": "code_mutation", "file": "later.py", "mutation": "targeted_fix"},
+        8,
+        "later failure",
+        target,
+    )
+
+    entries = yaml.safe_load(target.read_text())["blacklist"]
+    reasons = [entry["reason"] for entry in entries]
+    assert reasons == ["legacy ban", "new failure", "later failure"]
+
+
+def test_default_blacklist_append_fails_closed_when_legacy_migration_fails(
+    tmp_path, monkeypatch
+) -> None:
+    legacy = tmp_path / "scripts" / "autopilot" / "failure_blacklist.yaml"
+    target = tmp_path / "orchestration" / "autopilot_failure_blacklist.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("blacklist: []\n")
+    monkeypatch.setattr(state_store, "BLACKLIST_PATH", target)
+    monkeypatch.setattr(state_store, "LEGACY_BLACKLIST_PATH", legacy)
+
+    def fail_copy(source, destination):
+        raise OSError("simulated migration failure")
+
+    monkeypatch.setattr(state_store.shutil, "copyfileobj", fail_copy)
+    with pytest.raises(RuntimeError, match="Could not migrate failure blacklist"):
+        state_store.append_blacklist(
+            {"type": "code_mutation", "file": "new.py", "mutation": "targeted_fix"},
+            7,
+            "new failure",
+            target,
+        )
+    assert not target.exists()
+
+
 def test_load_blacklist_parses_yaml(tmp_path) -> None:
     f = tmp_path / "bl.yaml"
     f.write_text(yaml.dump({"blacklist": [

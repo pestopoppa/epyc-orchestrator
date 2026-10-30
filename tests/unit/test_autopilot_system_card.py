@@ -571,6 +571,35 @@ def test_render_system_card_fails_closed_when_generator_unavailable(monkeypatch)
     assert "frontdoor-prior.gguf" not in card
 
 
+@pytest.mark.usefixtures("_declared_backend_metadata")
+def test_generator_check_validates_generation_not_tracked_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_minimal_root(tmp_path)
+    _write_minimal_descriptors(tmp_path)
+    (tmp_path / "orchestration" / "derived" / "stack_priors.yaml").unlink()
+    output = tmp_path / "scripts" / "autopilot" / "system_card.md"
+    output.parent.mkdir(parents=True)
+    output.write_text("old tracked content")
+    before = output.read_bytes()
+
+    assert gen_system_card.main(["--check", "--root", str(tmp_path)]) == 0
+    assert capsys.readouterr().err == ""
+    assert output.read_bytes() == before
+
+
+def test_generator_check_reports_generation_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(root):
+        raise RuntimeError("broken fixture")
+
+    monkeypatch.setattr(gen_system_card, "generate_system_card", fail)
+
+    assert gen_system_card.main(["--check", "--root", str(tmp_path)]) == 1
+    assert "RuntimeError: broken fixture" in capsys.readouterr().err
+
+
 @pytest.fixture
 def _declared_backend_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Owned path metadata for pure compilation; no binary or store evidence."""

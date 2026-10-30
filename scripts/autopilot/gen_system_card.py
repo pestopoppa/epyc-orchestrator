@@ -352,6 +352,25 @@ def write_system_card(root: Path | str = DEFAULT_ROOT, output: Path | None = Non
     return out_path
 
 
+_REQUIRED_CARD_SECTIONS = (
+    "## Runtime State",
+    "## Active Model-Serving Roles",
+    "## Evaluation Instrument",
+    "## Baselines",
+    "## Eval Trust Boundary",
+    "## Generated-Card Rules",
+)
+
+
+def _validate_generated_card(text: str) -> str | None:
+    if not text.strip():
+        return "generator produced an empty system card"
+    missing = [section for section in _REQUIRED_CARD_SECTIONS if section not in text]
+    if missing:
+        return "generator omitted required sections: " + ", ".join(missing)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
@@ -360,20 +379,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stdout", action="store_true")
     args = parser.parse_args(argv)
 
-    text = generate_system_card(args.root)
-    output = args.output or (args.root / "scripts" / "autopilot" / "system_card.md")
+    try:
+        text = generate_system_card(args.root)
+    except Exception as exc:
+        if args.check:
+            print(f"system card generation failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        raise
+
+    if args.check:
+        error = _validate_generated_card(text)
+        if error:
+            print(error, file=sys.stderr)
+            return 1
+        return 0
     if args.stdout:
         print(text, end="")
         return 0
-    if args.check:
-        try:
-            current = output.read_text()
-        except OSError:
-            current = ""
-        if current != text:
-            print(f"{output} is stale; run gen_system_card.py", file=sys.stderr)
-            return 1
-        return 0
+    output = args.output or (args.root / "scripts" / "autopilot" / "system_card.md")
     output.write_text(text)
     print(output)
     return 0

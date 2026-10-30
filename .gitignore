@@ -124,6 +124,8 @@ orchestration/autopilot_journal_*
 orchestration/autopilot_plots/
 orchestration/autopilot_rejected_mutations.jsonl
 orchestration/autopilot_short_term_memory.md
+orchestration/autopilot_failure_blacklist.yaml
+orchestration/.autopilot_failure_blacklist.yaml.migration.lock
 orchestration/autopilot_state.json*
 orchestration/autopilot_state.pre-*.json
 # Eval-instrument identity ledger (2026-08-04): per-core_id content hash + tier mix, written

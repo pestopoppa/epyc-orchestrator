@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -2816,6 +2817,7 @@ def main(argv: list[str] | None = None) -> int:
             xmas_table_path=args.xmas_table.expanduser().resolve(),
             xmas_ab_root=args.xmas_ab_root.expanduser().resolve(),
         )
+        report["generated_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     except Exception as exc:
         print(f"failed to build Fable5 gate report: {exc}", file=sys.stderr)
         return 2

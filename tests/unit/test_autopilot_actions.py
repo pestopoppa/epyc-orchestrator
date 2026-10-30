@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -3861,6 +3862,30 @@ def test_model_gate_advisory_renders_latest_next_actions(tmp_path) -> None:
     assert "canary_role_sample_deficit=30" in text
     assert "P0 blocked run_ds_e1_kv_measurements" in text
     assert "blocked_by=active AutoPilot process 123" in text
+
+
+def test_model_gate_advisory_uses_generated_time_over_checkout_mtime(tmp_path, monkeypatch) -> None:
+    old = tmp_path / "model_gate_report_old.json"
+    new = tmp_path / "model_gate_report_new.json"
+    old.write_text(json.dumps({"generated_at": "2020-01-01T00:00:00Z", "ready": False}))
+    new.write_text(json.dumps({"generated_at": "2026-10-26T00:00:00Z", "ready": True}))
+    fixed_now = datetime(2026, 10, 27, 12, 0, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(autopilot, "datetime", FixedDateTime)
+    monkeypatch.setattr(autopilot, "MODEL_GATE_ADVISORY_MAX_AGE_S", 3600)
+    now = fixed_now.timestamp()
+    os.utime(old, (now + 60, now + 60))
+    os.utime(new, (now - 60, now - 60))
+
+    assert autopilot._latest_model_gate_report_path(tmp_path) == new
+    text = autopilot._build_model_gate_advisory(reports_dir=tmp_path)
+    assert "model_gate_report_new.json" in text
+    assert "freshness=stale" in text
 
 
 # ----- draft_critique: rejected-draft feedback (req #3) -----

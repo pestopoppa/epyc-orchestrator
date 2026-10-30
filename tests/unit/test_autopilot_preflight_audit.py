@@ -366,7 +366,8 @@ def test_audit_blacklist_detects_superseded_corrupted_sources(
     orchestration_dir = tmp_path / "orchestration"
     script_dir.mkdir(parents=True)
     orchestration_dir.mkdir()
-    (script_dir / "failure_blacklist.yaml").write_text(
+    blacklist_path = orchestration_dir / "autopilot_failure_blacklist.yaml"
+    blacklist_path.write_text(
         """
 blacklist:
   - reason: manual
@@ -390,7 +391,7 @@ blacklist:
     )
     monkeypatch.setattr(_MOD, "SCRIPT_DIR", script_dir)
 
-    assert _MOD.audit_blacklist() is False
+    assert _MOD.audit_blacklist(blacklist_path=blacklist_path) is False
 
 
 def test_archive_authority_diagnostic_matches_reconstructed_state() -> None:

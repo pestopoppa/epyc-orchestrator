@@ -735,12 +735,23 @@ def audit_question_pool() -> bool:
     return all_ok
 
 
-def audit_blacklist() -> bool:
+def audit_blacklist(*, blacklist_path: Path | None = None) -> bool:
     """Check blacklist is clean of entries sourced from poisoned trials."""
     _header("7. Failure Blacklist")
     import yaml
 
-    bl_path = SCRIPT_DIR / "failure_blacklist.yaml"
+    if blacklist_path is None:
+        try:
+            from state_store import BLACKLIST_PATH, migrate_legacy_blacklist
+        except ImportError:  # package import in tests and tools
+            from scripts.autopilot.state_store import (
+                BLACKLIST_PATH,
+                migrate_legacy_blacklist,
+            )
+
+        blacklist_path = BLACKLIST_PATH
+        migrate_legacy_blacklist(blacklist_path)
+    bl_path = blacklist_path
     journal_path = SCRIPT_DIR.parents[1] / "orchestration" / "autopilot_journal.jsonl"
     if not bl_path.exists():
         return _check("Blacklist file exists", False)

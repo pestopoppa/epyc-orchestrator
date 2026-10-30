@@ -9,11 +9,13 @@ paths via thin wrappers.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import math
 import os
 import re
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,6 +40,10 @@ except ImportError:  # pragma: no cover - package-relative fallback
     )
 
 log = logging.getLogger("autopilot")
+
+ORCH_ROOT = Path(__file__).resolve().parents[2]
+BLACKLIST_PATH = ORCH_ROOT / "orchestration" / "autopilot_failure_blacklist.yaml"
+LEGACY_BLACKLIST_PATH = Path(__file__).resolve().parent / "failure_blacklist.yaml"
 
 LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST = {"seed_batch", "deep_eval", "distill_knowledge"}
 OBSERVATIONAL_ACTION_BLACKLIST_DENYLIST = {"deep_eval"}
@@ -171,8 +177,42 @@ def save_state(state_path: Path, state: dict[str, Any]) -> None:
     _record_state_ownership_write(state_path, state)
 
 
+def migrate_legacy_blacklist(blacklist_path: Path = BLACKLIST_PATH) -> None:
+    """Copy the tracked legacy gate into its ignored runtime-state location once."""
+    if blacklist_path != BLACKLIST_PATH or blacklist_path.exists():
+        return
+    if not LEGACY_BLACKLIST_PATH.exists():
+        return
+    try:
+        blacklist_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = blacklist_path.with_name(f".{blacklist_path.name}.migration.lock")
+        with lock_path.open("a") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if blacklist_path.exists():
+                return
+            tmp_path = blacklist_path.with_name(
+                f".{blacklist_path.name}.migration.{os.getpid()}.tmp"
+            )
+            try:
+                with (
+                    LEGACY_BLACKLIST_PATH.open("rb") as source,
+                    tmp_path.open("wb") as migrated,
+                ):
+                    shutil.copyfileobj(source, migrated)
+                    migrated.flush()
+                    os.fsync(migrated.fileno())
+                os.replace(tmp_path, blacklist_path)
+            finally:
+                tmp_path.unlink(missing_ok=True)
+        log.info("Migrated legacy failure blacklist to %s", blacklist_path)
+    except OSError as exc:
+        # Never report a successful empty blacklist when migration fails.
+        raise RuntimeError(f"Could not migrate failure blacklist to {blacklist_path}") from exc
+
+
 def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:
     """Load failure blacklist from YAML at `blacklist_path`."""
+    migrate_legacy_blacklist(blacklist_path)
     if not blacklist_path.exists():
         return []
     try:
@@ -649,6 +689,11 @@ def append_blacklist(
     if ttl is not None and ttl > 0:
         entry["ttl_days"] = ttl
         entry["expires_at"] = (now + timedelta(days=ttl)).isoformat()
+
+    # A rollback may be the first blacklist operation after deploying the new
+    # runtime path. Migrate before reading so the first append preserves legacy
+    # bans instead of replacing them with only the new entry.
+    migrate_legacy_blacklist(blacklist_path)
 
     data = {"blacklist": []}
     if blacklist_path.exists():

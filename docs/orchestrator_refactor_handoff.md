@@ -29,7 +29,7 @@ Unrelated runtime artifacts should be left alone:
 
 - `orchestration/repl_memory/sessions/embeddings.faiss`
 - `orchestration/repl_memory/sessions/id_map.npy`
-- `scripts/autopilot/failure_blacklist.yaml`
+- `scripts/autopilot/failure_blacklist.yaml` (legacy seed retained for one-time migration)
 - `scripts/autopilot/short_term_memory.md`
 
 Do not revert those files unless the user explicitly asks.
@@ -147,7 +147,8 @@ across stack, autopilot, retriever, and dashboard.
   `load_blacklist`, `check_blacklist`, `append_blacklist`,
   `load_model_signatures`, `format_model_signatures` — all parameterized
   on Path objects.
-- `autopilot.py` keeps thin wrappers supplying STATE_PATH/BLACKLIST_PATH
+- `autopilot.py` keeps thin wrappers supplying STATE_PATH and Claude-CLI cwd; `state_store.py`
+  owns the canonical blacklist runtime path and migrates the legacy file once
   and the Claude-CLI cwd, plus `_apply_params` lazy lookup so existing
   monkeypatch-based tests keep working.
 
