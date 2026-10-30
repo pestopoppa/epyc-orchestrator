@@ -1268,12 +1268,16 @@ def _stack_manifest_registry_warnings(config: StackChangePipelineConfig) -> list
 
 
 def _fresh_capacity_import(repo_root: Path) -> subprocess.CompletedProcess:
-    """Seam for tests: import stack_manifest in a NEW interpreter, as every
-    `orchestrator_stack.py` command does, so its import-time capacity gate reads the
-    lean registry as it is on disk NOW."""
+    """Validate the newly compiled lean in a fresh interpreter.
+
+    Import alone is deliberately safe for oversized lineups; repair/status tools
+    must remain available. The explicit call preserves the fail-closed check.
+    """
     return subprocess.run(
         [sys.executable, "-c",
-         "import sys; sys.path.insert(0, sys.argv[1]); import scripts.server.stack_manifest",
+         "import sys; sys.path.insert(0, sys.argv[1]); "
+         "from scripts.server.stack_manifest import validate_serving_shape_capacity; "
+         "validate_serving_shape_capacity()",
          str(repo_root)],
         cwd=repo_root,
         text=True,
@@ -1284,15 +1288,7 @@ def _fresh_capacity_import(repo_root: Path) -> subprocess.CompletedProcess:
 
 
 def _serving_shape_capacity_step(config: StackChangePipelineConfig) -> PipelineStep:
-    """The import-time VRAM/host capacity gate, re-run on the lean this run produced.
-
-    STACKCHG-DFLASH2-20261003: `stack_manifest.validate_serving_shape_capacity()` runs
-    at MODULE IMPORT. This pipeline imports stack_manifest before `update` rewrites the
-    lean, so an `update` that compiles an over-capacity lineup reported every step
-    green while every later `orchestrator_stack.py` command (status, reload, start)
-    died at import. Measured on the DFlash2 candidate with Qwen3-VL still on the card:
-    `update` green, fresh import "ROCm0 OVERSUBSCRIBED by 3.16 GiB".
-    """
+    """Re-run the explicit VRAM/host capacity gate on this run's compiled lean."""
     default_lean = config.repo_root / "orchestration" / "model_registry.yaml"
     manifest = config.repo_root / "scripts" / "server" / "stack_manifest.py"
     if config.lean_registry.resolve() != default_lean.resolve() or not manifest.exists():
@@ -1313,7 +1309,7 @@ def _serving_shape_capacity_step(config: StackChangePipelineConfig) -> PipelineS
         return PipelineStep(
             name="serving_shape_capacity",
             status="ok",
-            details=["fresh-process stack_manifest import: capacity gate passed on "
+            details=["fresh-process serving capacity validation passed on "
                      f"{default_lean}"],
         )
     tail = (result.stderr or result.stdout or "").strip().splitlines()
@@ -1321,8 +1317,7 @@ def _serving_shape_capacity_step(config: StackChangePipelineConfig) -> PipelineS
     return PipelineStep(
         name="serving_shape_capacity",
         status="failed",
-        errors=[f"stack_manifest import fails on the compiled lean (every "
-                f"orchestrator_stack.py command would die at import): {_clip_output(reason)}"],
+        errors=[f"serving capacity validation fails on the compiled lean: {_clip_output(reason)}"],
     )
 
 

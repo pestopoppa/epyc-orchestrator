@@ -46,6 +46,7 @@ from scripts.server.stack_manifest import (
     _filter_by_numa_mode,
     validate_against_registry,
     validate_model_paths,
+    validate_serving_shape_capacity,
 )
 from scripts.server.stack_paths import (
     _HEALTH_SERVER_STARTUP,
@@ -1554,8 +1555,20 @@ def _start_registry_prelude_body(
     return 0
 
 
+def _capacity_launch_gate() -> bool:
+    """Refuse serving mutations while leaving status/repair commands usable."""
+    try:
+        validate_serving_shape_capacity()
+    except ValueError as exc:
+        print(f"[REFUSED] {exc}")
+        return False
+    return True
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
+    if not _capacity_launch_gate():
+        return 2
     # SS-BENCH-GATE-b: --allow-during-bench flows into the per-spawn placement
     # guard (the CLI-level guard already exited 2 without it when a bench runs).
     bench_force = bool(getattr(args, "allow_during_bench", False))
@@ -2273,6 +2286,8 @@ def _diag_override_target(component: str) -> tuple[int, list[str], str] | str:
 
 def cmd_reload(args: argparse.Namespace) -> int:
     """Reload components."""
+    if not _capacity_launch_gate():
+        return 2
     # SS-BENCH-GATE-b: same force plumbing as cmd_start — the reload that
     # spawned the incident's sidecar must honor --allow-during-bench per-spawn.
     bench_force = bool(getattr(args, "allow_during_bench", False))

@@ -318,7 +318,7 @@ def _assert_launcher_with_synthetic_host(assertions: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_fresh_launcher_import_keeps_real_host_capacity_guard() -> None:
+def test_fresh_launcher_explicit_check_keeps_real_host_capacity_guard() -> None:
     """The unpatched subprocess observes its own RAM and retains the guard."""
     env = dict(os.environ)
     env.update(
@@ -338,6 +338,7 @@ def test_fresh_launcher_import_keeps_real_host_capacity_guard() -> None:
             )
             try:
                 from scripts.server import orchestrator_stack
+                orchestrator_stack.validate_serving_shape_capacity()
             except ValueError as error:
                 assert "device host (CPU RAM) OVERSUBSCRIBED" in str(error)
                 assert f"{actual_gib:.2f} GiB MemTotal" in str(error)

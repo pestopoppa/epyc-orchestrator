@@ -124,6 +124,7 @@ from scripts.server.stack_manifest import (
     VISION_WORKER_MODEL,
     WORKER_POOL_MODELS,
     resolve_slots,
+    validate_serving_shape_capacity,
 )
 from scripts.server.stack_paths import (
     _HEALTH_SERVER_STARTUP,
@@ -1935,6 +1936,7 @@ def start_server(
     branch strips the allow-listed diagnostic keys from the inherited env first, so a
     launch without an override always runs the declared env (the restore).
     """
+    validate_serving_shape_capacity()
     if env_override and not embedding_mode:
         raise ValueError("env_override is only honoured for embedders (embedding_mode=True)")
     if diag_env_override:
@@ -2581,6 +2583,7 @@ def start_orchestrator(
     bench_force: bool = False,
 ) -> ProcessInfo | None:
     """Start the orchestrator API."""
+    validate_serving_shape_capacity()
     # A unit test that misses one lifecycle monkeypatch must fail inside pytest,
     # never escape as a long-lived production listener.  On 2026-08-05
     # test_cmd_start_infers_missing_numa_mode_from_realized_fleet launched the
@@ -3058,6 +3061,7 @@ def _embedding_spawn_prefix(
 
 def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | None:
     """Start one declared auxiliary service. Returns None on any failure."""
+    validate_serving_shape_capacity()
     service = AUX_SERVICES.get(name)
     if service is None:
         print(f"    [FAIL] unknown aux service {name!r}")

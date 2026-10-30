@@ -166,7 +166,7 @@ def test_reexec_helper_is_still_available_for_the_entry_point(fit_clone: Path) -
     assert proc.stderr == ""
 
 
-def test_host_capacity_guard_refuses_oversized_fixture(tmp_path: Path) -> None:
+def test_explicit_host_capacity_guard_refuses_oversized_fixture(tmp_path: Path) -> None:
     private_parent = tmp_path
     clone = materialize_source_clone(
         REPO_ROOT,
@@ -174,7 +174,9 @@ def test_host_capacity_guard_refuses_oversized_fixture(tmp_path: Path) -> None:
         variant="oversized",
         project_venv_python=VENV_PY,
     )
-    proc = _run_probe(clone, _import_code(clone), [])
+    proc = _run_probe(
+        clone, _import_code(clone, "m.validate_serving_shape_capacity()"), []
+    )
     assert proc.returncode != 0, "oversized synthetic lineup unexpectedly passed host capacity guard"
     assert proc.stdout == ""
     assert "Declared serving_shape lineup does not fit the hardware" in proc.stderr

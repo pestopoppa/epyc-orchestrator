@@ -1744,10 +1744,11 @@ def validate_serving_shape_capacity() -> None:
         )
 
 
-# Validate at module load (fails fast on misconfiguration)
+# Pure declaration validation stays at import; hardware capacity is checked
+# explicitly by the pipeline and serving launch paths so status/repair can load
+# an oversized lineup.
 _validate_role_classification()
 validate_declaration_parity()
-validate_serving_shape_capacity()
 
 # Computed server lists. Single source of truth: ROLE_LAUNCH_META + NUMA_CONFIG.
 HOT_SERVERS, WARM_SERVERS = _build_servers_from_classification()
