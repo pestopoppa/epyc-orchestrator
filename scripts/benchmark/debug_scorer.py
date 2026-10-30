@@ -735,6 +735,36 @@ def _extract_multiple_choice_text_index(answer: str, choices: list[Any]) -> int 
     return max(matches)[2]
 
 
+def _prepend_code_preamble(code: str, preamble: str) -> str:
+    """Keep valid future imports before the scorer's runtime setup.
+
+    A future import has no runtime effect before the parent-death guard, but
+    Python requires it before any ordinary statement. Never repair invalid code.
+    """
+    try:
+        module = ast.parse(code)
+        futures = [
+            node for node in module.body
+            if isinstance(node, ast.ImportFrom) and node.module == "__future__"
+        ]
+        if futures:
+            compile(code, "<scorer-solution>", "exec", dont_inherit=True)
+            lines = code.splitlines(keepends=True)
+            last = futures[-1]
+            # AST columns are UTF-8 byte offsets. Split at the statement, not
+            # the line: a semicolon may put user code beside the future import.
+            cut = sum(len(line.encode()) for line in lines[:last.end_lineno - 1])
+            cut += last.end_col_offset
+            encoded = code.encode()
+            tail = encoded[cut:].decode()
+            if tail.lstrip(" \t").startswith(";"):
+                tail = tail.lstrip(" \t")[1:].lstrip(" \t")
+            return encoded[:cut].decode() + "\n" + preamble + tail
+    except (SyntaxError, ValueError):
+        pass
+    return preamble + code
+
+
 def _score_stdin_program(code: str, test_code: str, preamble: str, timeout: int) -> bool:
     """Run a stdin/stdout program against TEST_CASES.
 
@@ -756,7 +786,7 @@ def _score_stdin_program(code: str, test_code: str, preamble: str, timeout: int)
     if not cases:
         return False
 
-    full_code = preamble + code
+    full_code = _prepend_code_preamble(code, preamble)
 
     try:
         # Benchmark test code can create relative files (for example BCB190's
@@ -875,7 +905,7 @@ def _score_code_execution(answer: str, expected: str, config: dict[str, Any]) ->
         return False
 
     # Build full test script
-    full_code = _PARENT_DEATH_GUARD + "\n" + _TYPING_PREAMBLE + code
+    full_code = _prepend_code_preamble(code, _PARENT_DEATH_GUARD + "\n" + _TYPING_PREAMBLE)
     if test_code:
         full_code += "\n\n" + test_code
         if _has_unittest_case(test_code) and "unittest.main" not in test_code:
@@ -1966,6 +1996,22 @@ def _extract_code_block(text: str, language: str = "python") -> str | None:
         match = re.search(pat, text, re.DOTALL)
         if match:
             return match.group(1).strip()
+
+    # A complete raw Python module may contain imports, decorators and several
+    # definitions separated by blank lines. Preserve it before the snippet
+    # fallback below, which extracts just the first definition from prose.
+    stripped = text.strip()
+    if language == "python":
+        try:
+            module = ast.parse(stripped)
+        except (SyntaxError, ValueError):
+            pass
+        else:
+            if any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                for node in module.body
+            ):
+                return stripped
 
     # Try to find a def/class statement (Python-specific)
     if language == "python":
