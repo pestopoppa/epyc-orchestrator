@@ -3718,6 +3718,25 @@ def test_prior_planner_decision_digest_handles_missing_archive(tmp_path) -> None
     assert "none yet" in text
 
 
+def test_prior_planner_decision_digest_labels_legacy_kind_unknown(tmp_path) -> None:
+    archive = tmp_path / "planner_archive.jsonl"
+    archive.write_text(
+        '{"type":"planner_coordinator","action_type":"seed_batch",'
+        '"draft_provider":"claude","critic_provider":"codex",'
+        '"critique_decision":"approve","degraded":false}\n'
+        '{"type":"planner_coordinator","action_type":"numeric_trial",'
+        '"draft_provider":"claude","critic_provider":"codex",'
+        '"critique_decision":"reject","critique_kind":"proposal_filter",'
+        '"degraded":false}\n'
+    )
+
+    text = autopilot._build_prior_planner_decision_digest(archive, limit=2)
+
+    assert "kind=proposal_filter" in text
+    assert "kind=unknown_legacy" in text
+    assert "kind=validation" not in text
+
+
 def test_repo_readiness_advisory_disabled_without_env(monkeypatch) -> None:
     monkeypatch.delenv(autopilot.REPO_READINESS_PICKUP_ENV, raising=False)
 

@@ -1953,6 +1953,15 @@ def _archive_decision(
             "fallback_reason": decision.fallback_reason,
             "action_type": (decision.action or {}).get("type"),
             "critique_decision": critique.decision if critique else "",
+            # Advisory taxonomy only: a valid planner critique filters proposals;
+            # it is not a validation result. Keep no-verdict rows explicitly unknown.
+            "critique_kind": (
+                "proposal_filter"
+                if critique
+                and not critique.parse_error
+                and critique.decision in {"approve", "revise", "reject"}
+                else "unknown"
+            ),
             "critique_confidence": critique.confidence if critique else 0.0,
             "critique_issues": critique.issues if critique else [],
             "draft_action": decision.draft_action,
@@ -2027,6 +2036,13 @@ def _critique_provider_event(
     return {
         "stage": stage,
         "role": result.role or "critique",
+        "critique_kind": (
+            "proposal_filter"
+            if critique
+            and not critique.parse_error
+            and critique.decision in {"approve", "revise", "reject"}
+            else "unknown"
+        ),
         "provider": result.provider,
         "ok": bool(result.ok),
         "text_chars": len(result.text or ""),

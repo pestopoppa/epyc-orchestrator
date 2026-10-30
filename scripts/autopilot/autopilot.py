@@ -5025,7 +5025,8 @@ def _build_prior_planner_decision_digest(
                 f"  - action={record.get('action_type') or '?'} "
                 f"draft={record.get('draft_provider') or '?'} "
                 f"critic={record.get('critic_provider') or 'none'} "
-                f"verdict={critique} status={degraded}"
+                f"verdict={critique} kind={record.get('critique_kind') or 'unknown_legacy'} "
+                f"status={degraded}"
             )
             if fallback:
                 line += f" fallback={fallback[:120]}"

@@ -19,6 +19,39 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 planner_providers = importlib.import_module("planner_providers")
 
 
+def test_planner_tap_start_marks_critic_as_advisory_proposal_filter() -> None:
+    assert planner_providers._planner_tap_start_line("local_worker", "critique") == (
+        "PLANNER provider=local_worker role=critique kind=proposal_filter start\n"
+    )
+    assert planner_providers._planner_tap_start_line("local_frontdoor", "draft") == (
+        "PLANNER provider=local_frontdoor role=draft start\n"
+    )
+
+
+def test_critic_provider_archive_records_advisory_kind_only_for_critic_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_providers, "_append_planner_archive", records.append)
+    critic_result = planner_providers.PlannerProviderResult(
+        provider="codex", role="critique", text="approve", ok=True
+    )
+    draft_result = planner_providers.PlannerProviderResult(
+        provider="claude", role="draft", text="seed", ok=True
+    )
+
+    planner_providers._archive_codex_call("prompt", critic_result, [])
+    planner_providers._archive_codex_call("prompt", draft_result, [])
+    planner_providers._archive_local_call(
+        "prompt", {"model": "local"}, critic_result, {"choices": []}, url="http://local"
+    )
+
+    assert records[0]["critique_kind"] == "proposal_filter"
+    assert "critique_kind" not in records[1]
+    assert "validation" not in records[0]["critique_kind"]
+    assert records[2]["critique_kind"] == "proposal_filter"
+
+
 class FakePlannerProvider:
     supports_resume = False
 

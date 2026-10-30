@@ -20,7 +20,8 @@ DEFAULT_STALE_AFTER_S = 7_200.0
 LOCAL_PROVIDER_PREFIX = "local_"
 START_RE = re.compile(
     r"^\[(?P<timestamp>[^\]]+)\]\s+PLANNER\s+"
-    r"provider=(?P<provider>\S+)\s+role=(?P<role>\S+)\s+start",
+    r"provider=(?P<provider>\S+)\s+role=(?P<role>\S+)"
+    r"(?:\s+kind=(?P<kind>\S+))?\s+start",
     re.MULTILINE,
 )
 END_RE = re.compile(
@@ -145,6 +146,15 @@ def _parse_event_block(block: str) -> dict[str, Any] | None:
         "timestamp_s": _parse_event_timestamp(start.group("timestamp")),
         "provider": provider,
         "role": role,
+        "critique_kind": (
+            "proposal_filter"
+            if role == "critique" and start.group("kind") == "proposal_filter"
+            else (
+                ("unknown" if start.group("kind") else "unknown_legacy")
+                if role == "critique"
+                else None
+            )
+        ),
         "status": "started",
         "retry_count": 0,
         "result_chars": None,
@@ -306,6 +316,7 @@ def build_report(
             "providers": {},
             "local": {},
             "critic_decisions": {},
+            "critic_kinds": {},
             "draft_actions": {},
             "recent_issues": [],
         }
@@ -348,6 +359,7 @@ def build_report(
 
     providers = _provider_stats(events)
     critic_decisions: dict[str, int] = {}
+    critic_kinds: dict[str, int] = {}
     draft_actions: dict[str, int] = {}
     revised_actions: dict[str, int] = {}
     local_draft_successes = 0
@@ -371,6 +383,8 @@ def build_report(
         if not is_local:
             fallback_starts += 1
         _count_key(critic_decisions, event.get("critique_decision"))
+        if event["role"] == "critique":
+            _count_key(critic_kinds, event.get("critique_kind"))
         _count_key(draft_actions, event.get("action_type"))
         _count_key(revised_actions, event.get("revised_action_type"))
 
@@ -421,6 +435,7 @@ def build_report(
             "fallback_provider_starts": fallback_starts,
         },
         "critic_decisions": critic_decisions,
+        "critic_kinds": critic_kinds,
         "draft_actions": draft_actions,
         "revised_actions": revised_actions,
         "recent_issues": _recent_issues(events, max_issues),
@@ -450,6 +465,9 @@ def format_report(report: dict[str, Any]) -> list[str]:
     decisions = report.get("critic_decisions") or {}
     if decisions:
         lines.append(f"critic decisions: {decisions}")
+    kinds = report.get("critic_kinds") or {}
+    if kinds:
+        lines.append(f"critic kinds (advisory): {kinds}")
     return lines
 
 

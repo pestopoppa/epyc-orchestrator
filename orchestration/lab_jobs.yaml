@@ -491,6 +491,11 @@ jobs:
             type: object
             additionalProperties:
               type: integer
+          critic_kinds:
+            type: object
+            description: Advisory critique taxonomy; never a validation grade.
+            additionalProperties:
+              type: integer
           draft_actions:
             type: object
             additionalProperties:

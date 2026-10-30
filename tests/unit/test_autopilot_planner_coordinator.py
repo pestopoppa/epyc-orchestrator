@@ -562,6 +562,34 @@ def test_planner_archive_records_provider_trace(monkeypatch: pytest.MonkeyPatch)
     assert records[-1]["provider_trace"][1]["stage"] == "critique_primary"
     assert records[-1]["provider_trace"][1]["parse_ok"] is True
     assert records[-1]["provider_trace"][1]["critique_decision"] == "approve"
+    assert records[-1]["critique_kind"] == "proposal_filter"
+    assert records[-1]["provider_trace"][1]["critique_kind"] == "proposal_filter"
+    assert "validation" not in records[-1]["critique_kind"]
+
+
+def test_planner_archive_marks_nonverdict_unknown_not_as_filter_or_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(planner_coordinator, "_append_planner_archive", records.append)
+    decision = planner_coordinator.PlannerDecision(
+        action=MEMRL_NUMERIC_ACTION,
+        rationale={},
+        session_id=None,
+        canonical_text="",
+        draft_text="",
+        draft_provider="claude",
+        mode="draft_critique",
+        draft_action=MEMRL_NUMERIC_ACTION,
+        critique=planner_coordinator.PlannerCritique(
+            decision="unavailable", provider="codex", parse_error="no valid verdict"
+        ),
+    )
+
+    planner_coordinator._archive_decision(decision, {})
+
+    assert records[-1]["critique_kind"] == "unknown"
+    assert records[-1]["critique_kind"] != "validation"
 
 
 def test_vidya_receipt_separates_exposure_from_declared_reliance(

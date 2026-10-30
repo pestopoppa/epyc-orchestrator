@@ -54,6 +54,49 @@ url: http://127.0.0.1:8000/v1/chat/completions
     assert report["critic_decisions"] == {"approve": 1}
     assert report["providers"]["local_frontdoor"]["draft_successes"] == 1
     assert report["providers"]["local_worker"]["critique_successes"] == 1
+    assert report["critic_kinds"] == {"unknown_legacy": 1}
+
+
+def test_report_labels_explicit_critic_kind_and_preserves_legacy_unknown(tmp_path: Path) -> None:
+    tap = tmp_path / "planner_tap.log"
+    _write_tap(
+        tap,
+        [
+            """[2026-07-06T06:06:48] PLANNER provider=local_worker role=critique kind=proposal_filter start
+------------------------------------------------------------------------
+```json:autopilot_critique
+{"decision": "approve", "confidence": 0.9, "issues": []}
+```
+[END provider=local_worker role=critique] result_chars=100""",
+            """[2026-07-06T06:07:48] PLANNER provider=legacy_worker role=critique start
+------------------------------------------------------------------------
+```json:autopilot_critique
+{"decision": "reject", "confidence": 0.8, "issues": ["test"]}
+```
+[END provider=legacy_worker role=critique] result_chars=100""",
+            """[2026-07-06T06:08:48] PLANNER provider=bad_worker role=critique kind=validation start
+------------------------------------------------------------------------
+```json:autopilot_critique
+{"decision": "approve", "confidence": 1.0, "issues": []}
+```
+[END provider=bad_worker role=critique] result_chars=100""",
+        ],
+    )
+
+    report = reporter.build_report(
+        tap_path=tap,
+        stale_after_s=999999,
+        scope_current_process=False,
+    )
+    rendered = "\n".join(reporter.format_report(report))
+
+    assert report["critic_kinds"] == {
+        "proposal_filter": 1,
+        "unknown_legacy": 1,
+        "unknown": 1,
+    }
+    assert "critic kinds (advisory)" in rendered
+    assert "validation" not in rendered
 
 
 def test_build_report_surfaces_local_failures_and_critic_rejections(tmp_path: Path) -> None:

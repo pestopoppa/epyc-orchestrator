@@ -306,8 +306,8 @@ class CodexPlannerProvider:
                     tap,
                     f"\n{'=' * 72}\n"
                     f"[{datetime.now().isoformat(timespec='seconds')}] "
-                    f"PLANNER provider={self.name} role={role} start\n"
-                    f"prompt_chars: {len(prompt)}\n"
+                    + _planner_tap_start_line(self.name, role)
+                    + f"prompt_chars: {len(prompt)}\n"
                     f"{'-' * 72}\n",
                 )
 
@@ -487,8 +487,8 @@ class LocalPlannerProvider:
                     tap,
                     f"\n{'=' * 72}\n"
                     f"[{datetime.now().isoformat(timespec='seconds')}] "
-                    f"PLANNER provider={self.name} role={role} start\n"
-                    f"url: {self._url}\n"
+                    + _planner_tap_start_line(self.name, role)
+                    + f"url: {self._url}\n"
                     f"local_role: {self._role}\n"
                     f"prompt_chars: {len(prompt)}\n"
                     f"{'-' * 72}\n",
@@ -625,8 +625,8 @@ class LocalChatPlannerProvider:
                     tap,
                     f"\n{'=' * 72}\n"
                     f"[{datetime.now().isoformat(timespec='seconds')}] "
-                    f"PLANNER provider={self.name} role={role} start\n"
-                    f"url: {self._url}\n"
+                    + _planner_tap_start_line(self.name, role)
+                    + f"url: {self._url}\n"
                     f"request_id: {payload['request_id']}\n"
                     f"prompt_chars: {len(prompt)}\n"
                     f"{'-' * 72}\n",
@@ -1111,6 +1111,12 @@ def _tap_write(tap: Any, text: str) -> None:
         pass
 
 
+def _planner_tap_start_line(provider: str, role: str) -> str:
+    """Render advisory role metadata; a critique is a proposal filter, not validation."""
+    kind = " kind=proposal_filter" if role == "critique" else ""
+    return f"PLANNER provider={provider} role={role}{kind} start\n"
+
+
 def _close_tap(tap: Any) -> None:
     if tap is None:
         return
@@ -1227,6 +1233,7 @@ def _archive_codex_call(
             "ts_iso": datetime.now().isoformat(timespec="seconds"),
             "provider": result.provider,
             "role": result.role,
+            **({"critique_kind": "proposal_filter"} if result.role == "critique" else {}),
             "duration_s": result.duration_s,
             "ok": result.ok,
             "error": result.error,
@@ -1256,6 +1263,7 @@ def _archive_local_call(
             "ts_iso": datetime.now().isoformat(timespec="seconds"),
             "provider": result.provider,
             "role": result.role,
+            **({"critique_kind": "proposal_filter"} if result.role == "critique" else {}),
             "duration_s": result.duration_s,
             "ok": result.ok,
             "error": result.error,

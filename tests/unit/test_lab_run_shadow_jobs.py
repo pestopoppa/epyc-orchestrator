@@ -254,6 +254,7 @@ def test_production_inventory_includes_planner_provider_active_safe_job() -> Non
             },
             "local": {"draft_successes": 1, "critique_successes": 1},
             "critic_decisions": {"approve": 1},
+            "critic_kinds": {"proposal_filter": 1},
             "draft_actions": {"deep_eval": 1},
             "recent_issues": [],
         }
