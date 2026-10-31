@@ -20,6 +20,22 @@ This repo is the production substrate; the *why* lives in [epyc-root](https://gi
 
 ---
 
+## Optional UI and OCR dependencies
+
+The optional Gradio UI runs with `pip install -e '.[gradio-ui]'` followed by
+`python -m src.gradio_ui`. The separate PyTorch LightOnOCR server requires
+`pip install -e '.[lightonocr]'` and starts with
+`python -m src.services.lightonocr_server`. It is distinct from the production
+GGUF OCR sidecar. Installing the OCR extra does not download model weights.
+
+LightOnOCR requires Transformers 5; the `colbert-export` extra currently needs
+Transformers 4. Use separate environments for those two features. `uv` records
+the conflict explicitly, so `uv sync --all-extras` cannot be used; select the
+needed extras separately (for example `uv sync --extra lightonocr` in the OCR
+environment and `uv sync --extra colbert-export` in the export environment).
+
+---
+
 ## What It Does
 
 - **Multi-tier routing** with **learned classifier** (98.7% val acc, in shadow mode pending 24-48 h window): routes tasks to the right model — fast workers for simple queries, architects for complex reasoning.

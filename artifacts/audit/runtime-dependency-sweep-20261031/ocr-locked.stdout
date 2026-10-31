@@ -1,0 +1,9 @@
+python 3.12.15 (main, Oct 13 2026, 16:52:04) [GCC 15.3.0]
+torch 2.9.0+cpu /mnt/raid0/llm/tmp/codex3-dependency-sweep-20261031/torch29cpu/torch/__init__.py
+torchvision 0.24.0+cpu /mnt/raid0/llm/tmp/codex3-dependency-sweep-20261031/torch29cpu/torchvision/__init__.py
+transformers 5.22.1 /mnt/raid0/llm/tmp/codex3-dependency-sweep-20261031/transformers5/transformers/__init__.py
+pypdfium2 5.14.0 /mnt/raid0/llm/tmp/codex3-dependency-sweep-20261031/ocrdeps/pypdfium2/__init__.py
+python-multipart 0.0.32 /mnt/raid0/llm/tmp/codex3-dependency-sweep-20261031/ocrdeps/python_multipart/__init__.py
+classes LightOnOcrForConditionalGeneration LightOnOcrProcessor PixtralImageProcessor
+server_source_sha256 bef10f8685635698b8f3307cfc81b0843fa0cc734b3a76a000e79e37ec6002a0
+server_imported_no_model True

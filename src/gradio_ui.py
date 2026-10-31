@@ -4,7 +4,7 @@
     This module is not actively used. The OpenAI-compatible API
     (``/v1/chat/completions``) with external clients (Aider, etc.)
     is the preferred interaction method. Retained as an optional
-    entry point (``orchestrator-ui`` in pyproject.toml).
+    entry point (``python -m src.gradio_ui``).
 
 Provides a web interface for interacting with the orchestrator:
 - Chat with streaming responses
@@ -20,7 +20,14 @@ import json
 import logging
 from typing import Any, Generator
 
-import gradio as gr
+try:
+    import gradio as gr
+except ModuleNotFoundError as exc:
+    if exc.name != "gradio":
+        raise
+    raise ModuleNotFoundError(
+        "Gradio UI requires the optional dependency: pip install -e '.[gradio-ui]'"
+    ) from exc
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -38,9 +45,9 @@ def create_httpx_client(api_url: str) -> httpx.Client:
 
 def stream_chat_response(
     message: str,
-    history: list[list[str]],
+    history: list[dict[str, str]],
     api_url: str,
-) -> Generator[tuple[list[list[str]], str | None, dict | None], None, None]:
+) -> Generator[tuple[list[dict[str, str]], str | None, dict | None], None, None]:
     """Stream chat responses from the orchestrator API.
 
     Yields:
@@ -51,7 +58,7 @@ def stream_chat_response(
         return
 
     # Add user message to history
-    history = history + [[message, ""]]
+    history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": ""}]
 
     # Collected state
     code_artifact = None
@@ -96,14 +103,14 @@ def stream_chat_response(
 
                     elif event_type == "token":
                         content = data.get("content", "")
-                        history[-1][1] += content
+                        history[-1]["content"] += content
                         yield history, code_artifact, routing_metadata
 
                     elif event_type == "tool":
                         # Tool call - add to history
                         tool_name = data.get("name", "unknown")
                         tool_result = data.get("result", "")
-                        history[-1][1] += f"\n[Tool: {tool_name}]\n{tool_result}\n"
+                        history[-1]["content"] += f"\n[Tool: {tool_name}]\n{tool_result}\n"
                         yield history, code_artifact, routing_metadata
 
                     elif event_type == "file":
@@ -124,35 +131,35 @@ def stream_chat_response(
 
                     elif event_type == "final":
                         answer = data.get("answer", "")
-                        if answer and answer != history[-1][1]:
-                            history[-1][1] = answer
+                        if answer and answer != history[-1]["content"]:
+                            history[-1]["content"] = answer
                         yield history, code_artifact, routing_metadata
 
                     elif event_type == "error":
                         error_msg = data.get("message", "Unknown error")
-                        history[-1][1] += f"\n\n**Error:** {error_msg}"
+                        history[-1]["content"] += f"\n\n**Error:** {error_msg}"
                         yield history, code_artifact, routing_metadata
 
     except httpx.HTTPStatusError as e:
         logger.error("API HTTP error: %d - %s", e.response.status_code, e.response.text)
-        history[-1][1] = f"API Error: {e.response.status_code} - {e.response.text}"
+        history[-1]["content"] = f"API Error: {e.response.status_code} - {e.response.text}"
         yield history, None, None
     except httpx.RequestError as e:
         logger.error("Connection error: %s", e)
-        history[-1][1] = f"Connection Error: {e}"
+        history[-1]["content"] = f"Connection Error: {e}"
         yield history, None, None
 
 
 def sync_chat(
     message: str,
-    history: list[list[str]],
+    history: list[dict[str, str]],
     api_url: str,
-) -> tuple[list[list[str]], str | None, dict | None]:
+) -> tuple[list[dict[str, str]], str | None, dict | None]:
     """Non-streaming chat for fallback."""
     if not message.strip():
         return history, None, None
 
-    history = history + [[message, ""]]
+    history = history + [{"role": "user", "content": message}, {"role": "assistant", "content": ""}]
 
     try:
         with httpx.Client(base_url=api_url, timeout=300.0) as client:
@@ -162,11 +169,11 @@ def sync_chat(
             )
             response.raise_for_status()
             data = response.json()
-            history[-1][1] = data.get("answer", "No response")
+            history[-1]["content"] = data.get("answer", "No response")
             return history, None, {"turns": data.get("turns", 1)}
     except Exception as e:
         logger.error("Sync chat error: %s", e)
-        history[-1][1] = f"Error: {e}"
+        history[-1]["content"] = f"Error: {e}"
         return history, None, None
 
 
@@ -206,8 +213,7 @@ def create_ui(api_url: str = DEFAULT_API_URL) -> gr.Blocks:
                 chatbot = gr.Chatbot(
                     label="Chat",
                     height=500,
-                    show_copy_button=True,
-                    bubble_full_width=False,
+                    buttons=["copy"],
                 )
 
                 with gr.Row():
@@ -261,7 +267,7 @@ def create_ui(api_url: str = DEFAULT_API_URL) -> gr.Blocks:
                         check_health_btn = gr.Button("Check Health", size="sm")
 
         # Event handlers
-        def submit_message(message: str, history: list[list[str]], url: str):
+        def submit_message(message: str, history: list[dict[str, str]], url: str):
             """Handle message submission with streaming."""
             if not message.strip():
                 return history, None, None, ""

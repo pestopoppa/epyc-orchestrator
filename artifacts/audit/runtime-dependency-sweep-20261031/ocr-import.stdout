@@ -1,0 +1,4 @@
+3.12.15 (main, Oct 13 2026, 16:52:04) [GCC 15.3.0]
+torch 2.10.0+cu128 torchvision 0.25.0+cu128 transformers 5.22.1
+LightOnOcrForConditionalGeneration LightOnOcrProcessor PixtralImageProcessor
+pypdfium2 /mnt/raid0/llm/venv/lib/python3.12/site-packages/pypdfium2/__init__.py multipart 0.0.21

@@ -10,7 +10,15 @@ import logging
 import re
 import time
 
-import pypdfium2 as pdfium
+try:
+    import pypdfium2 as pdfium
+    import python_multipart  # noqa: F401 — FastAPI form routes require this
+except ModuleNotFoundError as exc:
+    if exc.name not in {"pypdfium2", "python_multipart"}:
+        raise
+    raise ModuleNotFoundError(
+        "LightOnOCR requires the optional dependencies: pip install -e '.[lightonocr]'"
+    ) from exc
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from PIL import Image
@@ -31,8 +39,22 @@ def get_model():
     if model is not None:
         return processor, model
 
-    import torch
-    from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
+    try:
+        import torch
+        import torchvision  # noqa: F401 — required by the Pixtral image processor
+        from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"torch", "torchvision", "transformers"}:
+            raise
+        raise ModuleNotFoundError(
+            "LightOnOCR requires the optional dependencies: pip install -e '.[lightonocr]'"
+        ) from exc
+    except ImportError as exc:
+        if exc.name != "transformers":
+            raise
+        raise ImportError(
+            "LightOnOCR requires Transformers 5.3 or newer: pip install -e '.[lightonocr]'"
+        ) from exc
 
     logger.info(f"Loading {MODEL_ID}...")
     start = time.time()
@@ -68,9 +90,9 @@ def render_pdf_page(pdf_bytes: bytes, page_num: int = 0, dpi: int = 200) -> Imag
 
 def ocr_image(image: Image.Image, output_format: str = "bbox") -> dict:
     """Run OCR on a single image."""
+    proc, mdl = get_model()
     import torch
 
-    proc, mdl = get_model()
     device = next(mdl.parameters()).device
     dtype = next(mdl.parameters()).dtype
 
