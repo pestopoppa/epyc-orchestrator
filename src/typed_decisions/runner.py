@@ -125,6 +125,12 @@ Rules:
 """
 
 
+_VALUE_ONLY_INSTRUCTIONS = """Answer every question in one JSON object with a single 'answers' key.
+Each question id must appear exactly once, with only its value key: choice, score,
+or noul. Use only the candidate labels in the catalogue. No prose or other fields.
+"""
+
+
 def run_typed_decisions(
     primitives: Any,
     *,
@@ -136,6 +142,7 @@ def run_typed_decisions(
     n_tokens: int | None = None,
     cue_style: CueStyle | str = "id_only",
     tokenize_fn: TokenizeFn | None = None,
+    value_only: bool = False,
 ) -> DecisionResult:
     """Run one typed-decision pass and return typed decisions / failures.
 
@@ -165,6 +172,9 @@ def run_typed_decisions(
             enum's value string because importing ``CueStyle`` at module scope
             here would close an import cycle (``native`` imports this module's
             validation contract).
+        value_only: For JSON shadow selection, request only selected values.
+            Decisions carry an empty probability mapping and confidence None.
+            The default retains the full distribution schema. Native mode ignores it.
         tokenize_fn: Text -> token ids seam for native-mode candidate binding
             (TD-1b). IGNORED by the JSON arm, which never tokenizes
             candidates; forwarded to the native runner, which resolves a
@@ -195,8 +205,8 @@ def run_typed_decisions(
         raise ValueError(f"unknown typed-decisions mode: {mode!r}")
     catalogue = _validated_catalogue(questions)
 
-    schema = build_response_schema(catalogue)
-    prompt = _build_prompt(state, catalogue, schema)
+    schema = build_response_schema(catalogue, value_only=value_only)
+    prompt = _build_prompt(state, catalogue, schema, value_only=value_only)
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if n_tokens is None:
         n_tokens = _default_n_tokens(catalogue)
@@ -212,7 +222,7 @@ def run_typed_decisions(
     for attempt in range(1, attempts + 1):
         call_prompt = prompt
         if failure_context is not None:
-            call_prompt = prompt + _correction_message(*failure_context)
+            call_prompt = prompt + _correction_message(*failure_context, value_only=value_only)
         raw_text = str(
             primitives.llm_call(
                 call_prompt,
@@ -251,7 +261,9 @@ def run_typed_decisions(
             prompt_sha256=prompt_sha256,
         )
 
-    decisions, answer_failures = _decisions_from_answers(parsed, catalogue, mode)
+    decisions, answer_failures = _decisions_from_answers(
+        parsed, catalogue, mode, value_only=value_only
+    )
     return DecisionResult(
         decisions=tuple(decisions),
         failures=tuple(failures + answer_failures),
@@ -294,7 +306,9 @@ def _default_n_tokens(questions: Sequence[Question]) -> int:
     )
 
 
-def _build_prompt(state: str, questions: Sequence[Question], schema: dict[str, Any]) -> str:
+def _build_prompt(
+    state: str, questions: Sequence[Question], schema: dict[str, Any], *, value_only: bool = False
+) -> str:
     """Build the canonical prompt: stable prefix + state + question catalogue.
 
     The instruction block and the schema are identical for identical
@@ -303,8 +317,9 @@ def _build_prompt(state: str, questions: Sequence[Question], schema: dict[str, A
     prompts (asserted by the prompt-stability test).
     """
     schema_text = json.dumps(schema, indent=2, sort_keys=True)
+    instructions = _INSTRUCTIONS if not value_only else _VALUE_ONLY_INSTRUCTIONS
     return (
-        f"{_INSTRUCTIONS}\n"
+        f"{instructions}\n"
         f"RESPONSE JSON SCHEMA (authoritative):\n{schema_text}\n\n"
         f"STATE:\n{neutralise_control_tokens(state)}\n\n"  # CT-12.3c: state is untrusted
         f"QUESTION CATALOG:\n{_build_catalog(questions)}\n"
@@ -335,18 +350,20 @@ def _candidate_labels(question: Question) -> list[str]:
     return ["true", "false"]
 
 
-def _correction_message(reason: str, detail: str) -> str:
+def _correction_message(reason: str, detail: str, *, value_only: bool = False) -> str:
     if reason == REASON_SCHEMA_VIOLATION:
         problem = f"the response did not match the schema ({detail})"
     elif reason == REASON_NO_JSON:
         problem = f"no single JSON object could be extracted ({detail})"
     else:
         problem = f"{reason}: {detail}"
+    requirements = "every question id present exactly once"
+    if not value_only:
+        requirements += " and every probabilities object summing to 1.0"
     return (
         f"\n\n{_CORRECTION_HEADER}: your previous reply was unusable — "
         f"{problem}. Return exactly one JSON object matching the RESPONSE JSON "
-        "SCHEMA above, with every question id present exactly once and every "
-        "probabilities object summing to 1.0."
+        f"SCHEMA above, with {requirements}."
     )
 
 
@@ -430,6 +447,8 @@ def _decisions_from_answers(
     obj: dict[str, Any],
     questions: Sequence[Question],
     mode: str,
+    *,
+    value_only: bool = False,
 ) -> tuple[list[Decision], list[ParseFailure]]:
     """Turn a schema-valid response into decisions plus per-question failures.
 
@@ -451,7 +470,7 @@ def _decisions_from_answers(
             )
             continue
         try:
-            decisions.append(_decision_from_entry(entry, question, mode))
+            decisions.append(_decision_from_entry(entry, question, mode, value_only=value_only))
         except ValueError as exc:
             failures.append(ParseFailure(REASON_INVALID_VALUE, f"question {question.id!r}: {exc}"))
     known_ids = {question.id for question in questions}
@@ -460,7 +479,28 @@ def _decisions_from_answers(
     return decisions, failures
 
 
-def _decision_from_entry(entry: Mapping[str, Any], question: Question, mode: str) -> Decision:
+def _decision_from_entry(
+    entry: Mapping[str, Any], question: Question, mode: str, *, value_only: bool = False
+) -> Decision:
+    if value_only:
+        key = {
+            QuestionKind.CHOICE: "choice",
+            QuestionKind.SCORE: "score",
+            QuestionKind.NOUL: "noul",
+        }[question.kind]
+        value = entry.get(key)
+        if question.kind is QuestionKind.CHOICE and value not in question.options:
+            raise ValueError("choice outside options")
+        if question.kind is QuestionKind.SCORE and (
+            type(value) is not int or value not in question.levels
+        ):
+            raise ValueError("score outside levels")
+        if question.kind is QuestionKind.NOUL and not isinstance(value, bool):
+            raise ValueError("noul is not boolean")
+        return Decision(
+            question_id=question.id, kind=question.kind, value=value,
+            probabilities={}, confidence=None, mode=mode,
+        )
     raw_probabilities = entry.get("probabilities")
     if not isinstance(raw_probabilities, Mapping):
         raise ValueError("'probabilities' is not an object")

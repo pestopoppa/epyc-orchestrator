@@ -262,6 +262,7 @@ def propose_shadow_typed_arguments(
                 questions=mapping.questions,
                 role=role,
                 mode=mode,
+                value_only=(mode == "json"),
             )
         calls = tuple(dict(call) for call in call_log.calls)
         if result.failures:

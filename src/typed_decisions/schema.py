@@ -50,8 +50,10 @@ _GBNF_PRIMITIVES = "\n".join(
 )
 
 
-def build_response_schema(questions: Sequence[Question]) -> dict[str, Any]:
-    """Build the Draft 2020-12 schema for one all-questions JSON response."""
+def build_response_schema(
+    questions: Sequence[Question], *, value_only: bool = False
+) -> dict[str, Any]:
+    """Build a strict all-questions schema; value_only omits confidence data."""
     questions = list(questions)
     return {
         "$schema": _JSON_SCHEMA_DRAFT,
@@ -64,7 +66,10 @@ def build_response_schema(questions: Sequence[Question]) -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": False,
                 "required": [question.id for question in questions],
-                "properties": {question.id: _answer_schema(question) for question in questions},
+                "properties": {
+                    question.id: _answer_schema(question, value_only=value_only)
+                    for question in questions
+                },
             }
         },
     }
@@ -120,23 +125,26 @@ def build_gbnf(questions: Sequence[Question]) -> str | None:
     return "\n".join(rules) + "\n"
 
 
-def _answer_schema(question: Question) -> dict[str, Any]:
+def _answer_schema(question: Question, *, value_only: bool = False) -> dict[str, Any]:
     if question.kind is QuestionKind.CHOICE:
         return _object_answer_schema(
             value_key="choice",
             value_schema={"type": "string", "enum": list(question.options)},
             labels=list(question.options),
+            value_only=value_only,
         )
     if question.kind is QuestionKind.SCORE:
         return _object_answer_schema(
             value_key="score",
             value_schema={"type": "integer", "enum": list(question.levels)},
             labels=[str(level) for level in question.levels],
+            value_only=value_only,
         )
     return _object_answer_schema(
         value_key="noul",
         value_schema={"type": "boolean"},
         labels=["true", "false"],
+        value_only=value_only,
     )
 
 
@@ -145,7 +153,15 @@ def _object_answer_schema(
     value_key: str,
     value_schema: dict[str, Any],
     labels: list[str],
+    value_only: bool = False,
 ) -> dict[str, Any]:
+    if value_only:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": [value_key],
+            "properties": {value_key: value_schema},
+        }
     return {
         "type": "object",
         "additionalProperties": False,

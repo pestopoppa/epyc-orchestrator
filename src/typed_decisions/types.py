@@ -18,10 +18,11 @@ Design rules:
       ``bool`` for noul; ``kind`` says how to read the Python type.
     * ``Decision.probabilities`` is a mapping (candidate label -> float)
       normalized to sum to 1, computed by
-      ``confidence.normalize_probabilities``.
+      ``confidence.normalize_probabilities``. An empty mapping means no
+      distribution was requested or measured (value-only shadow JSON).
     * ``Decision.confidence`` is a LOCAL uncertainty statistic derived from
       that distribution, not a calibrated probability (see
-      ``confidence.py``).
+      ``confidence.py``); ``None`` means unavailable, never zero.
     * ``mode`` records the decoding path that produced the decision
       (``"json"`` today, ``"native"`` from TD-1a).
 """
@@ -148,7 +149,7 @@ class Decision:
     kind: QuestionKind
     value: object
     probabilities: Mapping[str | int, float]
-    confidence: float
+    confidence: float | None
     mode: str
     token_logprob: float | None = None
     native_key: str | None = None
