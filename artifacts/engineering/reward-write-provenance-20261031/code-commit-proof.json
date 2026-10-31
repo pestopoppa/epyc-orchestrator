@@ -1,0 +1,46 @@
+{
+  "implements_sha": "7e67e78ce5e6cf3979420ef76d2fab038fd844fd",
+  "implementation": {
+    "commit": "7e67e78ce5e6cf3979420ef76d2fab038fd844fd",
+    "parent": "8aedb0442a0ba92bdb5be7a9cba605437252b05a",
+    "tree": "2e618610d24e5ecbf6a726120c13d80952910d28",
+    "native_pii_receipt_sha256": "b5d67ab7cb17b32e7391943c2865a1f845aae439808abfb80afe7a91a6377cff",
+    "native_pii_record_seal": "9c483264c8a3f6f05cc46489f120e116eb63720d1ef2ed16254adeb97c87f1e4",
+    "native_pii_counts": {
+      "blocked": 0,
+      "excluded": 3,
+      "scanned": 35,
+      "selected": 38
+    },
+    "native_pii_checks": {
+      "frozen_index_unchanged": true,
+      "head_unchanged": true,
+      "live_index_unchanged": true,
+      "logs_complete": true,
+      "policy_unchanged": true,
+      "proofs_valid": true
+    },
+    "native_pii_value": true,
+    "native_hook_log_sha256": "f1bb8110a4b66ee44f4eeadadbba1c33912a9546f71c3f62eeb756a5e618be80"
+  },
+  "source_sha256": {
+    "scripts/benchmark/seeding_types.py": "4eecfb9946c2f874b787cc49d540169725cc39c90d9ed914d73f87ff6917ed47",
+    "scripts/benchmark/seeding_eval.py": "b9da35abedb3609bf9ddc4adc6eea6170d5cd0611a65a9473e10d1f6f04a6e04",
+    "scripts/benchmark/seeding_injection.py": "2b13f6cd9a0961b50c69b0fec742968df6bdda7b84773ef7d8873b9e38b7d543",
+    "scripts/benchmark/seeding_rewards.py": "77a220b407c6bde07dccc5a15a3284a3800026d60b137418302d26dfbb80dd8a",
+    "scripts/benchmark/seeding_legacy.py": "4cd2cce5a4dd01134752c8bcf6aa1c3cfbcdcaa6fdf6f53cb072ca13420f0724",
+    "orchestration/repl_memory/q_scorer.py": "0b07bc1a9109fc77c36d7f18d1b902caa8a5d1056baadd25611d85e4f46a1a68",
+    "orchestration/repl_memory/reward_provenance.py": "a3e1d5c0cbf723b6dea78c85ca33875ee36110f63bf5b361478a3d287c58f10b",
+    "tests/unit/test_seeding_reward_provenance.py": "519b7f45cc622e5da61dc4d910af1e2a1fc4035e687dceb1a39ac34ad0dae7be"
+  },
+  "approved_patch_sha256": "bfc8177facaddd6cc5c818118ec759348d2c4743ca85f67a7907359011fd64a7",
+  "tests_passed": 122,
+  "test_junit_sha256": "0989d1bde5409dd0a6e70f7cf9c2149182711144bcb601d78455df7c5bb0064f",
+  "source_pin_manifest_sha256": "7026bbea2617af49310363d37edce87dfa25f33ef7962ee616b5feb99d00df42",
+  "qualified_base": "4639d190b957c2e594b89423cdc8afaed2a36048",
+  "integration_base": "8aedb0442a0ba92bdb5be7a9cba605437252b05a",
+  "integration_controls_passed": 1,
+  "fresh_main_base": "8aedb0442a0ba92bdb5be7a9cba605437252b05a",
+  "pinned_source_byte_equivalence_to_integration": true,
+  "scope": "model-free source controls; no inference, runtime reload, live-store mutation, historical regrade, or new ladder"
+}
