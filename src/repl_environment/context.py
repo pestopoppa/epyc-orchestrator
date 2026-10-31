@@ -564,18 +564,37 @@ class _ContextMixin:
         step (these sites bypass ``_invoke_tool``).
         """
         steps = getattr(self, "_step_events", None)
-        if steps is None:
+        dep = getattr(self, "_dependency_log", None)
+        if steps is None and dep is None:
             return self.tool_registry.invoke(tool_name, self.role, caller_type="direct", **kwargs)
-        import time as _time
+        t0 = None
+        if steps is not None:
+            import time as _time
 
-        t0 = _time.perf_counter()
+            t0 = _time.perf_counter()
+            steps.enter()
         result: Any = None
-        steps.enter()
+        ok = True
         try:
             result = self.tool_registry.invoke(tool_name, self.role, caller_type="direct", **kwargs)
             return result
+        except Exception:
+            ok = False
+            raise
         finally:
-            self._observe_step(steps, tool_name, kwargs, result, t0)
+            if steps is not None:
+                self._observe_step(steps, tool_name, kwargs, result, t0)
+            # HIL-15: combined builtins call the registry here, bypassing _invoke_tool
+            # and producing only an aggregate ExplorationLog event. Record the actual
+            # native call args/result so retrieved ids retain their call provenance.
+            if dep is not None:
+                try:
+                    dep.observe(
+                        tool_name, kwargs, getattr(result, "output", result),
+                        ok=bool(getattr(result, "ok", ok)),
+                    )
+                except Exception:  # telemetry must never fail a tool call
+                    pass
 
     def _dispatch_tool(self, tool_name: str, **kwargs) -> Any:
         """Dispatch a tool call. Telemetry is captured by _invoke_tool."""

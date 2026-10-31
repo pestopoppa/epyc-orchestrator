@@ -1,0 +1,5 @@
+# HIL-15 preflight history (preserved)
+
+- An initial test launch used `region-lock run --cpu-list 32-33`, which waited behind an existing correctness grant. After the owner clarified the LOOP contract's model-free prep rule, only the launcher's own waiter PID 2023547 was interrupted; `ps -p 2023547` returned no row. No test command started in that attempt, and no peer process was signalled. This is an admission correction, not a test failure or result.
+- The required run then used the pair mutex `/mnt/raid0/llm/tmp/compute-flags/prep-locks/32-33.lock` and taskset CPUs 128,129. The complete pytest output and sampled resource receipt are retained in `cpu-tests.log`.
+- GitNexus reported this checkout unindexed; impact/context calls refused on multiple-repository ambiguity; `scripts/gitnexus-analyze.sh` refused with `denied: cross-role global region locks are not enabled`. These refusals were retained; no reindex or alternate-index bypass was attempted. Native callers were inspected manually.

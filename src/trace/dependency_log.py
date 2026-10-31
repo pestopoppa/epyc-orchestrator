@@ -23,6 +23,9 @@ _ID_KEYS = {"artifact_id": "artifact", "doc_id": "doc", "document_id": "doc"}
 _WRITE_NAME = re.compile(r"write|edit|patch|create|append|replace|insert|delete|save|log_append|str_replace", re.I)
 _DOC_RESULT_TOOLS = re.compile(r"search|retriev|rag|lookup|query", re.I)
 _MAX_RESULT_IDS = 20
+# These are REPL wrappers, not registry calls. Their inner invocations are recorded
+# individually at the native registry boundary in _registry_invoke_observed.
+_COMPOSITE_BUILTINS = frozenset({"batch_web_search", "search_and_verify"})
 
 
 def _resources_from_args(args: dict[str, Any]) -> list[str]:
@@ -66,6 +69,10 @@ def _doc_ids_from_result(result: Any) -> list[str]:
 def classify(name: str, args: dict[str, Any] | None, result: Any = None) -> tuple[list[str], list[str]]:
     """(reads, writes) resource ids for one call. Argument-named resources are reads unless the
     tool name marks it as a mutation; ids found in a retrieval tool's result are reads."""
+    # Do not turn an aggregate wrapper result into a purported native dependency.
+    # The actual registry calls are observed separately at their call boundary.
+    if name in _COMPOSITE_BUILTINS:
+        return [], []
     args = args or {}
     res = _resources_from_args(args)
     reads: list[str] = []
