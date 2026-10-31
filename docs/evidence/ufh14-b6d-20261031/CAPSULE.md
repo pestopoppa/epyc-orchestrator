@@ -18,11 +18,13 @@ All commands ran in the APP checkout with the canonical shared Python 3.11 inter
 
 | Command | Result | Durable output |
 |---|---:|---|
-| `pytest -q tests/unit/test_gpu_window_parked_role.py tests/unit/test_v1_escalation.py` | 68 passed, 1 warning, 29.75s | [parked-and-v1-tests.log](parked-and-v1-tests.log) |
-| `pytest -q tests/unit/test_stages.py tests/unit/test_llm_primitives.py` | 65 passed, 1 warning, 8.39s | [stages-and-primitives-tests.log](stages-and-primitives-tests.log) |
-| `ruff check` on the five changed source/test files | passed | [ruff.log](ruff.log) |
+| `pytest -q tests/unit/test_gpu_window_parked_role.py tests/unit/test_v1_escalation.py` | 68 passed, 1 warning, 29.75s | [parked-and-v1-tests.log.gz](parked-and-v1-tests.log.gz) |
+| `pytest -q tests/unit/test_stages.py tests/unit/test_llm_primitives.py` | 65 passed, 1 warning, 8.39s | [stages-and-primitives-tests.log.gz](stages-and-primitives-tests.log.gz) |
+| `ruff check` on the five changed source/test files | passed | [ruff.log.gz](ruff.log.gz) |
 | `git diff --check` | passed | recorded before source commit |
-| `make gates` | passed (schema, shellcheck, shfmt, markdownlint, format/lint targets) | [make-gates.log](make-gates.log) |
+| `make gates` | passed (schema, shellcheck, shfmt, markdownlint, format/lint targets) | [make-gates.log.gz](make-gates.log.gz) |
+
+Captured command output is gzip-compressed byte-for-byte to preserve logs containing trailing whitespace that `git diff --check` correctly rejects in ordinary text files; verify compressed artifact integrity with [SHA256SUMS](SHA256SUMS), and read with `gzip -dc <file>.gz`.
 
 The final 68-test run followed the clean rebase onto the source base above. Its shell PID was 1703420 (start `2026-10-31 13:33:48 UTC`, initial RSS 3624 KiB); the process was confirmed absent after completion. The 65-test run shell PID was 1674717 (start `2026-10-31 13:32:54 UTC`, initial RSS 3628 KiB); it too was confirmed absent.
 
@@ -30,8 +32,8 @@ The final 68-test run followed the clean rebase onto the source base above. Its 
 
 These earlier runs are retained to make the correction sequence auditable; they are not the final result.
 
-- The initial combined 131-test run had 33 failures and 98 passes because `FakePrimitives` did not implement the current route contract `bind_request_usage(chat_id)`. The captured traceback identifies the fixture `AttributeError`; the fake now implements `bind_request_usage` and `get_request_usage`. See [historical-33-failures.log](historical-33-failures.log).
-- A later run had one unrelated failure in the existing `<100 ms` primitive refusal check: preempt notification file I/O made that measured section take about 253 ms. The test now stubs only the preempt notification, retains its temporary window and serving-record assertions, and keeps the `<100 ms` assertion unchanged. See [historical-preempt-timing-failure.log](historical-preempt-timing-failure.log). The final parked-role module passed.
+- The initial combined 131-test run had 33 failures and 98 passes because `FakePrimitives` did not implement the current route contract `bind_request_usage(chat_id)`. The captured traceback identifies the fixture `AttributeError`; the fake now implements `bind_request_usage` and `get_request_usage`. See [historical-33-failures.log.gz](historical-33-failures.log.gz).
+- A later run had one unrelated failure in the existing `<100 ms` primitive refusal check: preempt notification file I/O made that measured section take about 253 ms. The test now stubs only the preempt notification, retains its temporary window and serving-record assertions, and keeps the `<100 ms` assertion unchanged. See [historical-preempt-timing-failure.log.gz](historical-preempt-timing-failure.log.gz). The final parked-role module passed.
 - An intermediate broad error-propagation experiment was removed after review. The final implementation opts into propagation only for typed parked refusals, and the final 68-test run above passes.
 
 ## Original handoff draft
