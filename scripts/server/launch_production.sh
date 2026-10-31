@@ -9,13 +9,18 @@ set -euo pipefail
 # stack without requiring agent interpretation.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Offer this entrypoint's checkout only as a fallback, AFTER env.sh evaluates
+# .env. Do not pre-seed PROJECT_ROOT: conditional .env defaults must still win.
+_EPYC_ENV_PROJECT_ROOT_DEFAULT="$REPO_ROOT"
 
 # Source environment library for path variables
 # shellcheck source=../lib/env.sh
 source "${SCRIPT_DIR}/../lib/env.sh"
+unset _EPYC_ENV_PROJECT_ROOT_DEFAULT
 
 STACK_PY="$SCRIPT_DIR/orchestrator_stack.py"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 print_manifest_summary() {
   local tier="${1:-hot}"
