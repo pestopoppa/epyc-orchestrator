@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -159,7 +160,10 @@ def _prefix_record(url: str, calls: list[dict[str, Any]]) -> dict[str, Any] | No
     }
 
 
-def run(*, url: str, output: Path, role: str, mode: str, limit: int = 18) -> dict[str, Any]:
+def run(
+    *, url: str, output: Path, role: str, mode: str, limit: int = 18,
+    deadline_epoch: float | None = None, stopfile: Path | None = None,
+) -> dict[str, Any]:
     cases = build_cases()
     if len(cases) != 18 or not 1 <= limit <= 18:
         raise ValueError("TD-4 cohort must contain exactly 18 cases; limit is smoke-only")
@@ -209,6 +213,10 @@ def run(*, url: str, output: Path, role: str, mode: str, limit: int = 18) -> dic
     try:
         with output.open("a", encoding="utf-8") as sink:
             for case in cases[completed:limit]:
+                if (deadline_epoch is not None and time.time() >= deadline_epoch) or (
+                    stopfile is not None and stopfile.exists()
+                ):
+                    break
                 repl = _Repl(primitives, case, role)
                 before_receipts = (
                     len(receipt_path.read_text().splitlines()) if receipt_path.exists() else 0
@@ -297,6 +305,7 @@ def run(*, url: str, output: Path, role: str, mode: str, limit: int = 18) -> dic
         "missing_pairs": missing,
         "invalid_pairs": invalid,
         "smoke_only": limit < 18,
+        "partial": limit == 18 and completed < 18,
         "output": str(output),
     }
 
@@ -308,6 +317,8 @@ def main() -> int:
     parser.add_argument("--role", default="frontdoor")
     parser.add_argument("--mode", choices=("json", "native"), default="native")
     parser.add_argument("--smoke-first-case", action="store_true")
+    parser.add_argument("--deadline-epoch", type=float)
+    parser.add_argument("--stopfile", type=Path)
     args = parser.parse_args()
     result = run(
         url=args.server_url,
@@ -315,9 +326,13 @@ def main() -> int:
         role=args.role,
         mode=args.mode,
         limit=1 if args.smoke_first_case else 18,
+        deadline_epoch=args.deadline_epoch,
+        stopfile=args.stopfile,
     )
     print(json.dumps(result, sort_keys=True))
-    return 0 if result["invalid_pairs"] == 0 else 1
+    if result["invalid_pairs"]:
+        return 1
+    return 75 if result["partial"] else 0
 
 
 if __name__ == "__main__":
