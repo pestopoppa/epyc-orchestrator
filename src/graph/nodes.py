@@ -220,7 +220,7 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
-            if _is_infra_failure(artifacts):
+            if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
                 return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
@@ -343,7 +343,7 @@ class WorkerNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
-            if _is_infra_failure(artifacts):
+            if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
                 return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
@@ -463,7 +463,7 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
-            if _is_infra_failure(artifacts):
+            if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
                 return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
@@ -570,7 +570,7 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
-            if _is_infra_failure(artifacts):
+            if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
                 return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
@@ -676,7 +676,7 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
-            if _is_infra_failure(artifacts):
+            if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
                 return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error
@@ -784,7 +784,7 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(ctx, answer, True)
 
         if error:
-            if _is_infra_failure(artifacts):
+            if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
                 return _make_end_result(ctx, error, False)
             state.consecutive_failures += 1
             state.last_error = error

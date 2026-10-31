@@ -122,6 +122,23 @@ class TaskState:
     session_log_records: list[Any] = field(default_factory=list)
     session_summary_cache: str = ""
     session_summary_turn: int = 0
+    history_turns: list[dict[str, Any]] = field(default_factory=list)
+    history_boundaries: list[int] = field(default_factory=list)
+    history_boundary_index: int = 0
+    history_tail_start: int = 0
+    history_pruned_outputs: list[str] = field(default_factory=list)
+    history_turn_start_s: float = 0.0
+    history_log_path: str = ""
+    history_log_chars: int = 0
+    history_summary_end: int = 0
+    history_boundary_wall_s: float = 0.0
+    history_task_start_s: float = 0.0
+    history_effective_budget: int = 0
+    history_context_exhausted: bool = False
+    history_valid: bool = True
+    history_invalid_reason: str = ""
+    history_token_count_source: str = ""
+    history_log_write_wall_s: float = 0.0
 
     # Session scratchpad (model-extracted semantic insights)
     scratchpad_entries: list[Any] = field(default_factory=list)

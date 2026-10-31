@@ -45,6 +45,7 @@ flags:
   cascading_tool_policy: baseline
   claude_code_mcp_chat: baseline
   content_cache: baseline
+  context_arm_ab: baseline
   context_compression: baseline
   credential_redaction: baseline
   dcp_for_consult: baseline
@@ -96,6 +97,8 @@ flags:
   repl: baseline
   repl_answer_force: baseline
   repl_embedding_pool: baseline
+  repl_think_fence_continue: baseline
+  repl_thinking_budget: baseline
   repl_turn_counter_tail: baseline
   replay_recording: baseline
   restricted_python: baseline
@@ -114,6 +117,7 @@ flags:
   session_compaction: baseline
   session_compaction_llm_index: baseline
   session_log: baseline
+  session_log_verbatim: baseline
   session_scratchpad: baseline
   session_token_budget: baseline
   side_effect_tracking: baseline
@@ -137,6 +141,8 @@ flags:
   tool_result_clearing: baseline
   tools: baseline
   trajectory_artifact: baseline
+  tts_it_normalize: baseline
+  tts_it_respell: baseline
   two_level_condensation: baseline
   typed_decisions: baseline
   typed_decisions_shadow: baseline

@@ -153,6 +153,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("content_cache", False, False, "CONTENT_CACHE", "SHA-256 keyed response cache"),
     FeatureSpec("session_compaction", False, True, "SESSION_COMPACTION", "Summarize old context"),
     FeatureSpec("session_log", False, True, "SESSION_LOG", "Append-only processing journal"),
+    FeatureSpec("session_log_verbatim", False, False, "SESSION_LOG_VERBATIM", "Verbatim experiment history"),
+    FeatureSpec("context_arm_ab", False, False, "CONTEXT_ARM_AB", "Context compression experiment arms", ("session_log_verbatim",)),
     FeatureSpec("session_scratchpad", False, True, "SESSION_SCRATCHPAD", "Model-extracted semantic insights"),
     FeatureSpec("depth_model_overrides", False, True, "DEPTH_MODEL_OVERRIDES", "Map nested depth to cheaper roles"),
     FeatureSpec("resume_tokens", False, True, "RESUME_TOKENS", "Base64url continuation tokens"),
@@ -661,6 +663,8 @@ class Features:
     content_cache: bool = False  # SHA-256 keyed response cache for LLM calls
     session_compaction: bool = False  # Summarize old context on long conversations
     session_log: bool = False  # Append-only processing journal across REPL turns
+    session_log_verbatim: bool = False
+    context_arm_ab: bool = False
     session_scratchpad: bool = False  # Model-extracted semantic insights from session log
     depth_model_overrides: bool = False  # Map nested llm_call depth to cheaper roles
     resume_tokens: bool = False  # Base64url continuation tokens for crash recovery

@@ -173,7 +173,7 @@ async def frontdoor_node(state: dict[str, Any], config: RunnableConfig) -> dict[
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
-        if _is_infra_failure(artifacts):
+        if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
             return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
@@ -270,7 +270,7 @@ async def worker_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
-        if _is_infra_failure(artifacts):
+        if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
             return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
@@ -373,7 +373,7 @@ async def coder_node(state: dict[str, Any], config: RunnableConfig) -> dict[str,
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
-        if _is_infra_failure(artifacts):
+        if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
             return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
@@ -464,7 +464,7 @@ async def coder_escalation_node(state: dict[str, Any], config: RunnableConfig) -
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
-        if _is_infra_failure(artifacts):
+        if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
             return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
@@ -553,7 +553,7 @@ async def ingest_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
-        if _is_infra_failure(artifacts):
+        if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
             return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error
@@ -644,7 +644,7 @@ async def architect_node(state: dict[str, Any], config: RunnableConfig) -> dict[
         return _handle_end(ctx, answer, True, task_state, snap)
 
     if error:
-        if _is_infra_failure(artifacts):
+        if artifacts.get("_context_budget_exhausted") or _is_infra_failure(artifacts):
             return _handle_end(ctx, error, False, task_state, snap)
         task_state.consecutive_failures += 1
         task_state.last_error = error

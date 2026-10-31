@@ -167,6 +167,23 @@ class OrchestratorState(TypedDict, total=False):
     session_log_path: str
     session_summary_cache: str
     session_summary_turn: int
+    history_turns: list[dict[str, Any]]
+    history_boundaries: list[int]
+    history_boundary_index: int
+    history_tail_start: int
+    history_pruned_outputs: list[str]
+    history_log_path: str
+    history_log_chars: int
+    history_summary_end: int
+    history_boundary_wall_s: float
+    history_task_start_s: float
+    history_turn_start_s: float
+    history_effective_budget: int
+    history_context_exhausted: bool
+    history_valid: bool
+    history_invalid_reason: str
+    history_token_count_source: str
+    history_log_write_wall_s: float
     compaction_quality_monitor: dict[str, int] | None
 
     # --- Two-level condensation (CF Phase 1) ---

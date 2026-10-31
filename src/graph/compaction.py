@@ -53,7 +53,7 @@ def _estimate_context_tokens(ctx: Any, text: str) -> int:
 UNKNOWN_CONTEXT_FALLBACK_TOKENS = 32768
 
 
-def _get_model_max_context(ctx: Any) -> int:
+def _real_model_max_context(ctx: Any) -> int:
     """The current role's REAL per-request context, in tokens.
 
     Order: an explicit registry role ``n_ctx`` (test doubles and future
@@ -101,6 +101,15 @@ def _get_model_max_context(ctx: Any) -> int:
         UNKNOWN_CONTEXT_FALLBACK_TOKENS,
     )
     return UNKNOWN_CONTEXT_FALLBACK_TOKENS
+
+
+def _get_model_max_context(ctx: Any) -> int:
+    real = _real_model_max_context(ctx)
+    from src.features import features
+    if features().context_arm_ab is True:
+        from src.graph.context_arm_ab import settings
+        return min(real, settings()[1])
+    return real
 
 
 def _context_externalization_path(state: TaskState, *, repl=None) -> Path:
@@ -176,6 +185,10 @@ async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
     """
     from src.features import features as _get_features
 
+    if _get_features().context_arm_ab is True:
+        from src.graph.context_arm_ab import boundary
+        await boundary(ctx, force=force)
+        return
     if not force and not _get_features().session_compaction:
         return
 

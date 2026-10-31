@@ -41,6 +41,8 @@ computed after the fact by :func:`evidence_span_tokens_est`).
 from __future__ import annotations
 
 import json
+import hashlib
+import time
 import logging
 import os
 import re
@@ -194,12 +196,21 @@ def note_call(state: Any, *, role: Any, prompt: str, meta: Mapping[str, Any] | N
                 "n_ctx": n_ctx, "n_ctx_source": src,
                 "size_ledger_visible": _SPILL_MARKER in prompt,
             }
+            from src.features import features
+            if features().context_arm_ab is True:
+                probe_path = os.environ.get("ORCHESTRATOR_CONTEXT_PROBE_MANIFEST", "")
+                if probe_path:
+                    manifest = json.loads(Path(probe_path).read_text(encoding="utf-8"))
+                    literals = manifest.get("probe_literals", {})
+                    t.pending["probe_literals_present"] = sorted(str(k) for k, v in literals.items()
+                        if isinstance(v, str) and v and v in prompt)
     except Exception:
         log.debug("trajectory note_call failed", exc_info=True)
 
 
 def note_turn(state: Any, *, role: Any, code: str = "", output: str = "", error: str | None = None,
-              is_final: bool = False, tool_calls: Sequence[str] | None = None) -> None:
+              is_final: bool = False, tool_calls: Sequence[str] | None = None,
+              log_events: Sequence[Mapping[str, str]] | None = None, blocked: bool = False) -> None:
     """The turn ended: write its event (merging the stashed call counts)."""
     try:
         if not enabled():
@@ -240,6 +251,23 @@ def note_turn(state: Any, *, role: Any, code: str = "", output: str = "", error:
                 "ledger_visible": {"size": bool(pend.get("size_ledger_visible")), "age": False},
                 "shell_compaction_seen": t.shell_compaction_seen,
             }
+            from src.features import features
+            if features().context_arm_ab is True:
+                log_paths = set(getattr(state, "context_file_paths", []))
+                if getattr(state, "history_log_path", ""):
+                    log_paths.add(state.history_log_path)
+                attempts = [{"path": path, "tool": tool} for tool, path in _FOLLOW_RE.findall(code or "")
+                            if path in log_paths]
+                attempts += [{"path": path, "tool": "read_file"} for path in
+                    re.findall(r"\bread_file\s*\(\s*['\"]([^'\"]+)['\"]", code or "")
+                    if path in log_paths]
+                log_follows = [dict(event) for event in (log_events or [])
+                               if event.get("path") in log_paths and event.get("tool") in {"peek", "grep", "read_file"}]
+                started = getattr(state, "history_turn_start_s", 0.0)
+                body.update({"blocked": bool(blocked),
+                    "log_follow_attempts": attempts, "log_follows": log_follows, "code_sha256": hashlib.sha256((code or "").encode()).hexdigest(),
+                    "turn_wall_s": max(0.0, time.monotonic() - started) if started else None,
+                    "probe_literals_present": pend.get("probe_literals_present")})
             _emit(t, "turn", body)
     except Exception:
         log.debug("trajectory note_turn failed", exc_info=True)
@@ -353,6 +381,23 @@ def note_shell_compaction_session(session_id: Any) -> None:
         log.debug("trajectory note_shell_compaction_session failed", exc_info=True)
 
 
+def note_context_boundary(state: Any, *, before: int, after: int, summary_tokens: int, wall_s: float) -> None:
+    try:
+        if not enabled():
+            return
+        t = _task(getattr(state, "task_id", None))
+        if t is not None:
+            with _lock:
+                # The explicit boundary hook already counted this rewrite; the
+                # following rendered-history observation establishes a new baseline.
+                t.last_history_sha = None
+                t.last_history_len = 0
+                _emit(t, "boundary", {"turn": state.turns, "history_tokens_before": before,
+                    "history_tokens_after": after, "summary_tokens": summary_tokens, "wall_s": wall_s})
+    except Exception:
+        log.debug("trajectory boundary failed", exc_info=True)
+
+
 def note_context_overflow(state: Any) -> None:
     try:
         t = _task(getattr(state, "task_id", None)) if enabled() else None
@@ -388,7 +433,7 @@ def finalize(state: Any, answer: str, success: bool) -> None:
         with _lock:
             t.finalized = True
             reason = str(answer or "")[:_REASON_CHARS] if not success and str(answer or "").startswith("[") else None
-            _emit(t, "final", {
+            body = {
                 "terminal_state": terminal_state_for(answer, success, t.context_overflow),
                 "terminal_reason": reason, "solved": bool(success),
                 "turns": int(getattr(state, "turns", t.turns) or t.turns),
@@ -401,7 +446,20 @@ def finalize(state: Any, answer: str, success: bool) -> None:
                 "tool_calls": {"retrieval": t.retrieval, "execution": t.execution},
                 "shell_compaction_seen": t.shell_compaction_seen,
                 "evidence_span_tokens": None,
-            })
+            }
+            from src.features import features
+            if features().context_arm_ab is True:
+                from src.graph.context_arm_ab import settings
+                arm, budget, fraction, _ = settings()
+                start = getattr(state, "history_task_start_s", 0.0)
+                body.update({"arm": arm, "context_budget_tokens": budget, "trigger_fraction": fraction,
+                    "effective_context_budget_tokens": state.history_effective_budget or budget,
+                    "trial_index": int(os.environ.get("ORCHESTRATOR_CONTEXT_TRIAL_INDEX", "0")),
+                    "boundary_wall_s": state.history_boundary_wall_s + state.history_log_write_wall_s,
+                    "task_wall_s": max(0.0, time.monotonic() - start) if start else None,
+                    "task_wall_scope": "graph_run", "token_count_source": state.history_token_count_source,
+                    "history_valid": state.history_valid, "history_invalid_reason": state.history_invalid_reason})
+            _emit(t, "final", body)
             _TASKS.pop(t.task_id, None)
     except Exception:
         log.debug("trajectory finalize failed", exc_info=True)

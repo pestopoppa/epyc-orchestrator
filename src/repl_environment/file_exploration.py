@@ -274,6 +274,32 @@ class _FileExplorationMixin:
             if len(hits) >= self.config.max_grep_results:
                 lines.append(f"[... truncated at {self.config.max_grep_results} results]")
             return lines
+        from src.features import features
+        if (features().context_arm_ab is True and file_path is not None
+                and os.path.abspath(file_path) in self._session_read_artifacts):
+            try:
+                text = self._read_registered_artifact(file_path, -1, 0)
+            except (OSError, ValueError) as exc:
+                return [f"[ERROR: {type(exc).__name__}: {exc}]"]
+            lines = text.split("\n")
+            matches = []
+            details = []
+            for i, line in enumerate(lines):
+                if regex.search(line):
+                    matches.append(line)
+                    start = max(0, i - context_lines)
+                    end = min(len(lines), i + context_lines + 1)
+                    details.append({"line_num": i + 1, "match": line[:500],
+                                    "context": "\n".join(lines[start:end])[:1000]})
+                    if len(matches) >= self.config.max_grep_results:
+                        matches.append(f"[... truncated at {self.config.max_grep_results} results]")
+                        break
+            if details:
+                self._grep_hits_buffer.append({"pattern": pattern, "source": file_path,
+                    "match_count": len(details), "hits": details[:20]})
+            self._exploration_log.add_event("grep", {"pattern": pattern, "file_path": file_path}, matches)
+            self._track_research("grep", f"pattern={pattern!r}, file={file_path}", "\n".join(matches[:10]))
+            return matches
         if file_path is not None:
             is_valid, error = self._validate_file_path(file_path)
             if not is_valid:

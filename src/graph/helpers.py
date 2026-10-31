@@ -1157,6 +1157,16 @@ def _trajectory_tool_calls(deps: Any, baseline: int) -> list[str] | None:
         return None
 
 
+def _trajectory_log_events(deps: Any, baseline: int) -> list[dict[str, str]]:
+    """Successful exploration calls only; refused reads never add exploration events."""
+    try:
+        events = deps.repl.get_exploration_log().events[baseline:]
+        return [{"tool": e.function, "path": e.args.get("file_path", "")} for e in events
+                if e.function in {"peek", "grep", "read_file"} and isinstance(e.args.get("file_path"), str)]
+    except Exception:
+        return []
+
+
 def _trajectory_note_rendered_history(state: Any, block: str) -> None:
     """TOC-WRITER-HOOKS-1: report the rendered session-log block (history-rewrite producer)."""
     try:
@@ -1226,7 +1236,16 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         (code_output, error_or_none, is_final, artifacts)
     """
     state = ctx.state
+    from src.features import features as _timing_features
+    if _timing_features().context_arm_ab is True:
+        import time as _context_time
+        state.history_turn_start_s = _context_time.monotonic()
+        if not state.history_task_start_s:
+            state.history_task_start_s = state.history_turn_start_s
     deps = ctx.deps
+    if (_timing_features().context_arm_ab is True and deps.repl is not None
+            and getattr(deps.repl, "_context_bundle", None) is not None):
+        raise ValueError("context arms do not support capped context bundles")
     if deps.repl is not None and getattr(deps.repl, "timed_out", False) is True:
         timeout_error = _typed_repl_timeout_error(deps.repl)
         _record_session_turn(state, role=str(role), error=timeout_error)
@@ -1286,7 +1305,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         )
 
     # Session compaction before execution
-    if not force_answer:
+    if not force_answer or _get_features().context_arm_ab is True:
         await _maybe_compact_context(ctx)
 
     if deps.primitives is None or deps.repl is None:
@@ -1349,6 +1368,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         # Tool output compression (Phase 2 native): compress before spill
         _output_for_prompt = state.last_output
         _error_for_prompt = state.last_error
+        if _get_features().context_arm_ab is True:
+            # Prior turns are rendered once in the experimental history block.
+            _output_for_prompt = ""
+            _error_for_prompt = ""
         if _get_features().tool_output_compression:
             try:
                 import sys as _sys
@@ -1425,7 +1448,12 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Inject session log summary (processing history across turns)
     await _maybe_refresh_session_summary(state, deps)
-    session_block = _session_log_prompt_block(state, repl=deps.repl)
+    if _get_features().context_arm_ab is True:
+        from src.graph.compaction import _estimate_context_tokens as _count_history_tokens
+        session_block = _session_log_prompt_block(state, repl=deps.repl,
+            count_tokens=lambda text: _count_history_tokens(ctx, text))
+    else:
+        session_block = _session_log_prompt_block(state, repl=deps.repl)
     if session_block:
         _trajectory_note_rendered_history(state, session_block)
         prompt += "\n\n" + session_block
@@ -1532,6 +1560,17 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             # UFH14-LB3.3: a blanket pass here hid an UnboundLocalError for a day (LB3.2).
             # Fall back to unconstrained generation, but never silently.
             _note_turn1_grammar_error(state, _grammar_exc)
+
+    if _get_features().context_arm_ab is True:
+        from src.graph.context_arm_ab import settings as _context_arm_settings
+        from src.graph.compaction import _estimate_context_tokens as _history_count_tokens
+        from src.graph.compaction import _get_model_max_context as _effective_context_budget
+        _arm, _budget, _, _ = _context_arm_settings()
+        _budget = min(_budget, _effective_context_budget(ctx))
+        if _history_count_tokens(ctx, prompt) > _budget:
+            state.history_context_exhausted = True
+            _trajectory_note_overflow(state)
+            return "", "[context-exhausted] rendered prompt exceeds experiment budget", False, {"_context_budget_exhausted": True}
 
     # LLM call — stop at first code block close to prevent repetition loops.
     # REPL expects one action per turn; without this, the model can generate
@@ -1961,6 +2000,16 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         timeout_error = _typed_repl_timeout_error(deps.repl)
         result = ExecutionResult(output="", is_final=False, error=timeout_error)
 
+    # Preserve the actual post-redaction execution result before rescue or guard
+    # logic changes what the legacy session record and graph return contain.
+    _verbatim_result = {}
+    if _get_features().context_arm_ab is True:
+        from src.repl_environment.redaction import redact_if_enabled
+        _verbatim_result = {
+            "verbatim_output": redact_if_enabled(result.output or ""),
+            "verbatim_error": redact_if_enabled(result.error or ""),
+        }
+
     # Track REPL execution count (Fast-RLM budget control)
     state.repl_executions += 1
 
@@ -2002,6 +2051,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         _record_session_turn(
             state, role=str(role), code=code, error=result.error, nudge=nudge,
             trajectory_tool_calls=_trajectory_tool_calls(deps, _exploration_baseline),
+            trajectory_log_events=_trajectory_log_events(deps, _exploration_baseline),
+            **_verbatim_result,
         )
         return "", None, False, {"_nudge": nudge}
 
@@ -2029,6 +2080,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         _record_session_turn(
             state, role=str(role), code=code, nudge=nudge,
             tool_calls=_get_exploration_tool_calls(deps, _exploration_baseline),
+            trajectory_log_events=_trajectory_log_events(deps, _exploration_baseline),
+            **_verbatim_result,
         )
         return "", None, False, {"_nudge": nudge}
 
@@ -2073,6 +2126,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             _record_session_turn(
                 state, role=str(role), code=code, nudge=nudge,
                 trajectory_tool_calls=_trajectory_tool_calls(deps, _exploration_baseline),
+                trajectory_log_events=_trajectory_log_events(deps, _exploration_baseline),
+                **_verbatim_result,
             )
             return "", None, False, {"_nudge": nudge}
 
@@ -2101,6 +2156,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         error=result.error if result.error else None,
         is_final=result.is_final,
         tool_calls=_get_exploration_tool_calls(deps, _exploration_baseline),
+        trajectory_log_events=_trajectory_log_events(deps, _exploration_baseline),
+        **_verbatim_result,
     )
     return output, result.error if result.error else None, result.is_final, artifacts
 

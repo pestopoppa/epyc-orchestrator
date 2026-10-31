@@ -142,6 +142,8 @@ def _extract_result(final_state: dict[str, Any]) -> TaskResult:
 
 def _lg_start_state(state: TaskState, start_role: Role | str | None) -> dict[str, Any]:
     """Convert a TaskState into the initial OrchestratorState dict + entry node."""
+    from src.graph.context_arm_ab import start_task
+    start_task(state)
     role = start_role or state.current_role
     if isinstance(role, Role):
         role = str(role)

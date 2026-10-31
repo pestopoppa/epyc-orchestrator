@@ -62,6 +62,8 @@ async def run_task(
     Returns:
         TaskResult with answer, success flag, and metadata.
     """
+    from src.graph.context_arm_ab import start_task
+    start_task(state)
     # Restore from resume token if provided
     if resume_token:
         from src.features import features as _get_features
@@ -112,6 +114,8 @@ async def iter_task(
     Yields:
         Node instances at each step of execution.
     """
+    from src.graph.context_arm_ab import start_task
+    start_task(state)
     role = start_role or state.current_role
     start_node = select_start_node(role)
 

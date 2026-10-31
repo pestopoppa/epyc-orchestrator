@@ -20,6 +20,12 @@ def _use_inline_calls_in_tests() -> bool:
 def _init_session_log(state: TaskState, *, repl=None) -> None:
     """Initialize session log path on first turn (idempotent)."""
     if state.session_log_path:
+        from src.features import features as _get_features
+        if _get_features().context_arm_ab is True:
+            expected = getattr(repl, "_session_artifact_dir", None)
+            if (expected is None or getattr(repl, "task_id", None) != state.task_id
+                    or os.path.abspath(state.session_log_path) != os.path.abspath(expected / "session.md")):
+                raise ValueError("context arm session log is not owned by this REPL")
         return
     from src.features import features as _get_features
 
@@ -50,6 +56,9 @@ def _record_session_turn(
     escalation_target: str = "",
     tool_calls: list[str] | None = None,
     trajectory_tool_calls: list[str] | None = None,
+    trajectory_log_events: list[dict[str, str]] | None = None,
+    verbatim_output: str | None = None,
+    verbatim_error: str | None = None,
 ) -> None:
     """Record a turn to session log (in-memory + disk). Fail-silent.
 
@@ -58,16 +67,41 @@ def _record_session_turn(
     is not undercounted, without adding them to the session-log record (whose ``tools:[...]``
     renders into the session-summary prompt block, so prompt bytes stay unchanged).
     """
+    from src.features import features as _get_features
+
+    experimental = _get_features().context_arm_ab is True
+    observed_output = verbatim_output if experimental and verbatim_output is not None else output
+    observed_error = verbatim_error if experimental and verbatim_error is not None else error
+    # Only actual error categories, canonical refusal results, or explicit guard nudges
+    # constitute blocked actions; ordinary prose containing "refused" is not a refusal.
+    error_text = observed_error or ""
+    blocked = experimental and (error_text.startswith(("PermissionError:", "REPLSecurityError:"))
+        or "input() is not available" in error_text
+        or any(line.startswith(("[ERROR: TASK SCOPE:", "[ERROR: Path not in allowed locations:",
+                                "[ERROR: PermissionError:"))
+               for line in observed_output.splitlines())
+        or nudge.startswith("STOP using input().")
+        or (nudge.startswith("FINAL(") and "is a status message" in nudge))
     try:  # TOC-SP-6 trajectory artifact (default off; no-op and never raises)
         from src.graph import trajectory_artifact
 
         trajectory_artifact.note_turn(
-            state, role=role, code=code, output=output, error=error,
+            state, role=role, code=code, output=observed_output, error=observed_error,
             is_final=is_final,
             tool_calls=tool_calls if trajectory_tool_calls is None else trajectory_tool_calls,
+            log_events=trajectory_log_events, blocked=blocked,
         )
     except Exception:
         pass
+
+    if _get_features().session_log_verbatim is True:
+        from src.graph.context_arm_ab import record_turn
+        try:
+            record_turn(state, role=role, code=code, output=observed_output, error=observed_error)
+        except Exception as exc:
+            state.history_valid = False
+            state.history_invalid_reason = type(exc).__name__
+            raise RuntimeError("verbatim history write failed") from exc
     if not state.session_log_path:
         return
     try:
@@ -104,6 +138,9 @@ def _get_exploration_tool_calls(deps: TaskDeps, baseline: int) -> list[str]:
 
 async def _maybe_refresh_session_summary(state: TaskState, deps: TaskDeps) -> None:
     """Regenerate session summary if stale by >= _SESSION_LOG_REGEN_INTERVAL turns."""
+    from src.features import features as _features
+    if _features().context_arm_ab is True:
+        return
     if not state.session_log_path or not state.session_log_records:
         return
 
@@ -350,8 +387,12 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
     state.session_summary_turn = state.turns
 
 
-def _session_log_prompt_block(state: TaskState, *, repl=None) -> str:
+def _session_log_prompt_block(state: TaskState, *, repl=None, count_tokens=None) -> str:
     """Return session log block for prompt injection. Empty if not available."""
+    from src.features import features as _features
+    if _features().context_arm_ab is True:
+        from src.graph.context_arm_ab import render
+        return render(state, repl, count_tokens)
     if not state.session_summary_cache:
         return ""
     parts: list[str] = []
