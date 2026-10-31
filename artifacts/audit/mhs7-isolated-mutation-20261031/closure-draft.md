@@ -1,0 +1,3 @@
+Original ROOT handoff row closure draft (MAIN applies to the original row):
+
+- [x] **MHS-7 — force the isolated mutation path.** ✅ 2026-10-31. APP source commit: `c91884ee5a38f7b4a2168c76fee1394a867e2e33`. Focused proof: `artifacts/audit/mhs7-isolated-mutation-20261031/pytest-focused-433.log` and `pytest-private-index-correction.log`, with checksummed receipts in the same directory. The code-only change enforces the existing experiment-context apply path, preimage checks, and rollback/commit isolation. The context still applies the evaluated candidate to the main tree for live evaluation; no SIGKILL durability claim. [no-belief: code-only change; no new measurement]

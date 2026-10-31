@@ -1,0 +1,30 @@
+{
+  "pid": 1040500,
+  "pid_start_ticks": 157275356,
+  "pid_absent_after_wait": true,
+  "rc": 0,
+  "samples": 1444,
+  "peak_tree_rss_bytes": 1551859712,
+  "elapsed_s": 73.120877959067,
+  "cpus": "32-33,128-129",
+  "physical_cpus": "32-33",
+  "smt_cpus": "128-129",
+  "mutex": "/mnt/raid0/llm/tmp/compute-flags/prep-locks/32-33.lock",
+  "command": [
+    "taskset",
+    "-c",
+    "32-33,128-129",
+    "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "tests/unit/test_prompt_forge_mutation_safety.py",
+    "tests/unit/test_prompt_forge_safety.py",
+    "tests/unit/test_prompt_forge_leakage_and_risk.py",
+    "tests/unit/test_worktree_manager.py",
+    "tests/unit/test_autopilot_actions.py",
+    "tests/unit/test_ap53_rejected_mutation_ledger.py",
+    "tests/unit/test_gate_frontier_c_and_b.py"
+  ],
+  "log": "/mnt/raid0/llm/tmp/codex-ni-20261031-mhs7/pytest-focused-review.log"
+}

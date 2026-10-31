@@ -1,0 +1,920 @@
+diff --git a/scripts/autopilot/actions.py b/scripts/autopilot/actions.py
+index 34f25fd8..d2233fdc 100644
+--- a/scripts/autopilot/actions.py
++++ b/scripts/autopilot/actions.py
+@@ -18,6 +18,7 @@ import logging
+ import os
+ import subprocess
+ import sys
++import uuid
+ from dataclasses import dataclass
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+@@ -1905,117 +1906,138 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
+ 
+     skill_without = _skill_efficacy_without_result(ctx)
+     bsv2_baseline = _bsv2_baseline_result(ctx)
+-    applied = ctx.forge.apply_code_mutation(mutation)
+-    if isinstance(applied, dict) and applied.get("status") not in {"rejected"}:
+-        _record_served_content(
+-            ctx, [ORCH_ROOT / mutation.file], restore=_mutation_restore("code", mutation)
+-        )
+-    eval_result = ctx.tower.hybrid_eval()
+-
+-    verdict = _action_gate_check(action, ctx, eval_result)
+-    if not verdict:
+-        _record_mutation_diversity_coverage(
+-            eval_result,
+-            ctx,
+-            artifact_kind="code",
+-            target=target,
+-            mutation_type=mutation_type,
+-            decision="reverted_safety_gate",
+-        )
+-        log.warning("Code mutation failed safety gate, reverting")
+-        _record_rejected_mutation(
+-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+-            artifact_kind="code", rejecting_gate="safety_gate",
+-            eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
+-        )
+-        ctx.forge.revert_code_mutation(mutation)
+-        return eval_result, "prompt_forge"
++    trial_name = f"code-mutation-{uuid.uuid4().hex}"
++    try:
++        with ctx.forge.apply_mutation_isolated(trial_name) as experiment_ctx:
++            applied = ctx.forge.apply_code_mutation_in_context(experiment_ctx, mutation)
++            if isinstance(applied, dict) and applied.get("status") == "rejected":
++                mutation.accepted = False
++                _record_rejected_mutation(
++                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
++                    artifact_kind="code", rejecting_gate="isolated_apply",
++                    eval_result=None, description=description,
++                    gate_detail=str(applied.get("reason", "isolated_apply_rejected")),
++                )
++                _discard_mutation_diversity_coverage(ctx)
++                return None, "prompt_forge"
+ 
+-    # AP-10 simplicity check (for code)
+-    passed, deficiency = _simplicity_check(
+-        mutation,
+-        eval_result,
+-        ctx,
+-        kind="code",
+-        log_label="Simplicity criterion:",
+-    )
+-    if not passed:
+-        _record_mutation_diversity_coverage(
+-            eval_result,
+-            ctx,
+-            artifact_kind="code",
+-            target=target,
+-            mutation_type=mutation_type,
+-            decision=f"reverted_simplicity:{deficiency or 'unknown'}",
+-        )
+-        _record_rejected_mutation(
+-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+-            artifact_kind="code", rejecting_gate="simplicity",
+-            eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
+-        )
+-        ctx.forge.revert_code_mutation(mutation)
+-        if deficiency == "shrinkage":
+-            ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
+-        return eval_result, "prompt_forge"
++            _record_served_content(
++                ctx, [ORCH_ROOT / mutation.file], restore=_mutation_restore("code", mutation)
++            )
++            eval_result = ctx.tower.hybrid_eval()
++
++            verdict = _action_gate_check(action, ctx, eval_result)
++            if not verdict:
++                _record_mutation_diversity_coverage(
++                    eval_result,
++                    ctx,
++                    artifact_kind="code",
++                    target=target,
++                    mutation_type=mutation_type,
++                    decision="reverted_safety_gate",
++                )
++                log.warning("Code mutation failed safety gate, reverting")
++                _record_rejected_mutation(
++                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
++                    artifact_kind="code", rejecting_gate="safety_gate",
++                    eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
++                )
++                mutation.accepted = False
++                return eval_result, "prompt_forge"
++
++            # AP-10 simplicity check (for code)
++            passed, deficiency = _simplicity_check(
++                mutation,
++                eval_result,
++                ctx,
++                kind="code",
++                log_label="Simplicity criterion:",
++            )
++            if not passed:
++                _record_mutation_diversity_coverage(
++                    eval_result,
++                    ctx,
++                    artifact_kind="code",
++                    target=target,
++                    mutation_type=mutation_type,
++                    decision=f"reverted_simplicity:{deficiency or 'unknown'}",
++                )
++                _record_rejected_mutation(
++                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
++                    artifact_kind="code", rejecting_gate="simplicity",
++                    eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
++                )
++                mutation.accepted = False
++                if deficiency == "shrinkage":
++                    ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
++                return eval_result, "prompt_forge"
++
++            if not _skill_efficacy_accepts(
++                without_result=skill_without,
++                with_result=eval_result,
++                artifact_kind="code",
++                target=target,
++                mutation_type=mutation_type,
++            ):
++                _record_mutation_diversity_coverage(
++                    eval_result,
++                    ctx,
++                    artifact_kind="code",
++                    target=target,
++                    mutation_type=mutation_type,
++                    decision="reverted_skill_efficacy",
++                )
++                _record_rejected_mutation(
++                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
++                    artifact_kind="code", rejecting_gate="skill_efficacy",
++                    eval_result=eval_result, description=description, gate_detail="",
++                )
++                mutation.accepted = False
++                return eval_result, "prompt_forge"
+ 
+-    if not _skill_efficacy_accepts(
+-        without_result=skill_without,
+-        with_result=eval_result,
+-        artifact_kind="code",
+-        target=target,
+-        mutation_type=mutation_type,
+-    ):
+-        _record_mutation_diversity_coverage(
+-            eval_result,
+-            ctx,
+-            artifact_kind="code",
+-            target=target,
+-            mutation_type=mutation_type,
+-            decision="reverted_skill_efficacy",
+-        )
+-        _record_rejected_mutation(
+-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+-            artifact_kind="code", rejecting_gate="skill_efficacy",
+-            eval_result=eval_result, description=description, gate_detail="",
+-        )
+-        ctx.forge.revert_code_mutation(mutation)
+-        return eval_result, "prompt_forge"
++            if not _bsv2_accepts(
++                baseline_result=bsv2_baseline,
++                candidate_result=eval_result,
++                artifact_kind="code",
++                target=target,
++                mutation_type=mutation_type,
++            ):
++                _record_mutation_diversity_coverage(
++                    eval_result,
++                    ctx,
++                    artifact_kind="code",
++                    target=target,
++                    mutation_type=mutation_type,
++                    decision="reverted_bsv2_accept_gate",
++                )
++                _record_rejected_mutation(
++                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
++                    artifact_kind="code", rejecting_gate="bsv2_accept_gate",
++                    eval_result=eval_result, description=description, gate_detail="",
++                )
++                mutation.accepted = False
++                return eval_result, "prompt_forge"
+ 
+-    if not _bsv2_accepts(
+-        baseline_result=bsv2_baseline,
+-        candidate_result=eval_result,
+-        artifact_kind="code",
+-        target=target,
+-        mutation_type=mutation_type,
+-    ):
+-        _record_mutation_diversity_coverage(
+-            eval_result,
+-            ctx,
+-            artifact_kind="code",
+-            target=target,
+-            mutation_type=mutation_type,
+-            decision="reverted_bsv2_accept_gate",
+-        )
+-        _record_rejected_mutation(
+-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+-            artifact_kind="code", rejecting_gate="bsv2_accept_gate",
+-            eval_result=eval_result, description=description, gate_detail="",
+-        )
+-        ctx.forge.revert_code_mutation(mutation)
+-        return eval_result, "prompt_forge"
++            experiment_ctx.accept(
++                f"autopilot: code {mutation.mutation_type} on {mutation.file}\n\n"
++                f"{mutation.description}"
++            )
++            _record_mutation_diversity_coverage(
++                eval_result,
++                ctx,
++                artifact_kind="code",
++                target=target,
++                mutation_type=mutation_type,
++                decision="kept",
++            )
++            _record_accepted_warrant_telemetry(action, ctx, eval_result)
++            ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
++            return eval_result, "prompt_forge"
+ 
+-    _record_mutation_diversity_coverage(
+-        eval_result,
+-        ctx,
+-        artifact_kind="code",
+-        target=target,
+-        mutation_type=mutation_type,
+-        decision="kept",
+-    )
+-    _record_accepted_warrant_telemetry(action, ctx, eval_result)
+-    ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
+-    return eval_result, "prompt_forge"
+ 
++    except BaseException:
++        mutation.accepted = False
++        raise
+ 
+ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
+     flags = action.get("flags", {})
+diff --git a/scripts/autopilot/species/prompt_forge.py b/scripts/autopilot/species/prompt_forge.py
+index fa2ca94a..449d1c14 100644
+--- a/scripts/autopilot/species/prompt_forge.py
++++ b/scripts/autopilot/species/prompt_forge.py
+@@ -1249,11 +1249,34 @@ class PromptForge:
+         gate_reason = mutation_risk_gate_reason(mutation.effect)
+         if gate_reason is not None:
+             return {"status": "rejected", "reason": gate_reason}
+-        ctx.apply_file(mutation.file, mutation.mutated_content)
++
++        try:
++            abs_path = _resolve_code_mutation_target(mutation.file)
++        except FileNotFoundError:
++            return {"status": "rejected", "reason": "target_invalid"}
++        if mutation.mutation_type == "new_file":
++            if mutation.original_content:
++                return {"status": "rejected", "reason": "new_file_has_preimage"}
++            if not _is_under_any(abs_path.parent, new_file_mutation_roots()):
++                return {"status": "rejected", "reason": "new_file_target_invalid"}
++            if abs_path.exists():
++                return {"status": "rejected", "reason": "target_changed"}
++        else:
++            if mutation.file not in CODE_MUTATION_ALLOWLIST:
++                return {"status": "rejected", "reason": "target_not_allowlisted"}
++            try:
++                current_content = abs_path.read_text()
++            except FileNotFoundError:
++                return {"status": "rejected", "reason": "target_missing"}
++            if current_content != mutation.original_content:
++                return {"status": "rejected", "reason": "target_changed"}
++
++        rel_path = abs_path.relative_to(PROJECT_ROOT).as_posix()
++        ctx.apply_file(rel_path, mutation.mutated_content)
+         mutation.accepted = True
+         return {
+             "status": "applied_isolated",
+-            "file": mutation.file,
++            "file": rel_path,
+             "mutation_type": mutation.mutation_type,
+             "effect": MutationEffect.normalize(mutation.effect).value,
+             "effect_risk": mutation_effect_risk(mutation.effect),
+@@ -1409,65 +1432,9 @@ class PromptForge:
+         return mutation
+ 
+     def apply_code_mutation(self, mutation: CodeMutation) -> dict[str, Any]:
+-        """Apply a code mutation with syntax validation + git safety."""
+-        if not mutation.syntax_valid:
+-            return {"status": "rejected", "reason": "syntax_invalid"}
+-        if MutationEffect.normalize(mutation.effect) is MutationEffect.UNSAFE:
+-            return {"status": "rejected", "reason": "effect_unsafe"}
+-        gate_reason = mutation_risk_gate_reason(mutation.effect)
+-        if gate_reason is not None:
+-            return {"status": "rejected", "reason": gate_reason}
+-
+-        abs_path = PROJECT_ROOT / mutation.file
+-
+-        # Git commit current state before mutation (safety net). Only this file: a
+-        # checkpoint must never sweep unrelated staged work into an autopilot commit.
+-        if abs_path.exists():
+-            self._git_commit_paths(
+-                [abs_path], f"autopilot: pre-code-mutation checkpoint ({mutation.file})"
+-            )  # may fail when there is nothing to commit — that's OK
+-
+-        # Write the mutated code
+-        abs_path.write_text(mutation.mutated_content)
+-        mutation.accepted = True
+-
+-        # Capture diff
+-        try:
+-            if mutation.mutation_type == "new_file" and not mutation.original_content:
+-                result = subprocess.run(
+-                    ["git", "diff", "--no-index", "--", "/dev/null", str(abs_path)],
+-                    capture_output=True,
+-                    text=True,
+-                    timeout=10,
+-                    cwd=str(PROJECT_ROOT),
+-                )
+-            else:
+-                result = subprocess.run(
+-                    ["git", "diff", str(abs_path)],
+-                    capture_output=True,
+-                    text=True,
+-                    timeout=10,
+-                    cwd=str(PROJECT_ROOT),
+-                )
+-            mutation.git_diff = result.stdout
+-        except Exception:
+-            mutation.git_diff = ""
+-
+-        if self.auto_commit and mutation.git_diff:
+-            self._git_commit_file(
+-                abs_path,
+-                f"autopilot: code {mutation.mutation_type} on {mutation.file}\n\n"
+-                f"{mutation.description}",
+-            )
+-
+-        return {
+-            "status": "applied",
+-            "file": mutation.file,
+-            "mutation_type": mutation.mutation_type,
+-            "effect": MutationEffect.normalize(mutation.effect).value,
+-            "effect_risk": mutation_effect_risk(mutation.effect),
+-            "diff_lines": len(mutation.git_diff.splitlines()),
+-        }
++        """Refuse legacy direct writes; code mutations require an experiment context."""
++        del mutation
++        return {"status": "rejected", "reason": "isolated_context_required"}
+ 
+     def revert_code_mutation(self, mutation: CodeMutation) -> None:
+         """Revert a code mutation to original content and commit the revert."""
+diff --git a/scripts/autopilot/worktree_manager.py b/scripts/autopilot/worktree_manager.py
+index 15ba1aac..99e55659 100644
+--- a/scripts/autopilot/worktree_manager.py
++++ b/scripts/autopilot/worktree_manager.py
+@@ -31,8 +31,10 @@ Usage:
+ from __future__ import annotations
+ 
+ import logging
++import os
+ import shutil
+ import subprocess
++import tempfile
+ from contextlib import contextmanager
+ from dataclasses import dataclass, field
+ from pathlib import Path
+@@ -93,13 +95,12 @@ class ExperimentContext:
+         """Accept the mutation — commit changes in main repo."""
+         if self._decided:
+             return
++        msg = commit_message or "autopilot: accept experiment"
++        paths = list(self._applied_files)
++        if paths:
++            _commit_with_private_index(self.project_root, paths, msg)
+         self._decided = True
+         self._accepted = True
+-
+-        msg = commit_message or "autopilot: accept experiment"
+-        for rel_path in self._applied_files:
+-            _git(["add", rel_path], cwd=self.project_root)
+-        _git(["commit", "-m", msg], cwd=self.project_root, check=False)
+         log.info("Experiment accepted: %s", msg)
+ 
+     def reject(self) -> None:
+@@ -219,6 +220,7 @@ def _git(
+     cwd: Path | str = DEFAULT_PROJECT_ROOT,
+     check: bool = True,
+     timeout: int = 30,
++    env: dict[str, str] | None = None,
+ ) -> subprocess.CompletedProcess:
+     """Run a git command."""
+     cmd = ["git"] + args
+@@ -230,6 +232,7 @@ def _git(
+             text=True,
+             timeout=timeout,
+             check=check,
++            env=env,
+         )
+     except subprocess.CalledProcessError as e:
+         log.warning("git %s failed: %s", " ".join(args), e.stderr.strip())
+@@ -237,3 +240,36 @@ def _git(
+     except subprocess.TimeoutExpired:
+         log.warning("git %s timed out after %ds", " ".join(args), timeout)
+         raise
++
++
++def _commit_with_private_index(project_root: Path, paths: list[str], message: str) -> None:
++    """Commit only experiment-owned paths while preserving the shared index."""
++    index_path = Path(
++        _git(["rev-parse", "--git-path", "index"], cwd=project_root).stdout.strip()
++    )
++    if not index_path.is_absolute():
++        index_path = project_root / index_path
++    fd, temporary_name = tempfile.mkstemp(prefix="experiment-index-", dir=index_path.parent)
++    os.close(fd)
++    temporary_index = Path(temporary_name)
++    temporary_index.unlink()
++    env = {**os.environ, "GIT_INDEX_FILE": str(temporary_index)}
++    try:
++        _git(["read-tree", "HEAD"], cwd=project_root, env=env)
++        _git(["add", "-A", "--", *paths], cwd=project_root, env=env)
++        result = _git(
++            ["commit", "-m", message],
++            cwd=project_root,
++            check=False,
++            env=env,
++        )
++        if result.returncode != 0:
++            detail = (result.stderr or result.stdout).strip()[:500]
++            raise RuntimeError(f"experiment commit rejected: {detail}")
++
++        # Refresh just the accepted paths after commit. This avoids staging a
++        # parallel edit written after the experiment's commit completed.
++        _git(["reset", "-q", "HEAD", "--", *paths], cwd=project_root, check=False)
++    finally:
++        temporary_index.unlink(missing_ok=True)
++        Path(f"{temporary_index}.lock").unlink(missing_ok=True)
+diff --git a/tests/unit/test_ap53_rejected_mutation_ledger.py b/tests/unit/test_ap53_rejected_mutation_ledger.py
+index c8e02eca..edbd210b 100644
+--- a/tests/unit/test_ap53_rejected_mutation_ledger.py
++++ b/tests/unit/test_ap53_rejected_mutation_ledger.py
+@@ -10,6 +10,7 @@ from __future__ import annotations
+ 
+ import importlib
+ import sys
++from contextlib import contextmanager
+ from pathlib import Path
+ from types import SimpleNamespace
+ 
+@@ -78,6 +79,28 @@ class _Forge:
+     def apply_code_mutation(self, mutation):
+         pass
+ 
++    @contextmanager
++    def apply_mutation_isolated(self, _trial_name):
++        class _Context:
++            worktree_path = Path("/tmp/fake-mutation-worktree")
++            accepted = False
++
++            def apply_file(self, _path, _content):
++                pass
++
++            def accept(self, _message=""):
++                self.accepted = True
++
++        ctx = _Context()
++        try:
++            yield ctx
++        finally:
++            if not ctx.accepted:
++                self.reverted += 1
++
++    def apply_code_mutation_in_context(self, _ctx, _mutation):
++        return {"status": "applied_isolated"}
++
+     def revert_mutation(self, mutation):
+         self.reverted += 1
+ 
+diff --git a/tests/unit/test_autopilot_actions.py b/tests/unit/test_autopilot_actions.py
+index de26dfea..6cb817b1 100644
+--- a/tests/unit/test_autopilot_actions.py
++++ b/tests/unit/test_autopilot_actions.py
+@@ -42,6 +42,35 @@ def _ctx(**overrides):
+     return actions._ActionContext(**defaults)
+ 
+ 
++class _FakeMutationExperiment:
++    def __init__(self, forge):
++        self.forge = forge
++        self.worktree_path = Path("/tmp/fake-mutation-worktree")
++        self.decided = False
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, exc_type, exc, tb):
++        if not self.decided:
++            self.forge.reverted += 1
++        return False
++
++    def apply_file(self, path, content):
++        pass
++
++    def accept(self, _message=""):
++        self.decided = True
++
++
++class _FakeIsolatedForge:
++    def apply_mutation_isolated(self, _trial_name):
++        return _FakeMutationExperiment(self)
++
++    def apply_code_mutation_in_context(self, _ctx, _mutation):
++        return {"status": "applied_isolated"}
++
++
+ def _isolate_seed_batch_telemetry(monkeypatch, tmp_path):
+     """Keep the real recorder enabled while isolating its persisted history."""
+     monkeypatch.syspath_prepend(str(ROOT / "scripts" / "benchmark"))
+@@ -1864,7 +1893,7 @@ def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
+     monkeypatch.setenv("AUTOPILOT_SKILL_EFFICACY_GATE", "true")
+     monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
+ 
+-    class FakeForge:
++    class FakeForge(_FakeIsolatedForge):
+         def __init__(self):
+             self.reverted = 0
+ 
+@@ -1913,7 +1942,7 @@ def test_code_mutation_bsv2_gate_accepts_watch_behavior(monkeypatch) -> None:
+     monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "true")
+     monkeypatch.setenv("AUTOPILOT_BSV2_MIN_SHARED_QIDS", "2")
+ 
+-    class FakeForge:
++    class FakeForge(_FakeIsolatedForge):
+         def __init__(self):
+             self.reverted = 0
+ 
+@@ -1963,6 +1992,54 @@ def test_code_mutation_bsv2_gate_accepts_watch_behavior(monkeypatch) -> None:
+     assert detail["signature_diff"]["severity"] == "watch"
+ 
+ 
++def test_code_mutation_eval_exception_exits_isolated_context(monkeypatch) -> None:
++    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
++    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
++
++    class FakeForge(_FakeIsolatedForge):
++        def __init__(self):
++            self.reverted = 0
++            self.applied = 0
++            self.mutation = None
++
++        def propose_code_mutation(self, **kwargs):
++            self.mutation = SimpleNamespace(
++                file=kwargs["target_file"],
++                mutation_type=kwargs["mutation_type"],
++                description="test",
++                original_content="old",
++                mutated_content="new",
++                syntax_valid=True,
++                accepted=False,
++            )
++            return self.mutation
++
++        def apply_code_mutation_in_context(self, _ctx, _mutation):
++            self.applied += 1
++            return {"status": "applied_isolated"}
++
++    class RaisingTower:
++        def hybrid_eval(self):
++            raise RuntimeError("fixture eval failure")
++
++    forge = FakeForge()
++    with pytest.raises(RuntimeError, match="fixture eval failure"):
++        actions._action_code_mutation(
++            {"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix"},
++            _ctx(
++                forge=forge,
++                tower=RaisingTower(),
++                gate=_AlwaysPassGate(),
++                swarm=_FakeSwarm(),
++                journal=_FakeJournal(),
++            ),
++        )
++
++    assert forge.applied == 1
++    assert forge.reverted == 1
++    assert forge.mutation.accepted is False
++
++
+ def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None:
+     class FakeForge:
+         def __init__(self):
+diff --git a/tests/unit/test_gate_frontier_c_and_b.py b/tests/unit/test_gate_frontier_c_and_b.py
+index 7892bb2d..3576303a 100644
+--- a/tests/unit/test_gate_frontier_c_and_b.py
++++ b/tests/unit/test_gate_frontier_c_and_b.py
+@@ -751,7 +751,10 @@ def test_handlers_hash_after_apply_and_before_eval_without_touching_the_action()
+     for handler, apply_call in (
+         ("def _action_prompt_mutation(", "ctx.forge.apply_mutation(mutation)"),
+         ("def _action_gepa_optimize(", "ctx.forge.apply_mutation(mutation)"),
+-        ("def _action_code_mutation(", "ctx.forge.apply_code_mutation(mutation)"),
++        (
++            "def _action_code_mutation(",
++            "ctx.forge.apply_code_mutation_in_context(experiment_ctx, mutation)",
++        ),
+     ):
+         body = source[source.index(handler):]
+         body = body[: body.index("\ndef ", 1)]
+diff --git a/tests/unit/test_prompt_forge_leakage_and_risk.py b/tests/unit/test_prompt_forge_leakage_and_risk.py
+index 2563708b..53d2e797 100644
+--- a/tests/unit/test_prompt_forge_leakage_and_risk.py
++++ b/tests/unit/test_prompt_forge_leakage_and_risk.py
+@@ -486,7 +486,7 @@ def test_apply_refuses_unknown_effect(tmp_path: Path, monkeypatch) -> None:
+     before = target.read_bytes()
+     result = forge.apply_code_mutation(mutation)
+     assert result["status"] == "rejected"
+-    assert result["reason"].startswith("effect_risk_gate:unknown")
++    assert result["reason"] == "isolated_context_required"
+     assert target.read_bytes() == before
+ 
+     class _Ctx:
+@@ -507,7 +507,10 @@ def test_apply_in_context_reports_risk(tmp_path: Path) -> None:
+ 
+     forge = PromptForge(prompts_dir=tmp_path, auto_commit=False, eval_id_vocabulary=_vocab())
+     mutation = CodeMutation(
+-        file="src/tool_policy.py", mutation_type="targeted_fix", description="d"
++        file="src/tool_policy.py",
++        mutation_type="targeted_fix",
++        description="d",
++        original_content=(ROOT / "src/tool_policy.py").read_text(),
+     )
+     mutation.syntax_valid = True
+     mutation.effect = MutationEffect.EXPAND
+diff --git a/tests/unit/test_prompt_forge_mutation_safety.py b/tests/unit/test_prompt_forge_mutation_safety.py
+index 15fb04ea..e17671a8 100644
+--- a/tests/unit/test_prompt_forge_mutation_safety.py
++++ b/tests/unit/test_prompt_forge_mutation_safety.py
+@@ -483,7 +483,7 @@ def test_code_mutation_defaults_to_unknown_effect() -> None:
+     assert mutation.effect is MutationEffect.UNKNOWN
+ 
+ 
+-def test_apply_rejects_unsafe_effect(tmp_path: Path) -> None:
++def test_legacy_direct_apply_fails_closed_without_writing(tmp_path: Path) -> None:
+     forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+     mutation = CodeMutation(
+         file="src/tool_policy.py",
+@@ -492,13 +492,13 @@ def test_apply_rejects_unsafe_effect(tmp_path: Path) -> None:
+         mutated_content="def f():\n    return 1\n",
+     )
+     mutation.syntax_valid = True
+-    mutation.effect = MutationEffect.UNSAFE
++    mutation.effect = MutationEffect.CONSTRAIN
+ 
+     target = ROOT / "src/tool_policy.py"
+     before = target.read_bytes()
+     result = forge.apply_code_mutation(mutation)
+ 
+-    assert result == {"status": "rejected", "reason": "effect_unsafe"}
++    assert result == {"status": "rejected", "reason": "isolated_context_required"}
+     assert target.read_bytes() == before
+     assert mutation.accepted is False
+ 
+@@ -516,6 +516,7 @@ def test_apply_in_context_reports_effect(tmp_path: Path) -> None:
+         file="src/tool_policy.py",
+         mutation_type="targeted_fix",
+         description="d",
++        original_content=(ROOT / "src/tool_policy.py").read_text(),
+         mutated_content="def f():\n    return 1\n",
+     )
+     mutation.syntax_valid = True
+@@ -538,6 +539,7 @@ def test_apply_in_context_rejects_unsafe_effect(tmp_path: Path) -> None:
+         file="src/tool_policy.py",
+         mutation_type="targeted_fix",
+         description="d",
++        original_content=(ROOT / "src/tool_policy.py").read_text(),
+         mutated_content="def f():\n    return 1\n",
+     )
+     mutation.syntax_valid = True
+@@ -547,3 +549,37 @@ def test_apply_in_context_rejects_unsafe_effect(tmp_path: Path) -> None:
+         "status": "rejected",
+         "reason": "effect_unsafe",
+     }
++
++
++def test_apply_in_context_refuses_stale_preimage(tmp_path: Path, monkeypatch) -> None:
++    root = tmp_path / "project"
++    target = root / "src" / "tool_policy.py"
++    target.parent.mkdir(parents=True)
++    target.write_text("parallel edit\n")
++    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", root)
++    monkeypatch.setattr(prompt_forge_mod, "CODE_MUTATION_ALLOWLIST", {"src/tool_policy.py"})
++
++    class _Ctx:
++        worktree_path = tmp_path
++        applied = False
++
++        def apply_file(self, _path: str, _content: str) -> None:
++            self.applied = True
++
++    mutation = CodeMutation(
++        file="src/tool_policy.py",
++        mutation_type="targeted_fix",
++        description="stale candidate",
++        original_content="proposal preimage\n",
++        mutated_content="candidate\n",
++    )
++    mutation.syntax_valid = True
++    mutation.effect = MutationEffect.CONSTRAIN
++
++    ctx = _Ctx()
++    result = PromptForge(prompts_dir=tmp_path, auto_commit=False).apply_code_mutation_in_context(
++        ctx, mutation
++    )
++    assert result == {"status": "rejected", "reason": "target_changed"}
++    assert ctx.applied is False
++    assert target.read_text() == "parallel edit\n"
+diff --git a/tests/unit/test_prompt_forge_safety.py b/tests/unit/test_prompt_forge_safety.py
+index 1e378419..352db520 100644
+--- a/tests/unit/test_prompt_forge_safety.py
++++ b/tests/unit/test_prompt_forge_safety.py
+@@ -213,13 +213,7 @@ def test_new_file_code_mutation_apply_and_revert(tmp_path: Path, monkeypatch) ->
+     )
+     result = forge.apply_code_mutation(mutation)
+ 
+-    assert result["status"] == "applied"
+-    assert target.read_text() == "VALUE = 1"
+-    assert "--- /dev/null" in mutation.git_diff
+-    assert "+++ " in mutation.git_diff
+-
+-    forge.revert_code_mutation(mutation)
+-
++    assert result == {"status": "rejected", "reason": "isolated_context_required"}
+     assert not target.exists()
+     assert mutation.accepted is False
+ 
+diff --git a/tests/unit/test_worktree_manager.py b/tests/unit/test_worktree_manager.py
+index fac4dd85..2f68bdf9 100644
+--- a/tests/unit/test_worktree_manager.py
++++ b/tests/unit/test_worktree_manager.py
+@@ -117,6 +117,165 @@ def test_accept_commits_to_main(temp_git_repo, monkeypatch):
+     assert "improved frontdoor" in result.stdout
+ 
+ 
++def test_accept_does_not_commit_or_unstage_unrelated_operator_work(temp_git_repo, monkeypatch):
++    import scripts.autopilot.worktree_manager as wm
++    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
++
++    unrelated = temp_git_repo / "src" / "escalation.py"
++    unrelated.write_text("operator staged edit\n")
++    subprocess.run(["git", "add", "--", "src/escalation.py"], cwd=temp_git_repo, check=True)
++
++    with WorktreeManager(temp_git_repo).experiment("test_scoped_accept") as ctx:
++        ctx.apply_file("orchestration/prompts/frontdoor.md", "accepted candidate")
++        ctx.accept("autopilot: accept candidate")
++
++    committed_unrelated = subprocess.run(
++        ["git", "show", "HEAD:src/escalation.py"],
++        cwd=temp_git_repo, capture_output=True, text=True, check=True,
++    ).stdout
++    staged_unrelated = subprocess.run(
++        ["git", "show", ":src/escalation.py"],
++        cwd=temp_git_repo, capture_output=True, text=True, check=True,
++    ).stdout
++    assert committed_unrelated == "# original escalation\ndef escalate(): pass\n"
++    assert staged_unrelated == "operator staged edit\n"
++
++
++def test_accept_commits_private_index_bytes_not_post_stage_worktree_edit(
++    temp_git_repo, monkeypatch
++):
++    import scripts.autopilot.worktree_manager as wm
++
++    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
++    unrelated = temp_git_repo / "src" / "escalation.py"
++    unrelated.write_text("operator staged edit\n")
++    subprocess.run(["git", "add", "--", "src/escalation.py"], cwd=temp_git_repo, check=True)
++    staged_unrelated_before = subprocess.run(
++        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
++        cwd=temp_git_repo,
++        capture_output=True,
++        text=True,
++        check=True,
++    ).stdout
++
++    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
++    hooks = temp_git_repo / ".git" / "hooks"
++    hooks.mkdir(exist_ok=True)
++    pre_commit = hooks / "pre-commit"
++    pre_commit.write_text(
++        "#!/bin/sh\n"
++        f"printf 'parallel post-stage edit\\n' > '{target}'\n"
++    )
++    pre_commit.chmod(0o755)
++
++    with WorktreeManager(temp_git_repo).experiment("test_private_index_commit") as ctx:
++        ctx.apply_file("orchestration/prompts/frontdoor.md", "evaluated candidate\n")
++        ctx.accept("autopilot: accept evaluated candidate")
++
++    committed_target = subprocess.run(
++        ["git", "show", "HEAD:orchestration/prompts/frontdoor.md"],
++        cwd=temp_git_repo,
++        capture_output=True,
++        text=True,
++        check=True,
++    ).stdout
++    assert committed_target == "evaluated candidate\n"
++    assert target.read_text() == "parallel post-stage edit\n"
++    assert subprocess.run(
++        ["git", "diff", "--cached", "--", "orchestration/prompts/frontdoor.md"],
++        cwd=temp_git_repo,
++        capture_output=True,
++        text=True,
++        check=True,
++    ).stdout == ""
++    assert subprocess.run(
++        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
++        cwd=temp_git_repo,
++        capture_output=True,
++        text=True,
++        check=True,
++    ).stdout == staged_unrelated_before
++
++
++def test_failed_commit_hook_restores_preimage_and_preserves_shared_index(temp_git_repo, monkeypatch):
++    import scripts.autopilot.worktree_manager as wm
++    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
++    unrelated = temp_git_repo / "src" / "escalation.py"
++    unrelated.write_text("operator staged edit\n")
++    subprocess.run(["git", "add", "--", "src/escalation.py"], cwd=temp_git_repo, check=True)
++    staged_before = subprocess.run(
++        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
++        cwd=temp_git_repo, capture_output=True, text=True, check=True,
++    ).stdout
++
++    hooks = temp_git_repo / ".git" / "hooks"
++    hooks.mkdir(exist_ok=True)
++    pre_commit = hooks / "pre-commit"
++    pre_commit.write_text("#!/bin/sh\nexit 1\n")
++    pre_commit.chmod(0o755)
++    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
++    with pytest.raises(RuntimeError, match="experiment commit rejected"):
++        with WorktreeManager(temp_git_repo).experiment("test_hook_reject") as ctx:
++            ctx.apply_file("orchestration/prompts/frontdoor.md", "candidate")
++            ctx.accept("autopilot: rejected by hook")
++
++    assert target.read_text() == "original frontdoor content"
++    assert subprocess.run(
++        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
++        cwd=temp_git_repo, capture_output=True, text=True, check=True,
++    ).stdout == staged_before
++    assert subprocess.run(
++        ["git", "show", "HEAD:orchestration/prompts/frontdoor.md"],
++        cwd=temp_git_repo, capture_output=True, text=True, check=True,
++    ).stdout == "original frontdoor content"
++
++
++def test_auto_reject_on_exception_restores_candidate_and_new_file(temp_git_repo, monkeypatch):
++    import scripts.autopilot.worktree_manager as wm
++    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
++
++    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
++    new_file = temp_git_repo / "src" / "generated.py"
++    with pytest.raises(RuntimeError, match="eval failed"):
++        with WorktreeManager(temp_git_repo).experiment("test_exception_reject") as ctx:
++            ctx.apply_file("orchestration/prompts/frontdoor.md", "candidate")
++            ctx.apply_file("src/generated.py", "candidate module")
++            raise RuntimeError("eval failed")
++
++    assert target.read_text() == "original frontdoor content"
++    assert not new_file.exists()
++
++
++def test_code_mutation_context_restores_new_file_on_early_exit(temp_git_repo, monkeypatch):
++    import scripts.autopilot.species.prompt_forge as prompt_forge_mod
++    import scripts.autopilot.worktree_manager as wm
++    from scripts.autopilot.species.prompt_forge import CodeMutation, MutationEffect, PromptForge
++
++    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
++    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", temp_git_repo)
++    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", temp_git_repo / "src")
++    target = temp_git_repo / "src" / "generated.py"
++    mutation = CodeMutation(
++        file="src/generated.py",
++        mutation_type="new_file",
++        description="fixture candidate",
++        original_content="",
++        mutated_content="VALUE = 1\n",
++    )
++    mutation.syntax_valid = True
++    mutation.effect = MutationEffect.CONSTRAIN
++    forge = PromptForge(
++        prompts_dir=temp_git_repo / "orchestration" / "prompts", auto_commit=False
++    )
++    with WorktreeManager(temp_git_repo).experiment("code_mutation_auto_reject") as ctx:
++        result = forge.apply_code_mutation_in_context(ctx, mutation)
++        assert result["status"] == "applied_isolated"
++        assert target.read_text() == "VALUE = 1\n"
++        # An undecided action exit models gate rejection and other early returns.
++
++    assert not target.exists()
++
++
+ def test_auto_reject_on_no_decision(temp_git_repo, monkeypatch):
+     """If neither accept nor reject is called, auto-reject."""
+     import scripts.autopilot.worktree_manager as wm

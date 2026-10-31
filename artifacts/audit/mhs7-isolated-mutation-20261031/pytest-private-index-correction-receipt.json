@@ -1,0 +1,91 @@
+{
+  "status": "passed",
+  "pids": [
+    {
+      "pid": 1106925,
+      "start_ticks": 157316422,
+      "absent_after_wait": true,
+      "return_code": 0,
+      "elapsed_s": 26.60243738302961,
+      "command": [
+        "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/unit/test_worktree_manager.py",
+        "tests/unit/test_prompt_forge_mutation_safety.py",
+        "tests/unit/test_prompt_forge_safety.py"
+      ]
+    },
+    {
+      "pid": 1109060,
+      "start_ticks": 157319082,
+      "absent_after_wait": true,
+      "return_code": 0,
+      "elapsed_s": 3.8655471079982817,
+      "command": [
+        "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/unit/test_autopilot_actions.py",
+        "-k",
+        "code_mutation"
+      ]
+    },
+    {
+      "pid": 1109152,
+      "start_ticks": 157319468,
+      "absent_after_wait": true,
+      "return_code": 0,
+      "elapsed_s": 3.587733498075977,
+      "command": [
+        "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/unit/test_ap53_rejected_mutation_ledger.py"
+      ]
+    },
+    {
+      "pid": 1109243,
+      "start_ticks": 157319827,
+      "absent_after_wait": true,
+      "return_code": 0,
+      "elapsed_s": 3.137546388898045,
+      "command": [
+        "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/unit/test_prompt_forge_leakage_and_risk.py",
+        "-k",
+        "apply_"
+      ]
+    },
+    {
+      "pid": 1109485,
+      "start_ticks": 157320141,
+      "absent_after_wait": true,
+      "return_code": 0,
+      "elapsed_s": 4.09330990514718,
+      "command": [
+        "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+        "-m",
+        "pytest",
+        "-q",
+        "tests/unit/test_gate_frontier_c_and_b.py",
+        "-k",
+        "handlers_hash_after_apply_and_before_eval"
+      ]
+    }
+  ],
+  "cpus": "32-33,128-129",
+  "physical_cpus": "32-33",
+  "smt_cpus": "128-129",
+  "mutex": "/mnt/raid0/llm/tmp/compute-flags/prep-locks/32-33.lock",
+  "peak_tree_rss_bytes": 700133376,
+  "samples": 813,
+  "elapsed_s": 41.29084019502625,
+  "log": "/mnt/raid0/llm/tmp/codex-ni-20261031-mhs7/pytest-private-index-correction.log"
+}
