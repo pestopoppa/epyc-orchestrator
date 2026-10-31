@@ -74,9 +74,10 @@ def _precompute_embedding(
     its own stored context contradicted (EPD-3-R3). The text itself is built by
     the one canonical builder, never re-spelled here.
 
-    ``task_description`` is expected pre-truncated by the caller to whatever it
-    puts in the payload's ``task_description`` field, so the precomputed vector
-    describes the text that is actually stored.
+    The full ``task_description`` is passed here and retained for storage. The
+    canonical builder applies its shared embedding-text bound, so the vector is
+    a bounded view of the same stored objective rather than a separately
+    truncated 200-character prefix.
     """
     text = embedding_text_for(
         objective=task_description,
@@ -186,7 +187,7 @@ def _inject_3way_rewards_http(
     if not rewards:
         return summary.to_dict()
 
-    embedding = _precompute_embedding(prompt[:200], client, task_type=suite)
+    embedding = _precompute_embedding(prompt, client, task_type=suite)
 
     executor = _get_reward_executor()
     futures: dict[concurrent.futures.Future[tuple[bool, str]], str] = {}
@@ -225,7 +226,7 @@ def _inject_3way_rewards_http(
             context.update(sp_rewards)
 
         payload = {
-            "task_description": prompt[:200],
+            "task_description": prompt,
             "action": action_key,
             "reward": reward,
             "context": context,
@@ -284,7 +285,7 @@ def _inject_per_role_rewards_http(
     if not rewards:
         return summary.to_dict()
 
-    embedding = _precompute_embedding(prompt[:200], client, task_type=suite)
+    embedding = _precompute_embedding(prompt, client, task_type=suite)
 
     executor = _get_reward_executor()
     futures: dict[concurrent.futures.Future[tuple[bool, str]], str] = {}
@@ -307,7 +308,7 @@ def _inject_per_role_rewards_http(
         }
 
         payload = {
-            "task_description": prompt[:200],
+            "task_description": prompt,
             "action": role_name,
             "reward": reward,
             "context": context,
