@@ -1,0 +1,4 @@
+COMMAND: ['/mnt/raid0/llm/epyc-orchestrator/.venv/bin/ruff', 'format', '--check', 'tests/unit/test_prompt_forge_eval_identity.py']
+1 file already formatted
+
+EXIT: 0

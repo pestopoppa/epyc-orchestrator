@@ -1,0 +1,2 @@
+1cda8aa9b20728add481ff35e0e666544f99cee22a6484164073e669ec90c33d  src/autopilot_core/mutation_guards.py
+4afb146b2ab401ff972da1b960288afea7fa7a89b44b0ee41faadfa1a5d792bf  tests/unit/test_prompt_forge_eval_identity.py

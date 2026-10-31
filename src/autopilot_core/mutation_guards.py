@@ -314,6 +314,250 @@ def _top_level_definition_names(tree: ast.AST) -> set[str]:
     return names
 
 
+_EVAL_IDENTITY_FIELDS = frozenset({"workload_class", "scoring_method", "batch_id"})
+_EVAL_METADATA_FIELDS = frozenset({"suite", "tier"})
+_CODE_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _identity_access(node: ast.AST) -> tuple[str, ast.AST | None] | None:
+    """Explicit Python field/key accesses, including Store for force-role protection."""
+    if isinstance(node, ast.Name):
+        return node.id, None
+    if isinstance(node, ast.Attribute):
+        return node.attr, node.value
+    if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+        if isinstance(node.slice.value, str):
+            return node.slice.value, node.value
+    if isinstance(node, ast.Call):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"get", "pop", "setdefault"}
+            and node.args
+        ):
+            key, base = node.args[0], node.func.value
+        elif (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"getattr", "hasattr"}
+            and len(node.args) > 1
+        ):
+            base, key = node.args[:2]
+        else:
+            return None
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return key.value, base
+    return None
+
+
+def _request_metadata_access(base: ast.AST | None) -> bool:
+    if base is None:
+        return False
+    for node in ast.walk(base):
+        access = _identity_access(node)
+        if access and access[0] in {"request", "req", "metadata", "request_metadata"}:
+            return True
+    return False
+
+
+def _force_role_access(node: ast.AST) -> bool:
+    access = _identity_access(node)
+    if access and access[0] == "force_role":
+        return True
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"setattr", "delattr"}
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == "force_role"
+    )
+
+
+def _code_scope_nodes(tree: ast.AST):
+    """Visit each lexical scope separately; nested defs never taint their parent."""
+
+    def visit(root, path):
+        nodes, nested = [], []
+
+        def collect(node):
+            nodes.append(node)
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, _CODE_SCOPES):
+                    nested.append(child)
+                else:
+                    collect(child)
+
+        collect(root)
+        yield path, nodes
+        counts = {}
+        for child in nested:
+            name = getattr(child, "name", "lambda")
+            index = counts.get(name, 0)
+            counts[name] = index + 1
+            yield from visit(child, (*path, (name, index)))
+
+    yield from visit(tree, ())
+
+
+def _control_context(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> tuple:
+    """Keep dominator tests and branch identity, without freezing unrelated bodies."""
+    context = []
+    while node in parents:
+        parent = parents[node]
+        if isinstance(
+            parent,
+            (
+                ast.If,
+                ast.While,
+                ast.For,
+                ast.AsyncFor,
+                ast.Try,
+                ast.With,
+                ast.AsyncWith,
+                ast.IfExp,
+                ast.Match,
+                ast.ExceptHandler,
+            ),
+        ):
+            header = []
+            branch = ""
+            for name, value in ast.iter_fields(parent):
+                if isinstance(value, list):
+                    if node in value:
+                        branch = name
+                    elif value and all(isinstance(item, ast.expr) for item in value):
+                        header.append((name, tuple(ast.dump(item) for item in value)))
+                elif isinstance(value, ast.AST) and not isinstance(value, ast.stmt):
+                    header.append((name, ast.dump(value)))
+            context.append((type(parent).__name__, branch, tuple(header)))
+        node = parent
+    return tuple(context)
+
+
+def _eval_identity_violations(tree: ast.AST, original_tree: ast.AST | None) -> list[str]:
+    """MHS-12: delta-only explicit identity reads and preservation of forced routing.
+
+    Compare executable AST expressions with multiplicity, lexical scope and control
+    context, not field-name sets: an old read never licenses a new branch/copy.
+    Comments/docstrings and write-only field names are not reads. Existing equal
+    expressions survive formatting and unrelated straight-line edits.
+
+    In force-role scopes, preserve force-bearing statements, writes to their
+    selected receivers (including explicit local aliases), and abrupt exits. New
+    exits or changed dominator tests fail conservatively, rather than asserting
+    that forced routing survived. This is an explicit-access static screen, not
+    arbitrary alias analysis, constant folding or a general security sandbox.
+    """
+
+    def records(root):
+        reads: dict[tuple, int] = {}
+        forces = {}
+        if root is None:
+            return reads, forces
+        parents = {
+            child: parent for parent in ast.walk(root) for child in ast.iter_child_nodes(parent)
+        }
+        for scope, nodes in _code_scope_nodes(root):
+            sensitive = set()
+            for node in nodes:
+                access = _identity_access(node)
+                if _force_role_access(node):
+                    sensitive.add(node)
+                label = None
+                if access and not isinstance(getattr(node, "ctx", None), (ast.Store, ast.Del)):
+                    key, base = access
+                    if key in _EVAL_IDENTITY_FIELDS or (
+                        key in _EVAL_METADATA_FIELDS and _request_metadata_access(base)
+                    ):
+                        label = key
+                if isinstance(node, ast.Constant) and node.value == "eval_batch":
+                    # A standalone string expression is documentation, not executed identity code.
+                    if not isinstance(parents.get(node), ast.Expr):
+                        label = "eval_batch"
+                if label is not None:
+                    expression = node
+                    while isinstance(parents.get(expression), ast.expr):
+                        expression = parents[expression]
+                    key = (
+                        scope,
+                        label,
+                        ast.dump(expression),
+                        _control_context(expression, parents),
+                    )
+                    reads[key] = reads.get(key, 0) + 1
+            if not sensitive:
+                continue
+            statements = set()
+            for node in sensitive:
+                while node in parents and not isinstance(node, ast.stmt):
+                    node = parents[node]
+                statements.add(node)
+            selected: set[str] = set()
+
+            def targets(node):
+                pending = list(node.targets) if isinstance(node, ast.Assign) else [node.target]
+                result = set()
+                while pending:
+                    target = pending.pop()
+                    if isinstance(target, (ast.Tuple, ast.List)):
+                        pending.extend(target.elts)
+                    else:
+                        result.add(ast.unparse(target))
+                return result
+
+            # Include assignments inside a force-bearing branch, then explicit
+            # local propagation such as selected = role.
+            changed = True
+            while changed:
+                before = set(selected)
+                for node in nodes:
+                    if not isinstance(
+                        node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
+                    ):
+                        continue
+                    value = node.value
+                    carries = any(item in sensitive for item in ast.walk(value)) if value else False
+                    carries |= (
+                        any(
+                            isinstance(item, (ast.Name, ast.Attribute, ast.Subscript))
+                            and isinstance(item.ctx, ast.Load)
+                            and ast.unparse(item) in selected
+                            for item in ast.walk(value)
+                        )
+                        if value
+                        else False
+                    )
+                    carries |= any(node in ast.walk(stmt) for stmt in statements)
+                    if carries:
+                        selected.update(targets(node))
+                changed = before != selected
+            protected = []
+            for node in nodes:
+                writes = isinstance(
+                    node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)
+                ) and bool(targets(node) & selected)
+                if (
+                    node in statements
+                    or writes
+                    or isinstance(node, (ast.Return, ast.Raise, ast.Break, ast.Continue))
+                ):
+                    protected.append((ast.dump(node), _control_context(node, parents)))
+            forces[scope] = tuple(protected)
+        return reads, forces
+
+    before, force_before = records(original_tree)
+    after, force_after = records(tree)
+    violations = []
+    for key, count in after.items():
+        if count > before.get(key, 0):
+            violations.append(f"eval_identity_added_read: {key[1]}")
+    for scope in force_before.keys() | force_after.keys():
+        if force_before.get(scope) != force_after.get(scope):
+            violations.append(
+                "force_role_handling_changed: forced routing preservation not established"
+            )
+    return violations
+
+
 def screen_static_safety(
     mutated: str,
     *,
@@ -333,6 +577,7 @@ def screen_static_safety(
     except SyntaxError as exc:
         return StaticSafetyReport(False, MutationEffect.UNSAFE, (f"syntax error: {exc}",))
 
+    original_tree = None
     grandfathered_roots: set[str] = set()
     grandfathered_calls: set[str] = set()
     if original.strip():
@@ -343,6 +588,8 @@ def screen_static_safety(
         if original_tree is not None:
             grandfathered_roots = _collect_imported_roots(original_tree)
             grandfathered_calls = _collect_dotted_calls(original_tree)
+
+    violations.extend(_eval_identity_violations(tree, original_tree))
 
     # 1. Module-level statements must not do work at import time.
     for node in ast.iter_child_nodes(tree):

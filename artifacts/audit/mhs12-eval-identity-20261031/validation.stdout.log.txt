@@ -1,0 +1,30 @@
+BASELINE: native chat noop and added eval-identity branch both pass; missing MHS-12 reproduced
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_no_test_patches_a_moved_global_on_prompt_forge ______________
+
+    def test_no_test_patches_a_moved_global_on_prompt_forge():
+        # A monkeypatch of a moved name on prompt_forge would silently change nothing.
+        aliases = r"(?:pf|prompt_forge|prompt_forge_mod|_prompt_forge_module|forge_module)"
+        names = "|".join(re.escape(n) for n in (*MOVED_S2, *NOT_REEXPORTED))
+        pattern = re.compile(rf"setattr\(\s*{aliases}\s*,\s*[\"']({names})[\"']")
+        offenders = []
+        for path in sorted((ROOT / "tests").rglob("*.py")):
+            for m in pattern.finditer(path.read_text(errors="replace")):
+                offenders.append(f"{path.relative_to(ROOT)}:{m.group(1)}")
+>       assert offenders == []
+E       AssertionError: assert ['tests/unit/...ON_ALLOWLIST'] == []
+E
+E         Left contains one more item: 'tests/unit/test_prompt_forge_mutation_safety.py:CODE_MUTATION_ALLOWLIST'
+E         Use -v to get more diff
+
+tests/unit/test_mutation_guards_seam_s2.py:173: AssertionError
+=========================== short test summary info ============================
+FAILED tests/unit/test_mutation_guards_seam_s2.py::test_no_test_patches_a_moved_global_on_prompt_forge
+1 failed in 0.16s
+........................................................................ [ 26%]
+........................................................................ [ 53%]
+........................................................................ [ 80%]
+.....................................................                    [100%]
+269 passed, 1 deselected in 69.54s (0:01:09)
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 72.3452456779778, "sampled_peak_tree_rss_bytes": 1457844224, "samples": 709, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 548284, "leader_birth": 158839332, "child_rc": 0, "children_drained": true, "failure": null}
