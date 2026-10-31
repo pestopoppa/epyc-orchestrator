@@ -487,9 +487,10 @@ class VoiceTurnSseClient:
                 raise VoiceServiceError("voice route request failed") from exc
         finally:
             with self._state_lock:
+                # Retire and reset before another stream can be admitted.
                 self._active_response = None
                 self._stream_active = False
-            self._cancel_requested.clear()
+                self._cancel_requested.clear()
         if not terminal and not was_cancelled:
             raise VoiceServiceError("voice route ended without a terminal event")
 
@@ -497,8 +498,9 @@ class VoiceTurnSseClient:
         raise VoiceServiceError("the first-party voice route has no inject endpoint")
 
     def cancel_generation(self) -> None:
-        self._cancel_requested.set()
         with self._state_lock:
+            # Bind the signal and response snapshot to the same generation.
+            self._cancel_requested.set()
             response = self._active_response
         if response is not None:
             response.close()

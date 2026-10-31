@@ -1,0 +1,141 @@
+source_sha256=fd2f4486b05917e867ac3610a94707664994c3b6b9c635b849241e0c35d8efb1
+test_sha256=8bc72af03676cf2d7d9901969ceabaf61c408ebe413a3885a601b2656965d368
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___ test_old_retirement_cannot_erase_typed_controller_cancel_of_replacement ____
+
+    def test_old_retirement_cannot_erase_typed_controller_cancel_of_replacement():
+        client, adapter, turns = _client()
+        retired = threading.Event()
+        release_retirement = threading.Event()
+        errors = []
+        lock = threading.Lock()
+    
+        class RetirementBarrier:
+            def __enter__(self):
+                lock.acquire()
+    
+            def __exit__(self, *_args):
+                retiring = (
+                    threading.current_thread().name == "old-retirement"
+                    and not adapter._stream_active
+                )
+                lock.release()
+                if retiring:
+                    retired.set()
+                    assert release_retirement.wait(3)
+    
+        adapter._state_lock = RetirementBarrier()
+        old = adapter.stream_turn("old", session_id="old-session", turn_id="old")
+        assert next(old) == VoiceEvent("text_delta", "first")
+        worker = _thread(errors, lambda: list(old), "old-retirement")
+        events_at_client_boundary = []
+        native_stream = adapter.stream_turn
+    
+        def observe(*args, **kwargs):
+            for event in native_stream(*args, **kwargs):
+                events_at_client_boundary.append(event)
+                yield event
+    
+        adapter.stream_turn = observe
+        synthesised = []
+        synthesizer = SimpleNamespace(
+            health=lambda: True,
+            cancel=lambda: None,
+            stream_pcm=lambda text, **_kwargs: synthesised.append(text) or iter((b"pcm",)),
+        )
+        cascade = CascadeBackend(
+            SimpleNamespace(health=lambda: True),
+            adapter,
+            synthesizer,
+            tts_text_normalization=False,
+            tts_respell=False,
+        )
+        controller = VoiceController(
+            cascade, SimpleNamespace(stop_queued_audio=lambda *_args: None)
+        )
+        try:
+            assert retired.wait(3)
+            stream = controller.respond(
+                VoiceTurn(
+                    "replacement",
+                    "new-session",
+                    b"",
+                    transcript="new",
+                )
+            )
+            assert next(stream) == VoiceEvent("text_delta", "first")
+            controller.apply_retain_cancel_choice(
+                "new-session",
+                "replacement",
+                RetainCancelChoice.RETAIN,
+            )
+            assert not turns["replacement"].closed
+            controller.apply_retain_cancel_choice(
+                "new-session",
+                "replacement",
+                RetainCancelChoice.CANCEL,
+            )
+            assert turns["replacement"].closed
+            release_retirement.set()
+            _join(worker, errors)
+            assert list(stream) == []
+>           assert events_at_client_boundary == [VoiceEvent("text_delta", "first")]
+E           AssertionError: assert [VoiceEvent(k...yload='tail')] == [VoiceEvent(k...load='first')]
+E             
+E             Left contains one more item: VoiceEvent(kind='text_delta', payload='tail')
+E             Use -v to get more diff
+
+/mnt/raid0/llm/tmp/codex3-cs18-20261031/readset/tests/unit/test_voice_cancellation_races.py:148: AssertionError
+_ test_cancel_signal_and_response_snapshot_cannot_target_different_generations _
+
+    def test_cancel_signal_and_response_snapshot_cannot_target_different_generations():
+        client, adapter, turns = _client()
+        signalled = threading.Event()
+        replacement_ready = threading.Event()
+        errors = []
+        replacement = []
+        state_lock = adapter._state_lock
+    
+        class CancellationBarrier(threading.Event):
+            def set(self):
+                super().set()
+                signalled.set()
+                # Let retirement and replacement happen during an unprotected set.
+                # With atomic cancellation they cannot enter until its snapshot is
+                # captured, so the barrier must not wait while holding that lock.
+                if not state_lock.locked():
+                    assert replacement_ready.wait(3)
+    
+        adapter._cancel_requested = CancellationBarrier()
+        old = adapter.stream_turn("old", session_id="old-session", turn_id="old")
+        assert next(old) == VoiceEvent("text_delta", "first")
+    
+        def replace():
+            assert signalled.wait(3)
+            assert list(old) == []
+            new = adapter.stream_turn(
+                "new", session_id="new-session", turn_id="replacement"
+            )
+            replacement.append(new)
+            assert next(new) == VoiceEvent("text_delta", "first")
+            replacement_ready.set()
+    
+        replacer = _thread(errors, replace, "replacement")
+        canceller = _thread(errors, adapter.cancel_orchestrator, "cancellation")
+        try:
+            _join(canceller, errors)
+            _join(replacer, errors)
+            # The cancel callback owns old's transport. Replacement must remain
+            # alive, including its already-buffered tail and natural completion.
+            assert turns["old"].closed
+>           assert not turns["replacement"].closed
+E           assert not True
+E            +  where True = <test_voice_cancellation_races._BufferedTurn object at 0x750e39785810>.closed
+
+/mnt/raid0/llm/tmp/codex3-cs18-20261031/readset/tests/unit/test_voice_cancellation_races.py:196: AssertionError
+=========================== short test summary info ============================
+FAILED ../dev::test_old_retirement_cannot_erase_typed_controller_cancel_of_replacement
+FAILED ../dev::test_cancel_signal_and_response_snapshot_cannot_target_different_generations
+2 failed in 0.49s
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 0.9156225000042468, "sampled_peak_tree_rss_bytes": 83599360, "samples": 10, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 1186833, "leader_birth": 159138404, "child_rc": 1, "children_drained": true, "failure": null}
