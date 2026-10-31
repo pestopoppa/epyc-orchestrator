@@ -1621,6 +1621,7 @@ def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None
     assert species == "prompt_forge"
     assert result.details.get("skill_efficacy") is None
     assert result.details.get("bsv2_accept_gate") is None
+    assert result.details["accepted_warrant_telemetry"]["acceptance_effect"] == "none"
     assert tower.calls == 1
     assert forge.applied == 1
     assert forge.reverted == 0
@@ -1770,6 +1771,7 @@ def test_prompt_mutation_bsv2_gate_rejects_behavior_regression(monkeypatch) -> N
     assert forge.applied == 1
     assert forge.reverted == 1
     assert swarm.epochs == []
+    assert "accepted_warrant_telemetry" not in result.details
     detail = result.details["bsv2_accept_gate"]
     assert detail["accept"] is False
     assert detail["gate_decision"] == "block"
@@ -1899,6 +1901,7 @@ def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
     assert tower.calls == 2
     assert forge.reverted == 0
     assert swarm.epochs == ["code_mutation:src/escalation.py/targeted_fix"]
+    assert result.details["accepted_warrant_telemetry"]["acceptance_effect"] == "none"
     detail = result.details["skill_efficacy"]
     assert detail["accept"] is True
     assert detail["artifact_kind"] == "code"

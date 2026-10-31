@@ -1081,6 +1081,56 @@ def _record_rejected_mutation(
         log.warning("AP-53 rejected-mutation record failed: %s", exc)
 
 
+def _record_accepted_warrant_telemetry(action: dict[str, Any], ctx: _ActionContext,
+                                       result: EvalResult) -> None:
+    """Observe explicit trial citations after acceptance; never decide the gate."""
+    import re
+
+    payload = {"schema": "accepted_warrant_telemetry.v1", "acceptance_effect": "none",
+               "acceptance_boundary": "action_local_retained",
+               "citation_syntax": "Trial #<id> in action.description",
+               "scan_limit_chars": 8192, "scanned_chars": 0, "scan_truncated": False,
+               "explicit_citation_found": None, "cites_observed_failure": None,
+               "cited_trial_ids": [], "verified_failure_trial_ids": [], "status": "unknown"}
+    try:
+        description = action.get("description")
+        if isinstance(description, str):
+            # A bounded scan is honest about truncation; unrecognized syntax is not
+            # evidence that no failure was cited in natural language.
+            bounded = description[:payload["scan_limit_chars"]]
+            payload["scanned_chars"] = len(bounded)
+            payload["scan_truncated"] = len(description) > len(bounded)
+            ids = sorted({int(x) for x in re.findall(r"\btrial\s*#\s*(\d+)\b", bounded, re.I)})
+            payload["cited_trial_ids"] = ids
+            payload["explicit_citation_found"] = bool(ids)
+            payload["status"] = "scan_truncated" if len(description) > len(bounded) else "no_supported_citation"
+            if ids:
+                from experiment_journal import has_negative_evidence, is_learning_eligible
+                entries = ctx.journal.entries_with_supersessions()
+                by_id = {e.trial_id: e for e in entries if e.trial_id in ids}
+                verified = sorted(i for i, e in by_id.items()
+                                  if is_learning_eligible(e) and has_negative_evidence(e))
+                payload["verified_failure_trial_ids"] = verified
+                if verified:
+                    payload["cites_observed_failure"] = True
+                    payload["status"] = "verified"
+                elif len(by_id) == len(ids) and all(is_learning_eligible(e) for e in by_id.values()):
+                    payload["cites_observed_failure"] = False
+                    payload["status"] = "resolved_no_failure"
+                elif len(by_id) == len(ids):
+                    payload["status"] = "unresolved_ineligible"
+                else:
+                    payload["status"] = "unresolved"
+        result.details["accepted_warrant_telemetry"] = payload
+    except Exception as exc:  # observation must never alter an acceptance
+        log.warning("Warrant telemetry unavailable: %s", type(exc).__name__)
+        try:
+            payload["status"] = "unavailable"
+            result.details["accepted_warrant_telemetry"] = payload
+        except Exception:  # noqa: BLE001 - never turn telemetry failure into rejection
+            pass
+
+
 def _build_mutation_context(
     action: dict[str, Any],
     ctx: _ActionContext,
@@ -1689,6 +1739,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         mutation_type=mutation_type,
         decision="kept",
     )
+    _record_accepted_warrant_telemetry(action, ctx, eval_result)
     # AP-7: Prompt change accepted — invalidate stale Optuna trials
     ctx.swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
     return eval_result, "prompt_forge"
@@ -1792,6 +1843,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
+    _record_accepted_warrant_telemetry(action, ctx, eval_result)
     ctx.swarm.mark_epoch(f"gepa_optimize:{target}")
     return eval_result, "prompt_forge"
 
@@ -1960,6 +2012,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         mutation_type=mutation_type,
         decision="kept",
     )
+    _record_accepted_warrant_telemetry(action, ctx, eval_result)
     ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
     return eval_result, "prompt_forge"
 
@@ -2097,6 +2150,7 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
             setattr(eval_result, "bug_corrupted_reason", reason)
             eval_result.details["flag_revert_failed"] = True
     else:
+        _record_accepted_warrant_telemetry(action, ctx, eval_result)
         # AP-7: Structural change accepted — invalidate stale Optuna trials
         ctx.swarm.mark_epoch(f"structural_experiment:{flags}")
 
@@ -2335,6 +2389,7 @@ def _action_structural_prune(action: dict[str, Any], ctx: _ActionContext):
         target_path.write_text(original_content)
         return eval_result, "structural_lab"
 
+    _record_accepted_warrant_telemetry(action, ctx, eval_result)
     # Accepted — invalidate stale Optuna trials
     ctx.swarm.mark_epoch(f"structural_prune:{target}/{block_id}")
     return eval_result, "structural_lab"
