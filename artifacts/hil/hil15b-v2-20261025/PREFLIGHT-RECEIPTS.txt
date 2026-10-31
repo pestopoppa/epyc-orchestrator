@@ -1,0 +1,13 @@
+Original preserved TMP validation receipts (paths outside repository):
+/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/PREFLIGHT.log
+SHA256 4aba478a5900408781df84c0f492c0d36cd593b0386e4ee3e7c9debc3e940099; rc0 2026-10-25T16:15:24Z.
+/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/PREFLIGHT-TOOLPROTOCOL.log
+SHA256 dbc4475a02a819218f2f7621779e2a6dcf83d456ac4c8b40537b44a7784aaa25; rc0 2026-10-25T16:16:48Z.
+/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/PREFLIGHT-MOCK40.log
+SHA256 51e6856b2e521379f8ee456e72e3b3616643ff9d3a42be9b4ed65c1003c7edb9; rc0 2026-10-25T16:17:13Z;79.111s.
+/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/mock40/manifest.json
+SHA256 d9cca2fdebb81ce2eb0fec161a0567dc0198e946ce520bda3c0bc1a08685819d; mock=true.
+Initial unittest absolute-module-path invocation failure retained at
+/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/PREFLIGHT-attempt1-import-path.log;
+corrected invocation passed; no answer/oracle discrepancy. Mock trace evidence proves
+plumbing only, not live tool protocol or empirical difficulty.

@@ -1,0 +1,13 @@
+2026-10-25T16:16:45Z
+PF: TMP-only syntax + model-free unit fixtures; CPUs24,25; OMP1; timeout300; no network/models/GNX
+GRANT /mnt/raid0/llm/tmp/compute-flags/grants/kpf64-f-fb.grant regions=0-23 start=2026-10-25T13:46Z end=2026-10-25T17:46Z
+GRANT /mnt/raid0/llm/tmp/compute-flags/grants/yarn-extension-arms.grant regions=mi210_0,184-191 start=2026-10-25T15:56Z end=2026-10-25T18:06Z
+COMMAND timeout300 taskset24,25 venv-python prototype/test_toolprotocol_preflight.py
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.409s
+
+OK
+PASS real REPL no-registry tool surface: file_write_safe wrote TMP input; peek read same bytes; TOOL/write_file/read_file absent
+PF_FIXTURES_RC=0
+2026-10-25T16:16:48Z

@@ -1,0 +1,15 @@
+2026-10-25T16:15:24Z
+PF: TMP-only syntax + model-free unit fixtures; CPUs24,25; OMP1; timeout300; no network/models/GNX
+GRANT /mnt/raid0/llm/tmp/compute-flags/grants/kpf64-f-fb.grant regions=0-23 start=2026-10-25T13:46Z end=2026-10-25T17:46Z
+GRANT /mnt/raid0/llm/tmp/compute-flags/grants/yarn-extension-arms.grant regions=mi210_0,184-191 start=2026-10-25T15:56Z end=2026-10-25T18:06Z
+COMMAND timeout300 taskset24,25 python3 prototype/test_preflight.py
+20 independent answer/input/checker comparisons and 5 semantic fixtures passed; no model/difficulty claim
+20 independent answer/input/checker comparisons and 5 semantic fixtures passed; no model/difficulty claim
+.
+----------------------------------------------------------------------
+Ran 1 test in 0.260s
+
+OK
+PASS: twice-generated20; independent oracle20; exact LCG anchor; disjoint16/4; native loader/grade positives/negatives; available helper names
+PF_FIXTURES_RC=0
+2026-10-25T16:15:24Z

@@ -1,0 +1,560 @@
+{
+ "schema": "hil15a_flagon_run/v1",
+ "mock": true,
+ "hashseed": "UNPINNED (no-reexec)",
+ "flags": [
+  "ORCHESTRATOR_OBSERVED_DEPENDENCY_LOGGING",
+  "ORCHESTRATOR_STEP_EVENT_LOGGING",
+  "ORCHESTRATOR_REPLAY_RECORDING"
+ ],
+ "reasoning_retry": "disabled via ORCHESTRATOR_REASONING_LENGTH_ALARM",
+ "started": "2026-10-25T16:15:54Z",
+ "paths": {
+  "tmp_dir": "/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/mock40/tmp",
+  "spill_dir": "/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/mock40/spill",
+  "cas_dir": "/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/mock40/cas",
+  "db": "/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/mock40/events.sqlite"
+ },
+ "runs": [
+  {
+   "run_id": "lcg5-hard-r0",
+   "task_key": "lcg5-hard",
+   "pass": true,
+   "answer": "1109335178",
+   "error": null,
+   "wall_s": 0.931
+  },
+  {
+   "run_id": "h15bv2-lcg-1-hard-r0",
+   "task_key": "h15bv2-lcg-1-hard",
+   "pass": true,
+   "answer": "1903703024",
+   "error": null,
+   "wall_s": 0.388
+  },
+  {
+   "run_id": "h15bv2-lcg-2-hard-r0",
+   "task_key": "h15bv2-lcg-2-hard",
+   "pass": true,
+   "answer": "1936994395",
+   "error": null,
+   "wall_s": 0.436
+  },
+  {
+   "run_id": "h15bv2-lcg-3-hard-r0",
+   "task_key": "h15bv2-lcg-3-hard",
+   "pass": true,
+   "answer": "1501335386",
+   "error": null,
+   "wall_s": 0.38
+  },
+  {
+   "run_id": "h15bv2-ledger-0-hard-r0",
+   "task_key": "h15bv2-ledger-0-hard",
+   "pass": true,
+   "answer": "10,17,14;4",
+   "error": null,
+   "wall_s": 0.491
+  },
+  {
+   "run_id": "h15bv2-dag-0-hard-r0",
+   "task_key": "h15bv2-dag-0-hard",
+   "pass": true,
+   "answer": "9,2",
+   "error": null,
+   "wall_s": 0.384
+  },
+  {
+   "run_id": "h15bv2-rewrite-0-hard-r0",
+   "task_key": "h15bv2-rewrite-0-hard",
+   "pass": true,
+   "answer": "cbcbcbcbcb",
+   "error": null,
+   "wall_s": 0.446
+  },
+  {
+   "run_id": "h15bv2-records-0-hard-r0",
+   "task_key": "h15bv2-records-0-hard",
+   "pass": true,
+   "answer": "4,160",
+   "error": null,
+   "wall_s": 0.388
+  },
+  {
+   "run_id": "h15bv2-ledger-1-hard-r0",
+   "task_key": "h15bv2-ledger-1-hard",
+   "pass": true,
+   "answer": "11,16,15;4",
+   "error": null,
+   "wall_s": 0.443
+  },
+  {
+   "run_id": "h15bv2-dag-1-hard-r0",
+   "task_key": "h15bv2-dag-1-hard",
+   "pass": true,
+   "answer": "9,2",
+   "error": null,
+   "wall_s": 0.37
+  },
+  {
+   "run_id": "h15bv2-rewrite-1-hard-r0",
+   "task_key": "h15bv2-rewrite-1-hard",
+   "pass": true,
+   "answer": "cbabcb",
+   "error": null,
+   "wall_s": 0.411
+  },
+  {
+   "run_id": "h15bv2-records-1-hard-r0",
+   "task_key": "h15bv2-records-1-hard",
+   "pass": true,
+   "answer": "4,165",
+   "error": null,
+   "wall_s": 0.4
+  },
+  {
+   "run_id": "h15bv2-ledger-2-hard-r0",
+   "task_key": "h15bv2-ledger-2-hard",
+   "pass": true,
+   "answer": "12,15,16;4",
+   "error": null,
+   "wall_s": 0.443
+  },
+  {
+   "run_id": "h15bv2-dag-2-hard-r0",
+   "task_key": "h15bv2-dag-2-hard",
+   "pass": true,
+   "answer": "9,4",
+   "error": null,
+   "wall_s": 0.399
+  },
+  {
+   "run_id": "h15bv2-rewrite-2-hard-r0",
+   "task_key": "h15bv2-rewrite-2-hard",
+   "pass": true,
+   "answer": "ca",
+   "error": null,
+   "wall_s": 0.429
+  },
+  {
+   "run_id": "h15bv2-records-2-hard-r0",
+   "task_key": "h15bv2-records-2-hard",
+   "pass": true,
+   "answer": "3,135",
+   "error": null,
+   "wall_s": 0.387
+  },
+  {
+   "run_id": "h15bv2-ledger-3-hard-r0",
+   "task_key": "h15bv2-ledger-3-hard",
+   "pass": true,
+   "answer": "13,31,0;3",
+   "error": null,
+   "wall_s": 0.489
+  },
+  {
+   "run_id": "h15bv2-dag-3-hard-r0",
+   "task_key": "h15bv2-dag-3-hard",
+   "pass": true,
+   "answer": "8,2",
+   "error": null,
+   "wall_s": 0.382
+  },
+  {
+   "run_id": "h15bv2-rewrite-3-hard-r0",
+   "task_key": "h15bv2-rewrite-3-hard",
+   "pass": true,
+   "answer": "ccbcbab",
+   "error": null,
+   "wall_s": 0.434
+  },
+  {
+   "run_id": "h15bv2-records-3-hard-r0",
+   "task_key": "h15bv2-records-3-hard",
+   "pass": true,
+   "answer": "3,145",
+   "error": null,
+   "wall_s": 0.372
+  },
+  {
+   "run_id": "lcg5-hard-r1",
+   "task_key": "lcg5-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.41
+  },
+  {
+   "run_id": "h15bv2-lcg-1-hard-r1",
+   "task_key": "h15bv2-lcg-1-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.365
+  },
+  {
+   "run_id": "h15bv2-lcg-2-hard-r1",
+   "task_key": "h15bv2-lcg-2-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.409
+  },
+  {
+   "run_id": "h15bv2-lcg-3-hard-r1",
+   "task_key": "h15bv2-lcg-3-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.387
+  },
+  {
+   "run_id": "h15bv2-ledger-0-hard-r1",
+   "task_key": "h15bv2-ledger-0-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.41
+  },
+  {
+   "run_id": "h15bv2-dag-0-hard-r1",
+   "task_key": "h15bv2-dag-0-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.355
+  },
+  {
+   "run_id": "h15bv2-rewrite-0-hard-r1",
+   "task_key": "h15bv2-rewrite-0-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.408
+  },
+  {
+   "run_id": "h15bv2-records-0-hard-r1",
+   "task_key": "h15bv2-records-0-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.389
+  },
+  {
+   "run_id": "h15bv2-ledger-1-hard-r1",
+   "task_key": "h15bv2-ledger-1-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.489
+  },
+  {
+   "run_id": "h15bv2-dag-1-hard-r1",
+   "task_key": "h15bv2-dag-1-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.372
+  },
+  {
+   "run_id": "h15bv2-rewrite-1-hard-r1",
+   "task_key": "h15bv2-rewrite-1-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.421
+  },
+  {
+   "run_id": "h15bv2-records-1-hard-r1",
+   "task_key": "h15bv2-records-1-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.372
+  },
+  {
+   "run_id": "h15bv2-ledger-2-hard-r1",
+   "task_key": "h15bv2-ledger-2-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.426
+  },
+  {
+   "run_id": "h15bv2-dag-2-hard-r1",
+   "task_key": "h15bv2-dag-2-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.374
+  },
+  {
+   "run_id": "h15bv2-rewrite-2-hard-r1",
+   "task_key": "h15bv2-rewrite-2-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.419
+  },
+  {
+   "run_id": "h15bv2-records-2-hard-r1",
+   "task_key": "h15bv2-records-2-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.389
+  },
+  {
+   "run_id": "h15bv2-ledger-3-hard-r1",
+   "task_key": "h15bv2-ledger-3-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.418
+  },
+  {
+   "run_id": "h15bv2-dag-3-hard-r1",
+   "task_key": "h15bv2-dag-3-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.381
+  },
+  {
+   "run_id": "h15bv2-rewrite-3-hard-r1",
+   "task_key": "h15bv2-rewrite-3-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.421
+  },
+  {
+   "run_id": "h15bv2-records-3-hard-r1",
+   "task_key": "h15bv2-records-3-hard",
+   "pass": false,
+   "answer": "7",
+   "error": null,
+   "wall_s": 0.361
+  }
+ ],
+ "label_classes": [
+  "False",
+  "True"
+ ],
+ "warnings": [],
+ "join": {
+  "step_bearing_runs": 40,
+  "joined_outcome": 40,
+  "task_runs": 40
+ },
+ "l2_scan": {
+  "rc": 0,
+  "stderr": "step-bearing runs: 40 (40 with a joined outcome)\n",
+  "sidecar": null,
+  "sidecar_skipped": "adapter not found: /mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/empty-root/scripts/vidya/adapters/l2_scan_capture.py"
+ },
+ "auc_table": {
+  "n_runs": 40,
+  "n_tasks": 20,
+  "n_failed": 20,
+  "auc_out_of_fold": {
+   "size": 0.5,
+   "size+composition": 0.5,
+   "size+composition+observed_dependency": 0.5,
+   "size+composition+degree_matched_counterfeit": 0.5
+  },
+  "deltas": {
+   "observed_dependency_minus_composition": {
+    "delta_auc": 0.0,
+    "ci95_task_resampled": [
+     0.0,
+     0.0
+    ]
+   },
+   "observed_dependency_minus_size": {
+    "delta_auc": 0.0,
+    "ci95_task_resampled": [
+     0.0,
+     0.0
+    ]
+   },
+   "counterfeit_minus_composition": {
+    "delta_auc": 0.0,
+    "ci95_task_resampled": [
+     0.0,
+     0.0
+    ]
+   }
+  },
+  "edge_definition": "observed (intervention-validated needs HIL-16 replay)"
+ },
+ "dep_coverage": {
+  "runs_with_dependency": 40,
+  "task_keys": 20,
+  "label_classes": 2
+ },
+ "replay_verify": {
+  "lcg5-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-lcg-1-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-lcg-2-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-lcg-3-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-0-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-0-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-0-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-0-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-1-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-1-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-1-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-1-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-2-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-2-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-2-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-2-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-3-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-3-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-3-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-3-hard-r0": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "lcg5-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-lcg-1-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-lcg-2-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-lcg-3-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-0-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-0-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-0-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-0-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-1-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-1-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-1-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-1-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-2-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-2-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-2-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-2-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-ledger-3-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-dag-3-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-rewrite-3-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  },
+  "h15bv2-records-3-hard-r1": {
+   "rc": 0,
+   "tail": "clean"
+  }
+ },
+ "verdict": "OK",
+ "finished": "2026-10-25T16:17:13Z"
+}

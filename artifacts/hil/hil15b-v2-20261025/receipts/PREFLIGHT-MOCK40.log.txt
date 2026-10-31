@@ -1,0 +1,14 @@
+2026-10-25T16:15:54Z
+PF: TMP-only syntax + model-free unit fixtures; CPUs24,25; OMP1; timeout300; no network/models/GNX
+GRANT /mnt/raid0/llm/tmp/compute-flags/grants/kpf64-f-fb.grant regions=0-23 start=2026-10-25T13:46Z end=2026-10-25T17:46Z
+GRANT /mnt/raid0/llm/tmp/compute-flags/grants/yarn-extension-arms.grant regions=mi210_0,184-191 start=2026-10-25T15:56Z end=2026-10-25T18:06Z
+COMMAND timeout300 taskset24,25 venv-python prototype/test_mock_preflight.py
+MOCK_COMMAND ['/workspace/repos/epyc-orchestrator/.venv/bin/python', '/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/fixture-mirror/scripts/trace/hil15a_flagon_run.py', '--mock-llm', '--no-reexec', '--tasks', '/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/generation-a/hil15b_v2_tasks.json', '--repeats', '2', '--out-dir', '/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/mock40', '--epyc-root', '/mnt/raid0/llm/tmp/codex-ni-20261025-ufh08/empty-root']
+.
+----------------------------------------------------------------------
+Ran 1 test in 79.111s
+
+OK
+PASS MOCK ONLY: 40/40 step-bearing/outcome joined; 40 replay recordings verify clean; both scripted labels; no efficacy claim
+PF_FIXTURES_RC=0
+2026-10-25T16:17:13Z
