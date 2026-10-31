@@ -80,6 +80,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
+from src.exceptions import RoleParkedError
 from src.roles import Role
 
 log = logging.getLogger(__name__)
@@ -299,6 +300,7 @@ def _record_step(
     to_role: str,
     before: dict[str, float],
     outcome: str,
+    skipped_roles: list[str] | None = None,
 ) -> dict[str, Any] | None:
     if plan.strict_capture is not None:
         try:
@@ -337,6 +339,8 @@ def _record_step(
         "completion_reason": str(last_meta.get("completion_reason") or "") or None,
         "outcome": outcome,
     }
+    if skipped_roles:
+        step["skipped_roles"] = list(skipped_roles)
     plan.steps.append(step)
     return step
 
@@ -400,6 +404,12 @@ def escalate_answer(
             state=state,
             task_id=request_id,
         )
+    except RoleParkedError as exc:
+        plan.error = f"{type(exc).__name__}: {exc}"
+        plan.final_answer_role = plan.from_role
+        failure_type = type(exc).__name__
+        failure_status = "role_parked"
+        raise
     except Exception as exc:
         # /chat's hooks never block an answer (each helper already swallows its
         # own backend failure); anything else is recorded in the receipt, not hidden.
@@ -435,6 +445,7 @@ def _escalate_answer(
 
     if stage == STAGE_DIRECT:
         quality_role = plan.quality_escalation_role
+        skipped_roles: list[str] = []
         before = _counters(primitives)
         trigger = TRIGGER_FORCED if plan.force else TRIGGER_QUALITY
         force_kwargs = {"force": True} if plan.force else {}
@@ -455,8 +466,28 @@ def _escalate_answer(
                     role,
                     allow_escalation=True,
                     escalation_role=Role(quality_role),
+                    skipped_roles_out=skipped_roles,
                     **force_kwargs,
                 )
+        except RoleParkedError as exc:
+            failed_step = _record_step(
+                plan,
+                primitives,
+                trigger=trigger,
+                from_role=role,
+                to_role=exc.role or quality_role,
+                before=before,
+                outcome="failed",
+                skipped_roles=skipped_roles,
+            )
+            if failed_step is not None:
+                failed_step["completion_reason"] = None
+            plan.error = f"{type(exc).__name__[:80]}: parked escalation chain exhausted"
+            plan.final_answer_role = role
+            if plan.strict_capture is not None:
+                plan.strict_capture["failure_type"] = type(exc).__name__[:80]
+                plan.strict_capture["failure_status"] = "role_parked"
+            raise
         except Exception as exc:
             if not plan.force:
                 if plan.strict_capture is not None:
@@ -491,9 +522,10 @@ def _escalate_answer(
             primitives,
             trigger=trigger,
             from_role=role,
-            to_role=quality_role,
+            to_role=_role_name(new_role) if adopted else quality_role,
             before=before,
             outcome="adopted" if adopted else "not_adopted",
+            skipped_roles=skipped_roles,
         )
         if adopted:
             answer, role = new_answer, _role_name(new_role)

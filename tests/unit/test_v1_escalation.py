@@ -77,8 +77,23 @@ class FakePrimitives:
         self.total_prompt_eval_ms = 0.0
         self.total_generation_ms = 0.0
         self.total_prompt_tokens_reported = 0
+        self._request_id: str | None = None
         self._trace: dict[str, Any] = {}
         self._last: dict[str, Any] | None = None
+
+    def bind_request_usage(self, request_id: str | None = None) -> None:
+        """Mirror the request-owned usage binding used by the real primitive."""
+        self._request_id = request_id
+
+    def get_request_usage(self) -> dict[str, Any]:
+        return {
+            "prompt_tokens": self.total_prompt_tokens_reported,
+            "completion_tokens": self.total_tokens_generated,
+            "total_tokens": self.total_prompt_tokens_reported + self.total_tokens_generated,
+            "usage_status": "reported",
+            "usage_provenance": ["server_reported"] if self.calls else [],
+            "prompt_tokens_details": None,
+        }
 
     def set_request_trace_keys(self, keys):
         self._trace = {k: v for k, v in (keys or {}).items() if v is not None}
@@ -108,7 +123,7 @@ class FakePrimitives:
             }
         )
 
-    def llm_call(self, prompt, role="worker", n_tokens=None, **kwargs):
+    def llm_call(self, prompt, role="worker", n_tokens=None, raise_parked_errors=False, **kwargs):
         role = str(role)
         self._account("llm", role, prompt, {"n_tokens": n_tokens, **kwargs})
         answer = self.answers.get(role, "")
@@ -818,6 +833,44 @@ def test_quality_escalate_default_target_is_unchanged_for_chat(monkeypatch):
     assert (answer, role) == ("better", Role.CODER_ESCALATION)
     assert primitives.llm_call.call_args.kwargs["role"] == "coder_escalation"
     reset_features()
+
+
+def test_v1_escalation_preserves_typed_parked_refusal(monkeypatch):
+    from src.api.routes import v1_escalation as v1
+    from src.exceptions import RoleParkedError
+
+    plan = v1.V1EscalationPlan(
+        requested="auto",
+        enabled=True,
+        disabled_reason=None,
+        from_role="frontdoor",
+    )
+    parked = RoleParkedError(
+        role="architect_general",
+        port=8074,
+        holder="autokernel",
+        retry_after_s=60,
+    )
+
+    def raise_parked(*_args, **_kwargs):
+        raise parked
+
+    monkeypatch.setattr(v1, "_escalate_answer", raise_parked)
+    with pytest.raises(RoleParkedError) as caught:
+        v1.escalate_answer(
+            plan,
+            stage=v1.STAGE_DIRECT,
+            answer="incumbent answer",
+            question="question",
+            direct_prompt="question",
+            primitives=MagicMock(),
+            state=None,
+            task_id="parked-v1",
+        )
+
+    assert caught.value is parked
+    assert plan.error.startswith("RoleParkedError:")
+    assert plan.final_answer_role == "frontdoor"
 
 
 def test_plan_is_none_whenever_no_key_was_sent():

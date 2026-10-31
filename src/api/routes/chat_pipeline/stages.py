@@ -21,9 +21,10 @@ import time
 
 from src.api.models import ChatRequest, ChatResponse
 from src.api.services.memrl import score_completed_task
+from src.exceptions import RoleParkedError
 from src.features import features
 from src.llm_primitives import LLMPrimitives
-from src.roles import Role
+from src.roles import Role, get_escalation_chain
 
 from src.repl_environment import REPLEnvironment
 from src.api.routes.chat_review import (
@@ -54,6 +55,7 @@ def _quality_escalate(
     allow_escalation: bool = True,
     escalation_role: Role = Role.CODER_ESCALATION,
     force: bool = False,
+    skipped_roles_out: list[str] | None = None,
 ) -> tuple[str, "Role"]:
     """Run the existing quality re-answer, or explicit v1 force mode, when eligible.
 
@@ -71,20 +73,62 @@ def _quality_escalate(
     quality_issue = force or _detect_output_quality_issue(answer)
     if not quality_issue:
         return answer, initial_role
+    # Only a declared escalation chain can provide another target. A force-mode
+    # consultant is a named target and retains its refusal if parked.
+    candidates = [escalation_role] if force else get_escalation_chain(escalation_role)
+    initial_name = str(initial_role)
+    unique_candidates: list[Role] = []
+    seen = set() if force else {initial_name}
+    for candidate in candidates:
+        name = str(candidate)
+        if name not in seen:
+            unique_candidates.append(candidate)
+            seen.add(name)
+
+    get_trace_keys = getattr(primitives, "get_request_trace_keys", None)
+    set_trace_keys = getattr(primitives, "set_request_trace_keys", None)
+    original_trace_keys = get_trace_keys() if callable(get_trace_keys) else {}
+    skipped_roles: list[str] = []
     try:
-        escalated = primitives.llm_call(
-            prompt, role=str(escalation_role), n_tokens=2048, skip_suffix=True,
-        )
-        normalized_escalated = escalated.strip()
-        if normalized_escalated:
+        for index, candidate in enumerate(unique_candidates):
+            candidate_name = str(candidate)
+            if callable(set_trace_keys):
+                set_trace_keys({
+                    **original_trace_keys,
+                    "escalation_to_role": candidate_name,
+                    "escalation_skipped_roles": list(skipped_roles),
+                })
+            try:
+                escalated = primitives.llm_call(
+                    prompt,
+                    role=candidate_name,
+                    n_tokens=2048,
+                    skip_suffix=True,
+                    raise_parked_errors=True,
+                )
+            except RoleParkedError:
+                skipped_roles.append(candidate_name)
+                if skipped_roles_out is not None:
+                    skipped_roles_out.append(candidate_name)
+                if force or index + 1 == len(unique_candidates):
+                    raise
+                continue
+            except Exception as exc:
+                if force:
+                    raise
+                log.debug("Quality escalation failed: %s", type(exc).__name__)
+                return answer, initial_role
+
+            normalized_escalated = escalated.strip()
             if force and normalized_escalated.startswith("[ERROR"):
                 raise RuntimeError("forced consultant returned an in-band error")
-            return normalized_escalated, escalation_role
-    except Exception as exc:
-        if force:
-            raise
-        log.debug("Quality escalation failed: %s", exc)
-    return answer, initial_role
+            if normalized_escalated:
+                return normalized_escalated, candidate
+            return answer, initial_role
+        return answer, initial_role
+    finally:
+        if callable(set_trace_keys):
+            set_trace_keys(original_trace_keys)
 
 
 # ── Stage 4: Mock mode ──────────────────────────────────────────────────

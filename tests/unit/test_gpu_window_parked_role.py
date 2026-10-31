@@ -44,6 +44,59 @@ def _records(log) -> list[dict]:
     return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
 
 
+def _routing_primitives(*, failures=None):
+    """Real primitives and parking guard with a recorded fake backend."""
+    from src.backends.serving_calls import recorded_call
+    from src.llm_primitives import LLMPrimitives
+    from src.model_server import InferenceResult
+
+    calls: list[str] = []
+    failures = failures or {}
+
+    class FakeBackend:
+        def __init__(self, url: str):
+            self.config = SimpleNamespace(base_url=url)
+
+        @recorded_call("infer")
+        def infer(self, role_config, request):
+            calls.append(role_config.name)
+            if role_config.name in failures:
+                raise failures[role_config.name]
+            return InferenceResult(
+                role=role_config.name,
+                output=f"served by {role_config.name}",
+                tokens_generated=3,
+                generation_speed=1.0,
+                elapsed_time=0.001,
+                success=True,
+                prompt_eval_ms=0.1,
+                generation_ms=0.1,
+                http_overhead_ms=0.0,
+                completion_reason="stop",
+            )
+
+    urls = {
+        "coder_escalation": "http://localhost:8083",
+        "architect_critic": "http://localhost:8083",
+        "architect_general": "http://localhost:8074",
+    }
+    prims = LLMPrimitives(mock_mode=False, server_urls=urls)
+    for role, url in urls.items():
+        prims._backends[role] = FakeBackend(url)
+    return prims, calls
+
+
+def _enable_quality_escalation(monkeypatch):
+    from src.api.routes.chat_pipeline import stages
+
+    monkeypatch.setattr(
+        stages, "features", lambda: SimpleNamespace(generation_monitor=True)
+    )
+    monkeypatch.setattr(
+        stages, "_detect_output_quality_issue", lambda _answer: "repetitive"
+    )
+
+
 # ── window file ──────────────────────────────────────────────────────────────
 
 
@@ -246,6 +299,16 @@ def test_primitives_refuse_before_any_gate(window, monkeypatch):
     from src.llm_primitives import LLMPrimitives
 
     _park(window)
+    # This latency assertion covers the role guard itself. The preempt
+    # notification is an external file-backed side effect and has its own
+    # tests above; keep it out of the timed section while preserving the
+    # refusal's requested status. The window and serving log are test-owned
+    # temporary paths via ``window``.
+    monkeypatch.setattr(
+        gw,
+        "request_preempt",
+        lambda *args, **kwargs: {"requested": True, "status": "requested"},
+    )
     prims = LLMPrimitives(mock_mode=False, server_urls={
         "architect_critic": "http://localhost:8083", "frontdoor": "http://localhost:8070",
     })
@@ -258,8 +321,157 @@ def test_primitives_refuse_before_any_gate(window, monkeypatch):
     assert (time.perf_counter() - t0) * 1000.0 < 100.0
     out = prims.llm_call("hello", role="architect_critic")
     assert out.startswith("[ERROR: role_parked")
+    with pytest.raises(RoleParkedError):
+        prims.llm_call("hello", role="architect_critic", raise_parked_errors=True)
     assert any(r["outcome"] == "refused" and r["caller"].get("source") == "primitives"
                for r in _records(window.log))
+
+
+def test_quality_escalation_skips_parked_rung_and_records_actual_route(window, monkeypatch):
+    from src.api.routes.v1_escalation import STAGE_DIRECT, V1EscalationPlan, _escalate_answer
+    from src.roles import Role
+
+    _park(window)  # coder_escalation and architect_critic both share parked :8083
+    _enable_quality_escalation(monkeypatch)
+    prims, calls = _routing_primitives()
+    plan = V1EscalationPlan(
+        requested="auto",
+        enabled=True,
+        disabled_reason=None,
+        from_role=str(Role.ARCHITECT_CRITIC),
+    )
+
+    result = _escalate_answer(
+        plan,
+        stage=STAGE_DIRECT,
+        answer="bad repetitive answer",
+        question="question",
+        direct_prompt="question",
+        primitives=prims,
+        state=None,
+        task_id="parked-chain",
+    )
+
+    assert result == "served by architect_general"
+    assert calls == ["architect_general"]
+    assert plan.steps[0]["to_role"] == "architect_general"
+    assert plan.steps[0]["skipped_roles"] == ["coder_escalation"]
+    records = _records(window.log)
+    served = next(record for record in records if record["outcome"] == "ok")
+    assert served["role"] == "architect_general"
+    assert served["caller"]["trace_keys"]["escalation_to_role"] == "architect_general"
+    assert served["caller"]["trace_keys"]["escalation_skipped_roles"] == ["coder_escalation"]
+    refused = next(record for record in records if record["outcome"] == "refused")
+    assert refused["role"] == "coder_escalation"
+    assert refused["refusal"]["gate"] == "role_parked"
+
+
+def test_quality_escalation_exhausted_chain_preserves_typed_parked_refusal(window, monkeypatch):
+    from src.api.routes.chat_pipeline import stages
+    from src.roles import Role
+
+    gw.park(
+        roles=["coder_escalation", "architect_general"],
+        ports=[8074, 8083],
+        holder="autokernel",
+        expected_end=gw.parse_expected_end("+1h"),
+        path=window.path,
+    )
+    _enable_quality_escalation(monkeypatch)
+    prims, calls = _routing_primitives()
+
+    with pytest.raises(RoleParkedError) as caught:
+        stages._quality_escalate(
+            "bad repetitive answer",
+            "question",
+            prims,
+            Role.FRONTDOOR,
+            escalation_role=Role.CODER_ESCALATION,
+        )
+
+    assert caught.value.role == "architect_general"
+    assert calls == []
+    assert [record["role"] for record in _records(window.log)] == [
+        "coder_escalation", "architect_general"
+    ]
+
+
+def test_force_named_consultant_does_not_reroute_when_parked(window, monkeypatch):
+    from src.api.routes.chat_pipeline import stages
+    from src.roles import Role
+
+    gw.park(
+        roles=["architect_general", "coder_escalation"],
+        ports=[8074, 8083],
+        holder="autokernel",
+        expected_end=gw.parse_expected_end("+1h"),
+        path=window.path,
+    )
+    prims, calls = _routing_primitives()
+
+    with pytest.raises(RoleParkedError) as caught:
+        stages._quality_escalate(
+            "answer",
+            "question",
+            prims,
+            Role.FRONTDOOR,
+            escalation_role=Role.ARCHITECT_GENERAL,
+            force=True,
+        )
+
+    assert caught.value.role == "architect_general"
+    assert calls == []
+    assert [record["role"] for record in _records(window.log)] == ["architect_general"]
+
+
+def test_force_named_consultant_same_as_incumbent_keeps_typed_refusal(window, monkeypatch):
+    from src.api.routes.chat_pipeline import stages
+    from src.roles import Role
+
+    gw.park(
+        roles=["architect_general"],
+        ports=[8074],
+        holder="autokernel",
+        expected_end=gw.parse_expected_end("+1h"),
+        path=window.path,
+    )
+    prims, calls = _routing_primitives()
+
+    with pytest.raises(RoleParkedError) as caught:
+        stages._quality_escalate(
+            "answer",
+            "question",
+            prims,
+            Role.ARCHITECT_GENERAL,
+            escalation_role=Role.ARCHITECT_GENERAL,
+            force=True,
+        )
+
+    assert caught.value.role == "architect_general"
+    assert calls == []
+    assert [record["role"] for record in _records(window.log)] == ["architect_general"]
+
+
+def test_generic_error_with_role_parked_text_does_not_skip_chain(window, monkeypatch):
+    from src.api.routes.chat_pipeline import stages
+    from src.roles import Role
+
+    _enable_quality_escalation(monkeypatch)
+    prims, calls = _routing_primitives(
+        failures={"coder_escalation": RuntimeError("503 role_parked text from backend")},
+    )
+
+    answer, role = stages._quality_escalate(
+        "bad repetitive answer",
+        "question",
+        prims,
+        Role.FRONTDOOR,
+        escalation_role=Role.CODER_ESCALATION,
+    )
+
+    assert answer.startswith("[ERROR: 503 role_parked text from backend]")
+    assert role == Role.CODER_ESCALATION
+    assert calls == ["coder_escalation"]
 
 
 def test_backend_layer_refuses_parked_port(window):

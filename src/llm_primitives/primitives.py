@@ -24,7 +24,7 @@ from .tokens import TokensMixin
 from .teleport import TeleportDecision, TeleportInputs, TeleportPolicy, decide_teleport
 from .types import CallLogEntry, LLMResult
 from .usage import NATIVE_OUTPUT_SOURCES, UsageLedger, token_count
-from src.exceptions import AdmissionDenied, AdmissionDeniedText
+from src.exceptions import AdmissionDenied, AdmissionDeniedText, RoleParkedError
 from src.roles import Role
 from src.workload_model import infer_workload_class
 
@@ -963,6 +963,7 @@ class LLMPrimitives(
         n_probs: int | None = None,
         post_sampling_probs: bool = False,
         on_chunk: Callable[[str], None] | None = None,
+        raise_parked_errors: bool = False,
     ) -> str:
         """Call a sub-LM with optional context slice.
 
@@ -990,6 +991,8 @@ class LLMPrimitives(
                 included) instead of the default pre-sampling raw logits —
                 see typed_decisions/native.py for why grammar-constrained
                 callers need this (TD-1d.2).
+            raise_parked_errors: If True, propagate typed parked-role refusals
+                after logging them instead of converting them to an in-band error.
 
         Returns:
             Sub-LM response (capped at output_cap chars).
@@ -1026,6 +1029,7 @@ class LLMPrimitives(
             return self._llm_call_impl(
                 prompt, context_slice, role, n_tokens, skip_suffix, stop_sequences,
                 persona, json_schema, grammar, **sampling_kwargs,
+                raise_parked_errors=raise_parked_errors,
                 on_chunk=on_chunk,
             )
         finally:
@@ -1169,6 +1173,7 @@ class LLMPrimitives(
         n_probs: int | None = None,
         post_sampling_probs: bool = False,
         on_chunk: Callable[[str], None] | None = None,
+        raise_parked_errors: bool = False,
     ) -> str:
         """Internal implementation of llm_call (after recursion check)."""
         start_time = time.perf_counter()
@@ -1278,6 +1283,8 @@ class LLMPrimitives(
             log_entry.elapsed_seconds = time.perf_counter() - start_time
             self._update_query_usage(_usage_before, log_entry)
             self.call_log.append(log_entry)
+            if raise_parked_errors and isinstance(e, RoleParkedError):
+                raise
             if isinstance(e, AdmissionDenied):
                 return AdmissionDeniedText(e)
             return f"[ERROR: {e}]"
