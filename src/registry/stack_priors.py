@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 
 import yaml
 
+from src.registry.slot_declarations import parse_slots_by_instance
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -1914,6 +1916,32 @@ def _slots_by_shape_declaration(
     return out
 
 
+def _slots_by_instance_declaration(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    *,
+    known_ports: set[int],
+) -> dict[int, int]:
+    """Read optional per-instance slots from the registry handed to compiler.
+
+    This intentionally does not call ``stack_manifest``: the compiler must
+    resolve the registry file it was given, not the process's ambient master.
+    """
+    out: dict[int, int] = {}
+    for cfg in (server_cfg, role_cfg):
+        shape = _nested_mapping(cfg, "serving_shape")
+        raw = shape.get("slots_by_instance") if isinstance(shape, dict) else None
+        if raw is None:
+            continue
+        parsed = parse_slots_by_instance(
+            raw,
+            known_ports=known_ports,
+        )
+        for port, value in parsed.items():
+            out.setdefault(port, value)
+    return out
+
+
 def _declared_slots_floor(role: str) -> dict[int, int]:
     """Port -> `-np` for EVERY declared instance, independent of compile mode.
 
@@ -1965,13 +1993,11 @@ def _slots_by_port(
 ) -> dict[int, int]:
     """Port -> `-np`, one entry per launch instance. THE JOIN.
 
-    `slots` is per-ROLE; the operator's spec is per-INSTANCE SHAPE. A role's full
-    96-core instance and its 48-core halves want different slot counts, and one
-    number cannot say that. Each launch entry already carries the SHAPE CLASS its
-    `cpu_shape` resolves to (placement, from stack_topology.yaml); this maps that
-    class through the registry's `slots_by_shape` (model, from server_mode) to a
-    per-port answer. A class the role does not declare falls back to the role's
-    single slot count, which is how the two single-instance GPU roles work.
+    `slots` is per-ROLE. The optional `slots_by_instance` map handles distinct
+    counts for same-shape instances; otherwise each launch entry's SHAPE CLASS
+    maps through `slots_by_shape`. Both declarations come from the registry the
+    compiler was handed. Missing instance and shape entries fall back to the
+    role's scalar slot count, which is how single-instance GPU roles work.
     """
     by_shape = _slots_by_shape_declaration(server_cfg, role_cfg)
     out: dict[int, int] = {}
@@ -1982,6 +2008,25 @@ def _slots_by_port(
     # fallback and claim a full's slot count on a half. Entries are merged in
     # afterwards so a launcher-only lane with no fleet map still resolves.
     classes: dict[int, str] = {}
+    # The launcher view may be filtered to `full` while `slots_by_port` must
+    # remain complete for admission and runtime attestation in every mode. Use
+    # topology's unfiltered per-instance shape classes to materialize the
+    # handed registry's declaration for the whole fleet.
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG, NUMA_INSTANCE_SHAPE_CLASSES
+
+        aliases, _roles = _stack_manifest_info()
+        topology_role = role if role in NUMA_CONFIG else aliases.get(role, role)
+        topology_cfg = NUMA_CONFIG.get(topology_role, {})
+        topology_classes = NUMA_INSTANCE_SHAPE_CLASSES.get(topology_role, ())
+        for idx, instance in enumerate(topology_cfg.get("instances", [])):
+            if idx >= len(topology_classes):
+                continue
+            port = instance[1]
+            if isinstance(port, int) and not isinstance(port, bool):
+                classes[port] = topology_classes[idx]
+    except Exception:  # noqa: BLE001 - launch entries remain the narrow fallback
+        pass
     if isinstance(port_shape_classes, dict):
         for port, shape_class in port_shape_classes.items():
             if isinstance(port, int) and isinstance(shape_class, str) and shape_class:
@@ -1999,8 +2044,15 @@ def _slots_by_port(
                 else:
                     classes.setdefault(port, "")
 
+    by_instance = _slots_by_instance_declaration(
+        server_cfg,
+        role_cfg,
+        known_ports=set(classes),
+    )
     for port, shape_class in classes.items():
-        value = by_shape.get(shape_class) if shape_class else None
+        value = by_instance.get(port)
+        if value is None:
+            value = by_shape.get(shape_class) if shape_class else None
         if value is None:
             value = role_slots
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:

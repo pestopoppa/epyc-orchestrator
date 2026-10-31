@@ -3,6 +3,9 @@
 import logging
 import os
 from typing import Any, Mapping
+from urllib.parse import urlparse
+
+from src.registry.slot_declarations import parse_slots_by_instance
 
 _log = logging.getLogger(__name__)
 
@@ -65,19 +68,81 @@ def _certified_native_batch_width(
             {},
         )
     serving_shape = server.get("serving_shape") if isinstance(server, dict) else {}
+    serving_shape = serving_shape if isinstance(serving_shape, dict) else {}
     slots_by_shape = (
-        serving_shape.get("slots_by_shape") if isinstance(serving_shape, dict) else {}
+        serving_shape.get("slots_by_shape")
     )
+    slots_by_instance = serving_shape.get("slots_by_instance")
+    from scripts.server.stack_numa import NUMA_CONFIG
+
+    instances = NUMA_CONFIG.get(topology_role, {}).get("instances", [])
+    known_ports = {
+        instance[1]
+        for instance in instances
+        if len(instance) > 1
+        and isinstance(instance[1], int)
+        and not isinstance(instance[1], bool)
+    }
     try:
-        declared = int((slots_by_shape or {}).get("full", server.get("slots", 1)))
-    except (TypeError, ValueError):
+        instance_slots = parse_slots_by_instance(
+            slots_by_instance,
+            known_ports=known_ports,
+            source=f"owner registry server_mode.{topology_role}.serving_shape.slots_by_instance",
+        )
+    except ValueError as exc:
+        _log.warning("refusing native batch-width certification: %s", exc)
         return 1
+
+    candidates: list[tuple[str, int | None]] = []
+    for candidate_url in _normalise_role_urls(full_url):
+        try:
+            parsed = urlparse(candidate_url)
+            port = parsed.port
+        except ValueError:
+            parsed = None
+            port = None
+        is_local_instance = (
+            parsed is not None
+            and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            and port in instance_slots
+        )
+        instance_width = instance_slots.get(port) if is_local_instance else None
+        candidates.append((candidate_url, instance_width))
+
+    # New instance declarations are only authoritative for explicit local
+    # topology endpoints. A multi-endpoint pool has one shared certified width,
+    # so use its narrowest declared instance width. Legacy shape/scalar
+    # behavior remains unchanged when no instance declaration is present.
+    declared = None
+    if instance_slots and any(width is not None for _, width in candidates):
+        try:
+            legacy_width = int((slots_by_shape or {}).get("full", server.get("slots", 1)))
+        except (TypeError, ValueError):
+            return 1
+        declared = min(
+            width if width is not None else legacy_width
+            for _, width in candidates
+        )
+    if declared is None:
+        try:
+            declared = int((slots_by_shape or {}).get("full", server.get("slots", 1)))
+        except (TypeError, ValueError):
+            return 1
     admission = getattr(owner, "admission_controller", None)
     limits = getattr(admission, "_limits", {}) if admission is not None else {}
-    try:
-        admitted = int(limits.get(full_url, declared))
-    except (TypeError, ValueError):
-        admitted = declared
+    if instance_slots and any(width is not None for _, width in candidates):
+        try:
+            admitted = min(
+                int(limits.get(url, width if width is not None else declared))
+                for url, width in candidates
+            )
+        except (TypeError, ValueError):
+            admitted = 1
+    else:
+        try:
+            admitted = int(limits.get(full_url, declared))
+        except (TypeError, ValueError):
+            admitted = declared
     return max(1, min(declared, admitted))
 
 

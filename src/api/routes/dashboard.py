@@ -2000,9 +2000,9 @@ def _region_locks_payload(
         come from the same per-shape declaration the launcher uses for ``-np``.
         """
         try:
-            from scripts.server.stack_manifest import resolve_slots
+            from scripts.server.stack_manifest import resolve_instance_slots
 
-            decision = resolve_slots(role, numa_instance=instance_idx)
+            decision = resolve_instance_slots(role, numa_instance=instance_idx)
             return max(1, int(decision.slots)), str(decision.source)
         except Exception as exc:
             return 1, f"fallback:error:{type(exc).__name__}"

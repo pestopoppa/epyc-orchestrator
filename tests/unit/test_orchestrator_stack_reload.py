@@ -979,6 +979,56 @@ def test_runtime_attestation_warnings_report_model_drift(monkeypatch) -> None:
     ]
 
 
+def test_runtime_attestation_uses_compiled_instance_slot_for_live_port() -> None:
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8080,
+        started_at="now",
+        model_path="/models/frontdoor.gguf",
+        log_file="frontdoor.log",
+    )
+    contract = {
+        "requirements": {"model_path": "/models/frontdoor.gguf"},
+        "runtime": {
+            "binary_path": "llama-server",
+            "cache": {
+                "slots": 4,
+                "slots_by_port": {8070: 4, 8080: 2, 8180: 3},
+            },
+        },
+    }
+
+    assert stack_commands._runtime_attestation_warnings(
+        "frontdoor",
+        info,
+        [
+            "llama-server",
+            "-m",
+            "/models/frontdoor.gguf",
+            "--port",
+            "8080",
+            "-np",
+            "2",
+        ],
+        contract,
+    ) == []
+    assert stack_commands._runtime_attestation_warnings(
+        "frontdoor",
+        info,
+        [
+            "llama-server",
+            "-m",
+            "/models/frontdoor.gguf",
+            "--port",
+            "8080",
+            "-np",
+            "3",
+        ],
+        contract,
+    ) == ["frontdoor pid 123 runtime slots expected 2; live cmdline has 3"]
+
+
 def test_runtime_attestation_warnings_report_unmanaged_listener(monkeypatch) -> None:
     monkeypatch.setattr(stack_commands, "load_state", lambda: {})
     monkeypatch.setattr(stack_commands, "_scan_known_ports", lambda: {8070: [123, 456]})

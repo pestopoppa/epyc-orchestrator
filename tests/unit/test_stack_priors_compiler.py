@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,139 @@ _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def test_instance_slots_compile_to_existing_port_cache_and_server_argv(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A synthetic declaration reaches cache, admission, resolver and `-np` by port."""
+    from types import SimpleNamespace
+
+    from scripts.server import orchestrator_stack as oss
+    from scripts.server import stack_manifest
+    from src.registry.stack_priors import (
+        DEFAULT_DESCRIPTORS,
+        DEFAULT_REGISTRY,
+        live_stack_serving_slot_limits,
+    )
+
+    registry = yaml.safe_load(DEFAULT_REGISTRY.read_text(encoding="utf-8"))
+    registry["server_mode"]["frontdoor"]["serving_shape"]["slots_by_instance"] = {
+        8080: 2,
+        8180: 3,
+    }
+    registry_path = _write_yaml(tmp_path / "instance-slots-registry.yaml", registry)
+
+    # No declaration in the shipped master: baseline compilation keeps the
+    # shipped shape/scalar cache output. The synthetic map below exists only in
+    # this temporary registry.
+    shipped = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "orchestration/derived/stack_priors.yaml")
+        .read_text(encoding="utf-8")
+    )
+    baseline = compile_stack_priors(
+        registry_path=DEFAULT_REGISTRY,
+        descriptor_path=DEFAULT_DESCRIPTORS,
+        active_roles={"frontdoor"},
+        allow_incomplete=True,
+    )
+    baseline_cache = baseline["roles"]["frontdoor"]["serving"]["launch"]["runtime"]["cache"]
+    shipped_cache = shipped["roles"]["frontdoor"]["serving"]["launch"]["runtime"]["cache"]
+    assert baseline_cache == shipped_cache
+
+    compiled = compile_stack_priors(
+        registry_path=registry_path,
+        descriptor_path=DEFAULT_DESCRIPTORS,
+        active_roles={"frontdoor"},
+        allow_incomplete=True,
+    )
+    record = compiled["roles"]["frontdoor"]
+    launch = record["serving"]["launch"]
+    runtime = launch["runtime"]
+    cache = runtime["cache"]
+    expected = {8070: 4, 8080: 2, 8180: 3}
+    assert set(cache) == set(baseline_cache)
+    assert cache["slots_by_port"] == expected
+    assert compiled["source_artifacts"]["registry"]["sha256"] == hashlib.sha256(
+        registry_path.read_bytes()
+    ).hexdigest()
+    assert {
+        int(entry["port"]): entry["slots"]
+        for entry in launch["entries"]
+        if entry.get("port") in expected
+    } == {8070: 4}
+
+    compiled_path = _write_yaml(tmp_path / "instance-slots-priors.yaml", compiled)
+    limits = live_stack_serving_slot_limits(compiled_path)
+    assert {port: limits[f"http://localhost:{port}"] for port in expected} == expected
+
+    original_master_serving_shape = stack_manifest.master_serving_shape
+
+    def serving_shape(role: str):
+        shape, source = original_master_serving_shape(role)
+        if role == "frontdoor":
+            shape = {**shape, "slots_by_instance": {8080: 2, 8180: 3}}
+        return shape, source
+
+    monkeypatch.setattr(stack_manifest, "master_serving_shape", serving_shape)
+    assert stack_manifest.resolve_instance_slots("frontdoor", 1, port=8080).slots == 2
+    assert stack_manifest.resolve_instance_slots("frontdoor", 2, port=8180).slots == 3
+    assert oss._resolve_parallel_slots({}, "frontdoor", 8080, 1) == "2"
+    assert oss._resolve_parallel_slots(cache, "frontdoor", 8180, 2) == "3"
+
+    role = SimpleNamespace(
+        name="frontdoor",
+        model=SimpleNamespace(full_path="/models/frontdoor.gguf"),
+        acceleration=SimpleNamespace(type="none", experts=None, draft_role=None),
+    )
+    monkeypatch.setattr(oss, "_stack_prior_launch", lambda _role: (launch["requirements"], runtime))
+    for port, idx, slots in ((8070, 0, "4"), (8080, 1, "2"), (8180, 2, "3")):
+        argv = oss._build_role_command(
+            role,
+            port=port,
+            numa_instance=idx,
+            prepare_runtime_dirs=False,
+        )
+        assert argv[argv.index("-np") + 1] == slots
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ({8080: 0}, "positive integers"),
+        ({8080: True}, "positive integers"),
+        ({8080: "2"}, "positive integers"),
+        ({9999: 2}, "undeclared port"),
+    ],
+)
+def test_compiler_rejects_invalid_instance_slot_declarations(
+    declaration: dict[object, object],
+    message: str,
+) -> None:
+    from src.registry.stack_priors import _slots_by_instance_declaration
+
+    with pytest.raises(ValueError, match=message):
+        _slots_by_instance_declaration(
+            {"serving_shape": {"slots_by_instance": declaration}},
+            None,
+            known_ports={8070, 8080, 8180},
+        )
+
+
+def test_compiler_honors_explicit_port_shape_over_global_topology_fill() -> None:
+    from src.registry.stack_priors import _slots_by_port
+
+    slots = _slots_by_port(
+        "frontdoor",
+        {"entries": []},
+        {"serving_shape": {"slots_by_shape": {"full": 4, "half": 1}}},
+        None,
+        4,
+        port_shape_classes={8070: "half"},
+    )
+
+    assert slots[8070] == 1
 
 
 # ---------------------------------------------------------------------------

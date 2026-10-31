@@ -52,6 +52,167 @@ def test_certified_native_batch_width_resolves_worker_registry_alias(monkeypatch
     )
 
 
+def test_certified_native_batch_width_honors_local_instance_slots_and_admission(
+    monkeypatch,
+):
+    monkeypatch.setenv("ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor")
+    from scripts.server import stack_manifest
+
+    def ambient_shape(role: str):
+        if role == "frontdoor":
+            return {"slots_by_instance": {8070: 9}}, "ambient/frontdoor"
+        return {}, None
+
+    # The owner may be using a passed registry that disagrees with ambient
+    # master. Certification must follow the owner's registry.
+    monkeypatch.setattr(stack_manifest, "master_serving_shape", ambient_shape)
+    owner = Mock()
+    owner.registry._raw = {
+        "server_mode": {
+            "frontdoor": {
+                "slots": 4,
+                "serving_shape": {
+                    "slots_by_shape": {"full": 4},
+                    "slots_by_instance": {8070: 2},
+                },
+            }
+        }
+    }
+    owner.admission_controller._limits = {"http://localhost:8070": 8}
+
+    # A lower declaration is honored; a higher declaration remains capped by
+    # the current live admission limit.
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="http://localhost:8070",
+        )
+        == 2
+    )
+    owner.registry._raw["server_mode"]["frontdoor"]["serving_shape"][
+        "slots_by_instance"
+    ][8070] = 8
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="http://localhost:8070",
+        )
+        == 8
+    )
+    owner.admission_controller._limits["http://localhost:8070"] = 4
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="http://localhost:8070",
+        )
+        == 4
+    )
+
+    # The local topology port map must not leak onto a remote service using the
+    # same numeric port, nor onto an unknown local endpoint.
+    owner.admission_controller._limits["http://example.com:8070"] = 8
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="http://example.com:8070",
+        )
+        == 4
+    )
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="http://localhost:9999",
+        )
+        == 4
+    )
+
+    # A pool's single shared width must respect its narrowest explicitly
+    # declared physical member. The `full:` marker is stripped for admission
+    # lookups, and an admission cap on either member applies to the pool.
+    owner.registry._raw["server_mode"]["frontdoor"]["serving_shape"][
+        "slots_by_instance"
+    ][8180] = 2
+    owner.admission_controller._limits = {
+        "http://localhost:8070": 8,
+        "http://localhost:8180": 8,
+    }
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="full:http://localhost:8070,http://localhost:8180",
+        )
+        == 2
+    )
+    owner.admission_controller._limits["http://localhost:8180"] = 1
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="full:http://localhost:8070,http://localhost:8180",
+        )
+        == 1
+    )
+    owner.admission_controller._limits = {"http://localhost:8070": 3}
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="full:http://localhost:8070",
+        )
+        == 3
+    )
+
+
+def test_certified_native_batch_width_keeps_eval_batch_independent_fallback(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "eval_batch_frontdoor")
+    owner = Mock()
+    owner.registry._raw = {"server_mode": {}}
+    owner.admission_controller._limits = {"http://localhost:18070": 4}
+
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="eval_batch_frontdoor",
+            full_url="http://localhost:18070",
+        )
+        == 2
+    )
+
+
+def test_certified_native_batch_width_refuses_invalid_owner_instance_declaration(
+    monkeypatch,
+):
+    monkeypatch.setenv("ORCHESTRATOR_NATIVE_BATCH_SHARED_ROLES", "frontdoor")
+    owner = Mock()
+    owner.registry._raw = {
+        "server_mode": {
+            "frontdoor": {
+                "slots": 4,
+                "serving_shape": {
+                    "slots_by_shape": {"full": 4},
+                    "slots_by_instance": {8070: 0},
+                },
+            }
+        }
+    }
+    owner.admission_controller._limits = {"http://localhost:8070": 8}
+
+    assert (
+        _certified_native_batch_width(
+            owner,
+            topology_role="frontdoor",
+            full_url="http://localhost:8070",
+        )
+        == 1
+    )
+
+
 @pytest.fixture
 def mock_backend():
     """Create a mock backend that implements the caching interface (no streaming)."""
@@ -102,7 +263,7 @@ class TestInferenceMixinRealCall:
                 role="coder_escalation", output="first", tokens_generated=12,
                 generation_speed=1.0, elapsed_time=0.1, success=True,
                 output_tokens_reported=4,
-                output_tokens_source="server:/completion.tokens_predicted",
+                output_tokens_source="llama_server:/completion.tokens_predicted",
             ),
             InferenceResult(
                 role="coder_escalation", output="estimated", tokens_generated=19,
@@ -112,7 +273,7 @@ class TestInferenceMixinRealCall:
                 role="coder_escalation", output="partial", tokens_generated=21,
                 generation_speed=1.0, elapsed_time=0.1, success=True, partial=True,
                 output_tokens_reported=21,
-                output_tokens_source="server:/completion.tokens_predicted",
+                output_tokens_source="llama_server:/completion.tokens_predicted",
             ),
         ]
 
@@ -121,7 +282,7 @@ class TestInferenceMixinRealCall:
             assert prims.get_request_output_usage() == (
                 4,
                 "reported",
-                ["server:/completion.tokens_predicted"],
+                ["llama_server:/completion.tokens_predicted"],
             )
 
         with prims.request_context(request_id="estimated-output"):
@@ -285,7 +446,7 @@ class TestInferenceMixinRealCall:
             predicted_per_second=25.0,
             http_overhead_ms=10.0,
             output_tokens_reported=9,
-            output_tokens_source="server:/completion.tokens_predicted",
+            output_tokens_source="llama_server:/completion.tokens_predicted",
         )
 
         with prims.request_context(request_id="cached-backend-output"):
@@ -293,12 +454,12 @@ class TestInferenceMixinRealCall:
             assert prims.get_request_output_usage() == (
                 9,
                 "reported",
-                ["server:/completion.tokens_predicted"],
+                ["llama_server:/completion.tokens_predicted"],
             )
 
         assert result == "Backend response"
         mock_backend.infer.assert_called_once()
-        assert prims.total_tokens_generated == 10
+        assert prims.total_tokens_generated == 9
         assert prims.total_prompt_eval_ms == 100.0
         assert prims.total_generation_ms == 300.0
         assert prims.total_http_overhead_ms == 10.0
@@ -514,7 +675,7 @@ class TestCallCachingBackend:
             success=True,
             predicted_per_second=40.0,
             output_tokens_reported=20,
-            output_tokens_source="server:/completion.tokens_predicted",
+            output_tokens_source="llama_server:/completion.tokens_predicted",
         )
 
         with prims.request_context(request_id="call-caching-output"):
@@ -524,7 +685,7 @@ class TestCallCachingBackend:
             assert prims.get_request_output_usage() == (
                 20,
                 "reported",
-                ["server:/completion.tokens_predicted"],
+                ["llama_server:/completion.tokens_predicted"],
             )
 
         assert result == "def hello(): pass"
@@ -1348,7 +1509,9 @@ class TestWorkerPoolBatch:
 
         with prims.request_context(request_id="worker-pool-unmetered"):
             prims._record_request_prompt_tokens(19)
-            prims._record_request_output_tokens(7, "server:chat")
+            prims._record_request_output_tokens(
+                7, "llama_server:/v1/chat/completions.usage.completion_tokens"
+            )
             with (
                 patch("asyncio.get_event_loop", return_value=mock_loop),
                 patch("asyncio.run", return_value=["text only"]),
@@ -1359,7 +1522,7 @@ class TestWorkerPoolBatch:
             assert prims.get_request_output_usage() == (
                 None,
                 "unknown",
-                ["server:chat"],
+                ["llama_server:/v1/chat/completions.usage.completion_tokens"],
             )
 
     def test_worker_pool_batch_routes_correctly(self):

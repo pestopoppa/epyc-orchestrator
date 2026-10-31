@@ -638,6 +638,70 @@ def test_resolve_slots_matches_master_for_every_declared_role() -> None:
         assert registry[master_role]["slots"] == slots
 
 
+def test_instance_slot_declaration_overrides_shape_for_same_shape_instances(monkeypatch) -> None:
+    from scripts.server import stack_manifest
+
+    original = stack_manifest.master_serving_shape
+
+    def serving_shape(role: str):
+        shape, source = original(role)
+        if role == "frontdoor":
+            shape = {**shape, "slots_by_instance": {8080: 2, 8180: 3}}
+        return shape, source
+
+    monkeypatch.setattr(stack_manifest, "master_serving_shape", serving_shape)
+    assert stack_manifest.instance_shape_class("frontdoor", 1) == "half"
+    assert stack_manifest.instance_shape_class("frontdoor", 2) == "half"
+
+    first_half = stack_manifest.resolve_instance_slots("frontdoor", 1, port=8080)
+    second_half = stack_manifest.resolve_instance_slots("frontdoor", 2, port=8180)
+    full = stack_manifest.resolve_instance_slots("frontdoor", 0, port=8070)
+
+    assert (first_half.slots, first_half.source) == (
+        2,
+        "master:frontdoor/direct.serving_shape.8080",
+    )
+    assert (second_half.slots, second_half.source) == (
+        3,
+        "master:frontdoor/direct.serving_shape.8180",
+    )
+    assert full.slots == stack_manifest.slots_by_shape_for("frontdoor")[0]["full"]
+    assert stack_manifest.declared_slots_by_port("frontdoor") == {
+        8070: full.slots,
+        8080: 2,
+        8180: 3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("declaration", "message"),
+    [
+        ({8080: 0}, "positive integers"),
+        ({8080: True}, "positive integers"),
+        ({8080: "2"}, "positive integers"),
+        ({9999: 2}, "undeclared port"),
+    ],
+)
+def test_instance_slot_declaration_rejects_invalid_counts_and_ports(
+    monkeypatch,
+    declaration: dict[object, object],
+    message: str,
+) -> None:
+    from scripts.server import stack_manifest
+
+    original = stack_manifest.master_serving_shape
+
+    def serving_shape(role: str):
+        shape, source = original(role)
+        if role == "frontdoor":
+            shape = {**shape, "slots_by_instance": declaration}
+        return shape, source
+
+    monkeypatch.setattr(stack_manifest, "master_serving_shape", serving_shape)
+    with pytest.raises(ValueError, match=message):
+        stack_manifest.resolve_instance_slots("frontdoor", 1, port=8080)
+
+
 def test_resolve_slots_labels_its_fallback_source() -> None:
     """An undeclared role gets the manifest fallback AND says so.
 

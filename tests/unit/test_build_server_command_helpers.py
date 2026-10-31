@@ -1286,7 +1286,18 @@ def test_build_role_command_omits_md_for_embedded_nextn_stack_prior(
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
-def test_eval_batch_frontdoor_command_uses_declared_serving_shape() -> None:
+def test_eval_batch_frontdoor_command_uses_declared_serving_shape(monkeypatch) -> None:
+    from scripts.server import stack_manifest
+
+    original = stack_manifest.master_serving_shape
+
+    def serving_shape(role: str):
+        shape, source = original(role)
+        if role == "frontdoor":
+            shape = {**shape, "slots_by_instance": {8080: 9}}
+        return shape, source
+
+    monkeypatch.setattr(stack_manifest, "master_serving_shape", serving_shape)
     cmd = oss._build_eval_batch_frontdoor_command(18070)
 
     assert _flag_value(cmd, "--port") == "18070"

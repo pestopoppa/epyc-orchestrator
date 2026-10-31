@@ -123,6 +123,7 @@ from scripts.server.stack_manifest import (
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
     WORKER_POOL_MODELS,
+    resolve_instance_slots,
     resolve_slots,
     validate_serving_shape_capacity,
 )
@@ -343,14 +344,16 @@ def _resolve_parallel_slots(
     value for every instance a role runs. That cannot express the ratified shape
     — frontdoor's 96-core full takes 16 slots while each of its 48-core halves
     takes 4 — so the compiled priors now carry `runtime.cache.slots_by_port`, one
-    entry per launch instance, joined by the compiler from the model's
-    `slots_by_shape` and the instance's declared `cpu_shape`.
+    entry per launch instance, joined by the compiler from the model's optional
+    `slots_by_instance` declaration, then `slots_by_shape` and the instance's
+    declared `cpu_shape`.
 
     Resolution order, most specific first:
       1. the compiled per-PORT value (what production uses),
       2. the compiled role-level `slots` (a record compiled before this field),
-      3. `stack_manifest.resolve_slots(role, numa_instance=...)`, which re-derives
-         the same join from the ambient registry when no prior is available.
+      3. `stack_manifest.resolve_instance_slots(...)`, which re-derives the
+         instance declaration from the ambient registry when no prior is
+         available.
     Port, not numa_instance, is the key: it is the one identifier the launcher is
     certain of at this point, and it is what admission keys on, so a mismatch
     between `-np` and the admission limit is not expressible.
@@ -365,12 +368,13 @@ def _resolve_parallel_slots(
     return _runtime_positive_int(
         cache,
         "slots",
-        resolve_slots(
+        resolve_instance_slots(
             role_name,
-            fallback_mode,
+            numa_instance=numa_instance,
+            mode=fallback_mode,
+            port=port,
             worker_type=worker_type,
             vision_type=vision_type,
-            numa_instance=numa_instance,
         ).slots,
     )
 

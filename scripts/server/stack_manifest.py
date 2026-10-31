@@ -30,6 +30,7 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from src.registry.slot_declarations import parse_slots_by_instance
 from scripts.server.stack_numa import (
     CPU_SHAPE_CLASSES,
     GPU_HOST_LANE,
@@ -220,8 +221,9 @@ def _master_declared_model_path(role: str) -> str | None:
     return None
 
 
-# The master registry's KV-FEASIBILITY GROUP. `n_ctx`, `slots_by_shape` and
-# `kv_quant` are declared together under `server_mode.<role>.serving_shape`
+# The master registry's KV-FEASIBILITY GROUP. `n_ctx`, the per-shape and
+# per-instance slot declarations, and `kv_quant` are declared together under
+# `server_mode.<role>.serving_shape`
 # because they are not independent: KV bytes are
 # `KiB_per_token(model, kv_quant) * n_ctx`, and per-slot context is
 # `n_ctx / slots`. See the long comment above `frontdoor:` in the master
@@ -858,6 +860,88 @@ def slots_by_shape_for(role: str) -> tuple[dict[str, int], str | None]:
     return table, source
 
 
+def _instance_topology_role(role: str) -> str:
+    """Topology role that owns a launch role's physical instance list."""
+    if role in NUMA_CONFIG:
+        return role
+    master_role, _row, _binding = master_server_row(role)
+    if isinstance(master_role, str) and master_role in NUMA_CONFIG:
+        return master_role
+    return next(
+        (
+            host
+            for host, meta in ROLE_LAUNCH_META.items()
+            if role in (meta.get("shared_with_first_n") or []) and host in NUMA_CONFIG
+        ),
+        role,
+    )
+
+
+def slots_by_instance_for(role: str) -> tuple[dict[int, int], str | None]:
+    """Master's optional per-instance slot map, keyed by declared server port.
+
+    Unlike ``slots_by_shape``, this map can distinguish two instances with the
+    same shape class. The port is the launcher's stable instance identity and
+    is also the key of the compiled ``runtime.cache.slots_by_port`` map.
+    """
+    shape, source = master_serving_shape(role)
+    raw = shape.get("slots_by_instance") if isinstance(shape, dict) else None
+    if raw is None:
+        return {}, None
+
+    topology_role = _instance_topology_role(role)
+    instances = NUMA_CONFIG.get(topology_role, {}).get("instances", [])
+    known_ports = {
+        int(instance[1])
+        for instance in instances
+        if isinstance(instance, (list, tuple))
+        and len(instance) > 1
+        and isinstance(instance[1], int)
+        and not isinstance(instance[1], bool)
+    }
+    table = parse_slots_by_instance(
+        raw,
+        known_ports=known_ports,
+        source=f"slots_by_instance for role '{role}' ({source})",
+    )
+    return table, source
+
+
+def resolve_instance_slots(
+    role: str,
+    numa_instance: int,
+    mode: str = "default",
+    *,
+    port: int | None = None,
+    worker_type: str | None = None,
+    vision_type: str | None = None,
+) -> SlotsDecision:
+    """Resolve ``-np`` for one declared instance, with a port override first.
+
+    Optional ``serving_shape.slots_by_instance`` is the most specific
+    declaration, followed by the established shape-class, role-scalar and
+    mode-fallback resolution in :func:`resolve_slots`.
+    """
+    if port is None:
+        topology_role = _instance_topology_role(role)
+        instances = NUMA_CONFIG.get(topology_role, {}).get("instances", [])
+        if 0 <= numa_instance < len(instances):
+            candidate = instances[numa_instance][1]
+            if isinstance(candidate, int) and not isinstance(candidate, bool):
+                port = candidate
+    if port is not None:
+        table, source = slots_by_instance_for(role)
+        if port in table:
+            return SlotsDecision(table[port], f"master:{source}.{port}")
+    return resolve_slots(
+        role,
+        mode,
+        worker_type=worker_type,
+        vision_type=vision_type,
+        numa_instance=numa_instance,
+    )
+
+
 def resolve_slots(
     role: str,
     mode: str = "default",
@@ -866,11 +950,11 @@ def resolve_slots(
     vision_type: str | None = None,
     numa_instance: int | None = None,
 ) -> SlotsDecision:
-    """Resolve `-np` for one INSTANCE of a role.
+    """Resolve the shape/scalar base `-np` for one role instance.
 
     Precedence, most specific first:
       1. ``serving_shape.slots_by_shape[<class of this instance>]`` — the
-         per-instance answer. Requires ``numa_instance``; the instance's shape
+         per-shape answer. Requires ``numa_instance``; the instance's shape
          CLASS comes from ``stack_topology.yaml``'s declared ``cpu_shape``, so no
          role -> shape table exists anywhere.
       2. the role's flat ``slots`` — the compat scalar, and the whole answer for
@@ -887,6 +971,9 @@ def resolve_slots(
     admission decision and it is made in src/api/admission.py; expressing it by
     shrinking the server's slot count instead both loses the distinction and
     silently overrides a declaration.
+
+    For a port-specific override that distinguishes instances of the same
+    shape, callers that know the instance use :func:`resolve_instance_slots`.
     """
     if numa_instance is not None:
         shape_class = instance_shape_class(role, numa_instance)
@@ -929,7 +1016,8 @@ def declared_slots_by_port(role: str) -> dict[int, int]:
         return {}
     out: dict[int, int] = {}
     for idx, instance in enumerate(cfg["instances"]):
-        out[int(instance[1])] = resolve_slots(role, numa_instance=idx).slots
+        port = int(instance[1])
+        out[port] = resolve_instance_slots(role, numa_instance=idx, port=port).slots
     return out
 
 
@@ -1331,18 +1419,26 @@ def validate_declaration_parity() -> None:
             used_exceptions.add(key)
 
     # --- 4. the KV-feasibility group must be internally coherent -------------
-    # `slots_by_shape` is the one declaration in master that is only meaningful
-    # against the topology, so it is the one that can go stale silently: rename a
-    # shape class, retire a role's halves, or mistype a key, and a role quietly
-    # falls back to the flat scalar with no error anywhere. Four teeth:
+    # `slots_by_shape` and `slots_by_instance` are declarations in master that
+    # are only meaningful against the topology, so they can go stale silently:
+    # rename a shape class, retire an instance, or mistype a key, and a role
+    # quietly falls back to the flat scalar with no error anywhere. The guards:
     #   (a) every key is a real shape class,
     #   (b) every key matches at least one instance the role actually has,
     #   (c) every instance of the role resolves to a positive slot count,
-    #   (d) the flat compat scalar equals the primary instance's resolved value.
+    #   (d) per-instance keys name real ports and positive counts,
+    #   (e) the flat compat scalar equals the primary instance's resolved value.
     # (d) is the one that matters most in practice: `slots` is read directly by
-    # consumers that know nothing about shapes, so a group that disagrees with it
+    # consumers that know nothing about shapes or instances, so a group that disagrees with it
     # ships two different answers to the same question.
     for role in sorted(set(_MANIFEST["role_launch_meta"]) | set(NUMA_CONFIG)):
+        instance_slots_valid = True
+        instance_slots: dict[int, int] = {}
+        try:
+            instance_slots, _instance_slots_source = slots_by_instance_for(role)
+        except ValueError as exc:
+            errors.append(str(exc))
+            instance_slots_valid = False
         table, source = slots_by_shape_for(role)
         instance_classes = NUMA_INSTANCE_SHAPE_CLASSES.get(role, ())
         if table:
@@ -1363,7 +1459,12 @@ def validate_declaration_parity() -> None:
         if not instance_classes:
             continue
         for idx, shape_class in enumerate(instance_classes):
-            decision = resolve_slots(role, numa_instance=idx)
+            port = int(NUMA_CONFIG[role]["instances"][idx][1])
+            decision = (
+                resolve_instance_slots(role, numa_instance=idx, port=port)
+                if instance_slots_valid
+                else resolve_slots(role, numa_instance=idx)
+            )
             if decision.slots <= 0:
                 errors.append(
                     f"role '{role}' instance {idx} ({shape_class}) resolves to "
@@ -1371,8 +1472,13 @@ def validate_declaration_parity() -> None:
                 )
         flat, flat_source = master_declared(role, "slots")
         primary_idx = NUMA_CONFIG.get(role, {}).get("full_instance_idx", 0) or 0
-        primary = resolve_slots(role, numa_instance=primary_idx)
-        if table and _positive_int(flat) is not None and flat != primary.slots:
+        primary_port = int(NUMA_CONFIG[role]["instances"][primary_idx][1])
+        primary = (
+            resolve_instance_slots(role, numa_instance=primary_idx, port=primary_port)
+            if instance_slots_valid
+            else resolve_slots(role, numa_instance=primary_idx)
+        )
+        if (table or instance_slots) and _positive_int(flat) is not None and flat != primary.slots:
             errors.append(
                 f"role '{role}': flat `slots` ({flat_source}) is {flat!r} but the primary "
                 f"instance (index {primary_idx}, class "
@@ -1573,7 +1679,9 @@ def serving_shape_instances() -> list[dict]:
                     "device": str(device) if isinstance(device, str) else None,
                     "on_gpu": shape_class == "gpu_host_lane",
                     "n_ctx": n_ctx,
-                    "slots": resolve_slots(role, numa_instance=idx).slots,
+                    "slots": resolve_instance_slots(
+                        role, numa_instance=idx, port=int(instance[1])
+                    ).slots,
                     "kv_quant": kv_quant,
                     "kv_gib": round(kv_gib_for(role, n_ctx, kv_quant), 4),
                     "vram_non_kv_gib": shape.get("vram_non_kv_gib"),
