@@ -2632,6 +2632,7 @@ class SafetyGate:
                 e_quality=float(e_quality),
                 e_rate=None if e_rate is None else float(e_rate),
                 k=int(q_state.k),
+                k_rate=int(rate_state.k) if rate_state is not None else None,
                 policy=policy,
                 source="live",
             )

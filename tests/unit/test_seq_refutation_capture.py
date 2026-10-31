@@ -287,6 +287,48 @@ def test_legacy_row_with_no_rate_axis_reconstructs_without_fabricating_one(
     assert rec["other_axis_margin"] is None
 
 
+def test_divergent_rate_count_uses_its_own_budget_horizon(readjudicate):
+    # Quality had eight trials; rate had just one measured update. Reusing
+    # quality k would falsely mark the rate axis refuted at the budget bar.
+    rec = refutation_record(e_quality=1.0, e_rate=1.0, k=8, k_rate=1)
+    assert rec["refuting_axis"] == "quality"
+    assert rec["both_axes_refuted"] is False
+    assert rec["n_trials_at_stop"] == 8
+    assert rec["k_rate"] == rec["axes"]["rate"]["k"] == 1
+    assert rec["axes"]["rate"]["refuted"] is False
+    row = {"E_quality": 1.0, "E_rate_noninf": 1.0, "k": 8, "k_rate": 1}
+    rebuilt, provenance = readjudicate.refutation_of(row, DEFAULT_POLICY)
+    assert provenance == "reconstructed"
+    assert rebuilt["axes"]["rate"] == rec["axes"]["rate"]
+    assert rebuilt["both_axes_refuted"] is False
+
+
+def test_old_refutation_rows_keep_explicit_legacy_fallback(readjudicate):
+    row = {"E_quality": 1.0, "E_rate_noninf": 1.0, "k": 8}
+    rebuilt, provenance = readjudicate.refutation_of(row, DEFAULT_POLICY)
+    assert provenance == "reconstructed"
+    assert "k_rate" not in rebuilt
+    assert rebuilt["axes"]["rate"]["k"] == 8
+
+
+def test_live_refutation_uses_rate_count_after_skipped_trials(tmp_path):
+    verdict = _gate(tmp_path).check(
+        _result(),
+        question_results={"q1": False},
+        baseline_profile={"q1": 0.0},
+        task_rate=1.0,
+        baseline_task_rate=0.5,
+        prior_quality_obs=[(i, 0.0) for i in range(7)],
+        prior_rate_obs=[],
+    )
+    seq = verdict.seq
+    assert seq["k"] == 8 and seq["k_rate"] == 1
+    assert seq["state"] == "refuted"
+    assert seq["refutation"]["k_rate"] == 1
+    assert seq["refutation"]["axes"]["rate"]["refuted"] is False
+    assert seq["refutation"]["both_axes_refuted"] is False
+
+
 def test_readjudicator_axis_refuted_delegates_to_the_canonical_rule(readjudicate):
     """The script's predicate is now the same code the live writer uses."""
     for wealth, k in ((1.0, 40), (11.55, 40), (0.01, 1), (1.5, 3), (None, 40)):
