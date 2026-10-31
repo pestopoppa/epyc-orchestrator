@@ -617,6 +617,18 @@ def routing_meta(
         elif getattr(request, "image_base64", None):
             meta["has_image"] = True
             meta["image_source"] = "base64"
+        else:
+            # The multi-file vision path also accepts documents and archives.
+            # Record only its first direct image input, using the same bounded
+            # path-only metadata and dashboard guard as image_path requests.
+            for file_path in getattr(request, "files", None) or ():
+                if Path(file_path).suffix.lower() in {
+                    ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"
+                }:
+                    meta["image_path"] = file_path[:MAX_IMAGE_PATH_LEN]
+                    meta["has_image"] = True
+                    meta["image_source"] = "path"
+                    break
     except Exception:
         pass
     # Request-lifecycle join fields for the in-process live telemetry reducer.
