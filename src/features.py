@@ -175,6 +175,9 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("tool_result_clearing", False, True, "TOOL_RESULT_CLEARING", "Clear stale tool output blocks"),
     # Reasoning length alarm
     FeatureSpec("reasoning_length_alarm", False, True, "REASONING_LENGTH_ALARM", "Retry verbose reasoning"),
+    # MF-RR-1: one retry after a native length cutoff only when no executable
+    # action/tool call was emitted and the selected backend can honor thinking-off.
+    FeatureSpec("reasoning_runaway_retry", False, False, "REASONING_RUNAWAY_RETRY", "MF-RR-1: one concise thinking-off retry after a native length cutoff with no executable action; default off"),
     # Tool output compression
     FeatureSpec("tool_output_compression", False, False, "TOOL_OUTPUT_COMPRESSION", "Compress verbose output"),
     # TOC-SP-6: chronological per-task trajectory artifact (also needs ORCHESTRATOR_TRAJECTORY_ARTIFACT_DIR)
@@ -722,6 +725,7 @@ class Features:
 
     # Reasoning length alarm (short-m@k Action 9): retry with conciseness nudge
     reasoning_length_alarm: bool = False  # Cancel + retry when <think> exceeds 1.5× band budget
+    reasoning_runaway_retry: bool = False  # MF-RR-1: retry native length cutoff with no action; default off
 
     # Tool output compression (Phase 2 native): compress verbose output before prompt injection
     tool_output_compression: bool = False  # Compress pytest/git/build output to preserve actionable info only

@@ -179,6 +179,44 @@ def _trace_announced_action(
     return value, status, "primary"
 
 
+def _has_executable_action_or_tool(output: str, meta: dict[str, Any]) -> bool:
+    """Fail closed when the completed attempt contains code or any tool call."""
+    native_calls = meta.get("tool_calls")
+    if isinstance(native_calls, (list, tuple)) and native_calls:
+        return True
+    if meta.get("completion_reason") == "tool_calls":
+        return True
+
+    raw = output or ""
+    if re.search(r"(?:TOOL|CALL)\s*\(|<\|tool_call>|</?tool_call>", raw, re.IGNORECASE):
+        return True
+
+    # The extractor recognizes fenced Python, Gemma tool-call text and the
+    # JSON tool-call dialects used by the REPL. Invalid extracted code is
+    # ambiguous; do not send a second request that might duplicate an action.
+    try:
+        from src.prompt_builders import extract_code_from_response
+
+        extracted = extract_code_from_response(raw)
+        if not extracted.strip():
+            return False
+        tree = ast.parse(extracted)
+    except Exception:
+        return True
+
+    # A lone string literal is not an action. Every other statement is
+    # conservatively treated as executable, including `pass` and assignments.
+    statements = list(tree.body)
+    return any(
+        not (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and isinstance(stmt.value.value, str)
+        )
+        for stmt in statements
+    )
+
+
 def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None = None,
                     prompt: str | None = None, repeat_count: object = None,
                     primary_meta: dict[str, Any] | None = None,
@@ -192,7 +230,12 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
                     action_source_output: object = None,
                     action_source_eligible: bool = True,
                     nudge_branch: str | None = None,
-                    task_id: object = None) -> None:
+                    task_id: object = None,
+                    reasoning_runaway_retry_enabled: bool = False,
+                    reasoning_runaway_retry_eligible: bool | None = None,
+                    reasoning_runaway_retry_attempted: bool = False,
+                    reasoning_runaway_retry_failed: bool = False,
+                    reasoning_runaway_thinking_off_supported: bool = False) -> None:
     """Flag-gated per-turn observability for BEP OFF-arm (interleaved) debugging.
 
     Captures exactly what the model emits each turn + whether it calls the file-write tool vs
@@ -232,6 +275,9 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
             if not attempted:
                 return "not_attempted"
             return value if isinstance(value, str) and value in {"model_server", "mock"} else "unknown"
+        def _reported_count(meta: dict[str, Any]) -> int | None:
+            value = meta.get("output_tokens_reported")
+            return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
         _cap = requested_output_cap
         _cap = _cap if isinstance(_cap, int) and not isinstance(_cap, bool) else None
         _processed_chars = processed_output_chars
@@ -258,6 +304,15 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
             "native_inference_transport_retry": _transport(_retry, attempted=retry_attempted),
             "native_completion_reason_retry": _reason(_retry, attempted=retry_attempted),
             "retry_attempted": bool(retry_attempted), "retry_failed": bool(retry_failed),
+            "reasoning_runaway_retry_enabled": bool(reasoning_runaway_retry_enabled),
+            "reasoning_runaway_retry_eligible": reasoning_runaway_retry_eligible,
+            "reasoning_runaway_retry_attempted": bool(reasoning_runaway_retry_attempted),
+            "reasoning_runaway_retry_failed": bool(reasoning_runaway_retry_failed),
+            "reasoning_runaway_thinking_off_supported": bool(reasoning_runaway_thinking_off_supported),
+            "native_output_tokens_primary": _reported_count(_primary),
+            "native_output_tokens_primary_source": _primary.get("output_tokens_source") if isinstance(_primary.get("output_tokens_source"), str) else None,
+            "native_output_tokens_retry": _reported_count(_retry),
+            "native_output_tokens_retry_source": _retry.get("output_tokens_source") if isinstance(_retry.get("output_tokens_source"), str) else None,
             "completion_tokens": None,
             "completion_tokens_status": "unsupported_unattested_backend_basis",
             "requested_output_cap": _cap,
@@ -1691,6 +1746,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     _reasoning_retry_meta: dict[str, Any] | None = None
     _reasoning_retry_attempted = False
     _reasoning_retry_failed = False
+    _reasoning_runaway_retry_enabled = bool(_get_features().reasoning_runaway_retry)
+    _reasoning_runaway_retry_eligible: bool | None = None
+    _reasoning_runaway_retry_attempted = False
+    _reasoning_runaway_retry_failed = False
+    _reasoning_runaway_thinking_off_supported = False
 
     if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
         elapsed_ms = (asyncio.get_event_loop().time() - llm_started) * 1000
@@ -1757,6 +1817,11 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             action_source_output=_processed_raw,
             action_source_eligible=action_source_eligible,
             nudge_branch=nudge_branch, task_id=getattr(state, "task_id", None),
+            reasoning_runaway_retry_enabled=_reasoning_runaway_retry_enabled,
+            reasoning_runaway_retry_eligible=_reasoning_runaway_retry_eligible,
+            reasoning_runaway_retry_attempted=_reasoning_runaway_retry_attempted,
+            reasoning_runaway_retry_failed=_reasoning_runaway_retry_failed,
+            reasoning_runaway_thinking_off_supported=_reasoning_runaway_thinking_off_supported,
         )
         _bep_trace_emitted = True
 
@@ -1790,10 +1855,127 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         _record_session_turn(state, role=str(role), error=_infra_sentinel)
         return "", _infra_sentinel, False, {"_infra_failure": True}
 
+    # MF-RR-1: only retry an explicit native token-cap cutoff that emitted no
+    # executable action/tool call. The thinking-off override is supported only
+    # for a live RI-23 thinking role, whose request is routed through the
+    # chat-completions template boundary. Other backends must not receive a
+    # retry that claims to disable thinking when they cannot honor it.
+    if (
+        _reasoning_runaway_retry_enabled
+        and _primary_call_meta.get("completion_reason") == "length"
+    ):
+        _reasoning_runaway_retry_eligible = not _has_executable_action_or_tool(
+            _primary_llm_output, _primary_call_meta,
+        )
+        try:
+            from src.chat_completions_roles import thinking_chat_lane_role
+
+            _reasoning_runaway_thinking_off_supported = bool(
+                thinking_chat_lane_role(str(role))
+            )
+        except Exception:
+            _reasoning_runaway_thinking_off_supported = False
+
+        if (
+            _reasoning_runaway_retry_eligible
+            and _reasoning_runaway_thinking_off_supported
+            and not _reasoning_retry_attempted
+        ):
+            from src.chat_completions_roles import thinking_off
+
+            _reasoning_runaway_retry_attempted = True
+            _reasoning_retry_attempted = True
+            _runaway_retry_prompt = prompt + (
+                "\n\n[SYSTEM: The previous response reached its output-token limit "
+                "before producing an executable action or tool call. Thinking is "
+                "disabled for this retry. In one concise action, emit the next "
+                "executable REPL action or FINAL(...). Do not explain or include "
+                "reasoning prose.]"
+            )
+            try:
+                with thinking_off():
+                    _retry_output, _retry_meta = await _call_llm_capturing_meta(
+                        deps.primitives.llm_call, deps.primitives,
+                        _runaway_retry_prompt, role=str(role),
+                        stop_sequences=["\n```\n"], skip_suffix=True, **llm_kwargs,
+                    )
+                _reasoning_retry_meta = dict(_retry_meta)
+                _retry_error_reason = _retry_meta.get("completion_reason")
+                _retry_error = _retry_meta.get("error")
+                _retry_infra = _backend_infra_sentinel(_retry_output)
+                _retry_failed = bool(
+                    _retry_infra
+                    or _retry_error
+                    or _retry_error_reason in {
+                        "exception", "error", "timeout", "read_timeout",
+                        "read_timeout_partial", "request_error", "http_error",
+                        "server_error",
+                    }
+                )
+                if _retry_failed:
+                    _reasoning_runaway_retry_failed = True
+                    _reasoning_retry_failed = True
+                    log.warning(
+                        "MF-RR-1 retry failed on turn %d (role=%s, reason=%s); preserving primary output",
+                        state.turns, role, _retry_error_reason or "backend_error",
+                    )
+                else:
+                    code = _retry_output
+                    raw_llm_output = _retry_output
+                    _turn_call_meta = dict(_retry_meta)
+            except Exception as e:
+                _reasoning_retry_meta = {
+                    "completion_reason": "exception",
+                    "error": f"{type(e).__name__}: {e}",
+                }
+                _reasoning_runaway_retry_failed = True
+                _reasoning_retry_failed = True
+                log.warning(
+                    "MF-RR-1 retry failed on turn %d (role=%s, %s); preserving primary output",
+                    state.turns, role, type(e).__name__,
+                )
+            # The ordinary turn accounting above covers the primary call.
+            # Attribute this retry from its own call-local native metadata;
+            # absent counts remain unknown instead of being estimated as zero.
+            _trajectory_note_call(state, role, _runaway_retry_prompt, _reasoning_retry_meta, deps)
+            _retry_output_tokens = _reasoning_retry_meta.get("output_tokens_reported")
+            if (
+                isinstance(_retry_output_tokens, int)
+                and not isinstance(_retry_output_tokens, bool)
+                and _retry_output_tokens >= 0
+            ):
+                state.aggregate_tokens += _retry_output_tokens
+                _retry_prompt_tokens = _reasoning_retry_meta.get("prompt_tokens")
+                if (
+                    _get_features().session_token_budget
+                    and isinstance(_retry_prompt_tokens, int)
+                    and not isinstance(_retry_prompt_tokens, bool)
+                    and _retry_prompt_tokens >= 0
+                ):
+                    try:
+                        _stb = getattr(state, "_session_token_budget", None)
+                        if _stb is None:
+                            from src.session_analytics import SessionTokenBudget
+
+                            _stb = SessionTokenBudget.from_env()
+                            state._session_token_budget = _stb  # type: ignore[attr-defined]
+                        _stb.record_tokens(
+                            prompt_tokens=_retry_prompt_tokens,
+                            completion_tokens=_retry_output_tokens,
+                        )
+                        _budget_status = _stb.check()
+                        if _budget_status.should_stop:
+                            log.warning(
+                                "B5 session token budget exhausted after MF-RR-1 retry: %s",
+                                _budget_status.message,
+                            )
+                    except Exception:
+                        log.debug("Session token budget retry accounting failed", exc_info=True)
+
     # Reasoning length alarm (short-m@k Action 9): if <think> exceeds
     # 1.5× band budget, retry once with a conciseness nudge.
     if _check_reasoning_length_alarm(raw_llm_output, getattr(state, "difficulty_band", ""), _completion_tokens):
-        if not getattr(state, "_alarm_retried", False):
+        if not getattr(state, "_alarm_retried", False) and not _reasoning_retry_attempted:
             _reasoning_retry_attempted = True
             state._alarm_retried = True  # type: ignore[attr-defined]
             log.info(
