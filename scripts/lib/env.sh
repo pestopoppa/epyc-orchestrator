@@ -43,8 +43,9 @@ fi
 export ORCHESTRATOR_PATHS_LLM_ROOT="${ORCHESTRATOR_PATHS_LLM_ROOT:-/mnt/raid0/llm}"
 export LLM_ROOT="${ORCHESTRATOR_PATHS_LLM_ROOT}"
 
-# Project root - this repository
-export ORCHESTRATOR_PATHS_PROJECT_ROOT="${ORCHESTRATOR_PATHS_PROJECT_ROOT:-${LLM_ROOT}/claude}"
+# Project root - caller fallback applies only after .env; other callers retain
+# the legacy default. The fallback is a shell-local entrypoint hint, not config.
+export ORCHESTRATOR_PATHS_PROJECT_ROOT="${ORCHESTRATOR_PATHS_PROJECT_ROOT:-${_EPYC_ENV_PROJECT_ROOT_DEFAULT:-${LLM_ROOT}/claude}}"
 export PROJECT_ROOT="${ORCHESTRATOR_PATHS_PROJECT_ROOT}"
 
 # =============================================================================
