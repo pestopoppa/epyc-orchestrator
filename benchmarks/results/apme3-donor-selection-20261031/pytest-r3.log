@@ -1,0 +1,24 @@
+
+==================================== ERRORS ====================================
+______________ ERROR collecting tests/unit/test_mutation_graph.py ______________
+tests/unit/test_mutation_graph.py:12: in <module>
+    from scripts.autopilot.species.mutation_graph import (
+scripts/autopilot/species/__init__.py:3: in <module>
+    from .seeder import Seeder
+scripts/autopilot/species/seeder.py:27: in <module>
+    from seeding_eval import evaluate_question_per_role  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark/seeding_eval.py:17: in <module>
+    from seeding_types import (
+scripts/benchmark/seeding_types.py:370: in <module>
+    DEFAULT_ROLES = _read_stack_prior_default_roles() or _discover_default_roles_fallback()
+                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/benchmark/seeding_types.py:357: in _discover_default_roles_fallback
+    discovered = discover_active_roles()
+                 ^^^^^^^^^^^^^^^^^^^^^
+E   NameError: name 'discover_active_roles' is not defined
+=========================== short test summary info ============================
+ERROR tests/unit/test_mutation_graph.py - NameError: name 'discover_active_ro...
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.22s
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 0.711094977799803, "sampled_peak_tree_rss_bytes": 99012608, "samples": 8, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 3435808, "leader_birth": 158149517, "child_rc": 2, "children_drained": true, "failure": null}

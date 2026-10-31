@@ -1,0 +1,22 @@
+
+==================================== ERRORS ====================================
+______________ ERROR collecting tests/unit/test_mutation_graph.py ______________
+ImportError while importing test module '/mnt/raid0/llm/tmp/codex3-apme3-20261031/tests/unit/test_mutation_graph.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../../users/daniele/.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/unit/test_mutation_graph.py:12: in <module>
+    from scripts.autopilot.species.mutation_graph import (
+scripts/autopilot/species/__init__.py:3: in <module>
+    from .seeder import Seeder
+scripts/autopilot/species/seeder.py:27: in <module>
+    from seeding_eval import evaluate_question_per_role  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ModuleNotFoundError: No module named 'seeding_eval'
+=========================== short test summary info ============================
+ERROR tests/unit/test_mutation_graph.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.32s
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 1.2164484220556915, "sampled_peak_tree_rss_bytes": 93388800, "samples": 13, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 3434436, "leader_birth": 158147145, "child_rc": 2, "children_drained": true, "failure": null}

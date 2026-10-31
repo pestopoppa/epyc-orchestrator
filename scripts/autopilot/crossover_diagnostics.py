@@ -1,5 +1,6 @@
 """Default-off native crossover donor diagnostics, independent of acceptance policy."""
 from __future__ import annotations
+import hashlib
 import logging
 import os
 from typing import Any
@@ -157,6 +158,14 @@ def _metadata(row: Any) -> dict[str, Any] | None:
 def capture_trial_features(row: Any, *, verdict: Any, action: dict[str, Any],
                            eval_result: Any, history: list[Any]) -> None:
     """Writer-time only: capture native declared features with a native observed anchor."""
+    content = getattr(eval_result, "_crossover_donor_content", None)
+    try:
+        delattr(eval_result, "_crossover_donor_content")
+    except AttributeError:
+        pass
+    except Exception as exc:
+        log.warning("Crossover donor consume unavailable (%s)", type(exc).__name__)
+        return
     if not enabled():
         return
     try:
@@ -198,6 +207,21 @@ def capture_trial_features(row: Any, *, verdict: Any, action: dict[str, Any],
             "sentinel_outcome_source": payload.get("sentinel_outcome_source"),
             "feature_semantics": "native_partial observations; sentinel source explicitly recorded",
         }
+        if (os.environ.get("AUTOPILOT_CROSSOVER_DONOR_SELECTION") == "1"
+                and action.get("type") == "prompt_mutation"
+                and isinstance(content, tuple) and len(content) == 3
+                and type(content[0]) is str and content[0] in features["files_touched"]
+                and type(content[1]) is str and type(content[2]) is str
+                and 0 < len(content[2].encode("utf-8")) <= 4096):
+            data = content[2].encode("utf-8")
+            digest = hashlib.sha256(data).hexdigest()
+            served = row.eval_details.get("served_content") or {}
+            if (isinstance(served, dict) and isinstance(served.get("files"), dict)
+                    and served["files"].get(content[1]) == digest):
+                row.eval_details["crossover_donor_content"] = {
+                    "trial_id": row.trial_id, "target": content[0], "source": content[1],
+                    "content": content[2], "sha256": digest,
+                }
     except Exception as exc:
         log.warning("Crossover feature capture unavailable (%s)", type(exc).__name__)
 
@@ -233,6 +257,60 @@ def donor_pairs(history: list[Any], target_file: str, *, top_n: int = 2) -> list
                           "policy": "advisory-disjoint-observed-improvements-v1"})
     pairs.sort(key=lambda pair: (len(pair["features"]["overlap_reasons"]), pair["donor_trial_ids"]))
     return pairs[:max(0, top_n)]
+
+
+def select_donor_pairs(history: list[Any], target_file: str, source: str, *, top_n: int = 1) -> list[dict[str, Any]]:
+    """Select only verifiable, comparable content, using the BSV-3 verdict."""
+    from bsv_observe import _conflict_severity
+
+    recorded = [(row, value) for row in history if (value := _metadata(row)) is not None]
+    candidates = []
+    for row, value in recorded:
+        reference = value.get("delta_reference_trial_id")
+        feature = value["features"]
+        content = row.eval_details.get("crossover_donor_content")
+        if (type(reference) is not int or target_file not in feature["files_touched"]
+                or not feature["prompt_sections_touched"] or type(content) is not dict
+                or set(content) != {"trial_id", "target", "source", "content", "sha256"}
+                or type(content["trial_id"]) is not int or content["trial_id"] != row.trial_id
+                or content["target"] != target_file or type(source) is not str or not source
+                or content["source"] != source
+                or type(content["content"]) is not str or type(content["sha256"]) is not str):
+            continue
+        raw = content["content"].encode("utf-8")
+        served = row.eval_details.get("served_content")
+        if (not raw or len(raw) > 4096 or hashlib.sha256(raw).hexdigest() != content["sha256"]
+                or type(served) is not dict or type(served.get("files")) is not dict
+                or served["files"].get(content["source"]) != content["sha256"]):
+            continue
+        delta = feature["behavior_signature_delta"]
+        if not (delta["changed_fields"] or delta["improved_sentinels"] or delta["regressed_sentinels"]):
+            continue
+        if not any(anchor["trial_id"] == reference and anchor["trial_id"] < value["trial_id"]
+                   and anchor["scope"] == value["scope"]
+                   and anchor["sentinel_outcome_source"] == value["sentinel_outcome_source"]
+                   and anchor["delta_reference_trial_id"] is None for _, anchor in recorded):
+            continue
+        candidates.append((value, content))
+    # Match the advisory path's bounded pair-search window.
+    candidates = candidates[-30:]
+    ranked = []
+    rank = {"none": 0, "watch": 1, "blocking": 2}
+    for i, (left, left_content) in enumerate(candidates):
+        for right, right_content in candidates[i + 1:]:
+            if (left["trial_id"] == right["trial_id"] or left["scope"] != right["scope"]
+                    or left["sentinel_outcome_source"] != right["sentinel_outcome_source"]
+                    or left["delta_reference_trial_id"] != right["delta_reference_trial_id"]):
+                continue
+            severity, reasons = _conflict_severity(left["features"], right["features"])
+            ranked.append((rank[severity], left["trial_id"], right["trial_id"], {
+                "trial_ids": [left["trial_id"], right["trial_id"]], "severity": severity,
+                "reasons": reasons, "source": source,
+                "sha256": [left_content["sha256"], right_content["sha256"]],
+                "contents": [left_content["content"], right_content["content"]],
+            }))
+    ranked.sort(key=lambda item: item[:3])
+    return [item[3] for item in ranked[:max(0, top_n)]]
 
 
 def crossover_context(journal: Any, target_file: str) -> str:

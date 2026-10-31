@@ -1,0 +1,45 @@
+{
+  "admission_post_sha256": "6e0340cd380b7d268e0b68c18b35adeb5f71e7afaf5d7a6b408fd27d35abc2c0",
+  "admission_pre_sha256": "6e0340cd380b7d268e0b68c18b35adeb5f71e7afaf5d7a6b408fd27d35abc2c0",
+  "admission_sha256": "6e0340cd380b7d268e0b68c18b35adeb5f71e7afaf5d7a6b408fd27d35abc2c0",
+  "argv": [
+    "/usr/bin/taskset",
+    "-c",
+    "122,123",
+    "/usr/bin/python3",
+    "/mnt/raid0/llm/tmp/codex3-k4a-20261031/capsule/prep_supervisor.py",
+    "900",
+    "--",
+    "/home/daniele/.local/share/uv/python/cpython-3.11-linux-x86_64-gnu/bin/python3.11",
+    "-m",
+    "pytest",
+    "-p",
+    "no:cacheprovider",
+    "-q",
+    "--basetemp=/mnt/raid0/llm/tmp/codex3-apme3-20261031/watch-attempt-02/pytest-tmp",
+    "tests/unit/test_mutation_diagnostics.py",
+    "tests/unit/test_mutation_graph.py"
+  ],
+  "cpus": [
+    122,
+    123
+  ],
+  "finished_utc": "2026-10-31T15:18:10.251677+00:00",
+  "log_sha256": "86f700ca242d39c6473eac74bd13d07aa81362992341c34733ef7911a43c551e",
+  "returncode": 0,
+  "source_sha256": {
+    "scripts/autopilot/actions.py": "6bd005bb630a6a1aee27789534a78100286a29d1cbbb7d135b5a705be1a6d056",
+    "scripts/autopilot/crossover_diagnostics.py": "bd081d48f2db46ec5fbe0646abff1385145fde5a7615eef246c04d2ed8f4190b",
+    "scripts/autopilot/species/mutation_graph.py": "008ae0a72a5e4ece674beece99427b002156e0d29a3efd28e890524035fe4700",
+    "tests/unit/test_mutation_diagnostics.py": "45aee4c66e5cb9c614281a31fe72ed9559a59214b73322128640a6a2dfb0182f",
+    "tests/unit/test_mutation_graph.py": "859e2cb91efda42c2d929b450b855b46866bbd81cf5975a751591f416f9c138a"
+  },
+  "started_utc": "2026-10-31T15:18:06.742660+00:00",
+  "state": "success",
+  "supervisor_post_sha256": "63222eb38697a0d15a7cee063d6e26fcbb9355c7e0c8701647a0dd9b7009ff65",
+  "supervisor_pre_sha256": "63222eb38697a0d15a7cee063d6e26fcbb9355c7e0c8701647a0dd9b7009ff65",
+  "supervisor_sha256": "63222eb38697a0d15a7cee063d6e26fcbb9355c7e0c8701647a0dd9b7009ff65",
+  "watcher_birth": 158235995,
+  "watcher_pid": 3659187,
+  "watcher_sha256": "4d038a60ad240e8fad8967aa9815671d23f927a28716caf9264c73091a90db97"
+}

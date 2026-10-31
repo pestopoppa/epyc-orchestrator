@@ -5,9 +5,8 @@ across the autopilot trial history so PromptForge can:
 
     1. Avoid re-trying mutation types that consistently fail for a given
        failure pattern.
-    2. Pick informed crossover sources — i.e. when assembling a new
-       prompt from sections of two existing ones, prefer sections that
-       have appeared on the Pareto frontier.
+    2. Pick comparable crossover donor pairs by shared BSV conflict severity,
+       when recorded trial provenance and complete donor content are available.
 
 The graph is a single SQLite table with three indexes; we deliberately do
 not pull in networkx because the queries we care about are all star-joins
@@ -303,21 +302,14 @@ class MutationGraph:
                     counter[str(sid)] += 1
         return counter.most_common(top_n)
 
+    @staticmethod
     def informed_crossover_candidates(
-        self,
-        target_file: str,
-        min_pareto_count: int = 1,
-        top_n: int = 10,
-    ) -> list[str]:
-        """Suggest section ids for an informed crossover into ``target_file``.
+        target_file: str, history: list[Any], source: str, top_n: int = 1
+    ) -> list[dict[str, Any]]:
+        """Select verified donor pairs by the shared BSV conflict severity."""
+        from crossover_diagnostics import select_donor_pairs
 
-        Returns just the section ids (without frequencies) with at least
-        ``min_pareto_count`` Pareto-frontier appearances. Plug into
-        ``PromptForge._build_mutation_prompt`` as a ``preferred_sections``
-        hint when running ``crossover`` mutations.
-        """
-        ranked = self.pareto_best_sections(target_file=target_file, top_n=top_n)
-        return [sid for sid, count in ranked if count >= min_pareto_count]
+        return select_donor_pairs(history, target_file, source, top_n=top_n)
 
     # ── Lifecycle ──────────────────────────────────────────────
 

@@ -1312,6 +1312,28 @@ def _build_mutation_context(
         last_entries[-1].eval_details.get("per_suite_quality") if last_entries else None
     )
 
+    if (action.get("type") == "prompt_mutation" and mutation_type == "crossover"
+            and os.environ.get("AUTOPILOT_CROSSOVER_COMPLEMENTARITY_DIAGNOSTICS") == "1"
+            and os.environ.get("AUTOPILOT_CROSSOVER_DONOR_SELECTION") == "1"):
+        try:
+            from species.mutation_graph import MutationGraph
+
+            current = served_content_record([ctx.forge._resolve_prompt_path(target)])
+            if current is None or len(current["files"]) != 1:
+                raise ValueError("current target source unavailable")
+            source = next(iter(current["files"]))
+            pairs = MutationGraph.informed_crossover_candidates(
+                target, ctx.journal.entries_with_supersessions(), source
+            )
+            if pairs:
+                # JSON encoding preserves complete content without interpreting its fences.
+                pair = pairs[0]
+                donor_text = json.dumps({key: pair[key] for key in (
+                    "trial_ids", "source", "sha256", "contents")}, ensure_ascii=False)
+                if len(donor_text.encode("utf-8")) <= 8192:
+                    failure_context += "\n\n## Selected crossover donor prompt texts (JSON)\n" + donor_text
+        except Exception as exc:
+            log.warning("Crossover donor selection unavailable (%s)", type(exc).__name__)
     if mutation_type == "crossover":
         try:
             from crossover_diagnostics import crossover_context
@@ -1713,6 +1735,12 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     if served_path is not None:
         _record_served_content(ctx, [served_path], restore=_mutation_restore("prompt", mutation))
     eval_result = ctx.tower.hybrid_eval()
+    # A reused result must never carry a prior trial's donor bytes through a rejection.
+    if os.environ.get("AUTOPILOT_CROSSOVER_DONOR_SELECTION") == "1":
+        try:
+            eval_result._crossover_donor_content = None
+        except Exception as exc:
+            log.warning("Crossover donor reset unavailable (%s)", type(exc).__name__)
 
     # Revert if quality drops
     verdict = _action_gate_check(action, ctx, eval_result)
@@ -1816,6 +1844,22 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         decision="kept",
     )
     _record_accepted_warrant_telemetry(action, ctx, eval_result)
+    # Keep candidate bytes transient until the final journal verdict binds them.
+    if (os.environ.get("AUTOPILOT_CROSSOVER_COMPLEMENTARITY_DIAGNOSTICS") == "1"
+            and os.environ.get("AUTOPILOT_CROSSOVER_DONOR_SELECTION") == "1"):
+        try:
+            content = mutation.mutated_content
+            raw = content.encode("utf-8")
+            path = ctx.forge._resolve_prompt_path(target)
+            observed = served_content_record([path])
+            served = ctx.state.get(SERVED_CONTENT_STATE_KEY) or {}
+            if (target == mutation.file and 0 < len(raw) <= 4096
+                    and path.read_bytes() == raw and observed is not None
+                    and observed["files"] == served.get("files")):
+                source = next(iter(observed["files"]))
+                eval_result._crossover_donor_content = (target, source, content)
+        except Exception as exc:
+            log.warning("Crossover donor capture unavailable (%s)", type(exc).__name__)
     # AP-7: Prompt change accepted — invalidate stale Optuna trials
     ctx.swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
     return eval_result, "prompt_forge"

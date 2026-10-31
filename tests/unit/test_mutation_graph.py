@@ -133,20 +133,10 @@ class TestMutationGraph:
         assert ids == ["a", "b"] or ids == ["b", "a"]
         assert "x" not in ids
 
-    def test_informed_crossover_candidates(self, graph):
-        for _ in range(3):
-            _record(graph, outcome=OUTCOME_PARETO,
-                    target_file="frontdoor.md",
-                    section_ids=["winner_section"], trial_id=1)
-        _record(graph, outcome=OUTCOME_PARETO,
-                target_file="frontdoor.md",
-                section_ids=["one_off"], trial_id=2)
-
-        cands = graph.informed_crossover_candidates(
-            target_file="frontdoor.md", min_pareto_count=2
-        )
-        assert "winner_section" in cands
-        assert "one_off" not in cands
+    def test_informed_crossover_candidates_without_provenance(self, graph):
+        _record(graph, outcome=OUTCOME_PARETO, target_file="frontdoor.md",
+                section_ids=["frequent"], trial_id=1)
+        assert graph.informed_crossover_candidates("frontdoor.md", [], "source") == []
 
     def test_context_manager_closes_db(self, tmp_path):
         path = tmp_path / "mut.db"

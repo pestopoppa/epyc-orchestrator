@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import sys
 import fcntl
 import threading
@@ -59,7 +60,7 @@ def method(name, bindings=None, script="species/prompt_forge.py"):
     node.decorator_list = []
     module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[
         ast.alias(name="annotations")], level=0), node], type_ignores=[])
-    namespace = {"log": logging.getLogger(__name__)}
+    namespace = {"log": logging.getLogger(__name__), "os": os, "json": json}
     for assignment in tree.body:
         if isinstance(assignment, ast.Assign) and any(isinstance(target, ast.Name)
                 and target.id == "MUTATION_TYPES" for target in assignment.targets):
@@ -132,6 +133,7 @@ def test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author(m
         pass
     seen = []
     fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "Ω original",
+                           _mutation_exclusion_reason=lambda _: None,
                            _negative_transfer_safety_block=lambda: "native safety")
     fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
     fake._build_code_mutation_prompt = fake._build_mutation_prompt
@@ -195,6 +197,7 @@ def test_busy_author_capture_lock_is_typed_and_fake_author_still_runs(monkeypatc
         pass
     seen = []
     fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "original",
+                           _mutation_exclusion_reason=lambda _: None,
                            _negative_transfer_safety_block=lambda: "native safety")
     fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
     def invoke(prompt):
@@ -363,3 +366,132 @@ def test_real_crossover_context_caller_preserves_negative_evidence(monkeypatch):
     assert diagnostic.endswith("Unknown: no eligible recorded comparable donor pair.")
     action["mutation"] = "targeted_fix"
     assert assemble(action, ctx)[0] == original
+
+
+def test_selection_writer_to_actual_prompt_context(monkeypatch, tmp_path):
+    from species.mutation_graph import MutationGraph
+    import actions
+    import bsv_observe
+    import experiment_journal
+    import species.mutation_graph
+
+    for module in (actions, bsv_observe, crossover, experiment_journal, species.mutation_graph):
+        assert Path(module.__file__).resolve().is_relative_to(ROOT)
+    monkeypatch.setenv(crossover.FLAG, "1")
+    monkeypatch.setenv("AUTOPILOT_CROSSOVER_DONOR_SELECTION", "1")
+    source_path = tmp_path / "a.md"
+    source_path.write_text("current")
+    source = next(iter(actions.served_content_record([source_path])["files"]))
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    for trial, outcomes in [(1, {"a": False, "b": False}),
+                            (2, {"a": True, "b": False}),
+                            (3, {"a": True, "b": False}),
+                            (4, {"a": False, "b": True})]:
+        entry = row(trial)
+        result = SimpleNamespace(core_id="core1", question_results=[
+            {"qid": k, "correct": v} for k, v in outcomes.items()], per_suite_quality={})
+        content = f"donor content {trial}"
+        entry.eval_details["served_content"] = {"files": {source: hashlib.sha256(content.encode()).hexdigest()}}
+        result._crossover_donor_content = ("prompts/a.md", source, content)
+        crossover.capture_trial_features(
+            entry, verdict=SimpleNamespace(passed=True),
+            action={"type": "prompt_mutation", "file": "prompts/a.md", "sections": ["rules"]},
+            eval_result=result, history=journal.entries_with_supersessions())
+        journal.record(entry)
+    history = journal.entries_with_supersessions()
+    pairs = MutationGraph.informed_crossover_candidates("prompts/a.md", history, source, top_n=3)
+    assert pairs[0]["trial_ids"] == [2, 3]
+    assert pairs[-1]["severity"] == "blocking"
+    assert pairs[0]["severity"] == _conflict_severity(
+        history[1].eval_details["crossover_features"]["features"],
+        history[2].eval_details["crossover_features"]["features"])[0]
+    assemble = method("_build_mutation_context", {
+        "_discard_mutation_diversity_coverage": lambda _: None,
+        "_ledger_journal_dir": lambda _: None,
+        "served_content_record": actions.served_content_record,
+    }, script="actions.py")
+    ctx = SimpleNamespace(journal=journal, strategy_store=None, tower=None, state={},
+                          forge=SimpleNamespace(_resolve_prompt_path=lambda _: source_path))
+    assembled, _ = assemble({"type": "prompt_mutation", "file": "prompts/a.md", "mutation": "crossover"}, ctx)
+    assert 'donor content 2' in assembled and 'donor content 3' in assembled
+    assert '"trial_ids": [2, 3]' in assembled and source in assembled
+    assert hashlib.sha256(b"donor content 2").hexdigest() in assembled
+    prompt = method("_build_mutation_prompt")(SimpleNamespace(
+        _negative_transfer_safety_block=lambda: "safety"), "prompts/a.md", "crossover",
+        "current", assembled, None, "")
+    assert 'donor content 2' in prompt and 'donor content 3' in prompt
+    monkeypatch.delenv("AUTOPILOT_CROSSOVER_DONOR_SELECTION")
+    assert 'donor content 2' not in assemble({"type": "prompt_mutation", "file": "prompts/a.md", "mutation": "crossover"}, ctx)[0]
+    history[1].eval_details["crossover_donor_content"]["content"] = "tampered"
+    assert all(2 not in p["trial_ids"] for p in MutationGraph.informed_crossover_candidates(
+        "prompts/a.md", history, source, top_n=3))
+    history[1].eval_details["crossover_donor_content"]["content"] = "donor content 2"
+    other_source = "other-root/a.md"
+    history[1].eval_details["crossover_donor_content"]["source"] = other_source
+    history[1].eval_details["served_content"]["files"][other_source] = hashlib.sha256(b"donor content 2").hexdigest()
+    assert all(2 not in p["trial_ids"] for p in MutationGraph.informed_crossover_candidates(
+        "prompts/a.md", history, source, top_n=3))
+    history[1].eval_details["crossover_donor_content"]["source"] = source
+    history[1].eval_details["crossover_features"]["features"]["prompt_sections_touched"] = []
+    assert all(2 not in p["trial_ids"] for p in MutationGraph.informed_crossover_candidates(
+        "prompts/a.md", history, source, top_n=3))
+
+
+def test_real_action_captures_only_kept_served_bytes(monkeypatch, tmp_path):
+    import actions
+
+    monkeypatch.setenv(crossover.FLAG, "1")
+    monkeypatch.setenv("AUTOPILOT_CROSSOVER_DONOR_SELECTION", "1")
+    path = tmp_path / "a.md"
+    path.write_text("before")
+    mutation = SimpleNamespace(file="a.md", original_content="before", mutated_content="after",
+                               safety_valid=True, safety_warnings=[], mutation_type="crossover")
+    result = SimpleNamespace()
+    forge = SimpleNamespace(propose_mutation=lambda **_: mutation,
+                            apply_mutation=lambda m: path.write_text(m.mutated_content),
+                            revert_mutation=lambda m: path.write_text(m.original_content),
+                            _resolve_prompt_path=lambda _: path)
+    ctx = SimpleNamespace(forge=forge, tower=SimpleNamespace(hybrid_eval=lambda: result),
+                          state={}, swarm=SimpleNamespace(mark_epoch=lambda _: None))
+    bindings = {name: getattr(actions, name) for name in (
+        "_served_prompt_path", "_record_served_content", "_mutation_restore",
+        "served_content_record", "SERVED_CONTENT_STATE_KEY")}
+    bindings.update({"_build_mutation_context": lambda *_: ("", None),
+                     "author_capture_kwargs": lambda *_: {},
+                     "_stash_prompt_interference": lambda *_: None,
+                     "_skill_efficacy_without_result": lambda *_: None,
+                     "_bsv2_baseline_result": lambda *_: None,
+                     "_action_gate_check": lambda *_: True,
+                     "_simplicity_check": lambda *_, **__: (True, None),
+                     "_skill_efficacy_accepts": lambda **_: True,
+                     "_bsv2_accepts": lambda **_: True,
+                     "_record_mutation_diversity_coverage": lambda *_, **__: None,
+                     "_record_accepted_warrant_telemetry": lambda *_: None})
+    action = method("_action_prompt_mutation", bindings, script="actions.py")
+    action({"file": "a.md", "mutation": "crossover"}, ctx)
+    target, source, content = result._crossover_donor_content
+    assert (target, content) == ("a.md", "after")
+    assert ctx.state[actions.SERVED_CONTENT_STATE_KEY]["files"][source] == hashlib.sha256(b"after").hexdigest()
+
+
+@pytest.mark.parametrize("diagnostics,selection,action_type,passed", [
+    ("0", "1", "prompt_mutation", True),
+    ("1", "0", "prompt_mutation", True),
+    ("1", "1", "code_mutation", True),
+    ("1", "1", "prompt_mutation", False),
+])
+def test_writer_consumes_retained_result_on_refusal(monkeypatch, diagnostics, selection, action_type, passed):
+    monkeypatch.setenv(crossover.FLAG, diagnostics)
+    monkeypatch.setenv("AUTOPILOT_CROSSOVER_DONOR_SELECTION", selection)
+    entry = row(10)
+    source = "orchestration/prompts/a.md"
+    data = "stale"
+    entry.eval_details["served_content"] = {"files": {source: hashlib.sha256(data.encode()).hexdigest()}}
+    result = SimpleNamespace(core_id="core1", question_results=[{"qid": "a", "correct": True}],
+                             per_suite_quality={}, _crossover_donor_content=("prompts/a.md", source, data))
+    crossover.capture_trial_features(
+        entry, verdict=SimpleNamespace(passed=passed),
+        action={"type": action_type, "file": "prompts/a.md", "sections": ["rules"]},
+        eval_result=result, history=[])
+    assert not hasattr(result, "_crossover_donor_content")
+    assert "crossover_donor_content" not in entry.eval_details

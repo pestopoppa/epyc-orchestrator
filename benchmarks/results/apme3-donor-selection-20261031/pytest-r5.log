@@ -1,0 +1,169 @@
+....F.F..................................                                [100%]
+=================================== FAILURES ===================================
+_ test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author[prompt] _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x75085dd36410>
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-54/test_real_prompt_boundary_unch0')
+kind = 'prompt'
+
+    @pytest.mark.parametrize("kind", ["prompt", "code"])
+    def test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author(monkeypatch, tmp_path, kind):
+        source_file = tmp_path / "fixture.py"
+        source_file.write_text("Ω original")
+        bindings = {"_resolve_code_mutation_target": lambda _: source_file,
+                    "CODE_MUTATION_ALLOWLIST": ["prompts/a.md"],
+                    "new_file_mutation_root_labels": lambda: ["synthetic-root"]}
+        build = method("_build_mutation_prompt" if kind == "prompt" else "_build_code_mutation_prompt", bindings)
+        propose = method("propose_mutation" if kind == "prompt" else "propose_code_mutation", bindings)
+        class BoundaryReached(Exception):
+            pass
+        seen = []
+        fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "Ω original",
+                               _negative_transfer_safety_block=lambda: "native safety")
+        fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
+        fake._build_code_mutation_prompt = fake._build_mutation_prompt
+        def invoke(prompt):
+            seen.append(prompt)
+            if author.capture_enabled():
+                assert (tmp_path / "mutation_author_context.v1.jsonl").exists()
+            raise BoundaryReached
+        fake._invoke_claude = invoke
+        kwargs = dict(target_file="prompts/a.md", mutation_type="crossover" if kind == "prompt" else "targeted_fix", failure_context="negative evidence",
+                      per_suite_quality={"qa": 2.0}, description="goal")
+        monkeypatch.delenv(author.FLAG, raising=False)
+        with pytest.raises(BoundaryReached):
+>           propose(fake, **kwargs)
+
+tests/unit/test_mutation_diagnostics.py:149: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = namespace(timeout=90, read_prompt=<function test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author...function test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author.<locals>.invoke at 0x75085dd39b20>)
+target_file = 'prompts/a.md', mutation_type = 'crossover'
+failure_context = 'negative evidence', per_suite_quality = {'qa': 2.0}
+description = 'goal', eval_tower = None, gepa_max_evals = 50
+author_capture_context = None
+
+    def propose_mutation(
+        self,
+        target_file: str,
+        mutation_type: str = "targeted_fix",
+        failure_context: str = "",
+        per_suite_quality: dict[str, float] | None = None,
+        description: str = "",
+        eval_tower=None,
+        gepa_max_evals: int = 50,
+        author_capture_context: dict[str, Any] | None = None,
+    ) -> PromptMutation:
+        """Propose a prompt mutation via Claude CLI or GEPA.
+    
+        When mutation_type="gepa", delegates to GEPA evolutionary optimization
+        (AP-19). Requires eval_tower to be passed for orchestrator-based eval.
+    
+        Returns PromptMutation with the proposed changes.
+        """
+        if mutation_type not in MUTATION_TYPES:
+            raise ValueError(f"Unknown mutation type: {mutation_type}")
+    
+        # HIL-6j: an excluded target gets no proposal (no CLI call, no GEPA run).
+>       exclusion = self._mutation_exclusion_reason(target_file)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'types.SimpleNamespace' object has no attribute '_mutation_exclusion_reason'
+
+scripts/autopilot/species/prompt_forge.py:691: AttributeError
+______ test_busy_author_capture_lock_is_typed_and_fake_author_still_runs _______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x75085dccc550>
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-54/test_busy_author_capture_lock_0')
+
+    def test_busy_author_capture_lock_is_typed_and_fake_author_still_runs(monkeypatch, tmp_path):
+        monkeypatch.setenv(author.FLAG, "1")
+        journal_file = tmp_path / "mutation_author_context.v1.jsonl"
+        locked = threading.Event()
+        release = threading.Event()
+    
+        def hold_lock():
+            with journal_file.open("a") as handle:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                locked.set()
+                release.wait(3)
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    
+        holder = threading.Thread(target=hold_lock, daemon=True)
+        holder.start()
+        assert locked.wait(2)
+        watchdog = threading.Timer(2, release.set)
+        watchdog.start()
+    
+        capture_results = []
+        original_capture = author.capture_author_context
+        def capture_and_record(*args, **kwargs):
+            result = original_capture(*args, **kwargs)
+            capture_results.append(result)
+            return result
+        monkeypatch.setattr(author, "capture_author_context", capture_and_record)
+    
+        source_file = tmp_path / "fixture.md"
+        source_file.write_text("original")
+        bindings = {"_resolve_code_mutation_target": lambda _: source_file,
+                    "CODE_MUTATION_ALLOWLIST": ["prompts/a.md"],
+                    "new_file_mutation_root_labels": lambda: ["synthetic-root"]}
+        build = method("_build_mutation_prompt", bindings)
+        propose = method("propose_mutation", bindings)
+        class BoundaryReached(Exception):
+            pass
+        seen = []
+        fake = SimpleNamespace(timeout=90, read_prompt=lambda _: "original",
+                               _negative_transfer_safety_block=lambda: "native safety")
+        fake._build_mutation_prompt = lambda **kw: build(fake, **kw)
+        def invoke(prompt):
+            seen.append(prompt)
+            release.set()
+            raise BoundaryReached
+        fake._invoke_claude = invoke
+        try:
+            with pytest.raises(BoundaryReached):
+>               propose(fake, target_file="prompts/a.md", mutation_type="crossover",
+                        failure_context="negative evidence", per_suite_quality={"qa": 2.0},
+                        description="goal", author_capture_context={"journal_dir": str(tmp_path)})
+
+tests/unit/test_mutation_diagnostics.py:208: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = namespace(timeout=90, read_prompt=<function test_busy_author_capture_lock_is_typed_and_fake_author_still_runs.<locals>..._claude=<function test_busy_author_capture_lock_is_typed_and_fake_author_still_runs.<locals>.invoke at 0x75085dd8b920>)
+target_file = 'prompts/a.md', mutation_type = 'crossover'
+failure_context = 'negative evidence', per_suite_quality = {'qa': 2.0}
+description = 'goal', eval_tower = None, gepa_max_evals = 50
+author_capture_context = {'journal_dir': '/tmp/pytest-of-root/pytest-54/test_busy_author_capture_lock_0'}
+
+    def propose_mutation(
+        self,
+        target_file: str,
+        mutation_type: str = "targeted_fix",
+        failure_context: str = "",
+        per_suite_quality: dict[str, float] | None = None,
+        description: str = "",
+        eval_tower=None,
+        gepa_max_evals: int = 50,
+        author_capture_context: dict[str, Any] | None = None,
+    ) -> PromptMutation:
+        """Propose a prompt mutation via Claude CLI or GEPA.
+    
+        When mutation_type="gepa", delegates to GEPA evolutionary optimization
+        (AP-19). Requires eval_tower to be passed for orchestrator-based eval.
+    
+        Returns PromptMutation with the proposed changes.
+        """
+        if mutation_type not in MUTATION_TYPES:
+            raise ValueError(f"Unknown mutation type: {mutation_type}")
+    
+        # HIL-6j: an excluded target gets no proposal (no CLI call, no GEPA run).
+>       exclusion = self._mutation_exclusion_reason(target_file)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'types.SimpleNamespace' object has no attribute '_mutation_exclusion_reason'
+
+scripts/autopilot/species/prompt_forge.py:691: AttributeError
+=========================== short test summary info ============================
+FAILED tests/unit/test_mutation_diagnostics.py::test_real_prompt_boundary_unchanged_and_capture_failure_cannot_mask_author[prompt]
+FAILED tests/unit/test_mutation_diagnostics.py::test_busy_author_capture_lock_is_typed_and_fake_author_still_runs
+2 failed, 39 passed in 2.41s
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 3.5858527650125325, "sampled_peak_tree_rss_bytes": 130756608, "samples": 36, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 3437750, "leader_birth": 158152264, "child_rc": 1, "children_drained": true, "failure": null}
