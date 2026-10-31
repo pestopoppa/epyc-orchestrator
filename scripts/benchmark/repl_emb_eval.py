@@ -77,7 +77,7 @@ OFFLINE_INDEX_TIMEOUT_S = 1e9
 W_DENSE, W_BM25, W_RRF_K = 0.75, 0.25, 60
 
 #: Trace strata the miners produce; a trace row's own ``stratum`` drives its group.
-TRACE_STRATA = ("agent_nav", "synthetic_spill", "spill_follow")
+TRACE_STRATA = ("agent_nav", "synthetic_spill", "spill_follow", "real_trace")
 SYNTHETIC_GROUP = "synthetic_spill"
 #: Decision groups, in report order. Every scored group except trivial_head is in the decision set.
 DECISION_GROUPS = ("probe45", *TRACE_STRATA)

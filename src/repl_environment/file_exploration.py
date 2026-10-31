@@ -91,6 +91,20 @@ class _FileExplorationMixin:
             except Exception:
                 pass  # Silently ignore research tracking failures
 
+    def _is_repl_trace_spill(self, file_path: str) -> bool:
+        """Whether this exact file was emitted as an output spill by this REPL."""
+        return os.path.abspath(file_path) in getattr(self, "_repl_trace_spill_paths", set())
+
+    def _record_repl_spill_open(self, file_path: str, start: int, end: int) -> None:
+        if not self._is_repl_trace_spill(file_path):
+            return
+        try:
+            from src.repl_environment import trace_capture
+
+            trace_capture.record_open(self, file_path, start, end)
+        except Exception:
+            pass
+
     @staticmethod
     def _page_text(text: str, n: int, offset: int) -> str:
         """Slice ``n`` characters of ``text`` starting at ``offset`` (negative = from the end).
@@ -186,7 +200,7 @@ class _FileExplorationMixin:
             return f"[ERROR: peek(n, file_path=None, offset=0) needs integer n/offset, got n={n!r}, offset={offset!r}]"
 
         if file_path is not None:
-            if os.path.abspath(file_path) in self._session_read_artifacts:
+            if os.path.abspath(file_path) in getattr(self, "_session_read_artifacts", {}):
                 try:
                     result = self._read_registered_artifact(file_path, n, offset)
                 except (OSError, ValueError) as exc:
@@ -208,6 +222,8 @@ class _FileExplorationMixin:
 
                 root, resolved = _explicit_exploration_root(self, file_path)
                 result = read_file_page(root, resolved, n, offset, max_bytes=None)
+                if offset >= 0:
+                    self._record_repl_spill_open(file_path, offset, offset + len(result))
                 event = {"n": n, "file_path": file_path}
                 if offset:
                     event["offset"] = offset
@@ -276,7 +292,7 @@ class _FileExplorationMixin:
             return lines
         from src.features import features
         if (features().context_arm_ab is True and file_path is not None
-                and os.path.abspath(file_path) in self._session_read_artifacts):
+                and os.path.abspath(file_path) in getattr(self, "_session_read_artifacts", {})):
             try:
                 text = self._read_registered_artifact(file_path, -1, 0)
             except (OSError, ValueError) as exc:
@@ -326,6 +342,22 @@ class _FileExplorationMixin:
 
         if file_path is not None:
             matches = [item.line for item in result.matches]
+            if self._is_repl_trace_spill(file_path):
+                try:
+                    from src.repl_environment import trace_capture
+
+                    trace_capture.record_spill_search(
+                        self,
+                        file_path,
+                        pattern,
+                        self.config.max_grep_results,
+                        [
+                            {"section": file_path, "start": item.start_char, "end": item.end_char}
+                            for item in result.matches
+                        ],
+                    )
+                except Exception:
+                    pass
             match_details = [
                 {"line_num": item.line_num, "match": item.line[:500], "context": item.context[:1000]}
                 for item in result.matches

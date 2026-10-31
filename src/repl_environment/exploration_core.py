@@ -30,6 +30,8 @@ class Match:
     line: str
     context: str
     context_lines: tuple[str, ...] = ()
+    start_char: int = 0
+    end_char: int = 0
 
 
 @dataclass(frozen=True)
@@ -150,7 +152,21 @@ def grep_file(
             compiled = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
             raise ExplorationError(f"invalid regex pattern: {exc}") from exc
-    lines = text.splitlines() if splitlines else text.split("\n")
+    if splitlines:
+        lines = text.splitlines()
+        line_spans = []
+        cursor = 0
+        for raw_line in text.splitlines(keepends=True):
+            visible = raw_line.rstrip("\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+            line_spans.append((cursor, cursor + len(visible)))
+            cursor += len(raw_line)
+    else:
+        lines = text.split("\n")
+        line_spans = []
+        cursor = 0
+        for index, line in enumerate(lines):
+            line_spans.append((cursor, cursor + len(line)))
+            cursor += len(line) + (1 if index < len(lines) - 1 else 0)
     matches: list[Match] = []
     total = 0
     for index, line in enumerate(lines):
@@ -172,6 +188,8 @@ def grep_file(
                 line=line if max_line_chars is None else line[:max_line_chars],
                 context=shown_context,
                 context_lines=shown_context_lines,
+                start_char=line_spans[index][0],
+                end_char=line_spans[index][1],
             ))
     return GrepResult(tuple(matches), total, total > len(matches))
 

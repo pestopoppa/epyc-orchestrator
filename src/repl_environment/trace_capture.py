@@ -1,7 +1,8 @@
 """REPL-EMB-2.8a: passive, hash-and-span-only capture of REPL context-search traces.
 
 REPL-EMB-2.8 (re-check the 2.2 verdict) needs >= 75 real traces and none were persisted. This
-module is a zero-stack-change tap on ``ContextBundle.search`` / ``ContextBundle.get``.
+module is a zero-stack-change tap on ``ContextBundle.search`` / ``ContextBundle.get`` and on
+``peek`` / ``grep`` follows of files created by ``REPLEnvironment._spill_output``.
 
 OFF BY DEFAULT. ``EPYC_REPL_TRACE_CAPTURE`` unset / "" / "0" => every function here returns
 immediately: no file, no directory, no state. Set it to ``1`` to enable.
@@ -51,7 +52,7 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,47}$")
 _HASHED_ID = re.compile(r"^h:[0-9a-f]{12}$")
 _TS = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00$")
-_MODE = re.compile(r"^(hybrid|lexical|lexical_fallback:[a-z_]{1,32})$")
+_MODE = re.compile(r"^(hybrid|lexical|grep|lexical_fallback:[a-z_]{1,32})$")
 _PII = re.compile(
     r"(@[A-Za-z0-9-]+\.[A-Za-z]{2,}|\b\d{3}[-. ]?\d{3}[-. ]?\d{4}\b|\b(?:sk|ghp|hf|xox[a-z])[-_][A-Za-z0-9]{8,}"
     r"|\b\d{13,19}\b|\b\d{1,3}(?:\.\d{1,3}){3}\b|-----BEGIN)"
@@ -191,6 +192,11 @@ def record_open(bundle: Any, section: str, start: int, end: int) -> None:
         return
 
 
+def record_spill_search(env: Any, path: str, query: str, k: int, hits: Iterable[Mapping]) -> None:
+    """Capture a grep query over a spill file using the same hash-and-span schema."""
+    record_search(env, query, k, path, "grep", hits)
+
+
 def load_records(path_or_dir: str | Path | None = None) -> list[dict]:
     """All well-formed records (malformed / PII-failing lines are skipped)."""
     p = Path(path_or_dir) if path_or_dir else trace_dir()
@@ -212,6 +218,7 @@ def load_records(path_or_dir: str | Path | None = None) -> list[dict]:
 def load_real_trace_rows(
     path_or_dir: str | Path | None = None,
     text_resolver: Callable[[str], str | None] | None = None,
+    bundle_resolver: Callable[[str], str | None] | None = None,
 ) -> list[dict]:
     """Records -> harness query rows with ``stratum='real_trace'`` (one per distinct
     (session, query_digest) search that returned hits). ``gold`` = the opened hit spans
@@ -234,6 +241,7 @@ def load_real_trace_rows(
         opened = [h for h in r["hits"]
                   if any(o[0] == h[0] and o[1] < h[2] and h[1] < o[2] for o in sess_opens)]
         text = text_resolver(r["query_digest"]) if text_resolver else None
+        bundle = bundle_resolver(r["session"]) if bundle_resolver else None
         gold = None
         if opened:
             path = opened[0][0]
@@ -244,7 +252,32 @@ def load_real_trace_rows(
             "stratum": STRATUM, "provenance": "trace",
             "text": text, "needs_text": text is None, "query_digest": r["query_digest"],
             "code_intent": None, "gold": gold, "opened": bool(opened),
-            "session": r["session"], "ts": r["ts"], "mode": r["mode"],
+            "bundle": bundle, "session": r["session"], "ts": r["ts"], "mode": r["mode"],
             "hits": r["hits"],
         })
     return rows
+
+
+def write_real_trace_queries(
+    output: str | Path,
+    path_or_dir: str | Path | None = None,
+    *,
+    text_resolver: Callable[[str], str | None],
+    bundle_resolver: Callable[[str], str | None],
+) -> int:
+    """Write rows accepted by ``repl_emb_eval.py freeze --trace-queries``.
+
+    Query text and the corresponding bundle id are supplied by the evaluator; neither is
+    reconstructed from the hash-only trace. Rows with unresolved query text or bundle ids are
+    refused so they cannot silently enter the frozen query set as unusable evidence.
+    """
+    rows = load_real_trace_rows(path_or_dir, text_resolver, bundle_resolver)
+    unresolved = [r["id"] for r in rows if not r["text"] or not r["bundle"]]
+    if unresolved:
+        raise ValueError(f"real-trace rows need text and bundle resolution: {unresolved[:5]}")
+    target = Path(output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8") as stream:
+        for row in rows:
+            stream.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+    return len(rows)

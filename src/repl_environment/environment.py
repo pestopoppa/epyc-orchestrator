@@ -932,6 +932,11 @@ class REPLEnvironment(
         spill_dir.mkdir(parents=True, exist_ok=True)
         spill_path = spill_dir / f"turn_{self._turn_counter}.txt"
         spill_path.write_text(output)
+        # REPL-EMB-2.8a: remember only this environment's output spills so the
+        # opt-in trace tap can capture later peek/grep follows without observing
+        # arbitrary files explored by the same session.
+        self._repl_trace_spill_paths = getattr(self, "_repl_trace_spill_paths", set())
+        self._repl_trace_spill_paths.add(os.path.abspath(spill_path))
 
         lines = output.splitlines()
         n_lines = len(lines)

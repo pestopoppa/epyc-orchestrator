@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-
-import pytest
+import os
+from types import SimpleNamespace
 
 from src.repl_environment import trace_capture as tc
 from src.repl_environment.context_bundle import ContextBundle, Section
+from src.repl_environment.file_exploration import _FileExplorationMixin
 
 SECRET_Q = "where is the zebra-quartz-7731 handler defined"
 BODY = "alpha beta zebra-quartz-7731 handler\n" * 40
@@ -102,3 +103,47 @@ def test_unsafe_section_name_is_hashed(tmp_path, monkeypatch):
     raw = "".join(f.read_text() for f in tmp_path.glob("traces-*.jsonl"))
     assert "jane" not in raw and '"h:' in raw
     assert tc.load_real_trace_rows(tmp_path)
+
+
+class _TraceFileEnv(_FileExplorationMixin):
+    def __init__(self, spill_path: str):
+        self._repl_trace_spill_paths = {os.path.abspath(spill_path)}
+        self._state_lock = None
+        self._exploration_calls = 0
+        self.config = SimpleNamespace(max_grep_results=80)
+        self._session_read_artifacts = {}
+        self._grep_hits_buffer = []
+        self._exploration_log = SimpleNamespace(add_event=lambda *args: None)
+        self._validate_file_path = lambda path: (os.path.isfile(path), None)
+
+
+def test_spill_grep_and_peek_export_harness_real_trace_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv(tc.ENV_FLAG, "1")
+    capture_dir = tmp_path / "capture"
+    monkeypatch.setenv(tc.ENV_DIR, str(capture_dir))
+    secret = "violet-otter-5193"
+    spill = tmp_path / "turn_1.txt"
+    spill.write_text(f"before\n{secret} handler here\nafter\n", encoding="utf-8")
+    env = _TraceFileEnv(str(spill))
+
+    assert env._grep(secret, file_path=str(spill))
+    assert env._peek(30, file_path=str(spill), offset=7) == f"{secret} handler here"
+    raw = "".join(p.read_text(encoding="utf-8") for p in capture_dir.glob("traces-*.jsonl"))
+    assert secret not in raw
+
+    out = tmp_path / "queries-real-trace.jsonl"
+    count = tc.write_real_trace_queries(
+        out,
+        capture_dir,
+        text_resolver=lambda digest: secret if digest == tc.digest(secret) else None,
+        bundle_resolver=lambda _session: "spill-session-1",
+    )
+    assert count == 1
+    from scripts.benchmark import repl_emb_eval
+
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    labelled, summary = repl_emb_eval.label_queries([], rows)
+    assert summary["by_group"]["real_trace"]["n"] == 1
+    assert labelled[0]["group"] == "real_trace"
+    assert labelled[0]["bundle"] == "spill-session-1"
+    assert labelled[0]["scored"] and labelled[0]["gold_spans"] == [["h:" + tc.digest(str(spill))[:12], 7, 37]]
