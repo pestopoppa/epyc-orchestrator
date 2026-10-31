@@ -122,6 +122,7 @@ def refutation_of(row: dict, pol) -> tuple[dict, str]:
             e_quality=float(row["E_quality"]),
             e_rate=float(raw_rate) if raw_rate is not None else None,
             k=int(row.get("k") or 0),
+            k_rate=row.get("k_rate"),
             policy=pol,
             source="reconstructed",
         ),

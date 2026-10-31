@@ -190,6 +190,7 @@ def refutation_record(
     e_quality: float | None,
     e_rate: float | None,
     k: int,
+    k_rate: int | None = None,
     policy: SequentialPolicy = DEFAULT_POLICY,
     captured_at: str | None = None,
     source: str = "live",
@@ -219,10 +220,18 @@ def refutation_record(
 
     Margins follow ``AxisRefutation``: negative = below the bar. ``source`` records
     whether the record was written live at stop time or reconstructed after the
-    fact by a reader.
+    fact by a reader. ``k`` counts quality updates; ``k_rate``, when observed,
+    counts rate updates. Legacy callers without ``k_rate`` retain their old
+    quality-count fallback and do not acquire a fabricated rate count.
     """
+    # The rate axis can skip trials while quality continues. Only new rows that
+    # carry an observed rate count use it; old callers retain their prior
+    # quality-count fallback rather than acquiring invented historical evidence.
+    if k_rate is not None and (type(k_rate) is not int or k_rate < 0):
+        raise ValueError("k_rate must be a nonnegative integer")
+    rate_k = k if k_rate is None else k_rate
     q = axis_refutation(AXIS_QUALITY, e_quality, k, policy)
-    r = axis_refutation(AXIS_RATE, e_rate, k, policy)
+    r = axis_refutation(AXIS_RATE, e_rate, rate_k, policy)
     if q.refuted:
         refuting, other = q, r
     elif r.refuted:
@@ -243,6 +252,7 @@ def refutation_record(
         "other_axis_margin": _margin(other),
         "both_axes_refuted": bool(q.refuted and r.refuted),
         "n_trials_at_stop": int(k),
+        **({"k_rate": rate_k} if k_rate is not None else {}),
         "axes": {AXIS_QUALITY: q.as_journal_dict(), AXIS_RATE: r.as_journal_dict()},
         "thresholds": {
             "policy_version": policy.version,
