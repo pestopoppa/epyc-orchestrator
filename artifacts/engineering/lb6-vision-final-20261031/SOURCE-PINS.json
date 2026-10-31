@@ -1,0 +1,10 @@
+{
+  "indexed_symbol_ast_matches_base": true,
+  "indexed_commit": "84f6f6f",
+  "index_status": "STALE; LOW1 is indexed evidence only, not current exhaustive impact",
+  "owner_head": "00c1b789aa30de3cc6801879af22a9a4cf4c3515",
+  "new_test_impact": "UNKNOWN: unindexed private artifact script",
+  "source_sha256": "1a1cd54febc558ce4fab8436ef52b84423752d52315aa11a16db0fecb1492b2d",
+  "candidate_sha256": "2cb2a64e4da56507edb750f047a0b06ee96f4c771a2489db8181095098f9c779",
+  "test_sha256": "c5cb0949efff51caa90306d36469a3662c68f3cbbc6e2db1f8f73cf411a723a0"
+}
