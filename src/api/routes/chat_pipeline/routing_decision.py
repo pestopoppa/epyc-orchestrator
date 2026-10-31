@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from pathlib import Path
+from typing import Any
 
 from src.api.models import ChatRequest
 from src.api.routes.chat_routing import _classify_and_route
@@ -321,10 +322,18 @@ def select_initial_route(
         )
         return routing_decision, routing_strategy, skill_context
 
+    classifier_kwargs: dict[str, Any] = {
+        "has_image": bool(request.image_path or request.image_base64),
+    }
+    # Keep the default-off call path identical. Startup constructs this instance
+    # when the feature is enabled; passing it here lets the existing resolver
+    # apply its declared priority bindings after heuristic classification.
+    if features().binding_routing and state.binding_router is not None:
+        classifier_kwargs["binding_router"] = state.binding_router
     classified_role, routing_strategy = classify_and_route(
         request.prompt,
         request.context or "",
-        has_image=bool(request.image_path or request.image_base64),
+        **classifier_kwargs,
     )
     routing_decision, routing_strategy = _fence_text_off_vision_roles(
         [classified_role], routing_strategy

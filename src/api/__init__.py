@@ -38,6 +38,16 @@ from src.api.services.memrl import (
 logger = logging.getLogger(__name__)
 
 
+def _configure_binding_router(state, enabled: bool) -> None:
+    """Attach the API-process binding registry when its feature flag is on."""
+    if enabled:
+        from src.routing_bindings import BindingRouter
+
+        state.binding_router = BindingRouter()
+    else:
+        state.binding_router = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan.
@@ -53,6 +63,7 @@ async def lifespan(app: FastAPI):
     """
     state = get_state()
     f = features()
+    _configure_binding_router(state, f.binding_routing)
 
     from src.runtime.config_attestation import publish_config_attestation
 
@@ -239,6 +250,7 @@ async def lifespan(app: FastAPI):
     state.q_scorer = None
     state.episodic_store = None
     state.hybrid_router = None
+    state.binding_router = None
     state.tool_registry = None
     state.script_registry = None
     state.registry = None
