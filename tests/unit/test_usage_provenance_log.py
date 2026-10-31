@@ -3,12 +3,24 @@
 import json
 import hashlib
 import subprocess
+import pytest
 
 from src.backends import serving_calls
 from src.llm_cache import ContentAddressableCache
 from src.llm_primitives.usage import UsageLedger
 from src.llm_primitives import usage_log
 from tests.unit.test_usage_provenance import metered_primitives, native_result
+
+
+TEST_ONLY_DECLARATION = {
+    "schema": "epyc.request_call_usage.measurement_declaration.v1",
+    "metrics": [{
+        "source_field": "completion_tokens", "metric": "test_completion_tokens",
+        "unit": "tokens", "category": "CANDIDATE", "metric_direction": "higher_better",
+        "protocol_id": "", "claim": "Test fixture only: exact completion count for one call.",
+        "reps_basis": "one captured call",
+    }],
+}
 
 
 def enable_usage_log(monkeypatch, tmp_path):
@@ -35,6 +47,7 @@ def test_pending_error_and_cache_replay_have_durable_self_hashed_identity(monkey
     assert all(record["request_id"] == "request-one" for record in records)
     assert all(record["record_sha256"] == serving_calls.record_digest(record) for record in records)
     assert all(record["process"]["orch_commit"] for record in records)
+    assert all(record["call"]["measurement_declaration"] is None for record in records)
     assert records[0]["call"]["call_id"] == pending_id
     assert records[0]["call"]["pending"] and records[0]["call"]["censored"]
     assert "error" not in records[2]["call"]
@@ -45,6 +58,34 @@ def test_pending_error_and_cache_replay_have_durable_self_hashed_identity(monkey
     assert records[-1]["call"]["replay_of_call_id"] == "original-server-observation"
     assert records[-1]["call"]["completion_tokens"] == 0
     assert not (tmp_path / "serving_calls.jsonl").exists()
+
+
+def test_optional_measurement_declaration_is_detached_and_self_hashed(monkeypatch, tmp_path):
+    path = enable_usage_log(monkeypatch, tmp_path)
+    ledger = UsageLedger(request_id="declared-test-only")
+    declaration = json.loads(json.dumps(TEST_ONLY_DECLARATION))
+    call_id = ledger.begin("worker", measurement_declaration=declaration)
+    declaration["metrics"][0]["claim"] = "mutated after begin"
+    ledger.finish(call_id, completion_tokens=0, provenance="server_reported",
+                  source="llama_server:/completion.tokens_predicted")
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [record["event"] for record in records] == ["begin", "settled"]
+    for record in records:
+        assert record["record_sha256"] == serving_calls.record_digest(record)
+        assert record["call"]["measurement_declaration"] == TEST_ONLY_DECLARATION
+    assert records[-1]["call"]["completion_tokens"] == 0
+    assert records[-1]["call"]["measurement_declaration"] == records[0]["call"]["measurement_declaration"]
+
+
+def test_usage_declaration_is_absent_by_default_and_rejects_invalid_claim_tuple_context():
+    ledger = UsageLedger("unannotated-default")
+    ledger.begin("worker")
+    assert ledger.records()[0]["measurement_declaration"] is None
+
+    invalid = json.loads(json.dumps(TEST_ONLY_DECLARATION))
+    invalid["metrics"][0]["metric_direction"] = "neutral"
+    with pytest.raises(ValueError, match="ClaimTuple direction"):
+        ledger.begin("worker", measurement_declaration=invalid)
 
 
 def test_real_primitive_and_cache_replay_emit_without_new_physical_decode(monkeypatch, tmp_path):

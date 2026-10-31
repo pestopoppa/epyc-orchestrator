@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+import json
 import threading
 import os
 import weakref
@@ -23,6 +24,61 @@ NATIVE_OUTPUT_SOURCES = frozenset({
     "llama_server:/v1/chat/completions.stream.timings.predicted_n",
 })
 
+MEASUREMENT_DECLARATION_SCHEMA = "epyc.request_call_usage.measurement_declaration.v1"
+MEASUREMENT_DECLARATION_FIELDS = frozenset({"prompt_tokens", "completion_tokens", "cached_tokens"})
+MEASUREMENT_CATEGORIES = frozenset({"OPTIMUM", "BASELINE", "CANDIDATE"})
+MEASUREMENT_DIRECTIONS = frozenset({"higher_better", "lower_better"})
+
+
+def _measurement_declaration(value: Any) -> dict[str, Any] | None:
+    """Validate and detach explicit source-authored ClaimTuple metadata.
+
+    Usage counters carry no implicit category, direction or protocol. Existing callers leave this
+    unset; the read-side adapter validates the declaration again against ClaimTuple itself.
+    """
+    if value is None:
+        return None
+    if type(value) is not dict or set(value) != {"schema", "metrics"}:
+        raise ValueError("measurement declaration must contain exactly schema and metrics")
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("measurement declaration must be finite JSON") from exc
+    if len(encoded.encode("utf-8")) > 8192:
+        raise ValueError("measurement declaration exceeds 8 KiB")
+    detached = json.loads(encoded)
+    if detached["schema"] != MEASUREMENT_DECLARATION_SCHEMA:
+        raise ValueError("unsupported measurement declaration schema")
+    metrics = detached["metrics"]
+    if type(metrics) is not list or not metrics or len(metrics) > len(MEASUREMENT_DECLARATION_FIELDS):
+        raise ValueError("measurement declaration metrics must be a nonempty bounded list")
+    seen: set[str] = set()
+    required = {"source_field", "metric", "unit", "category", "metric_direction", "protocol_id", "claim"}
+    allowed = required | {"reps_basis", "applicability", "observation"}
+    for metric in metrics:
+        if type(metric) is not dict or not required <= set(metric) or set(metric) - allowed:
+            raise ValueError("measurement declaration metric fields differ from the supported contract")
+        source_field = metric["source_field"]
+        if not isinstance(source_field, str) or source_field not in MEASUREMENT_DECLARATION_FIELDS or source_field in seen:
+            raise ValueError("measurement declaration source field is unsupported or repeated")
+        seen.add(source_field)
+        for field in ("metric", "unit", "claim"):
+            text = metric[field]
+            if not isinstance(text, str) or not text.strip() or len(text) > 512:
+                raise ValueError(f"measurement declaration {field} must be bounded nonempty text")
+        if not isinstance(metric["category"], str) or metric["category"] not in MEASUREMENT_CATEGORIES:
+            raise ValueError("measurement declaration category is not a ClaimTuple category")
+        if not isinstance(metric["metric_direction"], str) or metric["metric_direction"] not in MEASUREMENT_DIRECTIONS:
+            raise ValueError("measurement declaration direction is not a ClaimTuple direction")
+        if not isinstance(metric["protocol_id"], str) or len(metric["protocol_id"]) > 256:
+            raise ValueError("measurement declaration protocol_id must be text; empty means absent")
+        if "reps_basis" in metric and (not isinstance(metric["reps_basis"], str) or len(metric["reps_basis"]) > 256):
+            raise ValueError("measurement declaration reps_basis must be bounded text")
+        for field in ("applicability", "observation"):
+            if field in metric and type(metric[field]) is not dict:
+                raise ValueError(f"measurement declaration {field} must be an object")
+    return detached
+
 
 def token_count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
@@ -40,6 +96,7 @@ class CallUsage:
     source: str | None = None
     replay_of_call_id: str | None = None
     backend_record_id: str | None = None
+    measurement_declaration: dict[str, Any] | None = None
     finish_reason: str | None = None
     error: str | None = None
     censored: bool = True
@@ -81,10 +138,16 @@ class UsageLedger:
             write_usage_event(self.request_id, "settled", asdict(inherited))
         write_usage_event(self.request_id, event, asdict(call))
 
-    def begin(self, role: str, *, parent_call_id: str | None = None) -> str:
+    def begin(
+        self, role: str, *, parent_call_id: str | None = None,
+        measurement_declaration: dict[str, Any] | None = None,
+    ) -> str:
         call_id = uuid.uuid4().hex
+        declaration = _measurement_declaration(measurement_declaration)
         with self._lock:
-            call = self._calls[call_id] = CallUsage(call_id=call_id, role=role, parent_call_id=parent_call_id)
+            call = self._calls[call_id] = CallUsage(call_id=call_id, role=role,
+                                                    parent_call_id=parent_call_id,
+                                                    measurement_declaration=declaration)
         self._publish("begin", call)
         return call_id
 
