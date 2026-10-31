@@ -262,3 +262,19 @@ def test_outline_and_line_range_are_read_only_bounded_views(tmp_path: Path):
     ranged = read_range(root, "sample.py", start_line=2, num_lines=1)
     assert "sample.py lines 2-2 of 3" in ranged
     assert "2|     def open(self):" in ranged
+
+
+def test_trace_span_work_is_opt_in(tmp_path):
+    from src.repl_environment.exploration_core import grep_file
+
+    body = "first\r\nhit 雪\r\nlast\n"
+    source = tmp_path / "source.txt"
+    source.write_bytes(body.encode())
+    normal = grep_file(tmp_path, source, "hit")
+    captured = grep_file(tmp_path, source, "hit", capture_spans=True)
+    assert normal.source_text is None
+    assert normal.matches[0].start_char == normal.matches[0].end_char == 0
+    assert captured.source_text == body
+    match = captured.matches[0]
+    assert body[match.start_char:match.end_char] == "hit 雪"
+    assert [(m.line, m.context) for m in normal.matches] == [(m.line, m.context) for m in captured.matches]

@@ -2271,3 +2271,22 @@ def test_markdown_orders_primary_leakage_then_the_non_deciding_sets(tmp_path):
     secondary = md[i_sec:]
     assert "## kill rule (recall@5, hybrid vs L) - pooled, flagged included" in secondary
     assert "paired bootstrap" not in secondary.split("# SECONDARY (non-deciding): without")[0]
+
+
+def test_real_trace_uses_existing_floors_and_preserves_legacy_cohort(tmp_path, monkeypatch):
+    out, rows, n = _pass_world(tmp_path)
+    current = ev.analyze(out)
+    # Remove only the new recognized label, reproducing the legacy group configuration.
+    monkeypatch.setattr(ev, "TRACE_STRATA", ("agent_nav", "synthetic_spill", "spill_follow"))
+    monkeypatch.setattr(ev, "DECISION_GROUPS", ("probe45", *ev.TRACE_STRATA))
+    assert ev.analyze(out) == current  # all denominators, numeric verdicts and report groups
+    assert current["n_deciding"] == n == 130
+    assert current["floor_check"]["n_trace"] == 85
+    monkeypatch.undo()
+    real = dict(rows[-1], stratum="real_trace", text="find the handler", gold={"path": "f.py", "ranges": [[10, 20]]})
+    labelled, _ = ev.label_queries([], [real])
+    assert labelled[0]["group"] == "real_trace" and labelled[0]["scored"]
+    assert ev.primary_rows(labelled) == labelled
+    assert ev.floor_check(labelled)["n_trace"] == 1
+    assert ev.floor_check(labelled)["n_min"] == st.N_MIN == 120
+    assert ev.floor_check(labelled)["trace_min"] == st.TRACE_N_MIN == 75

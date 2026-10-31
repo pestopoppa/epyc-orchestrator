@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+from typing import Callable
 MAX_FILE_BYTES = 4 * 1024 * 1024
 READ_MAX_LINES = 200
 READ_MAX_LINE_CHARS = 400
@@ -40,6 +41,7 @@ class GrepResult:
     total: int
     truncated: bool
     engine: str = "python-re"
+    source_text: str | None = None
 
 
 def resolve_in_root(root: str | os.PathLike[str], path: str | os.PathLike[str]) -> str:
@@ -97,8 +99,16 @@ def _read_text(
 def read_file_page(
     root: str | os.PathLike[str], path: str | os.PathLike[str], n: int = 500,
     offset: int = 0, *, max_bytes: int | None = MAX_FILE_BYTES,
+    on_read: Callable[[str, int, int], None] | None = None,
 ) -> str:
     """Read a bounded character page while preserving newline and negative-offset semantics."""
+    if on_read is not None:
+        # Only opt-in capture reads the whole source, binding the page to this very read.
+        text, _ = _read_text(root, path, max_bytes=max_bytes, newline="")
+        start = max(0, len(text) + offset) if offset < 0 else min(offset, len(text))
+        page = text[start:] if n < 0 else text[start:start + n]
+        on_read(text, start, start + len(page))
+        return page
     if max_bytes is None:
         real = resolve_in_root(root, path)
         if os.path.isdir(real):
@@ -131,6 +141,7 @@ def grep_file(
     max_bytes: int | None = MAX_FILE_BYTES,
     ignore_case: bool = True, splitlines: bool = False,
     allow_empty_pattern: bool = False, compile_after_read: bool = False,
+    capture_spans: bool = False,
 ) -> GrepResult:
     """Search one explicit-root file and return bounded, structured match details."""
     if not pattern and not allow_empty_pattern:
@@ -146,27 +157,27 @@ def grep_file(
         context = max(0, int(context_lines))
     except (TypeError, ValueError) as exc:
         raise ExplorationError("grep limits must be integers") from exc
-    text, _ = _read_text(root, path, max_bytes=max_bytes)
+    text, _ = _read_text(root, path, max_bytes=max_bytes, newline="" if capture_spans else None)
+    source_text = text if capture_spans else None
+    if capture_spans:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
     if compiled is None:
         try:
             compiled = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
             raise ExplorationError(f"invalid regex pattern: {exc}") from exc
-    if splitlines:
-        lines = text.splitlines()
+    lines = text.splitlines() if splitlines else text.split("\n")
+    line_spans = None
+    if capture_spans:
+        # Offsets refer to original, unnormalised source characters (also for CRLF).
         line_spans = []
         cursor = 0
-        for raw_line in text.splitlines(keepends=True):
-            visible = raw_line.rstrip("\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029")
-            line_spans.append((cursor, cursor + len(visible)))
-            cursor += len(raw_line)
-    else:
-        lines = text.split("\n")
-        line_spans = []
-        cursor = 0
-        for index, line in enumerate(lines):
-            line_spans.append((cursor, cursor + len(line)))
-            cursor += len(line) + (1 if index < len(lines) - 1 else 0)
+        separators = r"\r\n|[\r\n\v\f\x1c-\x1e\x85\u2028\u2029]" if splitlines else r"\r\n|[\r\n]"
+        for separator in re.finditer(separators, source_text):
+            line_spans.append((cursor, separator.start()))
+            cursor = separator.end()
+        if not splitlines or cursor < len(source_text):
+            line_spans.append((cursor, len(source_text)))
     matches: list[Match] = []
     total = 0
     for index, line in enumerate(lines):
@@ -188,10 +199,10 @@ def grep_file(
                 line=line if max_line_chars is None else line[:max_line_chars],
                 context=shown_context,
                 context_lines=shown_context_lines,
-                start_char=line_spans[index][0],
-                end_char=line_spans[index][1],
+                start_char=line_spans[index][0] if line_spans is not None else 0,
+                end_char=line_spans[index][1] if line_spans is not None else 0,
             ))
-    return GrepResult(tuple(matches), total, total > len(matches))
+    return GrepResult(tuple(matches), total, total > len(matches), source_text=source_text)
 
 
 def read_range(

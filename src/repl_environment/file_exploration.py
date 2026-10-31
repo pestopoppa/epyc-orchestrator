@@ -92,18 +92,14 @@ class _FileExplorationMixin:
                 pass  # Silently ignore research tracking failures
 
     def _is_repl_trace_spill(self, file_path: str) -> bool:
-        """Whether this exact file was emitted as an output spill by this REPL."""
-        return os.path.abspath(file_path) in getattr(self, "_repl_trace_spill_paths", set())
+        from src.repl_environment import trace_capture
 
-    def _record_repl_spill_open(self, file_path: str, start: int, end: int) -> None:
-        if not self._is_repl_trace_spill(file_path):
-            return
-        try:
-            from src.repl_environment import trace_capture
+        return trace_capture.is_registered_spill(self, file_path)
 
-            trace_capture.record_open(self, file_path, start, end)
-        except Exception:
-            pass
+    def _record_repl_spill_open(self, file_path: str, text: str, start: int, end: int) -> None:
+        from src.repl_environment import trace_capture
+
+        trace_capture.record_spill_open(self, file_path, text, start, end)
 
     @staticmethod
     def _page_text(text: str, n: int, offset: int) -> str:
@@ -221,9 +217,13 @@ class _FileExplorationMixin:
                 from src.repl_environment.exploration_core import read_file_page
 
                 root, resolved = _explicit_exploration_root(self, file_path)
-                result = read_file_page(root, resolved, n, offset, max_bytes=None)
-                if offset >= 0:
-                    self._record_repl_spill_open(file_path, offset, offset + len(result))
+                capture = self._is_repl_trace_spill(file_path)
+                result = read_file_page(
+                    root, resolved, n, offset, max_bytes=None,
+                    on_read=(lambda text, start, end: self._record_repl_spill_open(
+                        file_path, text, start, end
+                    )) if capture else None,
+                )
                 event = {"n": n, "file_path": file_path}
                 if offset:
                     event["offset"] = offset
@@ -329,6 +329,7 @@ class _FileExplorationMixin:
                     root, resolved, pattern, context_lines=context_lines,
                     max_hits=self.config.max_grep_results, max_line_chars=None,
                     max_context_chars=None, max_bytes=None, allow_empty_pattern=True,
+                    capture_spans=self._is_repl_trace_spill(file_path),
                 )
                 source_text = None
                 source_name = file_path
@@ -342,13 +343,14 @@ class _FileExplorationMixin:
 
         if file_path is not None:
             matches = [item.line for item in result.matches]
-            if self._is_repl_trace_spill(file_path):
+            if result.source_text is not None:
                 try:
                     from src.repl_environment import trace_capture
 
                     trace_capture.record_spill_search(
                         self,
                         file_path,
+                        result.source_text,
                         pattern,
                         self.config.max_grep_results,
                         [

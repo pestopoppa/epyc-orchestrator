@@ -359,7 +359,7 @@ def _labelled_row(row: Mapping[str, Any], group: str, bundle: str) -> dict[str, 
 def trace_group(row: Mapping[str, Any]) -> tuple[str, str]:
     """Group of a trace row, driven by its own ``stratum`` (interpretation (n)).
 
-    ``agent_nav`` / ``synthetic_spill`` / ``spill_follow`` map to themselves and a row that says
+    ``agent_nav`` / ``synthetic_spill`` / ``spill_follow`` / ``real_trace`` map to themselves and a row that says
     ``trivial_head`` is trivial; any other stratum label falls back to ``spill_follow`` (the legacy
     single-source layout), recorded as ``group_source = legacy_default``."""
     stratum = row.get("stratum")
@@ -564,9 +564,19 @@ def validate_gold(rows: Sequence[Mapping[str, Any]], store: "BundleStore") -> di
     errors: list[str] = []
     warnings: list[str] = []
     for q in rows:
-        if not q["scored"]:
+        if not q["scored"] and q.get("group") != "real_trace":
             continue
         texts = {sec.name: sec.text for sec in store.get(q["bundle"]).sections}
+        if q.get("group") == "real_trace":
+            from src.repl_environment.trace_capture import digest
+
+            source = texts.get(q.get("source_section"))
+            if (q.get("custody") != "verified" or not isinstance(source, str)
+                    or digest(source) != q.get("content_digest")
+                    or len(source) != q.get("content_chars")
+                    or digest(q["text"]) != q.get("query_digest")):
+                errors.append(f"{q['id']}: real_trace query/corpus custody mismatch")
+                continue
         for path, start, _end in q["gold_spans"]:
             if path not in texts:
                 errors.append(

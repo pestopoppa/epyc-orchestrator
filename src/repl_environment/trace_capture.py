@@ -11,7 +11,9 @@ Records (JSONL, one per line, NO raw text):
   search: {v, kind:"search", provenance:"trace", session, ts, query_digest (sha256 of the query),
            k, section, mode, hits: [[section, start, end], ...]}      (char offsets, as returned)
   open:   {v, kind:"open", provenance:"trace", session, ts, section, start, end}
-A search hit counts as OPENED when a later ``open`` in the same session overlaps its span
+v1 ContextBundle rows have no corpus identity and remain diagnostic only. Prospective v2
+spill search/open records add only content_digest (SHA-256) and content_chars. No raw text.
+A v2 search hit counts as OPENED when a later same-content ``open`` in the same session overlaps its span
 (the REPL reads a pointer with ``context.get(section, offset=start, max_chars=end-start)``).
 Every record passes :func:`pii_scan` before it is written; a record with any string outside the
 closed shapes (sha256 hex, safe identifier, ISO timestamp, fixed vocab) is DROPPED, never
@@ -21,14 +23,15 @@ replaced by ``h:<12 hex of its sha256>``.
 Output: ``$EPYC_REPL_TRACE_DIR`` or ``<repo>/logs/repl_trace_capture/`` (logs/ is untracked),
 file ``traces-YYYYMMDD.jsonl``. Session id = random per-bundle id (no request content).
 
-OPERATOR STEP (one session): export EPYC_REPL_TRACE_CAPTURE=1 in the orchestrator API
-environment, ``orchestrator_stack.py reload orchestrator`` (API only), then run REPL sessions
-with ``context_bundle`` + ``context_search`` enabled. Load with :func:`load_real_trace_rows`.
-The digest cannot be inverted: rows carry ``text=None`` and ``query_digest``; pass a
-``text_resolver(digest)->str|None`` (re-supplied from the session's own prompts) to fill text,
-otherwise the rows are flagged ``needs_text`` for the harness.
+LIVE ACTIVATION: the session owning the API enables EPYC_REPL_TRACE_CAPTURE=1 and reloads
+only the orchestrator at its own boundary. Ordinary spill -> grep -> peek use then writes v2.
+Capture JSONL never stores query/corpus text. Separately retain authorized exact originals;
+text_resolver verifies the query SHA and bundle_resolver supplies
+{bundle: id, sections: {original_path: exact_text}} for corpus SHA verification. Old v1 records
+cannot be retroactively given corpus custody. Exported gold uses the harness's inclusive line
+units, and freeze rechecks the actual bundle text against the native content digest.
 
-Failure isolation: every public entry point swallows all exceptions.
+Failure isolation: runtime capture entry points swallow exceptions; offline resolvers fail closed.
 """
 
 from __future__ import annotations
@@ -45,7 +48,8 @@ from typing import Any, Callable, Iterable, Mapping
 
 ENV_FLAG = "EPYC_REPL_TRACE_CAPTURE"
 ENV_DIR = "EPYC_REPL_TRACE_DIR"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1  # Existing ContextBundle records retain their closed v1 schema.
+SPILL_SCHEMA_VERSION = 2
 STRATUM = "real_trace"
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -103,14 +107,19 @@ def pii_scan(rec: Mapping[str, Any]) -> list[str]:
     if kind not in _KEYS:
         return ["unknown kind"]
     problems: list[str] = []
-    if set(rec) != _KEYS[kind]:
+    version = rec.get("v")
+    expected = _KEYS[kind] | ({"content_digest", "content_chars"} if version == SPILL_SCHEMA_VERSION else set())
+    if set(rec) != expected:
         problems.append("unexpected or missing keys")
-    if rec.get("v") != SCHEMA_VERSION or rec.get("provenance") != "trace":
+    if version not in (SCHEMA_VERSION, SPILL_SCHEMA_VERSION) or rec.get("provenance") != "trace":
         problems.append("bad v/provenance")
     if not _check_str(rec.get("session"), re.compile(r"^[0-9a-f]{16}$")):
         problems.append("session shape")
     if not _check_str(rec.get("ts"), _TS):
         problems.append("ts shape")
+    if version == SPILL_SCHEMA_VERSION:
+        if not _check_str(rec.get("content_digest"), _HEX64) or not _is_int(rec.get("content_chars")):
+            problems.append("content identity")
     sec = rec.get("section")
     if not (_check_str(sec, _SAFE_ID, True) or _check_str(sec, _HASHED_ID)):
         problems.append("section shape")
@@ -122,7 +131,8 @@ def pii_scan(rec: Mapping[str, Any]) -> list[str]:
         if not _check_str(rec.get("mode"), _MODE):
             problems.append("mode shape")
         hits = rec.get("hits")
-        if not isinstance(hits, list) or len(hits) > 64:
+        hit_limit = max(64, rec["k"]) if version == SPILL_SCHEMA_VERSION and _is_int(rec.get("k")) else 64
+        if not isinstance(hits, list) or len(hits) > hit_limit:
             problems.append("hits")
         else:
             for h in hits:
@@ -133,6 +143,14 @@ def pii_scan(rec: Mapping[str, Any]) -> list[str]:
     else:
         if not (_is_int(rec.get("start")) and _is_int(rec.get("end"))):
             problems.append("span")
+    if version == SPILL_SCHEMA_VERSION and not problems:
+        if sec is None:
+            problems.append("spill section missing")
+        if kind == "search":
+            if rec["mode"] != "grep" or any(h[0] != sec or not 0 <= h[1] <= h[2] <= rec["content_chars"] for h in rec["hits"]):
+                problems.append("spill hit identity/span")
+        elif not 0 <= rec["start"] <= rec["end"] <= rec["content_chars"]:
+            problems.append("spill open span")
     return problems
 
 
@@ -192,9 +210,56 @@ def record_open(bundle: Any, section: str, start: int, end: int) -> None:
         return
 
 
-def record_spill_search(env: Any, path: str, query: str, k: int, hits: Iterable[Mapping]) -> None:
-    """Capture a grep query over a spill file using the same hash-and-span schema."""
-    record_search(env, query, k, path, "grep", hits)
+def register_spill(env: Any, path: str, text: str) -> None:
+    """Prospective write-side identity. No state is allocated while disabled."""
+    try:
+        if not enabled():
+            return
+        registry = getattr(env, "_repl_trace_spills", None)
+        if registry is None:
+            registry = env._repl_trace_spills = {}
+        registry[os.path.abspath(path)] = digest(text)
+    except Exception:
+        return
+
+
+def is_registered_spill(env: Any, path: str) -> bool:
+    if not enabled():
+        return False
+    registry = getattr(env, "_repl_trace_spills", None)
+    return registry is not None and os.path.abspath(path) in registry
+
+
+def _spill_record(env: Any, path: str, text: str, kind: str, **fields: Any) -> None:
+    try:
+        if not is_registered_spill(env, path):
+            return
+        content_digest = digest(text)
+        if env._repl_trace_spills[os.path.abspath(path)] != content_digest:
+            return  # The path was overwritten outside this environment's spill writer.
+        _write({
+            "v": SPILL_SCHEMA_VERSION, "kind": kind, "provenance": "trace",
+            "session": _session_id(env), "ts": _now(), "section": _safe_section(os.path.abspath(path)),
+            "content_digest": content_digest, "content_chars": len(text), **fields,
+        })
+    except Exception:
+        return
+
+
+def record_spill_search(env: Any, path: str, text: str, query: str, k: int, hits: Iterable[Mapping]) -> None:
+    """v2 binds hit offsets and query hash to the original registered spill text."""
+    try:
+        if not enabled():
+            return
+        _spill_record(env, path, text, "search", query_digest=digest(query), k=int(k), mode="grep",
+                      hits=[[_safe_section(os.path.abspath(path)), int(h["start"]), int(h["end"])] for h in hits])
+    except Exception:
+        return
+
+
+def record_spill_open(env: Any, path: str, text: str, start: int, end: int) -> None:
+    """v2 open from the same read that produced the returned page, including negative offsets."""
+    _spill_record(env, path, text, "open", start=start, end=end)
 
 
 def load_records(path_or_dir: str | Path | None = None) -> list[dict]:
@@ -218,43 +283,74 @@ def load_records(path_or_dir: str | Path | None = None) -> list[dict]:
 def load_real_trace_rows(
     path_or_dir: str | Path | None = None,
     text_resolver: Callable[[str], str | None] | None = None,
-    bundle_resolver: Callable[[str], str | None] | None = None,
+    bundle_resolver: Callable[[str], Mapping[str, Any] | None] | None = None,
 ) -> list[dict]:
-    """Records -> harness query rows with ``stratum='real_trace'`` (one per distinct
-    (session, query_digest) search that returned hits). ``gold`` = the opened hit spans
-    ({path, ranges, unit:'chars'}); rows with no opened hit are kept with ``opened=False`` and
-    ``gold=None`` (not-opened is a recorded outcome, not a drop)."""
+    """Load diagnostic rows, never inventing gold for custody-unknown v1 records.
+
+    A resolver supplies {bundle: id, sections: {original_section_name: exact_text}}.
+    Query SHA and v2 source SHA are checked before line-unit gold is constructed. Only
+    later opens of the SAME content version count; a v1 overlap cannot prove custody.
+    This is preparation, not the >=75-real-trace 2.8 gate or measurement warrant.
+    """
     recs = load_records(path_or_dir)
-    opens: dict[str, list[tuple[str, int, int]]] = {}
-    for r in recs:
-        if r["kind"] == "open":
-            opens.setdefault(r["session"], []).append((r["section"], r["start"], r["end"]))
     rows, seen = [], set()
-    for r in recs:
+    for index, r in enumerate(recs):
         if r["kind"] != "search" or not r["hits"]:
             continue
-        key = (r["session"], r["query_digest"])
-        if key in seen:
+        identity = (r["session"], r["query_digest"], r.get("content_digest"), r["section"])
+        if identity in seen:
             continue
-        seen.add(key)
-        sess_opens = opens.get(r["session"], [])
-        opened = [h for h in r["hits"]
-                  if any(o[0] == h[0] and o[1] < h[2] and h[1] < o[2] for o in sess_opens)]
+        seen.add(identity)
+        versioned = r["v"] == SPILL_SCHEMA_VERSION
+        later_opens = [o for o in recs[index + 1:]
+                       if o["kind"] == "open" and o["session"] == r["session"]
+                       and versioned and o["v"] == SPILL_SCHEMA_VERSION
+                       and o["content_digest"] == r["content_digest"]
+                       and o["content_chars"] == r["content_chars"]]
+        opened = [h for h in r["hits"] if h[0] == r["section"] and any(
+            o["section"] == h[0] and o["start"] < h[2] and h[1] < o["end"] for o in later_opens)]
         text = text_resolver(r["query_digest"]) if text_resolver else None
-        bundle = bundle_resolver(r["session"]) if bundle_resolver else None
+        if text is not None and (not isinstance(text, str) or digest(text) != r["query_digest"]):
+            raise ValueError("query resolver digest mismatch")
+        resolved = bundle_resolver(r["session"]) if bundle_resolver else None
+        bundle, source_path, source_text = None, None, None
+        if resolved is not None:
+            if not isinstance(resolved, Mapping) or not isinstance(resolved.get("sections"), Mapping):
+                raise ValueError("bundle resolver must supply bundle id and original section text")
+            bundle = resolved.get("bundle")
+            candidates = [(path, body) for path, body in resolved["sections"].items()
+                          if isinstance(path, str) and _safe_section(path) == r["section"]]
+            if versioned:
+                if len(candidates) != 1:
+                    raise ValueError("missing or ambiguous original corpus section")
+                source_path, source_text = candidates[0]
+                if (not isinstance(source_text, str) or digest(source_text) != r["content_digest"]
+                        or len(source_text) != r["content_chars"]):
+                    raise ValueError("corpus resolver digest mismatch")
         gold = None
-        if opened:
-            path = opened[0][0]
-            gold = {"path": path, "unit": "chars",
-                    "ranges": [[h[1], h[2]] for h in opened if h[0] == path]}
-        rows.append({
-            "id": f"real_trace-{r['session']}-{r['query_digest'][:12]}",
+        if versioned and source_text is not None and opened:
+            ranges = []
+            for _, start, end in opened:
+                if not 0 <= start < end <= len(source_text):
+                    raise ValueError("hit outside original corpus")
+                # Harness chunk pointers use 1-based inclusive lines, never char offsets.
+                ranges.append([source_text.count("\n", 0, start) + 1,
+                               source_text.count("\n", 0, end - 1) + 1])
+            gold = {"path": source_path, "unit": "lines", "ranges": ranges}
+        row = {
+            "id": f"real_trace-{r['session']}-{r['query_digest'][:12]}-{digest(str(identity))[:12]}",
             "stratum": STRATUM, "provenance": "trace",
             "text": text, "needs_text": text is None, "query_digest": r["query_digest"],
-            "code_intent": None, "gold": gold, "opened": bool(opened),
+            "code_intent": None, "gold": gold, "opened": bool(opened) if versioned else None,
             "bundle": bundle, "session": r["session"], "ts": r["ts"], "mode": r["mode"],
-            "hits": r["hits"],
-        })
+            "hits": r["hits"], "custody": "verified" if source_text is not None else "unknown",
+            "custody_reason": ("verified_original_content_digest" if source_text is not None else
+                               "original_corpus_not_supplied" if versioned else "legacy_v1_missing_content_digest"),
+        }
+        if versioned:
+            row.update(content_digest=r["content_digest"], content_chars=r["content_chars"],
+                       source_section=source_path)
+        rows.append(row)
     return rows
 
 
@@ -263,18 +359,21 @@ def write_real_trace_queries(
     path_or_dir: str | Path | None = None,
     *,
     text_resolver: Callable[[str], str | None],
-    bundle_resolver: Callable[[str], str | None],
+    bundle_resolver: Callable[[str], Mapping[str, Any] | None],
 ) -> int:
-    """Write rows accepted by ``repl_emb_eval.py freeze --trace-queries``.
+    """Export only hash-verified v2 rows for the harness's real_trace stratum.
 
-    Query text and the corresponding bundle id are supplied by the evaluator; neither is
-    reconstructed from the hash-only trace. Rows with unresolved query text or bundle ids are
-    refused so they cannot silently enter the frozen query set as unusable evidence.
+    Source texts stay outside capture JSONL. The separately authorized resolver must provide
+    exact originals, not a guessed bundle label; legacy v1 custody is unknown and refused.
+    Exported source_section/content_digest are rechecked against actual bundles at freeze.
+    Export is all-or-nothing: mixed v1/v2 logs refuse if any row has unknown custody. Callers
+    must explicitly scope the input file to a qualified v2 spill session, retaining the native
+    source log and selection provenance; the exporter never silently drops unknown rows.
     """
     rows = load_real_trace_rows(path_or_dir, text_resolver, bundle_resolver)
-    unresolved = [r["id"] for r in rows if not r["text"] or not r["bundle"]]
+    unresolved = [(r["id"], r["custody_reason"]) for r in rows if not r["text"] or not r["bundle"] or r["custody"] != "verified"]
     if unresolved:
-        raise ValueError(f"real-trace rows need text and bundle resolution: {unresolved[:5]}")
+        raise ValueError(f"real-trace rows need verified text and corpus custody: {unresolved[:5]}")
     target = Path(output)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as stream:
