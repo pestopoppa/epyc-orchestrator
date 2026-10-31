@@ -27,6 +27,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import selectors
 import subprocess
 import sys
 import textwrap
@@ -84,12 +85,12 @@ class _SelfHeldLock:
 
 _HOLDER_SRC = textwrap.dedent(
     """
-    import fcntl, os, sys, time
+    import fcntl, os, sys
     fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     sys.stdout.write("held\\n")
     sys.stdout.flush()
-    time.sleep(float(sys.argv[2]))
+    sys.stdin.buffer.read()
     """
 )
 
@@ -97,30 +98,48 @@ _HOLDER_SRC = textwrap.dedent(
 class _ForeignHeldLock:
     """Hold the daemon lock in a SEPARATE process — the real-world shape."""
 
-    def __init__(self, lock_path: Path, ttl: float = 30.0) -> None:
+    _READY_TIMEOUT = 10.0
+
+    def __init__(self, lock_path: Path) -> None:
         self._path = lock_path
-        self._ttl = ttl
         self._proc: subprocess.Popen | None = None
 
     def __enter__(self) -> int:
         self._proc = subprocess.Popen(
-            [sys.executable, "-c", _HOLDER_SRC, str(self._path), str(self._ttl)],
+            [sys.executable, "-c", _HOLDER_SRC, str(self._path)],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            text=True,
         )
-        assert self._proc.stdout is not None
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline:
-            if self._proc.stdout.readline().strip() == "held":
-                return self._proc.pid
-            if self._proc.poll() is not None:
-                break
-        raise AssertionError("lock holder subprocess never reported holding the lock")
+        try:
+            assert self._proc.stdout is not None
+            with selectors.DefaultSelector() as selector:
+                selector.register(self._proc.stdout, selectors.EVENT_READ)
+                if not selector.select(self._READY_TIMEOUT):
+                    raise AssertionError("lock holder readiness timed out")
+                if os.read(self._proc.stdout.fileno(), 5) != b"held\n":
+                    raise AssertionError("lock holder exited without readiness")
+            return self._proc.pid
+        except BaseException:
+            self.__exit__()
+            raise
 
     def __exit__(self, *exc: object) -> None:
-        if self._proc is not None and self._proc.poll() is None:
-            self._proc.terminate()
+        if self._proc is None:
+            return
+        if self._proc.stdin is not None:
+            self._proc.stdin.close()
+        try:
             self._proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                self._proc.wait(timeout=10)
+        finally:
+            if self._proc.stdout is not None:
+                self._proc.stdout.close()
 
 
 # ── the field-ownership declaration itself ──────────────────────────────────
@@ -391,3 +410,29 @@ def test_externally_written_fields_ignores_out_of_band_control_changes(
     _write_state(state_path, {"trial_counter": 9, "paused": True})
 
     assert so.externally_written_fields(state_path, so.read_state_file(state_path)) == []
+
+
+def test_foreign_fixture_keeps_lock_until_context_exits(tmp_path: Path) -> None:
+    _, lock_path = _state_dir(tmp_path)
+    holder = _ForeignHeldLock(lock_path)
+    with holder as pid:
+        time.sleep(0.15)
+        assert holder._proc is not None and holder._proc.poll() is None
+        assert so.daemon_lock_holder_pids(lock_path) == {pid}
+    assert holder._proc is not None and holder._proc.poll() is not None
+    assert so.daemon_lock_holder_pids(lock_path) == set()
+
+
+@pytest.mark.parametrize("holder_src", ["raise SystemExit(1)", "import time; time.sleep(60)"])
+def test_foreign_fixture_cleans_failed_or_timed_out_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, holder_src: str,
+) -> None:
+    _, lock_path = _state_dir(tmp_path)
+    monkeypatch.setitem(globals(), "_HOLDER_SRC", holder_src)
+    monkeypatch.setattr(_ForeignHeldLock, "_READY_TIMEOUT", 0.2)
+    holder = _ForeignHeldLock(lock_path)
+    started = time.monotonic()
+    with pytest.raises(AssertionError):
+        holder.__enter__()
+    assert time.monotonic() - started < 15
+    assert holder._proc is not None and holder._proc.poll() is not None
