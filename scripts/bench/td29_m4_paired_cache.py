@@ -88,10 +88,21 @@ class _Capture:
         self.calls: list[dict[str, Any]] = []
         self.stage = ""
         self.lock = threading.Lock()
+        self.local = threading.local()
+        self.original_send = httpx.Client.send
 
     def __enter__(self) -> "_Capture":
         original = self.original
+        original_send = self.original_send
         capture = self
+
+        def observed_send(client: httpx.Client, request: httpx.Request, *args: Any, **kwargs: Any) -> Any:
+            record = getattr(capture.local, "record", None)
+            if record is not None and request.url.path == "/v1/chat/completions":
+                record["wire_route"] = request.url.path
+                record["wire_body_sha256"] = hashlib.sha256(request.content).hexdigest()
+                record["wire_request_json"] = json.loads(request.content)
+            return original_send(client, request, *args, **kwargs)
 
         def observed(instance: Any, prompt: str, **kwargs: Any) -> Any:
             record: dict[str, Any] = {
@@ -102,6 +113,7 @@ class _Capture:
                 "n_tokens": kwargs.get("n_tokens"),
             }
             try:
+                capture.local.record = record
                 reply = original(instance, prompt, **kwargs)
                 record["reply"] = reply
                 return reply
@@ -109,6 +121,7 @@ class _Capture:
                 record["error"] = f"{type(exc).__name__}: {exc}"
                 raise
             finally:
+                capture.local.record = None
                 meta = read_last_meta(instance)
                 record["prompt_n"] = meta.get("prompt_n") if meta else None
                 record["cache_n"] = meta.get("cache_n") if meta else None
@@ -118,16 +131,18 @@ class _Capture:
                     capture.calls.append(record)
 
         self.cls.llm_call = observed
+        httpx.Client.send = observed_send
         return self
 
     def __exit__(self, *_: Any) -> None:
         self.cls.llm_call = self.original
+        httpx.Client.send = self.original_send
 
 
 def _tokenize(url: str, prompt: str) -> list[int]:
     response = httpx.post(
         f"{url.rstrip('/')}/tokenize",
-        json={"content": prompt, "add_special": True, "with_pieces": False},
+        json={"content": prompt, "add_special": True, "parse_special": True, "with_pieces": False},
         timeout=30.0,
     )
     response.raise_for_status()
@@ -148,15 +163,41 @@ def _prefix_record(url: str, calls: list[dict[str, Any]]) -> dict[str, Any] | No
     typed = next((call for call in calls if call["stage"] == "typed_shadow"), None)
     if tool is None or typed is None:
         return None
-    left, right = tool["prompt"], typed["prompt"]
+    rendered = []
+    for call in (tool, typed):
+        if call.get("wire_route") != "/v1/chat/completions":
+            raise ValueError("actual chat wire request was not captured")
+        response = httpx.post(
+            f"{url.rstrip('/')}/apply-template",
+            json=call["wire_request_json"],
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        prompt = response.json().get("prompt")
+        if not isinstance(prompt, str):
+            raise ValueError("sidecar /apply-template did not return a text prompt")
+        rendered.append(prompt)
+    left, right = rendered
     left_ids, right_ids = _tokenize(url, left), _tokenize(url, right)
+    caller_left, caller_right = tool["prompt"], typed["prompt"]
+    common_bytes = _prefix(left.encode(), right.encode())
     return {
-        "common_bytes": _prefix(left.encode(), right.encode()),
+        "source": "same-sidecar /apply-template on captured /v1/chat/completions JSON",
+        "common_bytes": common_bytes,
         "common_tokens": _prefix(left_ids, right_ids),
+        "caller_common_bytes": _prefix(caller_left.encode(), caller_right.encode()),
+        "rendered_tool_prompt": left,
+        "rendered_typed_prompt": right,
+        "rendered_tool_sha256": hashlib.sha256(left.encode()).hexdigest(),
+        "rendered_typed_sha256": hashlib.sha256(right.encode()).hexdigest(),
+        "tool_token_count_matches_server": len(left_ids) == tool["prompt_n"] + tool["cache_n"],
+        "typed_token_count_matches_server": len(right_ids) == typed["prompt_n"] + typed["cache_n"],
         "tool_tokens": len(left_ids),
         "typed_tokens": len(right_ids),
         "first_tool_text": left[:100],
         "first_typed_text": right[:100],
+        "first_tool_bytes_at_break": left.encode()[common_bytes:common_bytes + 32].decode(errors="backslashreplace"),
+        "first_typed_bytes_at_break": right.encode()[common_bytes:common_bytes + 32].decode(errors="backslashreplace"),
     }
 
 
@@ -263,6 +304,8 @@ def run(
                 ]
                 pair_valid = (
                     pair is not None
+                    and pair["tool_token_count_matches_server"]
+                    and pair["typed_token_count_matches_server"]
                     and len(paired_calls) >= 2
                     and all(
                         isinstance(call.get("prompt_n"), int)
