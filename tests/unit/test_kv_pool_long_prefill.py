@@ -678,3 +678,73 @@ class TestInferencePrefillDone:
         assert seen.holder_before is not None, "a 20k-token prompt took the long-prefill lease"
         assert seen.holder_after is None, "the first chunk handed it on"
         assert fresh_pool.in_flight_tokens(URL) == 0
+
+
+def test_admission_records_actual_holder_and_observed_lease_wait(monkeypatch):
+    pool = SharedKVPoolAdmission(occupancy=lambda _: None, cross_process=False)
+    first = pool.acquire(URL, 40_000, POOL, timeout_s=0)
+    assert first is not None
+    first_info = pool.admission_record(first)
+    assert first_info["long_prefill"] is True
+    assert first_info["lease_held_at_admission"] is True
+    assert first_info["admission_ticket"] == first_info["lease_holder_ticket"] == first
+    assert first_info["lease_wait_observed_ms"] == 0
+
+    observed_lease = threading.Event()
+    original = pool._admissible
+
+    def observe(*args, **kwargs):
+        verdict = original(*args, **kwargs)
+        if verdict == "lease":
+            observed_lease.set()
+        return verdict
+
+    monkeypatch.setattr(pool, "_admissible", observe)
+    admitted = []
+    thread = threading.Thread(target=lambda: admitted.append(
+        pool.acquire(URL, 30_000, POOL, timeout_s=5, poll_s=0.02)
+    ))
+    thread.start()
+    try:
+        assert observed_lease.wait(5)
+        # Leave the waiter in at least one observed lease-verdict condition wait.
+        time.sleep(0.05)
+        pool.prefill_done(URL, first)
+        thread.join(timeout=5)
+        assert not thread.is_alive() and admitted[0] is not None
+        info = pool.admission_record(admitted[0])
+        assert info["lease_held_at_admission"] is True
+        assert 0 < info["lease_wait_observed_ms"] <= info["queue_wait_ms"]
+    finally:
+        pool.prefill_done(URL, first)
+        thread.join(timeout=5)
+        if admitted and admitted[0] is not None:
+            pool.release(URL, admitted[0])
+        pool.release(URL, first)
+
+
+def test_admission_does_not_confuse_long_class_with_lease_ownership(monkeypatch):
+    pool = SharedKVPoolAdmission(occupancy=lambda _: None, cross_process=False)
+    short = pool.acquire(URL, 100, POOL, timeout_s=0)
+    assert short is not None
+    info = pool.admission_record(short)
+    assert info["long_prefill"] is False
+    assert info["lease_held_at_admission"] is False
+    assert info["lease_wait_observed_ms"] == 0
+    assert pool.admission_record(None) is None
+    assert pool.admission_record(short + 100) is None
+    pool.release(URL, short)
+
+
+def test_long_class_without_lease_is_not_reported_as_holder(monkeypatch):
+    pool = SharedKVPoolAdmission(occupancy=lambda _: None, cross_process=False)
+    # Exercise an alternate admit verdict; unlike head it does not take a lease.
+    monkeypatch.setattr(pool, "_admissible", lambda *args, **kwargs: "lpm")
+    ticket = pool.acquire(URL, 40_000, POOL, timeout_s=0)
+    assert ticket is not None
+    info = pool.admission_record(ticket)
+    assert info["long_prefill"] is True
+    assert info["lease_held_at_admission"] is False
+    assert info["admission_ticket"] == ticket and info["lease_holder_ticket"] is None
+    assert info["lease_wait_observed_ms"] == 0
+    pool.release(URL, ticket)

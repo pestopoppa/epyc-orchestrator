@@ -234,3 +234,19 @@ def test_pin_policy_ignores_chat_lane_and_explicit_slots(monkeypatch):
     assert inner.infer.call_args[0][1].slot_id is None          # tool payloads: never
     cb.infer(MagicMock(), req())
     assert inner.infer.call_args[0][1].slot_id == 3
+
+
+def test_primitives_serving_record_captures_real_lease_admission(monkeypatch, tmp_path):
+    monkeypatch.setenv(kpa.KV_POOL_LONG_PREFILL_ENV, "1")
+    slots = Slots()
+    prims, _, log = _primitives(monkeypatch, tmp_path, slots)
+    try:
+        assert prims.llm_call("A sufficiently long prompt", role="coder_escalation", n_tokens=8) == "ok"
+    finally:
+        set_context_limit_resolver(None)
+    record = _records(log)[0]
+    assert record["caller"]["source"] == "primitives"
+    info = record["kv_admission"]
+    assert info["long_prefill"] is True
+    assert info["lease_held_at_admission"] is True
+    assert info["lease_wait_observed_ms"] == 0
