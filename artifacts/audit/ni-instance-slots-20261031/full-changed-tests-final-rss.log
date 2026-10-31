@@ -1,0 +1,53 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/worktrees/mains/codex-ni-orchestrator
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 502 items
+
+tests/unit/test_stack_manifest_imports.py .............................. [  5%]
+.................................................                        [ 15%]
+tests/unit/test_stack_priors_compiler.py ............................... [ 21%]
+...................                                                      [ 25%]
+tests/unit/test_build_server_command_helpers.py ........................ [ 30%]
+..................................................                       [ 40%]
+tests/unit/test_inference_mixin.py ..................................... [ 47%]
+....................                                                     [ 51%]
+tests/unit/test_orchestrator_stack_reload.py ........................... [ 57%]
+.........................................................                [ 68%]
+tests/unit/test_admission.py ...............                             [ 71%]
+tests/unit/test_stack_change_guard.py .................................. [ 78%]
+........................................................................ [ 92%]
+.....................................                                    [100%]
+
+=============================== warnings summary ===============================
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 502 passed, 1 warning in 58.41s ========================
+	Command being timed: "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python -m pytest tests/unit/test_stack_manifest_imports.py tests/unit/test_stack_priors_compiler.py tests/unit/test_build_server_command_helpers.py tests/unit/test_inference_mixin.py tests/unit/test_orchestrator_stack_reload.py tests/unit/test_admission.py tests/unit/test_stack_change_guard.py -q"
+	User time (seconds): 61.32
+	System time (seconds): 1.13
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:02.51
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 178580
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 147960
+	Voluntary context switches: 1799
+	Involuntary context switches: 240
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 19160
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
