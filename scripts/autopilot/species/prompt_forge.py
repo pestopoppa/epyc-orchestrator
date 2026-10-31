@@ -201,9 +201,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 # ``schema_evolution/`` is the AutoMem/MH-9 lane for default-inert memory
 # schema/scaffold proposals.
 NEW_FILE_MUTATION_ROOT = PROJECT_ROOT / "src"
-MEMORY_SCHEMA_MUTATION_ROOT = (
-    PROJECT_ROOT / "orchestration" / "repl_memory" / "schema_evolution"
-)
+MEMORY_SCHEMA_MUTATION_ROOT = PROJECT_ROOT / "orchestration" / "repl_memory" / "schema_evolution"
 
 # RTG-55: the shape the MH-9 schema-evolution prompt asks for. It is shipped in
 # the prompt verbatim and MUST itself pass ``screen_static_safety(strict=True)``
@@ -599,7 +597,8 @@ class PromptForge:
         excluded = _mutation_exclusions.load()
         if excluded:
             files = [
-                f for f in files
+                f
+                for f in files
                 if _mutation_exclusions.excluded_reason(self._exclusion_target(f), excluded) is None
             ]
         return sorted(f.name for f in files)
@@ -733,11 +732,19 @@ class PromptForge:
         # Best-effort metadata is captured at the complete-input boundary, before any author call.
         try:
             from mutation_author_capture import capture_author_context
+
             capture_author_context(
-                prompt, operator=mutation_type, target=target_file,
-                inputs={"original_content": original, "failure_context": failure_context,
-                        "description": description}, context=author_capture_context,
-                parameters={"timeout_s": self.timeout})
+                prompt,
+                operator=mutation_type,
+                target=target_file,
+                inputs={
+                    "original_content": original,
+                    "failure_context": failure_context,
+                    "description": description,
+                },
+                context=author_capture_context,
+                parameters={"timeout_s": self.timeout},
+            )
         except Exception as exc:
             log.warning("Mutation author metadata unavailable (%s)", type(exc).__name__)
         result = self._invoke_claude(prompt)
@@ -1317,11 +1324,19 @@ class PromptForge:
         # Best-effort metadata is captured at the complete-input boundary, before any author call.
         try:
             from mutation_author_capture import capture_author_context
+
             capture_author_context(
-                prompt, operator=mutation_type, target=target_file,
-                inputs={"original_content": original, "failure_context": failure_context,
-                        "description": description}, context=author_capture_context,
-                parameters={"timeout_s": self.timeout})
+                prompt,
+                operator=mutation_type,
+                target=target_file,
+                inputs={
+                    "original_content": original,
+                    "failure_context": failure_context,
+                    "description": description,
+                },
+                context=author_capture_context,
+                parameters={"timeout_s": self.timeout},
+            )
         except Exception as exc:
             log.warning("Mutation author metadata unavailable (%s)", type(exc).__name__)
         result = self._invoke_claude(prompt)
@@ -1384,7 +1399,9 @@ class PromptForge:
         if report.safe and mutation.safety_valid:
             gate_reason = mutation_risk_gate_reason(mutation.effect)
             if gate_reason is not None:
-                log.warning("Code mutation rejected by risk gate (%s): %s", target_file, gate_reason)
+                log.warning(
+                    "Code mutation rejected by risk gate (%s): %s", target_file, gate_reason
+                )
                 mutation.safety_valid = False
                 mutation.safety_reason = gate_reason
                 mutation.mutated_content = original
@@ -1494,9 +1511,7 @@ class PromptForge:
         is_new_file: bool = False,
     ) -> tuple[bool, str]:
         """Backwards-compatible ``(valid, reason)`` wrapper over the static screen."""
-        report = self._screen_code_mutation(
-            original, mutated, target_file, is_new_file=is_new_file
-        )
+        report = self._screen_code_mutation(original, mutated, target_file, is_new_file=is_new_file)
         return report.safe, report.reason
 
     def _screen_code_mutation(
