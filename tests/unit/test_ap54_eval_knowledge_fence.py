@@ -360,6 +360,8 @@ def test_chat_response_without_fence_is_byte_identical() -> None:
 
 
 class _FakeHttpRequest:
+    headers: dict[str, str] = {}
+
     async def is_disconnected(self) -> bool:
         return False
 
