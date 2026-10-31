@@ -622,18 +622,80 @@ def test_server_slot_and_cached_tokens_fallbacks():
     assert call.server_slot == 3
 
 
-def test_request_semaphore_full_is_503(client, server, monkeypatch):
+def test_request_semaphore_full_is_503(client, server, monkeypatch, wiring):
     from src.api.admission import AdmissionController
     from src.api.state import get_state
 
     controller = AdmissionController(limits={server.url: 1})
     assert controller.acquire(server.url)
     monkeypatch.setattr(get_state(), "admission", controller)
+    try:
+        r = client.post("/v1/passthrough/architect_critic/chat/completions",
+                        json={"messages": [{"role": "user", "content": "hi"}]})
+    finally:
+        controller.release(server.url)
+    assert r.status_code == 503
+    assert r.json()["error"] == "admission_queue_full"
+    refusal = r.json()["refusal"]
+    assert refusal["gate"] == "admission_queue_full"
+    assert refusal["blockers"] == [] and refusal["blockers_known"] is False
+    assert refusal["wait_ms"] >= 1900  # real 2-second admission timeout
+    assert server.requests == []
+    (record,) = _records(wiring)
+    assert record["dispatched"] is False and record["refusal"] == refusal
+
+
+def test_lock_refusal_reports_actual_blockers_and_wait(
+    client, server, monkeypatch, wiring, tmp_path
+):
+    from src.runtime import cpu_region_lock as crl
+
+    monkeypatch.setattr(crl, "_occupancy_mutex_path", lambda: tmp_path / "occupancy.lock")
+    monkeypatch.setattr(crl, "_pid_is_alive", lambda pid: True)
+    monkeypatch.setattr(crl, "_read_occupancy_entries_unlocked", lambda: [{
+        "pid": 42, "role": "autokernel-cpu", "regions": ["q1"], "shared": False,
+    }])
+
+    class Denied:
+        def __enter__(self):
+            return crl._reserve_region_admission(
+                role="architect_critic", regions=["q1"], instance_idx=None,
+                capacity=1, request_tag="test", shared=False, timeout_s=0.02,
+                deadline_s=None, cancel_check=None,
+            )
+
+        def __exit__(self, *_):
+            raise AssertionError("unentered lock must not be exited")
+
+    monkeypatch.setattr(pt, "_region_lock", lambda call: Denied())
     r = client.post("/v1/passthrough/architect_critic/chat/completions",
                     json={"messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 503
-    assert r.json()["error"] == "admission_queue_full"
+    refusal = r.json()["refusal"]
+    assert refusal["gate"] == "lock_unavailable"
+    assert refusal["blockers"] == ["autokernel-cpu"]
+    assert refusal["blockers_known"] is True and refusal["wait_ms"] >= 10
     assert server.requests == []
+    (record,) = _records(wiring)
+    assert record["dispatched"] is False and record["refusal"] == refusal
+
+
+def test_lock_blockers_preserve_unknown_and_structured_payload():
+    from src.runtime.cpu_region_lock import CpuRegionLockTimeout
+
+    exc = CpuRegionLockTimeout("deadline expired without holder identity")
+    assert pt._lock_refusal_blockers(exc) == ([], False)
+    exc.blockers = ["role-a", "role-b"]
+    assert pt._lock_refusal_blockers(exc) == (["role-a", "role-b"], True)
+    assert pt._lock_refusal_blockers(RuntimeError("blockers=['forged'], tag=x)")) == ([], False)
+    assert pt._lock_refusal_blockers(CpuRegionLockTimeout("blockers=[None], tag=x)")) == ([], False)
+
+    class BrokenBlockers(Exception):
+        @property
+        def blockers(self):
+            raise RuntimeError("unreadable")
+
+    assert pt._lock_refusal_blockers(BrokenBlockers()) == ([], False)
 
 
 def test_binding_per_request_cap_refuses_request_too_large(
@@ -855,7 +917,8 @@ def test_sse_scanner_captures_finish_reason_and_inter_event_gaps(monkeypatch):
     ticks = iter([1.0, 1.01, 2.01, 2.02])
     monkeypatch.setattr(pt.time, "monotonic", lambda: next(ticks))
     scanner = pt._SSEScanner(call, lambda: None)
-    ev = lambda d: b"data: " + json.dumps(d).encode() + b"\n\n"
+    def ev(d):
+        return b"data: " + json.dumps(d).encode() + b"\n\n"
     scanner.feed(ev({"choices": [{"delta": {"content": "a"}, "finish_reason": None}]}))
     scanner.feed(ev({"prompt_progress": {"processed": 1}}))  # not an output event: no gap
     scanner.feed(ev({"choices": [{"delta": {"content": "b"}, "finish_reason": None}]}))

@@ -81,11 +81,13 @@ Safety: localhost only, the same rule as ``POST /config``. Kill switch
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -520,6 +522,30 @@ def _region_lock(call: _Call):
     return inference_lock(call.role, cancel_check=cancel_check, request_tag=tag, port=port)
 
 
+def _lock_refusal_blockers(exc: Exception) -> tuple[list[str], bool]:
+    """Return observed blocker roles and whether the lock supplied them.
+
+    Current region-admission timeouts expose this list only in their own
+    exception text. Never infer holders from other exception messages.
+    """
+    from src.runtime.cpu_region_lock import CpuRegionLockTimeout
+
+    try:
+        value = getattr(exc, "blockers", None)
+    except Exception:
+        return [], False
+    if value is None and isinstance(exc, CpuRegionLockTimeout):
+        match = re.search(r"\bblockers=(\[[^\r\n]{0,4096}?\])(?=,\s*tag=|\))", str(exc))
+        if match:
+            try:
+                value = ast.literal_eval(match.group(1))
+            except (SyntaxError, ValueError, RecursionError):
+                pass
+    if isinstance(value, list) and all(isinstance(role, str) and role for role in value):
+        return list(value), True
+    return [], False
+
+
 @contextlib.contextmanager
 def gate(call: _Call, state: AppState):
     """Admission for one call: request semaphore -> KV pool -> region lock.
@@ -543,8 +569,12 @@ def gate(call: _Call, state: AppState):
         # Same bounded wait as _call_caching_backend for a call with no deadline.
         if not admission.acquire(url, priority="interactive", wait=True, timeout_s=2.0,
                                  cancel_check=call.cancel.is_set):
-            raise _Refused(503, "admission_queue_full",
-                           f"[ERROR: admission] Backend queue full for {url}", retry_after=5)
+            raise _Refused(
+                503, "admission_queue_full",
+                f"[ERROR: admission] Backend queue full for {url}", retry_after=5,
+                refusal={"blockers": [], "blockers_known": False,
+                         "wait_ms": round((time.perf_counter() - t0) * 1000.0, 3)},
+            )
         admitted = True
 
     pool = None
@@ -617,9 +647,14 @@ def gate(call: _Call, state: AppState):
         except Exception as exc:
             if call.cancel.is_set():
                 raise _Refused(499, "client_closed", "client disconnected while queued") from exc
-            raise _Refused(503, "lock_unavailable",
-                           f"inference/region lock not acquired for {call.role}: {exc}",
-                           retry_after=5) from exc
+            blockers, blockers_known = _lock_refusal_blockers(exc)
+            raise _Refused(
+                503, "lock_unavailable",
+                f"inference/region lock not acquired for {call.role}: {exc}",
+                retry_after=5,
+                refusal={"blockers": blockers, "blockers_known": blockers_known,
+                         "wait_ms": round((time.perf_counter() - t0) * 1000.0, 3)},
+            ) from exc
         call.gate["queue_wait_ms"] = round((time.perf_counter() - t0) * 1000.0, 3)
 
         def first_output() -> None:
