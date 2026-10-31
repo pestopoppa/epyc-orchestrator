@@ -198,7 +198,7 @@ def test_start_parser_research_registry_flag(monkeypatch, _no_running_cpu_bench)
     assert captured["research_registry"] == Path("/x/reg.yaml")
 
 
-def test_cmd_start_compiles_registry_by_default_arg_absence(
+def test_cmd_start_compiles_registry_after_active_template_validation(
     monkeypatch, isolated_runtime_facts_tmp: Path
 ) -> None:
     calls: list[dict[str, object]] = []
@@ -225,12 +225,13 @@ def test_cmd_start_compiles_registry_by_default_arg_absence(
 
     args = _stack_gate_args(
         stack_profile="default",
-        validate_only=True,
+        validate_only=False,
         compile_descriptors=False,
         allow_incomplete_descriptors=False,
     )
+    monkeypatch.setattr(stack_commands, "_run_stack_change_launch_gate", lambda _args: False)
 
-    assert stack_commands.cmd_start(args) == 0
+    assert stack_commands.cmd_start(args) == 2
     assert len(calls) == 1
     assert calls[0]["master_path"] == resolved_master
     assert calls[0]["output_path"].name == "model_registry.yaml"

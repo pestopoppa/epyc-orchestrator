@@ -1565,8 +1565,47 @@ def _capacity_launch_gate() -> bool:
     return True
 
 
+def _validate_active_template_for_launch(args: argparse.Namespace) -> bool:
+    """Fail closed on an invalid active template before startup side effects."""
+    from src.config.stack_templates import (
+        get_active_profile,
+        load_template,
+        validate_template,
+    )
+
+    profile = getattr(args, "stack_profile", None) or get_active_profile()
+    try:
+        template = load_template(profile)
+        registry_path = (
+            Path(_PATHS["model_registry"]) if _PATHS.get("model_registry") else None
+        )
+        result = validate_template(template, registry_path)
+    except Exception as exc:  # noqa: BLE001 — an unloadable active profile cannot launch
+        print(f"[stack-template] ERROR: could not validate active profile {profile!r}: {exc}")
+        return False
+
+    print(f"[stack-template] Active profile {profile!r}: {result.summary}")
+    for error in result.errors:
+        print(f"  ERROR: {error}")
+    for warning in result.warnings:
+        print(f"  WARN: {warning}")
+    if not result.valid:
+        print("[stack-template] Refusing to start with an invalid active profile.")
+        return False
+    return True
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
+    # A migration validates its explicitly selected target in migrate_to_template;
+    # it is not a launch of the currently active profile. Every ordinary start
+    # validates the active profile before registry compilation or other effects.
+    if not getattr(args, "migrate_to", None) and not _validate_active_template_for_launch(args):
+        return 1
+    if getattr(args, "validate_only", False) and not getattr(args, "migrate_to", None):
+        print("--validate-only: exiting after template validation.")
+        return 0
+
     if not _capacity_launch_gate():
         return 2
     # SS-BENCH-GATE-b: --allow-during-bench flows into the per-spawn placement
@@ -1603,58 +1642,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         result = migrate_to_template(migrate_to, dry_run=dry_run, registry_path=registry_path)
         print(result.summary())
         return 0 if result.ok else 1
-
-    # DS-7: Stack template validation (before any other work)
-    stack_profile = getattr(args, "stack_profile", None)
-    validate_only = getattr(args, "validate_only", False)
-    if stack_profile:
-        try:
-            from src.config.stack_templates import (
-                load_template,
-                validate_template,
-            )
-
-            print(f"[DS-7] Loading stack template: {stack_profile}")
-            template = load_template(stack_profile)
-            print(f"  Name: {template.name}")
-            print(f"  Description: {template.description}")
-            print(f"  Roles: {len(template.roles)} ({', '.join(template.role_names())})")
-            print(f"  Instances: {template.total_instances}")
-            print(f"  RAM: {template.total_ram_gb:.0f} GB")
-            print()
-
-            registry_path = (
-                Path(_PATHS.get("model_registry", "")) if _PATHS.get("model_registry") else None
-            )
-            result = validate_template(template, registry_path)
-            if result.errors:
-                print(f"  [FAIL] {len(result.errors)} validation errors:")
-                for err in result.errors:
-                    print(f"    ERROR: {err}")
-            if result.warnings:
-                for warn in result.warnings:
-                    print(f"    WARN: {warn}")
-            if result.valid:
-                print("  [OK] Template valid")
-            else:
-                print("\n  Template validation failed. Fix errors and retry.")
-                return 1
-
-            if validate_only:
-                print("\n--validate-only: exiting after validation.")
-                return 0
-
-            print(
-                "  (Template loaded but not yet used for server launch — "
-                "integration pending DS-7 Phase 2)"
-            )
-            print()
-        except FileNotFoundError as exc:
-            print(f"[DS-7] ERROR: {exc}")
-            return 1
-        except Exception as exc:
-            print(f"[DS-7] Template load error: {exc}")
-            return 1
 
     print("=" * 60)
     print("ORCHESTRATOR STACK STARTUP")
