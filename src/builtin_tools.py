@@ -293,6 +293,16 @@ def _register_file_tools(registry: ToolRegistry) -> None:
     def read_file(path: str, max_lines: int | None = None) -> dict[str, Any]:
         """Read contents of a file."""
         try:
+            from src.repl_environment.session_artifacts import read_registry_artifact
+
+            artifact = read_registry_artifact(path)
+            if artifact is not None:
+                lines = artifact.splitlines(keepends=True)
+                return {
+                    "content": "".join(lines[:max_lines]) if max_lines else artifact,
+                    "truncated": bool(max_lines and len(lines) > max_lines),
+                    "success": True,
+                }
             with open(path) as f:
                 if max_lines:
                     lines = []

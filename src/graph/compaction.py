@@ -103,8 +103,12 @@ def _get_model_max_context(ctx: Any) -> int:
     return UNKNOWN_CONTEXT_FALLBACK_TOKENS
 
 
-def _context_externalization_path(state: TaskState) -> Path:
+def _context_externalization_path(state: TaskState, *, repl=None) -> Path:
     """Return a writable path for context externalization artifacts."""
+    if getattr(repl, "task_id", None) == state.task_id and getattr(repl, "_session_artifact_dir", None):
+        base = repl._session_artifact_dir
+        base.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return base / f"context_{state.compaction_count}.md"
     candidates: list[Path] = []
 
     try:
@@ -126,12 +130,16 @@ def _context_externalization_path(state: TaskState) -> Path:
                 f.write("ok")
             probe.unlink(missing_ok=True)
             task_id = re.sub(r"[^A-Za-z0-9_.-]", "_", state.task_id or "unknown")
-            return base / f"session_{task_id}_ctx_{state.compaction_count}.md"
+            nonce = getattr(repl, "_session_artifact_nonce", "") if getattr(repl, "task_id", None) == state.task_id else ""
+            prefix = f"{nonce}_" if nonce else ""
+            return base / f"session_{prefix}{task_id}_ctx_{state.compaction_count}.md"
         except Exception:
             continue
 
     task_id = re.sub(r"[^A-Za-z0-9_.-]", "_", state.task_id or "unknown")
-    return Path(tempfile.gettempdir()) / f"session_{task_id}_ctx_{state.compaction_count}.md"
+    nonce = getattr(repl, "_session_artifact_nonce", "") if getattr(repl, "task_id", None) == state.task_id else ""
+    prefix = f"{nonce}_" if nonce else ""
+    return Path(tempfile.gettempdir()) / f"session_{prefix}{task_id}_ctx_{state.compaction_count}.md"
 
 
 #: Share of the index worker's per-request window the index INPUT may use (the
@@ -235,7 +243,7 @@ async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
         if not to_externalize.strip():
             return
 
-        ctx_file_path = _context_externalization_path(state)
+        ctx_file_path = _context_externalization_path(state, repl=getattr(ctx.deps, "repl", None))
         try:
             with open(ctx_file_path, "w") as f:
                 f.write(old_context)
@@ -243,6 +251,10 @@ async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
             log.warning("Context externalization file write failed: %s", exc)
             return
 
+        repl = getattr(ctx.deps, "repl", None)
+        register = getattr(repl, "_register_session_artifact", None)
+        if callable(register):
+            register(str(ctx_file_path), state.task_id)
         state.context_file_paths.append(str(ctx_file_path))
 
         # UFH14-B1: TaskState.context is NEVER rendered into a turn prompt (the

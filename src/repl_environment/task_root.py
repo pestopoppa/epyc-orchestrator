@@ -459,6 +459,16 @@ def check_registry_tool_scope(tool_name: str, kwargs: dict, side_effects=None) -
     Only the allowlisted read-only file tools run, and every path-like argument must
     resolve inside task_root + read_roots.
     """
+    from src.repl_environment.session_artifacts import is_registry_artifact, is_reserved_artifact_path
+
+    for name in (*_PATH_ARG_NAMES, "paths", "files"):
+        value = kwargs.get(name)
+        values = value if isinstance(value, (list, tuple)) else (value,)
+        for path in values:
+            if isinstance(path, str) and path and (is_reserved_artifact_path(path)
+                                                    or is_reserved_artifact_path(resolve_task_path(path))):
+                if not (tool_name == "read_file" and name == "path" and is_registry_artifact(path)):
+                    return f"{SCOPE_DENY_PREFIX}: session artifact path requires a read capability"
     scope = _scope.get()
     if scope is None:
         return None
@@ -473,6 +483,10 @@ def check_registry_tool_scope(tool_name: str, kwargs: dict, side_effects=None) -
     for name in _PATH_ARG_NAMES:
         v = kwargs.get(name)
         if isinstance(v, str) and v:
+            from src.repl_environment.session_artifacts import is_registry_artifact
+
+            if tool_name == "read_file" and name == "path" and is_registry_artifact(v):
+                continue
             resolved = resolve_task_path(v)
             denial = scope.read_denial(resolved)
             if denial is not None:

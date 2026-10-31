@@ -56,7 +56,7 @@ _SPILL_HASH_CHARS = 16
 _SPILL_MIN_BODY = 200
 
 
-def _spill_file_path(text: str, label: str, state: TaskState) -> str:
+def _spill_file_path(text: str, label: str, state: TaskState, *, repl=None) -> str:
     """Content-addressed spill path: ``{task}_{label}_{sha256[:16]}.txt``.
 
     The name is a function of the content, so a pointer already emitted into a
@@ -69,7 +69,11 @@ def _spill_file_path(text: str, label: str, state: TaskState) -> str:
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
     safe_label = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)[:40]
     digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
-    return f"{SPILL_DIR}/{safe_id}_{safe_label}_{digest[:_SPILL_HASH_CHARS]}.txt"
+    if getattr(repl, "task_id", None) == state.task_id and getattr(repl, "_session_artifact_dir", None):
+        return str(repl._session_artifact_dir / f"{safe_label}_{digest[:_SPILL_HASH_CHARS]}.txt")
+    nonce = getattr(repl, "_session_artifact_nonce", "") if getattr(repl, "task_id", None) == state.task_id else ""
+    prefix = f"{nonce}_" if nonce else ""
+    return f"{SPILL_DIR}/{prefix}{safe_id}_{safe_label}_{digest[:_SPILL_HASH_CHARS]}.txt"
 
 
 def _write_spill_file(path: str, text: str) -> None:
@@ -97,7 +101,9 @@ def _note_trajectory_spill(state: TaskState, spill_path: str, text: str, label: 
         pass
 
 
-def _spill_if_truncated(text: str, max_chars: int, label: str, state: TaskState) -> str:
+def _spill_if_truncated(
+    text: str, max_chars: int, label: str, state: TaskState, *, repl=None,
+) -> str:
     """Return a head + tail excerpt of *text* with an exact-recall pointer if it exceeds *max_chars*.
 
     The full text is spilled to a content-addressed file. The excerpt keeps the
@@ -113,9 +119,12 @@ def _spill_if_truncated(text: str, max_chars: int, label: str, state: TaskState)
 
     if not features().output_spill_to_file:
         return text
-    spill_path = _spill_file_path(text, label, state)
+    spill_path = _spill_file_path(text, label, state, repl=repl)
     try:
         _write_spill_file(spill_path, text)
+        register = getattr(repl, "_register_session_artifact", None)
+        if callable(register):
+            register(spill_path, state.task_id)
         _note_trajectory_spill(state, spill_path, text, label)
 
         def _marker(omitted: int, start: int) -> str:

@@ -1268,7 +1268,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     return "", f"Interrupted: {interrupt_desc}", False, {}
 
     # Initialize session log on first turn
-    _init_session_log(state)
+    _init_session_log(state, repl=deps.repl)
 
     # Clear stale tool outputs before compaction (C3)
     tool_tokens_freed = _clear_stale_tool_outputs(state)
@@ -1384,10 +1384,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
         # CMV Action 11: spill long output/error to file with peek() pointer
         _spilled_output = _spill_if_truncated(
-            _output_for_prompt, _prompt_cfg.max_output_preview, "output", state,
+            _output_for_prompt, _prompt_cfg.max_output_preview, "output", state, repl=deps.repl,
         )
         _spilled_error = _spill_if_truncated(
-            _error_for_prompt, _prompt_cfg.max_error_preview, "error", state,
+            _error_for_prompt, _prompt_cfg.max_error_preview, "error", state, repl=deps.repl,
         )
         prompt = builder.build_root_lm_prompt(
             state=repl_state,
@@ -1425,7 +1425,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Inject session log summary (processing history across turns)
     await _maybe_refresh_session_summary(state, deps)
-    session_block = _session_log_prompt_block(state)
+    session_block = _session_log_prompt_block(state, repl=deps.repl)
     if session_block:
         _trajectory_note_rendered_history(state, session_block)
         prompt += "\n\n" + session_block

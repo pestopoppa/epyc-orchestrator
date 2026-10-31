@@ -224,6 +224,15 @@ class REPLEnvironment(
         self._execution_count = 0
         self._turn_counter = 0
         self._session_id = task_id or uuid.uuid4().hex[:8]
+        from src.repl_environment.session_artifacts import session_artifact_root
+
+        artifact_root = session_artifact_root()
+        self._session_artifact_base = Path(os.path.realpath(artifact_root.parent))
+        self._session_artifact_nonce = uuid.uuid4().hex
+        self._session_artifact_dir = (
+            self._session_artifact_base / artifact_root.name / self._session_artifact_nonce
+        )
+        self._session_read_artifacts: dict[str, tuple[str, int, int, int, int]] = {}
         self._last_spill_summary: str | None = None  # Rolling summary across spills
         self._tool_invocations = 0  # Count of TOOL()/CALL() invocations
         # Request-local invocation records (SimpleNamespace with tool_name,
@@ -483,6 +492,7 @@ class REPLEnvironment(
             **({"scipy": _scipy} if _scipy else {}),
             # Built-in functions
             "peek": self._peek,
+            "read_file": self._read_session_file,
             "grep": self._grep,
             "FINAL": self._final,
             "FINAL_VAR": self._final_var,
@@ -567,6 +577,71 @@ class REPLEnvironment(
         # boundaries: last_output in the prompt builder, llm_call/llm_batch args.
         return globals_dict
 
+    def _register_session_artifact(self, path: str, task_id: str) -> bool:
+        """Record one graph-produced tmp file for this REPL, never a directory grant."""
+        import os
+        import stat
+
+        if not task_id or task_id != self.task_id or not os.path.isabs(path):
+            return False
+        try:
+            absolute = os.path.abspath(path)
+            parent = os.path.dirname(absolute)
+            if parent != str(self._session_artifact_dir):
+                return False
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            base_fd = os.open(self._session_artifact_base, flags)
+            try:
+                root_fd = os.open(self._session_artifact_dir.parent.name, flags, dir_fd=base_fd)
+                try:
+                    parent_fd = os.open(self._session_artifact_nonce, flags, dir_fd=root_fd)
+                finally:
+                    os.close(root_fd)
+            finally:
+                os.close(base_fd)
+            try:
+                parent_stat = os.fstat(parent_fd)
+                fd = os.open(os.path.basename(absolute), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=parent_fd)
+                try:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode):
+                        return False
+                    self._session_read_artifacts[absolute] = (
+                        parent, parent_stat.st_dev, parent_stat.st_ino, info.st_dev, info.st_ino,
+                    )
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(parent_fd)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _read_session_file(self, path: str):
+        """Use the registered read_file tool, preserving its permission and telemetry gates."""
+        import os
+
+        from src.repl_environment.session_artifacts import registry_artifact_read
+
+        absolute = os.path.abspath(path)
+        tool = getattr(self.tool_registry, "_tools", {}).get("read_file")
+        if self.tool_registry is None:
+            if absolute not in self._session_read_artifacts:
+                raise PermissionError("not a registered session artifact")
+            return {"success": True, "content": self._read_registered_artifact(absolute, -1, 0)}
+        if tool is None:
+            raise ValueError("Unknown tool: read_file")
+        handler = getattr(tool, "handler", None)
+        trusted_builtin = (
+            getattr(handler, "__module__", None) == "src.builtin_tools"
+            and getattr(handler, "__qualname__", None) == "_register_file_tools.<locals>.read_file"
+        )
+        if absolute in self._session_read_artifacts and trusted_builtin:
+            with registry_artifact_read(absolute, self._read_registered_artifact):
+                return self._invoke_tool("read_file", path=absolute)
+        return self._invoke_tool("read_file", path=path)
+
     def _validate_file_path(self, path: str) -> tuple[bool, str | None]:
         """Validate that a file path is allowed.
 
@@ -589,6 +664,10 @@ class REPLEnvironment(
         )
 
         resolved = resolve_task_path(path)
+        from src.repl_environment.session_artifacts import is_reserved_artifact_path
+
+        if is_reserved_artifact_path(path) or is_reserved_artifact_path(resolved):
+            return False, "session artifact paths require a read capability"
         from src.repl_environment.task_root import request_scope
 
         scope = request_scope()

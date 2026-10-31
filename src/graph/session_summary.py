@@ -17,7 +17,7 @@ def _use_inline_calls_in_tests() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
-def _init_session_log(state: TaskState) -> None:
+def _init_session_log(state: TaskState, *, repl=None) -> None:
     """Initialize session log path on first turn (idempotent)."""
     if state.session_log_path:
         return
@@ -29,7 +29,13 @@ def _init_session_log(state: TaskState) -> None:
         return
     from src.graph.session_log import session_log_path
 
-    state.session_log_path = session_log_path(state.task_id)
+    if getattr(repl, "task_id", None) == state.task_id and getattr(repl, "_session_artifact_dir", None):
+        repl._session_artifact_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        state.session_log_path = str(repl._session_artifact_dir / "session.md")
+        return
+    nonce = getattr(repl, "_session_artifact_nonce", "") if getattr(repl, "task_id", None) == state.task_id else ""
+    session_key = f"{nonce}_{state.task_id}" if nonce else state.task_id
+    state.session_log_path = session_log_path(session_key)
 
 
 def _record_session_turn(
@@ -203,8 +209,6 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
 
         if cached_text is not None:
             from src.graph.session_log import ConsolidatedSegment, _extract_topic_tags
-            import time as _time
-
             from src.trace.replay.clock import time as _replay_time   # HIL-16b
             now = _replay_time()
             segment = ConsolidatedSegment(
@@ -232,8 +236,6 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                 )
         else:
             from src.graph.session_log import ConsolidatedSegment, _extract_topic_tags
-            import time as _time
-
             from src.trace.replay.clock import time as _replay_time   # HIL-16b
             now = _replay_time()
             fallback_text = "; ".join(state.pending_granular_blocks)
@@ -348,7 +350,7 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
     state.session_summary_turn = state.turns
 
 
-def _session_log_prompt_block(state: TaskState) -> str:
+def _session_log_prompt_block(state: TaskState, *, repl=None) -> str:
     """Return session log block for prompt injection. Empty if not available."""
     if not state.session_summary_cache:
         return ""
@@ -358,5 +360,12 @@ def _session_log_prompt_block(state: TaskState) -> str:
         parts.append(f"[Key Insights]\n{bullets}")
     parts.append(state.session_summary_cache)
     if state.session_log_path:
-        parts.append(f'Full log: peek(99999, file_path="{state.session_log_path}")')
+        register = getattr(repl, "_register_session_artifact", None)
+        nonce = getattr(repl, "_session_artifact_nonce", "") if getattr(repl, "task_id", None) == state.task_id else ""
+        if repl is None:
+            parts.append(f'Full log: peek(99999, file_path="{state.session_log_path}")')
+        elif (nonce and state.task_id and callable(register)
+              and os.path.abspath(state.session_log_path) == os.path.abspath(repl._session_artifact_dir / "session.md")
+              and register(state.session_log_path, state.task_id)):
+            parts.append(f'Full log: peek(99999, file_path="{state.session_log_path}")')
     return "\n".join(parts)

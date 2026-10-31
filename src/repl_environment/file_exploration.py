@@ -126,6 +126,45 @@ class _FileExplorationMixin:
                 remaining -= len(chunk)
             return f.read(n)
 
+    def _read_registered_artifact(self, path: str, n: int, offset: int) -> str:
+        """Read only the exact previously registered inode, without following symlinks."""
+        import stat
+
+        from src.repl_environment.knowledge_fence import check_path
+
+        absolute = os.path.abspath(path)
+        parent, parent_dev, parent_ino, file_dev, file_ino = self._session_read_artifacts[absolute]
+        denial = check_path(absolute)
+        if denial is not None:
+            raise PermissionError(denial)
+        try:
+            parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                current_parent = os.fstat(parent_fd)
+                if (current_parent.st_dev, current_parent.st_ino) != (parent_dev, parent_ino):
+                    raise PermissionError("session artifact directory changed")
+                fd = os.open(os.path.basename(absolute), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=parent_fd)
+            finally:
+                os.close(parent_fd)
+            with os.fdopen(fd, "r", encoding="utf-8", errors="replace", newline="") as handle:
+                current = os.fstat(handle.fileno())
+                if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (file_dev, file_ino):
+                    raise PermissionError("session artifact changed")
+                if offset < 0:
+                    text = handle.read()
+                    start = max(0, len(text) + offset)
+                    return text[start:] if n < 0 else text[start:start + n]
+                remaining = offset
+                while remaining > 0:
+                    chunk = handle.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        return ""
+                    remaining -= len(chunk)
+                return handle.read(n)
+        except (OSError, ValueError):
+            raise
+
     def _peek(self, n: int = 500, file_path: str | None = None, offset: int = 0) -> str:
         """Return n characters of context or file, starting at ``offset``.
 
@@ -147,6 +186,17 @@ class _FileExplorationMixin:
             return f"[ERROR: peek(n, file_path=None, offset=0) needs integer n/offset, got n={n!r}, offset={offset!r}]"
 
         if file_path is not None:
+            if os.path.abspath(file_path) in self._session_read_artifacts:
+                try:
+                    result = self._read_registered_artifact(file_path, n, offset)
+                except (OSError, ValueError) as exc:
+                    return f"[ERROR: {type(exc).__name__}: {exc}]"
+                event = {"n": n, "file_path": file_path}
+                if offset:
+                    event["offset"] = offset
+                self._exploration_log.add_event("peek", event, result)
+                self._track_research("peek", f"n={n}, offset={offset}, file={file_path}", result)
+                return result
             # Read from file
             is_valid, error = self._validate_file_path(file_path)
             if not is_valid:
