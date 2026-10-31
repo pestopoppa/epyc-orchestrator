@@ -370,7 +370,9 @@ def _compact_oversized_eval_prompt(prompt: str) -> tuple[str, dict[str, Any]]:
     context = raw[:marker]
     question = raw[marker + 1 :]
     step = _RETRIEVAL_CHUNK_CHARS - _RETRIEVAL_CHUNK_OVERLAP_CHARS
-    chunks = [context[start : start + _RETRIEVAL_CHUNK_CHARS] for start in range(0, len(context), step)]
+    chunks = [
+        context[start : start + _RETRIEVAL_CHUNK_CHARS] for start in range(0, len(context), step)
+    ]
     terms = _eval_retrieval_terms(question)
     doc_freq: dict[str, int] = {term: 0 for term in terms}
     folded_chunks: list[str] = []
@@ -396,13 +398,16 @@ def _compact_oversized_eval_prompt(prompt: str) -> tuple[str, dict[str, Any]]:
         scored.append((score, idx))
 
     overhead = len(question) + 256
-    max_chunks = max(2, (_RETRIEVAL_CONTEXT_BUDGET_CHARS - overhead) // (_RETRIEVAL_CHUNK_CHARS + 64))
-    selected = {idx for _score, idx in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_chunks]}
+    max_chunks = max(
+        2, (_RETRIEVAL_CONTEXT_BUDGET_CHARS - overhead) // (_RETRIEVAL_CHUNK_CHARS + 64)
+    )
+    selected = {
+        idx for _score, idx in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_chunks]
+    }
     selected.update({0, n_chunks - 1})
     ordered = sorted(selected)
     segments = [
-        f"[Retrieved context segment {idx + 1}/{n_chunks}]\n{chunks[idx]}"
-        for idx in ordered
+        f"[Retrieved context segment {idx + 1}/{n_chunks}]\n{chunks[idx]}" for idx in ordered
     ]
     compact = (
         "Context (deterministically retrieved from an oversized source):\n"
@@ -1159,8 +1164,7 @@ def _question_result_qid(q: dict[str, Any]) -> str:
             f"unavailable-image:{path}".encode("utf-8", errors="replace")
         ).hexdigest()
     payload = (
-        f"{q.get('suite', 'unknown')}\x00{q.get('prompt', '')}"
-        f"\x00image-sha256:{image_identity}"
+        f"{q.get('suite', 'unknown')}\x00{q.get('prompt', '')}\x00image-sha256:{image_identity}"
     ).encode("utf-8", errors="replace")
     return hashlib.sha1(payload).hexdigest()[:16]
 
@@ -1954,9 +1958,7 @@ def _resolve_stack_numa_mode_for_fanout(raw: object) -> tuple[str, str]:
     return (_EVAL_FANOUT_UNKNOWN_MODE, "unrecognised")
 
 
-def _full_first_live_concurrency(
-    live_regions: Sequence[frozenset[str]], topology_cap: int
-) -> int:
+def _full_first_live_concurrency(live_regions: Sequence[frozenset[str]], topology_cap: int) -> int:
     """Largest disjoint live set reachable under the dispatcher's full-first policy.
 
     Instance 0 is the full instance by NUMA_CONFIG convention, so it is always
@@ -2100,9 +2102,7 @@ class _EvalResourceLane:
     cohort: str = ""
 
 
-_BATCH_PLACEMENT_MODES = frozenset(
-    {"auto", "homogeneous_native_batch", "mixed_role_split"}
-)
+_BATCH_PLACEMENT_MODES = frozenset({"auto", "homogeneous_native_batch", "mixed_role_split"})
 
 
 def _eval_batch_placement_mode(question: Mapping[str, Any]) -> str:
@@ -2394,9 +2394,7 @@ def _wait_for_eval_api_lifecycle_drain(
                 "total": payload.get("overflow_total", 0),
                 "critical": payload.get("overflow_critical", 0),
                 "history_evictions": payload.get("history_evictions", 0),
-                "history_critical_evictions": payload.get(
-                    "history_critical_evictions", 0
-                ),
+                "history_critical_evictions": payload.get("history_critical_evictions", 0),
                 "request_evictions": payload.get("request_evictions", 0),
             }
             reducer_degraded = (
@@ -3539,6 +3537,14 @@ def dataset_content_sha256(questions: Sequence[dict[str, Any]]) -> str:
     return h.hexdigest()
 
 
+def eval_result_count_fields(result: EvalResult) -> dict[str, int | None]:
+    """The requested/delivered pair carried into the durable journal row."""
+    return {
+        "n_questions_requested": result.n_questions_requested,
+        "n_questions_completed": result.n_questions_completed,
+    }
+
+
 def _stamp_eval_instrument(
     result: EvalResult,
     *,
@@ -3565,8 +3571,14 @@ def _stamp_eval_instrument(
         execution_profile, sort_keys=True, separators=(",", ":"), default=str
     )
     result.core_id = core_id
+    # `n_questions` remains the existing aggregate count for compatibility.
+    # The profile's `questions` is the declared decision draw, after excluded
+    # audit/sentinel partitions; the aggregate count is what was delivered.
+    result.n_questions_requested = len(questions)
+    result.n_questions_completed = result.n_questions
     result.details.update(
         {
+            **eval_result_count_fields(result),
             "core_id": core_id,
             "dataset_content_sha256": dataset_sha,
             "dataset_sha256": dataset_sha,
@@ -3800,13 +3812,15 @@ def screen_paired_arms(
         label = str(arm.get("label", f"arm{len(prepared)}"))
         raw = arm.get("outcomes") or {}
         vector = _arm_outcome_vector(raw)
-        prepared.append({
-            "label": label,
-            "vector": vector,
-            "profile": arm.get("profile"),
-            # CJ-9. Rows excluded for a non-quality disposition, by disposition.
-            "excluded": _arm_outcome_excluded(raw),
-        })
+        prepared.append(
+            {
+                "label": label,
+                "vector": vector,
+                "profile": arm.get("profile"),
+                # CJ-9. Rows excluded for a non-quality disposition, by disposition.
+                "excluded": _arm_outcome_excluded(raw),
+            }
+        )
 
     per_arm: dict[str, Any] = {}
     for arm in prepared:
@@ -4618,9 +4632,7 @@ class EvalTower:
         # above), so this file never carries its own copy of the flag to
         # drift from debug_scorer's.
         scorer_for_judge = _load_orchestrator_debug_scorer()
-        constrain_judge_output = bool(
-            getattr(scorer_for_judge, "CONSTRAIN_JUDGE_OUTPUT", False)
-        )
+        constrain_judge_output = bool(getattr(scorer_for_judge, "CONSTRAIN_JUDGE_OUTPUT", False))
         arm_key = str(q.get("_eval_batch_id") or "") or None
         judge_scores: list[dict[str, float]] = []
         for role in judge_roles:
@@ -4674,9 +4686,7 @@ class EvalTower:
             # independent of the flag); the repair turn itself is an extra
             # network call, so it is only spent when the flag says to.
             if not constrain_judge_output:
-                scorer_for_judge._record_judge_parse_outcome(
-                    "rubric_judge", "unparseable", arm_key
-                )
+                scorer_for_judge._record_judge_parse_outcome("rubric_judge", "unparseable", arm_key)
                 continue
 
             def _rubric_repair_complete(
@@ -4732,9 +4742,7 @@ class EvalTower:
                 scorer_for_judge._record_judge_parse_outcome("rubric_judge", "repaired", arm_key)
                 judge_scores.append(repaired_scores)
             else:
-                scorer_for_judge._record_judge_parse_outcome(
-                    "rubric_judge", "unparseable", arm_key
-                )
+                scorer_for_judge._record_judge_parse_outcome("rubric_judge", "unparseable", arm_key)
 
         if not judge_scores:
             return fallback, "heuristic_fallback"
@@ -4836,7 +4844,8 @@ class EvalTower:
             if prompt_root:
                 call_kwargs["prompt_root"] = prompt_root
             resp = call_orchestrator_forced(
-                **call_kwargs, **_bitwise_generation_spec_kwargs(),
+                **call_kwargs,
+                **_bitwise_generation_spec_kwargs(),
                 request_source=producer_source("autopilot"),
             )
             elapsed = time.time() - start
@@ -5020,9 +5029,7 @@ class EvalTower:
                     _warn_rubric_threshold_suite(q, undeclared=True)
                 else:
                     threshold = float(threshold_cfg)
-                    rubric_threshold_source = (
-                        "declared" if rationale else "declared-no-rationale"
-                    )
+                    rubric_threshold_source = "declared" if rationale else "declared-no-rationale"
                     if not rationale:
                         _warn_rubric_threshold_suite(q, undeclared=False)
                 correct = aggregate_rubric_score(rubric_scores).score >= threshold
@@ -5220,8 +5227,7 @@ class EvalTower:
             sidecar_status["archive_status"] = "not_applicable"
             return _EvalBatchResults([], sidecar_persistence=sidecar_status)
         batch_request_timeout_s = max(
-            _eval_question_timeout_s(str(q.get("prompt", "")), self.timeout)
-            for q in questions
+            _eval_question_timeout_s(str(q.get("prompt", "")), self.timeout) for q in questions
         )
         question_lanes, lane_capacities = _eval_resource_lanes(questions)
         workers = min(n, sum(lane_capacities.values()))
@@ -5433,9 +5439,7 @@ class EvalTower:
                             **_wait_for_eval_quiescence(
                                 api_url=self.url,
                                 batch_id=eval_batch_id,
-                                timeout_s=_eval_backend_drain_timeout_s(
-                                    batch_request_timeout_s
-                                ),
+                                timeout_s=_eval_backend_drain_timeout_s(batch_request_timeout_s),
                             ),
                         }
                         serial_backend_drain_reports.append(report)
@@ -5976,9 +5980,7 @@ class EvalTower:
         # 2026-07-20.md, operator ruling 2026-09-23.
         scored_results = _quality_denominator(results)
         n_scored = len(scored_results)
-        task_failed_count = sum(
-            1 for r in results if _disposition_of(r) == DISPOSITION_TASK_FAILED
-        )
+        task_failed_count = sum(1 for r in results if _disposition_of(r) == DISPOSITION_TASK_FAILED)
 
         infra_failed_count = sum(
             1 for r in results if _disposition_of(r) == DISPOSITION_INFRA_FAILED
@@ -7064,9 +7066,7 @@ class EvalTower:
                 "infra_and_scoring_failures_excluded"
             ),
             "core_minus_fresh_quality": (
-                core_quality - fresh_quality
-                if generalization_status == "measured"
-                else None
+                core_quality - fresh_quality if generalization_status == "measured" else None
             ),
             "scale": "mean_question_accuracy_0_to_3",
             "positive_means": "core quality exceeds fresh-audit quality",
@@ -7347,8 +7347,11 @@ class EvalTower:
             artifact_root, _ = _eval_artifact_root(self._trial_path_context)
             process_root = self._question_artifact_dir or artifact_root
             process_summary = verify_results(
-                results, process_verifier, n=verification_n,
-                artifact_path=Path(process_root) / f"process_verification.T2.{uuid.uuid4().hex}.jsonl",
+                results,
+                process_verifier,
+                n=verification_n,
+                artifact_path=Path(process_root)
+                / f"process_verification.T2.{uuid.uuid4().hex}.jsonl",
             )
 
         excluded_partitions: set[str] = set()
@@ -7825,7 +7828,8 @@ class EvalTower:
                                 "suite": getattr(r, "suite", "") or "",
                                 "disposition": getattr(r, "disposition", "") or "",
                             }
-                            for r in scored if r.qid
+                            for r in scored
+                            if r.qid
                         },
                     }
                 )
