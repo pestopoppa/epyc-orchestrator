@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -389,6 +390,8 @@ def _numeric_apply_error_is_infra(reason: str, apply_result: dict[str, Any]) -> 
 
 
 def _numeric_apply_no_changes(apply_result: dict[str, Any]) -> bool:
+    if apply_result.get("status") == "error":
+        return False
     if apply_result.get("status") == "no_changes":
         return True
     nested_results = [
@@ -926,16 +929,30 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     else:
         # Let Optuna suggest
         trial = ctx.swarm.suggest_trial(surface)
-        preimage = (
-            _capture_param_preimage(dict(trial["params"]))
-            if _multitier_runtime_enabled()
-            else None
-        )
+        try:
+            preimage = (
+                _capture_param_preimage(dict(trial["params"]))
+                if _multitier_runtime_enabled()
+                else None
+            )
+        except Exception as exc:
+            ctx.swarm.mark_failed(surface, trial["trial_number"],
+                                  f"preimage exception: {type(exc).__name__}")
+            raise
         if preimage is not None and preimage.get("status") != "ok":
             reason = f"exact numeric restore preimage unavailable: {preimage}"
             ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
             return SkipOutcome("skipped", reason, "numeric_trial"), "numeric_swarm"
-        apply_result = _apply_params(trial["params"])
+        try:
+            apply_result = _apply_params(trial["params"])
+        except Exception as exc:
+            if isinstance(exc, MemoryError):
+                ctx.swarm.report_infeasible(surface, trial["trial_number"],
+                                             outcome_class="preflight", reason="MemoryError")
+            else:
+                ctx.swarm.mark_failed(surface, trial["trial_number"],
+                                      f"apply exception: {type(exc).__name__}")
+            raise
         if _numeric_apply_no_changes(apply_result):
             reason = "suggested params produced no live config changes"
             ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
@@ -945,7 +962,17 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
             )
         if apply_result.get("status") == "error":
             reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
-            if not _numeric_apply_error_is_infra(reason, apply_result):
+            # Only the applicator's explicit validation/unknown-parameter paths
+            # establish invalid configuration. An arbitrary hot-swap or restart
+            # error can be an unavailable endpoint, not evidence about the config.
+            invalid = bool(apply_result.get("unknown_params")) or any(
+                str(e).startswith(("unknown_params:", "review_plane:", "placement_policy:", "role_restart:"))
+                for e in apply_result.get("errors", [])
+            ) and not any(k in apply_result for k in ("hot_swap_result", "env_result", "role_restart_result", "kv_compact_result"))
+            if invalid:
+                ctx.swarm.report_infeasible(surface, trial["trial_number"],
+                                             outcome_class="preflight", reason=reason)
+            else:
                 ctx.swarm.mark_failed(surface, trial["trial_number"], reason)
             log.warning(
                 "Skipping numeric trial eval; suggested params were not applied: %s",
@@ -967,40 +994,88 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
             "trial_number": trial["trial_number"],
         }
 
-    eval_result = ctx.tower.hybrid_eval()
+    try:
+        eval_result = ctx.tower.hybrid_eval()
+    except Exception as exc:
+        trial_info = ctx.state.pop("_current_optuna_trial", None)
+        if trial_info:
+            if isinstance(exc, MemoryError):
+                ctx.swarm.report_infeasible(trial_info["surface"], trial_info["trial_number"],
+                                            outcome_class="runtime", reason="MemoryError")
+            else:
+                ctx.swarm.mark_failed(trial_info["surface"], trial_info["trial_number"],
+                                      f"evaluation exception: {type(exc).__name__}")
+        raise
     if eval_result:
-        eval_result.details.setdefault(
-            "numeric_trial_applied_params", dict(action.get("params") or {})
-        )
-    # Report to Optuna if we have a trial. FIELD-1 tail: build the objective tuple
-    # through the canonical tier_specs chokepoint (objectives_from) rather than the
-    # raw EvalResult.objectives property — tier_specs is the single source of truth
-    # for per-tier objective shape, and its own docstring forbids bypassing it with
-    # ad-hoc tuple building at call sites. Behavior-identical for all current tiers
-    # (the default spec returns the same (quality, speed, -cost, reliability) tuple).
-    if "_current_optuna_trial" in ctx.state and eval_result:
-        t = ctx.state.pop("_current_optuna_trial")
-        # objectives_from() raises when a dominance axis is unmeasured — e.g. an
-        # aborted / fast-rejected batch where seq_task_rate_qph_from() lands below
-        # the 1.0 s/question validity floor and returns None. The trial has already
-        # been popped, so letting that escape kills _action_numeric_trial and
-        # strands an Optuna trial that is neither reported nor failed, permanently
-        # occupying a slot in the study. autopilot.py guards the identical
-        # condition at both of its objectives_from() call sites; this one was
-        # missed. An unmeasured axis is a FAILED trial, not a crash.
-        try:
-            objectives = objectives_from(eval_result)
-        except UnmeasuredObjectiveError:
-            log.warning(
-                "Numeric trial %s/%s: dominance axis unmeasured; marking the "
-                "Optuna trial failed instead of reporting a fabricated objective",
-                t["surface"],
-                t["trial_number"],
-            )
-            ctx.swarm.mark_failed(t["surface"], t["trial_number"], "dominance axis unmeasured")
-        else:
-            ctx.swarm.report_result(t["surface"], t["trial_number"], objectives)
+        eval_result.details.setdefault("numeric_trial_applied_params", dict(action.get("params") or {}))
+    elif "_current_optuna_trial" in ctx.state:
+        trial_info = ctx.state.pop("_current_optuna_trial")
+        ctx.swarm.mark_failed(trial_info["surface"], trial_info["trial_number"], "evaluation returned no result")
+    # Sampler completion belongs after the actual main-loop safety verdict.
     return eval_result, "numeric_swarm"
+
+
+def run_numeric_gate_check(state: dict[str, Any], gate: Any, result: Any, **kwargs: Any) -> tuple[Any, Any]:
+    if "_current_optuna_trial" in state:
+        return gate.check_with_constraint_observation(result, **kwargs)
+    return gate.check(result, **kwargs), None
+
+
+def finalize_numeric_trial(state: dict[str, Any], swarm: Any, result: Any,
+                           verdict: Any, gate: Any, *, excluded: bool = False,
+                           observation: Any = None) -> None:
+    """Finish a sampled numeric trial using the actual evaluation and gate verdict."""
+    t = state.pop("_current_optuna_trial", None)
+    if not t:
+        return
+    surface, number = t["surface"], t["trial_number"]
+    if excluded or getattr(result, "infra_failed_count", 0) or getattr(result, "scoring_failed_count", 0):
+        swarm.mark_failed(surface, number, "evaluation excluded or infrastructure/scoring failure")
+        return
+    try:
+        if getattr(result, "quality_measured", None) is not True:
+            raise UnmeasuredObjectiveError("quality measurement is not explicitly qualified")
+        details = getattr(result, "details", None)
+        if not isinstance(details, dict):
+            raise UnmeasuredObjectiveError("native objective provenance missing")
+        cost_count = details.get("cost_tier_observed_count")
+        reliability_count = details.get("reliability_observed_count")
+        if (type(cost_count) is not int or cost_count <= 0
+                or type(reliability_count) is not int or reliability_count <= 0
+                or cost_count > reliability_count):
+            raise UnmeasuredObjectiveError("native cost/reliability evidence unavailable")
+        objectives = objectives_from(result)
+        if not all(math.isfinite(value) for value in objectives):
+            raise UnmeasuredObjectiveError("dominance axis is non-finite")
+    except UnmeasuredObjectiveError:
+        # Task-failed counts include ordinary model/agent failures and do not
+        # establish that this configuration broke the evaluator.
+        swarm.mark_failed(surface, number, "objective unavailable or provenance unqualified")
+        return
+    except Exception as exc:
+        swarm.mark_failed(surface, number, f"objective construction exception: {type(exc).__name__}")
+        raise
+    if getattr(verdict, "retry_not_revert", False):
+        swarm.mark_failed(surface, number, "gate requested retry: untrustworthy evidence")
+        return
+    if verdict:
+        swarm.report_result(surface, number, objectives,
+                            cost_tier_observed_count=cost_count,
+                            reliability_observed_count=reliability_count)
+        return
+    overages = observation
+    if not overages or any(cap <= 0 or overage <= 0 for _, overage, cap in overages):
+        swarm.mark_failed(surface, number, "gate violation has no structured overage/cap")
+        return
+    normalized = [overage / cap for _, overage, cap in overages]
+    if not all(math.isfinite(value) for value in normalized):
+        swarm.mark_failed(surface, number, "gate overage cannot be represented finitely")
+        return
+    swarm.report_result(surface, number, objectives,
+                        normalized_overages=normalized,
+                        overage_cap_pairs=overages, outcome_class="slo_miss",
+                        cost_tier_observed_count=cost_count,
+                        reliability_observed_count=reliability_count)
 
 
 def _verdict_detail(verdict: Any) -> str:

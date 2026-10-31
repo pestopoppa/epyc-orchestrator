@@ -150,6 +150,14 @@ def _canned_response(questions: Sequence[Question], values: Mapping[str, object]
     return json.dumps({"answers": answers})
 
 
+def _shadow_response(questions: Sequence[Question], values: Mapping[str, object]) -> str:
+    payload = json.loads(_canned_response(questions, values))
+    for answer in payload["answers"].values():
+        answer.pop("probabilities")
+        answer.pop("confidence")
+    return json.dumps(payload)
+
+
 def _decision(question: Question, value: object, mode: str = "native") -> Decision:
     return Decision(
         question_id=question.id,
@@ -634,7 +642,7 @@ def test_call_site_shadow_records_proposal_but_executes_original(enabled, monkey
     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
     mapping = tool_schema_to_questions("deploy", schema)
     primitives = _FakePrimitives(
-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+        _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
     )
     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
     repl = _make_repl(primitives, registry)
@@ -736,7 +744,7 @@ def test_shadow_preserves_unmappable_optional_fields_on_original_td4_cohort():
                 answers[question.id] = case.expected[question.id]
         optional = next(iter(set(case.parameters["properties"]) - set(case.expected)))
         original = {**case.expected, optional: f"original-{case.case_id}"}
-        primitives = _FakePrimitives(_canned_response(mapping.questions, answers))
+        primitives = _FakePrimitives(_shadow_response(mapping.questions, answers))
         proposal = integration.propose_shadow_typed_arguments(
             tool_name=case.tool,
             full_schema=case.parameters,
@@ -770,7 +778,7 @@ def test_shadow_required_unmappable_declines_without_model_call():
 def test_shadow_full_validation_rejects_extra_and_constraint_violations():
     schema = _FULLY_MAPPABLE
     mapping = tool_schema_to_questions("deploy", schema)
-    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    response = _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
     result = integration.propose_shadow_typed_arguments(
         tool_name="deploy",
         full_schema=schema,
@@ -796,7 +804,7 @@ def test_shadow_full_validation_rejects_extra_and_constraint_violations():
         tool_name="count",
         full_schema=constrained,
         original_kwargs={"count": 3},
-        primitives=_FakePrimitives(_canned_response(questions, {"count": 1})),
+        primitives=_FakePrimitives(_shadow_response(questions, {"count": 1})),
         state=STATE,
         role=ROLE,
     )
@@ -845,7 +853,7 @@ def test_dispatch_never_waits_for_blocked_shadow(enabled, monkeypatch, tmp_path)
             return super().llm_call(prompt, **kwargs)
 
     primitives = BlockingPrimitives(
-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+        _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
     )
     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
     repl = _make_repl(primitives, registry)
@@ -877,7 +885,7 @@ def test_shadow_worker_observes_cancel_and_keeps_cost_separate(enabled, monkeypa
     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
     mapping = tool_schema_to_questions("deploy", schema)
     primitives = CountedPrimitives(
-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+        _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
     )
     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
     repl = _make_repl(primitives, registry)
@@ -1007,7 +1015,7 @@ def test_concurrent_foreground_and_shadow_isolate_meta_and_cost(enabled, monkeyp
     _set_receipt_path(monkeypatch, tmp_path)
     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
     mapping = tool_schema_to_questions("deploy", schema)
-    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    response = _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
     started, release = threading.Event(), threading.Event()
 
     class ConcurrentPrimitives(_FakePrimitives):
@@ -1095,7 +1103,7 @@ def test_real_primitives_usage_ledger_isolated_during_shadow(enabled, monkeypatc
     monkeypatch.setattr("src.llm_primitives.usage_log.write_usage_event", lambda *a, **k: None)
     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
     mapping = tool_schema_to_questions("deploy", schema)
-    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    response = _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
     started, release = threading.Event(), threading.Event()
     ledgers = []
 

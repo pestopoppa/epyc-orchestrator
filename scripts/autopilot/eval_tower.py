@@ -6434,6 +6434,10 @@ class EvalTower:
             details={
                 "correct": correct_count,
                 "total": total_count,
+                # Native provenance for numeric optimizer axes: a zero count
+                # distinguishes the 0.5 cost fallback from reported tiers.
+                "cost_tier_observed_count": len(cost_tiers),
+                "reliability_observed_count": total_count,
                 "n_questions": total_count,
                 "n_scored": n_scored,
                 "quality_denominator": n_scored,

@@ -166,7 +166,7 @@ from state_lock import (
     supersede_pause_lease,
 )
 from state_ownership import clear_halt_latch, halt_latch_message
-from actions import dispatch_action, SkipOutcome, _structural_noop_reason
+from actions import dispatch_action, SkipOutcome, _structural_noop_reason, finalize_numeric_trial, run_numeric_gate_check
 from actions import (
     PROMPT_LINT_STATE_KEY,
     SERVED_CONTENT_STATE_KEY,
@@ -10492,6 +10492,7 @@ def _run_loop_inner(
                 f"({eval_result.n_exogenous_unrecovered}/{eval_result.n_questions} "
                 f"questions affected)"
             )
+            finalize_numeric_trial(state, swarm, eval_result, verdict, gate, excluded=True)
             log.warning(
                 "Trial %d skipped safety gate + archive: %s",
                 trial_counter,
@@ -10499,18 +10500,25 @@ def _run_loop_inner(
             )
         else:
             # Safety gate
-            seq_inputs = _seq_inputs_for_trial(
-                journal=journal,
-                action=action,
-                tier=eval_result.tier,
-                candidate_override=(
-                    str(seq_fresh_eval_context.get("candidate")) if seq_fresh_eval_context else None
-                ),
-                quality_exclude_before_ts=quality_exclude_before_ts,
-            )
             try:
-                verdict = gate.check(
-                    eval_result,
+                seq_inputs = _seq_inputs_for_trial(
+                    journal=journal,
+                    action=action,
+                    tier=eval_result.tier,
+                    candidate_override=(
+                        str(seq_fresh_eval_context.get("candidate")) if seq_fresh_eval_context else None
+                    ),
+                    quality_exclude_before_ts=quality_exclude_before_ts,
+                )
+            except Exception:
+                trial_info = state.pop("_current_optuna_trial", None)
+                if trial_info:
+                    swarm.mark_failed(trial_info["surface"], trial_info["trial_number"],
+                                      "safety gate inputs unavailable")
+                raise
+            try:
+                verdict, numeric_observation = run_numeric_gate_check(
+                    state, gate, eval_result,
                     question_results=list(getattr(eval_result, "question_results", []) or []),
                     # SEQ-B: paired with the incumbent comparator built in
                     # `_seq_inputs_for_trial`. NOT `task_rate_qph_from` — that divides the
@@ -10537,7 +10545,16 @@ def _run_loop_inner(
                     type(exc).__name__,
                     exc,
                 )
-                verdict = gate.check(eval_result)
+                try:
+                    verdict, numeric_observation = run_numeric_gate_check(state, gate, eval_result)
+                except Exception:
+                    trial_info = state.pop("_current_optuna_trial", None)
+                    if trial_info:
+                        swarm.mark_failed(trial_info["surface"], trial_info["trial_number"],
+                                          "safety gate failed before producing a verdict")
+                    raise
+            finalize_numeric_trial(state, swarm, eval_result, verdict, gate,
+                                   observation=numeric_observation)
             if isinstance(getattr(verdict, "seq", None), dict):
                 verdict.seq["alpha_wealth"] = seq_inputs.get("alpha_wealth")
             seq_finalized = _annotate_seq_promotion_finalization(

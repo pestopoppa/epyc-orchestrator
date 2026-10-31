@@ -1,0 +1,41 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/tmp/codex3-ap66-20261031
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 102 items
+
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_autopilot_numeric_apply.py . [  0%]
+..............                                                           [ 14%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_ap66_numeric_constraints.py . [ 15%]
+..                                                                       [ 17%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_numeric_swarm_epoch.py . [ 18%]
+..                                                                       [ 20%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_safety_gate_pure_verdict.py . [ 21%]
+.......                                                                  [ 28%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_safety_gate_b9_gate.py . [ 29%]
+.........                                                                [ 38%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_safety_gate_reliability_floor.py . [ 39%]
+.........                                                                [ 48%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_safety_gate_quality_measured.py . [ 49%]
+........                                                                 [ 56%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_safety_gate_speed_era_and_suite_absence.py . [ 57%]
+..........................                                               [ 83%]
+../mnt/raid0/llm/tmp/codex3-ap66-20261031/tests/unit/test_harness_loop_pilot_run.py . [ 84%]
+................                                                         [100%]
+
+=============================== warnings summary ===============================
+tests/unit/test_autopilot_numeric_apply.py::test_native_dispatch_and_gate_tell_real_study
+tests/unit/test_autopilot_numeric_apply.py::test_native_dispatch_infra_apply_is_terminal_pruned
+tests/unit/test_autopilot_numeric_apply.py::test_native_dispatch_invalid_config_waits_then_flushes
+tests/unit/test_autopilot_numeric_apply.py::test_unmeasured_axis_without_causal_failure_is_pruned
+tests/unit/test_ap66_numeric_constraints.py::test_cold_start_pending_survives_restart_and_flushes_from_measured_vector
+tests/unit/test_ap66_numeric_constraints.py::test_crash_loses_to_large_miss_and_nonanswers_do_not_enter_population
+tests/unit/test_ap66_numeric_constraints.py::test_infeasible_parent_changes_next_native_suggestion_away
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/optuna/_experimental.py:33: ExperimentalWarning: Argument ``constraints_func`` is an experimental feature. The interface can change in the future.
+    optuna_warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 102 passed, 7 warnings in 11.85s =======================
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 13.649305071914569, "sampled_peak_tree_rss_bytes": 245239808, "samples": 136, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 1711683, "leader_birth": 157617902, "child_rc": 0, "children_drained": true, "failure": null}

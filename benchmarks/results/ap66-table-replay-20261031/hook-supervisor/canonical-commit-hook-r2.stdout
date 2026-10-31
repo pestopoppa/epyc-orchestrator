@@ -1,0 +1,3 @@
+PII native capture unavailable; no finding may be inferred
+supervisor refusal: monitoring/admission gap: [Errno 3] No such process
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 3.1483692741021514, "sampled_peak_tree_rss_bytes": 67448832, "samples": 30, "verified_exited_processes": 5, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 2419911, "leader_birth": 157970921, "child_rc": -15, "children_drained": true, "failure": "monitoring/admission gap: [Errno 3] No such process"}
