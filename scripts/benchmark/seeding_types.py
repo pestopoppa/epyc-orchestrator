@@ -655,6 +655,8 @@ class RoleResult:
     output_tokens_reported: int | None = None
     output_tokens_status: str = "unknown"
     output_tokens_sources: list[str] = field(default_factory=list)
+    # Original structured response facts only; absent fields are never classified here.
+    reward_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

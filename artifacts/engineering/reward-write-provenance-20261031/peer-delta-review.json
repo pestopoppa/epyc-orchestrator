@@ -1,0 +1,10 @@
+{
+  "qualified_base": "4639d190b957c2e594b89423cdc8afaed2a36048",
+  "fresh_peer_base": "8aedb0442a0ba92bdb5be7a9cba605437252b05a",
+  "changed_dependency": "src/api/routes/chat_vision.py",
+  "delta_sha256": "aec17041b13b498da7b7e6d8ac23792e73c65b5a9991b595be240d5a87442782",
+  "semantic_review": "Only the existing vision_react final HTTP call gains existing _record_vl_call telemetry in finally; no imports/module initialization, reward serialization, QScorer or provenance call graph change.",
+  "necessary_control": "normal root/unit bootstrap with real RewardRequest serializer -> temporary native store/ProgressLogger CREATE and UPDATE; missing-three_way case",
+  "full_122_rerun": false,
+  "source_target_paths_changed_by_peer": []
+}

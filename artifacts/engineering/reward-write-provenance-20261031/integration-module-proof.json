@@ -1,0 +1,5 @@
+{
+  "module": "src.api.routes.chat_vision",
+  "path": "/mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/src/api/routes/chat_vision.py",
+  "sha256": "2cb2a64e4da56507edb750f047a0b06ee96f4c771a2489db8181095098f9c779"
+}

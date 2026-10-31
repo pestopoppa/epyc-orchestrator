@@ -1,0 +1,15 @@
+{
+  "qualified_base": "4639d190b957c2e594b89423cdc8afaed2a36048",
+  "integration_base": "8aedb0442a0ba92bdb5be7a9cba605437252b05a",
+  "integration_controls_passed": 1,
+  "fresh_main": "8aedb0442a0ba92bdb5be7a9cba605437252b05a",
+  "changed_pinned_paths": [],
+  "pinned_source_files": 526,
+  "source_byte_equivalence": true,
+  "tests_passed": 122,
+  "canonical_wrapper_sha256": "2385af56caa1b87cf3910144a6dc20193cead6ab1f8a2b1a2763d39c809c8a1e",
+  "canonical_extras_sha256": "a6a5b479583cd541fa67cf2f5e9ca977f38494bea1a45d215a7525bc7f6ca583",
+  "resource_guard_sha256": "5215ca929cbc320b998a48c9e91c837417bc3c2314c34783ce992387a3499abe",
+  "supervisor_sha256": "d0351bfc8577f3fa094d5d8f11061ec7c10f2805226c6ddb543a508886f18509",
+  "authority": "existing R4 free physical pair, not a timing exception; no model execution"
+}

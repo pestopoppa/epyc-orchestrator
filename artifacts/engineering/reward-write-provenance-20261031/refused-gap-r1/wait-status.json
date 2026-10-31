@@ -1,0 +1,9 @@
+{
+  "at": "2026-10-31T18:47:48.469411+00:00",
+  "kind": "validation_or_fresh_guard_refusal",
+  "rc": 1,
+  "cpus": [
+    78,
+    79
+  ]
+}

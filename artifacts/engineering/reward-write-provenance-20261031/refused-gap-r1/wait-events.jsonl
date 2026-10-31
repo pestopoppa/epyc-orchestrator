@@ -1,0 +1,4 @@
+{"at": "2026-10-31T18:31:40.650841+00:00", "kind": "waiting_for_fresh_R6_admission", "logical_mutex": "/mnt/raid0/llm/tmp/compute-flags/prep-locks/30-31.lock"}
+{"at": "2026-10-31T18:31:40.687985+00:00", "kind": "waiting_for_fresh_R6_admission", "logical_mutex": "/mnt/raid0/llm/tmp/compute-flags/prep-locks/30-31.lock", "reasons": ["grant overlaps prep CPUs", "grant overlaps prep CPUs", "timing grant active", "timing grant active", "timing grant active"]}
+{"at": "2026-10-31T18:47:42.381237+00:00", "base": "4639d190b957c2e594b89423cdc8afaed2a36048", "cpus": [78, 79], "kind": "starting_guarded_validation", "logical_mutex": "/mnt/raid0/llm/tmp/compute-flags/prep-locks/30-31.lock"}
+{"at": "2026-10-31T18:47:48.469411+00:00", "cpus": [78, 79], "kind": "validation_or_fresh_guard_refusal", "rc": 1}

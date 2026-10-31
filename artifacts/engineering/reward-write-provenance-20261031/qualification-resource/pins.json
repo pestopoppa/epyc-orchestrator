@@ -1,0 +1,14 @@
+{
+  "prep_admission.py": "5215ca929cbc320b998a48c9e91c837417bc3c2314c34783ce992387a3499abe",
+  "prep_supervisor.py": "d0351bfc8577f3fa094d5d8f11061ec7c10f2805226c6ddb543a508886f18509",
+  "mutex": "30-31.lock",
+  "physical_cpus": [
+    78,
+    79
+  ],
+  "omp_num_threads": 1,
+  "deadline_s": 900,
+  "sampled_owned_tree_peak_rss_bytes": 199880704,
+  "child_exit": 0,
+  "children_drained": true
+}

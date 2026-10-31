@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 
 from orchestration.repl_memory.memory_record import embedding_text_for
+from orchestration.repl_memory.reward_provenance import reward_context_provenance
 
 __all__ = [
     "EMBEDDER_PORTS",
@@ -200,6 +201,7 @@ def _inject_3way_rewards_http(
         context = {
             "task_type": suite,
             "source": "3way_eval",
+            **reward_context_provenance(metadata.get("reward_provenance", {}).get(action_key)),
             "question_id": question_id,
             "action_type": "routing",
             "tools_helped": metadata.get("tools_helped", False),
@@ -297,6 +299,7 @@ def _inject_per_role_rewards_http(
         context = {
             "task_type": suite,
             "source": "per_role_eval",
+            **reward_context_provenance(metadata.get("reward_provenance", {}).get(role_name)),
             "question_id": question_id,
             "action_type": "routing",
             "elapsed_seconds": action_cost.get("elapsed_seconds", 0.0),

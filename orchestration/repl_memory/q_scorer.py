@@ -59,6 +59,7 @@ from src.autopilot_core.measurement_guards import (
 from src.classifiers.role_taxonomy import VALID_TRINITY_ROLES
 from src.roles import Role
 
+from .reward_provenance import reward_journal_provenance
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore, outcome_from_reward
 from .memory_record import (
@@ -2210,8 +2211,16 @@ class QScorer:
                     mem.id, reward, self.config.learning_rate,
                     temporal_decay_rate=self.config.temporal_decay_rate,
                 )
-                self.logger.log_memory_update(
-                    mem.id, old_q, new_q, reward, "external"
+                self.logger.log(
+                    ProgressEntry(
+                        event_type=EventType.Q_VALUE_UPDATED,
+                        task_id="external",
+                        memory_id=mem.id,
+                        data={
+                            "old_q": old_q, "new_q": new_q, "reward": reward,
+                            "reward_provenance": reward_journal_provenance(context, action),
+                        },
+                    )
                 )
                 result["memories_updated"] += 1
                 updated = True
@@ -2282,6 +2291,7 @@ class QScorer:
                         "action_type": action_type,
                         "initial_q": initial_q,
                         "source": "external_score",
+                        "reward_provenance": reward_journal_provenance(context, action),
                     },
                 )
             )

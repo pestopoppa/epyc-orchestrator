@@ -1,0 +1,13 @@
+[
+  {
+    "pid": 1891361,
+    "uid": 1000,
+    "birth": 159505109,
+    "state": "S",
+    "argv": [
+      "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+      "/mnt/raid0/llm/tmp/codex3-reward-provenance-1740/wait_then_validate.py"
+    ],
+    "children": []
+  }
+]

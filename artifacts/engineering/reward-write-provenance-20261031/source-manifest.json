@@ -1,0 +1,19 @@
+{
+  "qualified_base": "4639d190b957c2e594b89423cdc8afaed2a36048",
+  "publication_readset_base": "79230233c04b1e24b8736640d70e290825612880",
+  "changed_files": {
+    "scripts/benchmark/seeding_types.py": "4eecfb9946c2f874b787cc49d540169725cc39c90d9ed914d73f87ff6917ed47",
+    "scripts/benchmark/seeding_eval.py": "b9da35abedb3609bf9ddc4adc6eea6170d5cd0611a65a9473e10d1f6f04a6e04",
+    "scripts/benchmark/seeding_injection.py": "2b13f6cd9a0961b50c69b0fec742968df6bdda7b84773ef7d8873b9e38b7d543",
+    "scripts/benchmark/seeding_rewards.py": "77a220b407c6bde07dccc5a15a3284a3800026d60b137418302d26dfbb80dd8a",
+    "scripts/benchmark/seeding_legacy.py": "4cd2cce5a4dd01134752c8bcf6aa1c3cfbcdcaa6fdf6f53cb072ca13420f0724",
+    "orchestration/repl_memory/q_scorer.py": "0b07bc1a9109fc77c36d7f18d1b902caa8a5d1056baadd25611d85e4f46a1a68",
+    "orchestration/repl_memory/reward_provenance.py": "a3e1d5c0cbf723b6dea78c85ca33875ee36110f63bf5b361478a3d287c58f10b",
+    "tests/unit/test_seeding_reward_provenance.py": "519b7f45cc622e5da61dc4d910af1e2a1fc4035e687dceb1a39ac34ad0dae7be"
+  },
+  "patch_sha256": "bfc8177facaddd6cc5c818118ec759348d2c4743ca85f67a7907359011fd64a7",
+  "guard_sha256": "5215ca929cbc320b998a48c9e91c837417bc3c2314c34783ce992387a3499abe",
+  "supervisor_sha256": "d0351bfc8577f3fa094d5d8f11061ec7c10f2805226c6ddb543a508886f18509",
+  "tests_passed": 122,
+  "source_control_fixtures_only": true
+}

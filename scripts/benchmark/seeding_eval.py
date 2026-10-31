@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from orchestration.repl_memory.reward_provenance import native_reward_provenance
+
 from seeding_types import (
     ACTION_ARCHITECT,
     ACTION_SELF_DIRECT,
@@ -443,6 +445,15 @@ def _build_role_result(
         elapsed_seconds=elapsed,
         error=error,
         error_type=error_type,
+        reward_provenance={
+            **native_reward_provenance(resp),
+            "requested_role": role,
+            "requested_mode": mode,
+            "evaluation": {
+                "error_type": error_type,
+                "source": "seeding_eval._build_role_result",
+            },
+        },
         tokens_generated=resp.get("tokens_generated", 0),
         output_tokens_reported=output_tokens_reported,
         output_tokens_status=output_tokens_status,
@@ -735,6 +746,14 @@ def _compute_3way_metadata(
 
     direct_key = f"{self_role}:{self_direct_mode}"
     repl_key = f"{self_role}:{self_repl_mode}"
+    metadata["reward_provenance"] = {
+        ACTION_SELF_DIRECT: role_results[direct_key].reward_provenance,
+        ACTION_SELF_REPL: role_results[repl_key].reward_provenance,
+        ACTION_ARCHITECT: [
+            role_results[f"{role}:{arch_mode}"].reward_provenance
+            for role, result in arch_results.items() if result["passed"] is not None
+        ],
+    }
     metadata["cost_metrics"] = {
         ACTION_SELF_DIRECT: {
             "elapsed_seconds": role_results[direct_key].elapsed_seconds,
@@ -1054,7 +1073,8 @@ def evaluate_question_3way(
         for line in format_all_infra_skip(ACTION_ARCHITECT):
             logger.info(line)
 
-    worker_rewards = score_delegation_chain(role_results)
+    worker_provenance: list[dict[str, Any]] = []
+    worker_rewards = score_delegation_chain(role_results, provenance=worker_provenance)
     rewards.update(worker_rewards)
 
     # ── Metadata ──
@@ -1063,6 +1083,9 @@ def evaluate_question_3way(
         passed_direct, passed_repl,
         self_role, self_direct_mode, self_repl_mode, arch_mode,
     )
+
+    if worker_rewards:
+        metadata.setdefault("reward_provenance", {})["WORKER"] = worker_provenance
 
     # ── REL-1 offline re-scoring context ──
     # The per-role raw ``answer`` is already persisted via asdict(RoleResult)
@@ -1140,6 +1163,7 @@ def evaluate_question_per_role(
     role_results: dict[str, RoleResult] = {}
     rewards: dict[str, float] = {}
     cost_metrics: dict[str, dict] = {}
+    reward_provenance: dict[str, dict] = {}
     skipped_roles: dict[str, str] = {}
 
     # Filter roles for VL capability
@@ -1343,11 +1367,13 @@ def evaluate_question_per_role(
                 )
             else:
                 rewards[role_name] = success_reward(rr.passed)
+                reward_provenance[role_name] = rr.reward_provenance
 
     # Metadata
     metadata: dict[str, Any] = {
         "suite": suite,
         "cost_metrics": cost_metrics,
+        "reward_provenance": reward_provenance,
         "all_infra": all(
             rr.error_type == "infrastructure" for rr in role_results.values()
         ),

@@ -1,0 +1,11 @@
+{
+  "qualified_base": "4639d190b957c2e594b89423cdc8afaed2a36048",
+  "fresh_main_readset": "79230233c04b1e24b8736640d70e290825612880",
+  "tests": 122,
+  "source_hashes_unchanged": 526,
+  "module_identities": 312,
+  "foreign_modules": {},
+  "peer_changed_pinned_paths": [],
+  "peer_changed_loaded_paths": [],
+  "scope": "model-free source controls; no runtime deployment or inference"
+}

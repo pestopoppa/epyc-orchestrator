@@ -456,7 +456,7 @@ def evaluate_question(
         comp_for_inject = ComparativeResult(
             suite=suite, question_id=qid, prompt=prompt[:200],
             expected=expected[:200], reference=prompt_info.get("reference", ""),
-            rewards=rewards,
+            rewards=rewards, role_results=role_results,
         )
         rewards_injected = _inject_rewards_http(comp_for_inject, url, client)
     elif has_infrastructure_error:
@@ -469,12 +469,12 @@ def evaluate_question(
     # Escalation chains: detect cheap-fail -> expensive-pass patterns
     escalation_data: list[dict[str, Any]] = []
     if escalation_chains and not dry_run:
-        escalation_data = detect_escalation_chains(role_results)
+        escalation_data = detect_escalation_chains(role_results, include_provenance=True)
         if escalation_data:
             comp_for_esc = ComparativeResult(
                 suite=suite, question_id=qid, prompt=prompt[:200],
                 expected=expected[:200], reference=prompt_info.get("reference", ""),
-                rewards=rewards,
+                rewards=rewards, role_results=role_results,
             )
             esc_injected = _inject_escalation_chains_http(
                 comp_for_esc, escalation_data, url, client,

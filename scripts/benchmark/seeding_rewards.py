@@ -15,6 +15,9 @@ from urllib.parse import urlparse
 import yaml
 
 from src.roles import Role
+from orchestration.repl_memory.reward_provenance import (
+    native_reward_provenance, reward_context_provenance,
+)
 
 from seeding_types import (
     ACTION_ARCHITECT,
@@ -334,6 +337,8 @@ def compute_comparative_rewards(
 
 def detect_escalation_chains(
     role_results: dict[str, RoleResult],
+    *,
+    include_provenance: bool = False,
 ) -> list[dict[str, Any]]:
     """Detect cases where a cheap model fails but a more expensive one passes.
 
@@ -369,6 +374,12 @@ def detect_escalation_chains(
                     "to_mode": mode_j,
                     "action": f"escalate:{role_i}->{role_j}",
                     "reward": ESCALATION_REWARD,
+                    **({"provenance_sources": [
+                        {**native_reward_provenance(rr_i.reward_provenance),
+                         "requested_role": rr_i.role, "requested_mode": rr_i.mode},
+                        {**native_reward_provenance(rr_j.reward_provenance),
+                         "requested_role": rr_j.role, "requested_mode": rr_j.mode},
+                    ]} if include_provenance else {}),
                 })
                 break  # Only the cheapest passing escalation target
 
@@ -397,6 +408,7 @@ def _inject_escalation_chains_http(
                     "context": {
                         "task_type": comp.suite,
                         "source": "escalation_chain",
+                        **reward_context_provenance(chain.get("provenance_sources", [])),
                         "question_id": comp.question_id,
                         "action_type": "escalation",
                         "from_role": chain["from_role"],
@@ -433,6 +445,10 @@ def _inject_rewards_http(
                     "context": {
                         "task_type": comp.suite,
                         "source": "comparative_seeding",
+                        **reward_context_provenance(
+                            comp.role_results[action_key].reward_provenance
+                            if action_key in comp.role_results else None
+                        ),
                         "question_id": comp.question_id,
                         "comparative": True,
                     },
@@ -506,6 +522,8 @@ def compute_3way_rewards(
 
 def score_delegation_chain(
     results: dict[str, RoleResult],
+    *,
+    provenance: list[dict[str, Any]] | None = None,
 ) -> dict[str, float]:
     """Score WORKER based on delegation chain outcomes.
 
@@ -528,6 +546,8 @@ def score_delegation_chain(
         if getattr(rr, "error_type", "none") == "infrastructure":
             continue
         if _has_delegation(rr):
+            if provenance is not None:
+                provenance.append(rr.reward_provenance)
             if rr.delegation_success is not None:
                 rewards[ACTION_WORKER] = success_reward(rr.delegation_success)
             else:
@@ -540,6 +560,8 @@ def score_delegation_chain(
         if getattr(rr, "error_type", "none") == "infrastructure":
             continue
         if _has_delegation(rr):
+            if provenance is not None:
+                provenance.append(rr.reward_provenance)
             score = (
                 success_reward(rr.delegation_success)
                 if rr.delegation_success is not None
