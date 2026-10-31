@@ -9,7 +9,7 @@ Original EPD-3-R7 task text, copied exactly from fresh ROOT `origin/main` handof
 
 Prepared result details for MAIN to apply with no task-text changes:
 
-- Implementing APP commit: pending serialized publication.
+- Implementing APP commit: `9c388042475d835f88e62355443e7036986b9a34`.
 - Test/artifact: `tests/unit/test_seeding_injection_objective_storage.py`; `artifacts/audit/epd3-r7-objective-payload-20261031/verification.md`.
 - Test result: 68 passed across the focused seeding and native embedding controls.
 - Belief marker: `[no-belief: software source publication and regression verification]`.
