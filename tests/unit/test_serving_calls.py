@@ -418,3 +418,17 @@ def test_native_enqueue_is_optional_and_never_inherited_by_another_call(log_file
     assert first["queue"]["enqueue_ts_epoch"] == 1234.125
     assert "enqueue_ts_epoch" not in first["caller"]
     assert "enqueue_ts_epoch" not in second["queue"]
+
+
+def test_legacy_and_unstaged_lease_metadata_remains_unknown(log_file):
+    sc.stage_caller(role="frontdoor", task_id="legacy")
+    sc.annotate_staged(kv_admission={"long_prefill": True})
+    _Backend(_server_ok).infer(_role_config(), InferenceRequest(role="frontdoor", prompt="x"))
+    sc.stage_caller(role="frontdoor", task_id="unstaged-admission")
+    _Backend(_server_ok).infer(_role_config(), InferenceRequest(role="frontdoor", prompt="y"))
+    legacy, missing = _records(log_file)
+    for record in (legacy, missing):
+        info = record.get("kv_admission") or {}
+        assert info.get("lease_held_at_admission") is None
+        assert info.get("lease_wait_observed_ms") is None
+        assert info.get("lease_holder_ticket") is None

@@ -724,6 +724,7 @@ class SharedKVPoolAdmission:
             self._waiting[ticket] = (want, is_long)
         logged = False
         waited_on_lease = False
+        lease_wait_observed_s = 0.0
         admitted = False
         try:
             while True:
@@ -802,9 +803,18 @@ class SharedKVPoolAdmission:
                             stat[f"cache_credit_{source}"] = stat.get(f"cache_credit_{source}", 0) + 1
                         else:
                             stat["cache_credit_unavailable"] += 1
+                        lease_holder = (self._prefill_lease.get(url) or (None,))[0]
                         self._admission_info[ticket] = dict(
                             credit,
                             long_prefill=bool(is_long),
+                            # Captured under the admission mutex; classification alone
+                            # does not prove that this ticket actually held the lease.
+                            admission_ticket=ticket,
+                            lease_held_at_admission=lease_holder == ticket,
+                            lease_holder_ticket=lease_holder if lease_holder == ticket else None,
+                            # Condition waits whose observed verdict was "lease";
+                            # other queue predicates can overlap and polling is bounded.
+                            lease_wait_observed_ms=round(lease_wait_observed_s * 1000.0, 3),
                             cache_credited=bool(cache_credited),
                             long_prefill_threshold=self.long_prefill_threshold(),
                             queue_wait_ms=round(waited * 1000.0, 3),
@@ -844,7 +854,10 @@ class SharedKVPoolAdmission:
                             " — another long prefill is in flight" if verdict == "lease" else "",
                         )
                         logged = True
+                    lease_wait_start = time.perf_counter() if verdict == "lease" else None
                     self._cond.wait(timeout=poll_s)
+                    if lease_wait_start is not None:
+                        lease_wait_observed_s += time.perf_counter() - lease_wait_start
             if pidx is not None and pview is not None:
                 # The tree walk runs once, after admission and outside the gate's
                 # lock (review D4); the record is completed under a brief lock.
