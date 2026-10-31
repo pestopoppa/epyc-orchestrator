@@ -467,8 +467,7 @@ def empty_frontier_min_repro() -> int:
         value = 0
     if value < 2:
         log.error(
-            "%s=%r refused (must be an integer >= 2: one trial is not a reproduction); "
-            "using %d.",
+            "%s=%r refused (must be an integer >= 2: one trial is not a reproduction); using %d.",
             EMPTY_FRONTIER_MIN_REPRO_ENV,
             raw,
             DEFAULT_EMPTY_FRONTIER_MIN_REPRO,
@@ -499,12 +498,16 @@ def _build_promotion_guard_view(pending_rows: tuple[dict[str, Any], ...]) -> Pro
         except Exception as exc:  # noqa: BLE001
             log.error("Promotion guard: live-scope archive UNAVAILABLE (%s)", exc)
             return PromotionGuardView(
-                archive=None, objective_policy="", scope="unavailable",
+                archive=None,
+                objective_policy="",
+                scope="unavailable",
                 error=f"live-scope archive unavailable: {exc}"[:300],
             )
         if view is None or view.archive is None:
             return PromotionGuardView(
-                archive=None, objective_policy="", scope="unavailable",
+                archive=None,
+                objective_policy="",
+                scope="unavailable",
                 error="live-scope provider returned no archive",
             )
         return view
@@ -518,7 +521,9 @@ def _build_promotion_guard_view(pending_rows: tuple[dict[str, Any], ...]) -> Pro
     archive = _pareto_archive_for_safety_guard()
     if archive is None:
         return PromotionGuardView(
-            archive=None, objective_policy="", scope="unavailable",
+            archive=None,
+            objective_policy="",
+            scope="unavailable",
             error="legacy archive unreadable",
         )
     return PromotionGuardView(
@@ -919,6 +924,10 @@ class EvalResult:
     # main loop. Cache the first verdict on the result so one trial mutates MAD
     # history / consecutive-failure state exactly once.
     gate_verdict: SafetyVerdict | None = field(default=None, repr=False, compare=False)
+    # EV-14g: append only to preserve positional construction of older fields.
+    # None means a legacy or manually constructed result made no count claim.
+    n_questions_requested: int | None = None
+    n_questions_completed: int | None = None
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -1767,9 +1776,7 @@ def quality_floor_leg(quality: float, tier: int) -> GateLeg:
     quality_floor = QUALITY_FLOOR_T0 if tier == 0 else QUALITY_FLOOR_T1
     if quality < quality_floor:
         return GateLeg(
-            violations=(
-                f"Quality floor violation: {quality:.3f} < {quality_floor} (tier {tier})",
-            ),
+            violations=(f"Quality floor violation: {quality:.3f} < {quality_floor} (tier {tier})",),
             categories=("quality_floor",),
         )
     return GateLeg()
@@ -2007,8 +2014,7 @@ def throughput_leg(
             categories.append("throughput")
     elif speed < frontdoor_speed * 0.9:
         warnings.append(
-            f"Speed marginal: {speed:.1f} t/s "
-            f"({speed / frontdoor_speed:.0%} of baseline)"
+            f"Speed marginal: {speed:.1f} t/s ({speed / frontdoor_speed:.0%} of baseline)"
         )
     return GateLeg(tuple(violations), tuple(warnings), tuple(categories))
 
@@ -2035,9 +2041,7 @@ def proxy_check_warnings(per_suite_quality: Any, baseline_per_suite_quality: Any
     if improved and declined and len(improved) <= 1:
         imp_str = ", ".join(f"{s} +{d:.2f}" for s, d in improved)
         dec_str = ", ".join(f"{s} {d:+.2f}" for s, d in declined)
-        warnings.append(
-            f"Proxy-only improvement: gains in [{imp_str}] but declines in [{dec_str}]"
-        )
+        warnings.append(f"Proxy-only improvement: gains in [{imp_str}] but declines in [{dec_str}]")
     return warnings
 
 
@@ -2099,7 +2103,11 @@ def verdict_from_evidence(result: Any, evidence: GateEvidence) -> SafetyVerdict:
         warnings,
         categories,
     )
-    floor = evidence.reliability_floor if evidence.reliability_floor is not None else _reliability_floor()
+    floor = (
+        evidence.reliability_floor
+        if evidence.reliability_floor is not None
+        else _reliability_floor()
+    )
     reliability = reliability_floor_leg(result.reliability, floor)
     reliability_blocked = bool(reliability.violations)
     _add(reliability, violations, warnings, categories)
@@ -2756,15 +2764,11 @@ class SafetyGate:
         # floor still runs, and update_baseline() separately refuses quality promotion until a
         # same-era baseline is reseeded. Inert when no active era is set.
         quality_rebaseline_hold = (
-            not reliability_blocked
-            and not quality_unmeasured
-            and self.quality_rebaseline_required
+            not reliability_blocked and not quality_unmeasured and self.quality_rebaseline_required
         )
         if quality_rebaseline_hold:
             _add(
-                quality_rebaseline_hold_leg(
-                    self.baseline.eval_quality_era, self._eval_quality_era
-                ),
+                quality_rebaseline_hold_leg(self.baseline.eval_quality_era, self._eval_quality_era),
                 violations,
                 warnings,
                 categories,
@@ -2817,7 +2821,9 @@ class SafetyGate:
             _add(
                 per_suite_regression_leg(
                     result.per_suite_quality,
-                    {} if quality_rebaseline_hold else self.baseline.per_suite_for_tier(result.tier),
+                    {}
+                    if quality_rebaseline_hold
+                    else self.baseline.per_suite_for_tier(result.tier),
                     getattr(result, "per_suite_counts", None) or {},
                     self.baseline.per_suite_counts_for_tier(result.tier),
                 ),
@@ -3039,7 +3045,9 @@ class SafetyGate:
         row = _pending_candidate_row(source_trial_id)
         fingerprint = config_fingerprint_from_row(row) if row is not None else None
         for entry in frontier:
-            same_config = bool(fingerprint) and getattr(entry, "config_fingerprint", "") == fingerprint
+            same_config = (
+                bool(fingerprint) and getattr(entry, "config_fingerprint", "") == fingerprint
+            )
             same_trial = source_trial_id is not None and int(entry.trial_id) == int(source_trial_id)
             if not (same_config or same_trial):
                 return False
@@ -3178,14 +3186,17 @@ class SafetyGate:
         fingerprint, reps = found
         if not fingerprint:
             return (
-                "empty-frontier rule (b): the candidate carries no served-config identity; "
-                "REFUSED"
+                "empty-frontier rule (b): the candidate carries no served-config identity; REFUSED"
             )
         trial_ids = sorted({int(r["trial_id"]) for r in reps})
         log.info(
             "Empty-frontier rule (b) T%d fp=%s: %d of %d required comparable live-regime "
             "reproductions (trials %s)",
-            tier, fingerprint, len(trial_ids), n_min, trial_ids,
+            tier,
+            fingerprint,
+            len(trial_ids),
+            n_min,
+            trial_ids,
         )
         if len(trial_ids) < n_min:
             return (
@@ -3452,7 +3463,9 @@ class SafetyGate:
             # but this tier has a baseline. Promote only a config with >= N independent,
             # AP-55-comparable reproductions under the live regime; the promoted fields are
             # the median over exactly those reproductions.
-            outcome = self._empty_frontier_promotion(result, tier, previous_quality, source_trial_id)
+            outcome = self._empty_frontier_promotion(
+                result, tier, previous_quality, source_trial_id
+            )
             if isinstance(outcome, str):
                 log.warning("Baseline update REFUSED — %s", outcome)
                 return BaselineUpdateResult(

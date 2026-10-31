@@ -96,7 +96,7 @@ from pareto_archive import (
 )
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate, _atomic_write_text
 from safety_gate import PromotionGuardView, configure_promotion_guard_archive
-from eval_tower import EVAL_EXECUTION_INSTRUMENT_ID, EvalTower
+from eval_tower import EVAL_EXECUTION_INSTRUMENT_ID, EvalTower, eval_result_count_fields
 from config_applicator import apply_params  # noqa: F401 - re-export for actions.py tests
 from config_applicator import health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
@@ -167,7 +167,12 @@ from state_lock import (
 )
 from state_ownership import clear_halt_latch, halt_latch_message
 from actions import dispatch_action, SkipOutcome, _structural_noop_reason
-from actions import PROMPT_LINT_STATE_KEY, SERVED_CONTENT_STATE_KEY, _public_pending_copy, served_content_record
+from actions import (
+    PROMPT_LINT_STATE_KEY,
+    SERVED_CONTENT_STATE_KEY,
+    _public_pending_copy,
+    served_content_record,
+)
 from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
@@ -298,6 +303,8 @@ MULTITIER_MAX_ATTEMPTS_PER_TIER = int(
         str(DEFAULT_MAX_ATTEMPTS_PER_TIER),
     )
 )
+
+
 def _multitier_attempt_cap() -> int:
     """Per-tier attempt cap, never below the reproduction bar a final_t1 must clear.
 
@@ -1560,9 +1567,9 @@ def _question_outcome_excluded(question_results: Any) -> int:
     if not isinstance(question_results, list):
         return 0
     return sum(
-        1 for item in question_results
-        if isinstance(item, dict)
-        and not _is_quality_admissible(item.get("disposition"))
+        1
+        for item in question_results
+        if isinstance(item, dict) and not _is_quality_admissible(item.get("disposition"))
     )
 
 
@@ -1844,8 +1851,7 @@ def _seq_paired_baseline_diagnostics(
             # CJ-9. Rows excluded for a non-quality disposition never entered the
             # pairing. They are reported here so a shrinking `shared_qids` is
             # readable as an exclusion rather than as a smaller run.
-            "candidate_excluded_non_quality": _question_outcome_excluded(
-                question_results),
+            "candidate_excluded_non_quality": _question_outcome_excluded(question_results),
             "baseline_reference_trial_id": baseline.get("trial_id"),
             "baseline_reference_timestamp": baseline.get("timestamp", ""),
             "baseline_reference_reason": baseline.get("reason", ""),
@@ -1958,7 +1964,8 @@ def _seq_baseline_reference_state(
             regime = {"status": "UNFINGERPRINTED", "differing_components": []}
         else:
             regime = compare_infra_fingerprints(
-                current_fingerprint, latest_reference_fp,
+                current_fingerprint,
+                latest_reference_fp,
                 reference_label=f"seq_baseline_reference_{latest_reference_trial_id}",
             )
         regime_due = (
@@ -3052,7 +3059,9 @@ def _multitier_candidate_is_eligible(
         return False, blocker
     action_type = str(action.get("type") or "")
     if action_type in CONTENT_IDENTIFIED_ACTION_TYPES:
-        restore = (served_content or {}).get("restore") if isinstance(served_content, Mapping) else None
+        restore = (
+            (served_content or {}).get("restore") if isinstance(served_content, Mapping) else None
+        )
         if not _mutation_restore_is_complete(restore, served_content):
             return False, f"candidate {action_type} lacks an exact restore preimage"
     elif action_type == "numeric_trial":
@@ -3066,9 +3075,7 @@ def _multitier_candidate_is_eligible(
     elif action_type == "structural_experiment":
         restore_flags = action.get("_multitier_restore_flags")
         if not isinstance(restore_flags, dict) or not restore_flags:
-            prior_flags = (getattr(eval_result, "details", {}) or {}).get(
-                "flag_prior_values"
-            )
+            prior_flags = (getattr(eval_result, "details", {}) or {}).get("flag_prior_values")
             if isinstance(prior_flags, dict) and prior_flags:
                 action["_multitier_restore_flags"] = dict(prior_flags)
                 restore_flags = action["_multitier_restore_flags"]
@@ -5320,7 +5327,12 @@ BASELINE_INFRA_FINGERPRINTS_STATE_KEY = "baseline_infra_fingerprints"
 
 
 def _ap55_seed_rerun_forcing_enabled() -> bool:
-    return os.environ.get("AUTOPILOT_AP55_SEED_RERUN", "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.environ.get("AUTOPILOT_AP55_SEED_RERUN", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _ap55_attempt_key(reference: Mapping[str, Any]) -> str:
@@ -5348,8 +5360,10 @@ def _ap55_seed_rerun_attempt_allowed(
         log.warning(
             "AP-55 seed re-run NOT forced: %d attempts since reference %s never landed "
             "(cap AUTOPILOT_AP55_SEED_RERUN_MAX_ATTEMPTS=%d); promotion gate leg stays %s",
-            count, reference.get("latest_reference_trial_id"),
-            AP55_SEED_RERUN_MAX_ATTEMPTS, reference.get("regime_status"),
+            count,
+            reference.get("latest_reference_trial_id"),
+            AP55_SEED_RERUN_MAX_ATTEMPTS,
+            reference.get("regime_status"),
         )
         return False
     try:
@@ -5360,7 +5374,9 @@ def _ap55_seed_rerun_attempt_allowed(
         log.info(
             "AP-55 seed re-run deferred: attempt %d at trial %d did not land a reference; "
             "next attempt after %d trials",
-            count, last, AP55_REGIME_REFRESH_MIN_TRIALS,
+            count,
+            last,
+            AP55_REGIME_REFRESH_MIN_TRIALS,
         )
         return False
     return True
@@ -5428,8 +5444,8 @@ def _infra_comparability_for_trial(
             }
             if drift["status"] == "NON_COMPARABLE":
                 verdict["status"] = "NON_COMPARABLE"
-                verdict["reason"] = (
-                    "infra changed during trial: " + ",".join(drift["differing_components"])
+                verdict["reason"] = "infra changed during trial: " + ",".join(
+                    drift["differing_components"]
                 )
         return verdict
     except Exception as exc:  # noqa: BLE001
@@ -5465,7 +5481,9 @@ def _ap55_promotion_gate_for_trial(
             if hasattr(journal, "entries_with_supersessions")
             else journal.all_entries()
         )
-        revision = baseline_pin.get("baseline_revision") if isinstance(baseline_pin, Mapping) else None
+        revision = (
+            baseline_pin.get("baseline_revision") if isinstance(baseline_pin, Mapping) else None
+        )
 
         def _key(row: Any) -> str:
             snap = getattr(row, "config_snapshot", None)
@@ -5486,10 +5504,16 @@ def _ap55_promotion_gate_for_trial(
     except Exception as exc:  # noqa: BLE001 - provenance must never fail a trial
         mode = ap55_promotion_gate.gate_mode()
         hold = mode != "shadow"
-        return {"mode": mode, "status": "error", "error": str(exc)[:200],
-                "hold": hold, "hold_reasons": ["gate_error"] if hold else [],
-                "counterfactual": {m: {"hold": True, "hold_reasons": ["gate_error"]}
-                                   for m in ("enforce", "strict")}}
+        return {
+            "mode": mode,
+            "status": "error",
+            "error": str(exc)[:200],
+            "hold": hold,
+            "hold_reasons": ["gate_error"] if hold else [],
+            "counterfactual": {
+                m: {"hold": True, "hold_reasons": ["gate_error"]} for m in ("enforce", "strict")
+            },
+        }
 
 
 def _record_baseline_infra_fingerprint(
@@ -5738,9 +5762,7 @@ HEALTH_BACKOFF_S = _env_float("AUTOPILOT_HEALTH_BACKOFF_S", 10.0)
 # stack_commands.py) with margin, so an ordinary slow API restart rides through
 # without crying wolf, while a genuinely dead API is impossible to miss within
 # ~6 minutes instead of never.
-HEALTH_ESCALATE_AFTER = _env_int(
-    "AUTOPILOT_HEALTH_ESCALATE_AFTER", DEFAULT_HEALTH_ESCALATE_AFTER
-)
+HEALTH_ESCALATE_AFTER = _env_int("AUTOPILOT_HEALTH_ESCALATE_AFTER", DEFAULT_HEALTH_ESCALATE_AFTER)
 
 
 def _stream_points_to_path(stream: Any, path: Path) -> bool:
@@ -7504,8 +7526,8 @@ def _sync_segment_snapshot_scope(journal: Any, state: Mapping[str, Any]) -> None
     if not hasattr(journal, "segment_snapshot_scope"):
         return
     try:
-        deinflate_before_ts, deinflate_factor, exclude_before_ts = (
-            _archive_epoch_params_from_state(state)
+        deinflate_before_ts, deinflate_factor, exclude_before_ts = _archive_epoch_params_from_state(
+            state
         )
         if deinflate_before_ts is not None and deinflate_factor != 1.0:
             journal.segment_snapshots = False
@@ -7713,7 +7735,10 @@ CLEAN_TRIAL_REPRESENTATIVES_ENV = "AUTOPILOT_CLEAN_TRIAL_REPRESENTATIVES"
 def _clean_trial_representatives_enabled() -> bool:
     """Decision (c) is ON unless explicitly disabled (``=0``)."""
     return os.environ.get(CLEAN_TRIAL_REPRESENTATIVES_ENV, "1").strip().lower() not in {
-        "0", "false", "no", "off",
+        "0",
+        "false",
+        "no",
+        "off",
     }
 
 
@@ -7730,8 +7755,8 @@ def _install_promotion_guard_scope(journal: Any, state: Mapping[str, Any]) -> No
 
     def _provider(pending_rows: tuple[dict[str, Any], ...] = ()) -> PromotionGuardView:
         policy = _live_objective_policy_from_state(state)
-        deinflate_before_ts, deinflate_factor, exclude_before_ts = (
-            _archive_epoch_params_from_state(dict(state))
+        deinflate_before_ts, deinflate_factor, exclude_before_ts = _archive_epoch_params_from_state(
+            dict(state)
         )
         pending = [dict(r) for r in pending_rows]
         payload = _journal_archive_payload_for_authority(
@@ -8349,9 +8374,7 @@ def _belief_degraded_turn(
     last_signature: str | None,
     review_fn: Callable[..., Any] | None = None,
     hypotheses_loader: Callable[[], list[Any]] | None = None,
-) -> tuple[
-    dict[str, Any] | None, dict[str, Any] | None, Any | None, dict[str, Any] | None, str
-]:
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Any | None, dict[str, Any] | None, str]:
     """One belief-degraded turn: NO planner draft. Returns
     (action, rationale, seed_review_token, selected_item, turn_signature).
 
@@ -8378,8 +8401,14 @@ def _belief_degraded_turn(
     skipped = ineligible + selection.skipped
     outcome = "review" if selection.item is not None else "backoff"
     signature = json.dumps(
-        [refusal.get("reason"), outcome, selection.reason, load_error,
-         [i["id"] for i in items], skipped],
+        [
+            refusal.get("reason"),
+            outcome,
+            selection.reason,
+            load_error,
+            [i["id"] for i in items],
+            skipped,
+        ],
         sort_keys=True,
         default=str,
     )
@@ -8396,9 +8425,7 @@ def _belief_degraded_turn(
                 selected_id=(selection.item or {}).get("id"),
                 selection_reason=selection.reason,
                 load_error=load_error,
-                checked_against_digest=(selection.seed_check or {}).get(
-                    "checked_against_digest"
-                ),
+                checked_against_digest=(selection.seed_check or {}).get("checked_against_digest"),
                 outcome=outcome,
             ),
         )
@@ -9148,7 +9175,9 @@ def _run_loop_inner(
                 targets=_loop_beliefs.derive_targets(
                     hypotheses_loader=_load_operator_hypotheses,
                     stack_regime_loader=lambda: (_infra_fingerprint_for_trial() or {}).get(
-                        "digest")),
+                        "digest"
+                    ),
+                ),
             )
             if _belief_outcome.ready is not None:
                 belief_ready = _belief_outcome.ready
@@ -10101,7 +10130,8 @@ def _run_loop_inner(
                     )
                     # DP-4(A): a blocked dispatch is one confirmed reliance.
                     _loop_beliefs.record_premise_skip(
-                        trial_counter, pre_dispatch_skip.reason, action, belief_premise_ids)
+                        trial_counter, pre_dispatch_skip.reason, action, belief_premise_ids
+                    )
 
         if belief_seed_review is not None:
             _record_belief_degraded_dispatch(
@@ -10443,7 +10473,8 @@ def _run_loop_inner(
             dispatch_fingerprint=dispatch_infra_fingerprint,
             baseline_revision=(
                 baseline_pin_record.get("baseline_revision")
-                if isinstance(baseline_pin_record, dict) else None
+                if isinstance(baseline_pin_record, dict)
+                else None
             ),
         )
         if isinstance(baseline_pin_record, dict) and baseline_pin_record:
@@ -11196,6 +11227,7 @@ def _run_loop_inner(
         except UnmeasuredObjectiveError:
             live_objectives = None
         eval_details_dict: dict[str, Any] = {
+            **eval_result_count_fields(eval_result),
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
             "question_results": list(getattr(eval_result, "question_results", []) or []),
@@ -11355,12 +11387,19 @@ def _run_loop_inner(
             active_flags=active_flags_list,
             failure_analysis=failure_analysis,
             error_signature=build_error_signature(
-                passed=verdict.passed, retry_not_revert=verdict.retry_not_revert,
-                categories=verdict.categories, species=species_name,
-                action_type=action.get("type", ""), tier=eval_result.tier),
+                passed=verdict.passed,
+                retry_not_revert=verdict.retry_not_revert,
+                categories=verdict.categories,
+                species=species_name,
+                action_type=action.get("type", ""),
+                tier=eval_result.tier,
+            ),
             error_scope=build_error_scope(
-                core_id=eval_result.core_id, baseline_pin=baseline_pin_record,
-                regime_digest=trial_regime_digest, comparability=trial_comparability),
+                core_id=eval_result.core_id,
+                baseline_pin=baseline_pin_record,
+                regime_digest=trial_regime_digest,
+                comparability=trial_comparability,
+            ),
             eval_details=eval_details_dict,
             metric_schema_version=metric_schema_version,
             harness_metrics=harness_metrics,
@@ -11394,15 +11433,21 @@ def _run_loop_inner(
         if os.environ.get("AUTOPILOT_CROSSOVER_COMPLEMENTARITY_DIAGNOSTICS") == "1":
             try:
                 from crossover_diagnostics import capture_trial_features
+
                 capture_trial_features(
-                    journal_entry, verdict=verdict, action=effective_action,
-                    eval_result=eval_result, history=journal.entries_with_supersessions())
+                    journal_entry,
+                    verdict=verdict,
+                    action=effective_action,
+                    eval_result=eval_result,
+                    history=journal.entries_with_supersessions(),
+                )
             except Exception as exc:
                 log.warning("Crossover feature metadata unavailable (%s)", type(exc).__name__)
         _sync_segment_snapshot_scope(journal, state)  # W3
         try:  # P1-M: regime scope for FUTURE belief projection (never back-filled)
             journal_entry.belief_scope = _loop_beliefs.trial_belief_scope(
-                trial_infra_fingerprint, effective_action)
+                trial_infra_fingerprint, effective_action
+            )
         except Exception as exc:  # noqa: BLE001 -- provenance must not fail a trial
             log.warning("belief scope not recorded (%s)", type(exc).__name__)
         journal.record(journal_entry)
@@ -11762,12 +11807,10 @@ def _belief_settings_from_args(args: argparse.Namespace) -> "_loop_beliefs.Belie
             Path(args.belief_known_good) if getattr(args, "belief_known_good", None) else None
         ),
         escalate_after_s=float(
-            getattr(args, "belief_escalate_after_s", None)
-            or _loop_beliefs.DEFAULT_ESCALATE_AFTER_S
+            getattr(args, "belief_escalate_after_s", None) or _loop_beliefs.DEFAULT_ESCALATE_AFTER_S
         ),
         reader_timeout_s=float(
-            getattr(args, "belief_reader_timeout_s", None)
-            or _loop_beliefs.DEFAULT_READER_TIMEOUT_S
+            getattr(args, "belief_reader_timeout_s", None) or _loop_beliefs.DEFAULT_READER_TIMEOUT_S
         ),
     )
 

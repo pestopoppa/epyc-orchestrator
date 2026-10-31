@@ -16,6 +16,7 @@ This module is the SINGLE source of truth for tier scoring and is imported the s
 (`from src.autopilot_core.tier_specs import ...`) by both `scripts/autopilot` (which puts
 ORCH_ROOT on sys.path) and `src/api`, so `TIER_SPECS` is one shared registry object.
 """
+
 from __future__ import annotations
 
 import math
@@ -181,11 +182,18 @@ def _nested(row: dict, *path: str) -> Any:
 
 def _task_rate_inputs_from_row(row: dict) -> tuple[float, float]:
     eval_details = row.get("eval_details") or {}
+    completed = (
+        eval_details.get("n_questions_completed") if isinstance(eval_details, dict) else None
+    )
     n_questions = (
-        row.get("n_questions")
-        or _nested(eval_details, "details", "total")
-        or _nested(eval_details, "details", "n_questions")
-        or _nested(eval_details, "details", "per_suite_counts_total")
+        completed
+        if completed is not None
+        else (
+            row.get("n_questions")
+            or _nested(eval_details, "details", "total")
+            or _nested(eval_details, "details", "n_questions")
+            or _nested(eval_details, "details", "per_suite_counts_total")
+        )
     )
     if not n_questions:
         counts = _nested(eval_details, "details", "per_suite_counts")
@@ -201,9 +209,14 @@ def _task_rate_inputs_from_row(row: dict) -> tuple[float, float]:
 
 def task_rate_qph_from(result: Any) -> float:
     """Questions completed per eval-wall-hour; 0 when wall/n are unavailable."""
+    completed = getattr(result, "n_questions_completed", None)
     n_questions = _as_float(
-        getattr(result, "n_questions", None)
-        or _nested(getattr(result, "details", {}) or {}, "total")
+        completed
+        if completed is not None
+        else (
+            getattr(result, "n_questions", None)
+            or _nested(getattr(result, "details", {}) or {}, "total")
+        )
     )
     eval_wall_s = _as_float(
         getattr(result, "eval_wall_s", None)
@@ -237,13 +250,18 @@ def task_rate_qph_from_row_if_available(row: dict) -> float | None:
     if not isinstance(detail_counts, dict):
         detail_counts = {}
 
+    completed = eval_details.get("n_questions_completed")
     count_candidates = (
         row.get("n_questions"),
         detail_counts.get("total"),
         detail_counts.get("n_questions"),
         detail_counts.get("per_suite_counts_total"),
     )
-    n_questions = next((value for value in count_candidates if value), None)
+    n_questions = (
+        completed
+        if completed is not None
+        else next((value for value in count_candidates if value), None)
+    )
     if n_questions is None:
         counts = detail_counts.get("per_suite_counts")
         if isinstance(counts, dict) and counts:
@@ -264,10 +282,7 @@ def task_rate_qph_from_row_if_available(row: dict) -> float | None:
             # Preserve a numeric explicit zero; absence and booleans are unavailable.
             n_questions = (
                 0
-                if any(
-                    not isinstance(value, bool) and value == 0
-                    for value in count_candidates
-                )
+                if any(not isinstance(value, bool) and value == 0 for value in count_candidates)
                 else None
             )
 
@@ -392,11 +407,11 @@ def seq_task_rate_qph_from(result: Any) -> float | None:
     return seq_task_rate_qph(
         question_results=getattr(result, "question_results", None),
         n_questions=(
-            getattr(result, "n_questions", None) or _nested(details, "total")
+            getattr(result, "n_questions_completed")
+            if getattr(result, "n_questions_completed", None) is not None
+            else (getattr(result, "n_questions", None) or _nested(details, "total"))
         ),
-        eval_wall_s=(
-            getattr(result, "eval_wall_s", None) or _nested(details, "eval_wall_s")
-        ),
+        eval_wall_s=(getattr(result, "eval_wall_s", None) or _nested(details, "eval_wall_s")),
     )
 
 
@@ -434,9 +449,7 @@ def goodput_qph_from_row(row: dict) -> float | None:
     return (quality / 3.0) * task_rate_qph_from_row(row)
 
 
-def task_rate_objectives_from(
-    result: Any, tier: int | None = None
-) -> tuple[float, ...] | None:
+def task_rate_objectives_from(result: Any, tier: int | None = None) -> tuple[float, ...] | None:
     """Shadow 3D vector: (quality, task_rate_qph, reliability); None if unmeasured."""
     _ = tier  # Reserved for future tier-specific rate semantics.
     quality = quality_from(result)
@@ -636,11 +649,14 @@ class ObjectiveShapeError(ValueError):
 @dataclass(frozen=True)
 class TierSpec:
     """How one eval tier's quality is scored for the Pareto archive + safety gate."""
+
     tier: int
     label: str
     reference_point: tuple[float, ...] = DEFAULT_REFERENCE_POINT
     objectives_from: Callable[[Any], tuple[float, ...]] = _rate_objectives_from
-    objectives_from_row: Callable[[dict], tuple[float, ...] | None] = _policy_aware_objectives_from_row
+    objectives_from_row: Callable[[dict], tuple[float, ...] | None] = (
+        _policy_aware_objectives_from_row
+    )
     # W3e: the name of each position in the tuple `objectives_from` builds.
     axes: tuple[str, ...] = OBJECTIVE_AXES_4D
 
