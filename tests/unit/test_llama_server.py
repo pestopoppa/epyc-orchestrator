@@ -1051,6 +1051,19 @@ class TestChatCompletionsLogprobs:
             {"token": "4", "logprob": -0.05, "top_logprobs": []}
         ]
 
+    def test_chat_path_carries_raw_prompt_cache_timings(self, role_config):
+        backend = self._backend()
+        response = self._chat_response()
+        response.json.return_value["timings"].update({"prompt_n": 7, "cache_n": 3})
+        with patch.object(backend.client, "post", return_value=response):
+            result = backend.infer(
+                role_config, InferenceRequest(role="frontdoor", prompt="2+2?", n_tokens=8)
+            )
+        assert result.timings["prompt_n"] == 7
+        assert result.timings["cache_n"] == 3
+        assert result.prompt_tokens == 10
+        assert result.cached_prompt_tokens == 3
+
     @pytest.mark.parametrize("requested,expected", [(1, 1), (20, 20), (21, 21), (64, 64), (128, 128), (129, 128)])
     def test_chat_logprob_capture_matches_native_cap(self, role_config, requested, expected):
         """Public infer must not silently drop requested alternatives above twenty."""

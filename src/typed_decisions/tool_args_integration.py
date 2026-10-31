@@ -79,8 +79,15 @@ consequence of replacement, and one more reason the flag ships off.
 from __future__ import annotations
 
 import logging
+import copy
+import time
 from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError, ValidationError
 
 from src.features import features
 from src.typed_decisions.native import (
@@ -88,7 +95,12 @@ from src.typed_decisions.native import (
     REASON_NATIVE_UNSUPPORTED_CANDIDATES,
 )
 from src.typed_decisions.runner import run_typed_decisions
+from src.typed_decisions.call_recorder import record_llm_calls
+from src.typed_decisions.prepared_action import append_receipt, make_receipt
+from src.typed_decisions.shadow import submit_bounded_shadow_work
+from src.typed_decisions.prepared_action import PreparedAction, ValidationResult
 from src.typed_decisions.tool_args import (
+    ToolArgumentError,
     ToolQuestionMapping,
     assemble_arguments,
     tool_schema_to_questions,
@@ -96,6 +108,296 @@ from src.typed_decisions.tool_args import (
 from src.typed_decisions.types import DecisionResult
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ShadowArgumentProposal:
+    status: str
+    proposed: dict[str, Any] | None
+    reason: str | None
+    calls: tuple[dict[str, Any], ...] = ()
+
+
+class _ShadowInstanceOverride(Exception):
+    """Instance llm_call wrapper may close over foreground state."""
+
+
+_SHADOW_SCHEMA_KEYS = frozenset(
+    {
+        "type",
+        "description",
+        "title",
+        "default",
+        "enum",
+        "const",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "items",
+        "prefixItems",
+        "contains",
+        "minContains",
+        "maxContains",
+        "properties",
+        "patternProperties",
+        "additionalProperties",
+        "required",
+        "minProperties",
+        "maxProperties",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "if",
+        "then",
+        "else",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+    }
+)
+
+
+def _recognized_schema(spec: Any) -> bool:
+    if isinstance(spec, bool):
+        return True
+    if not isinstance(spec, Mapping) or set(spec) - _SHADOW_SCHEMA_KEYS:
+        return False
+    for key in ("items", "contains", "additionalProperties", "not", "if", "then", "else"):
+        if key in spec and not _recognized_schema(spec[key]):
+            return False
+    for key in ("properties", "patternProperties"):
+        if key in spec and (
+            not isinstance(spec[key], Mapping)
+            or any(not _recognized_schema(child) for child in spec[key].values())
+        ):
+            return False
+    for key in ("prefixItems", "allOf", "anyOf", "oneOf"):
+        if key in spec and (
+            not isinstance(spec[key], list)
+            or any(not _recognized_schema(child) for child in spec[key])
+        ):
+            return False
+    return True
+
+
+def registry_parameters_to_full_schema(
+    parameters: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Build a lossless validation schema from Tool.parameters or abstain.
+
+    The old registry projection deliberately drops constraints.  Shadow
+    proposals cannot use it as a complete-action validity check.
+    """
+    if not isinstance(parameters, Mapping) or not parameters:
+        return None
+    properties = {}
+    required = []
+    for name, spec in parameters.items():
+        if not isinstance(name, str) or not name or not isinstance(spec, Mapping):
+            return None
+        if not _recognized_schema(spec):
+            return None
+        is_required = spec.get("required", False)
+        if not isinstance(is_required, bool):
+            return None
+        if is_required:
+            required.append(name)
+        properties[name] = {key: value for key, value in spec.items() if key != "required"}
+    schema: dict[str, Any] = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+        "required": required,
+    }
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError:
+        return None
+    return schema
+
+
+def propose_shadow_typed_arguments(
+    *,
+    tool_name: str,
+    full_schema: Mapping[str, Any] | None,
+    original_kwargs: Mapping[str, Any],
+    primitives: Any,
+    role: str,
+    state: str,
+    mode: str = "json",
+    tool: Any = None,
+) -> ShadowArgumentProposal:
+    """Observe a typed proposal; never return arguments for foreground dispatch."""
+    if mode not in {"json", "native"} or not isinstance(full_schema, Mapping):
+        return ShadowArgumentProposal("abstained", None, "complete_schema_unavailable")
+    if not isinstance(original_kwargs, Mapping) or not isinstance(state, str) or not state.strip():
+        return ShadowArgumentProposal("abstained", None, "invalid_original_or_state")
+    try:
+        schema = dict(full_schema)
+        Draft202012Validator.check_schema(schema)
+        mapping = tool_schema_to_questions(tool_name, schema)
+        required = set(schema.get("required", ()))
+        properties = schema.get("properties", {})
+        if any(name not in properties for name in required) or any(
+            skipped.startswith(f"{name}: ") for name in required for skipped in mapping.skipped
+        ):
+            return ShadowArgumentProposal("abstained", None, "required_argument_unmappable")
+        if not mapping.questions:
+            return ShadowArgumentProposal("abstained", None, "no_mappable_arguments")
+        with record_llm_calls(primitives) as call_log:
+            result = run_typed_decisions(
+                primitives,
+                state=state,
+                questions=mapping.questions,
+                role=role,
+                mode=mode,
+            )
+        calls = tuple(dict(call) for call in call_log.calls)
+        if result.failures:
+            return ShadowArgumentProposal("abstained", None, "typed_failure", calls)
+        selected = assemble_arguments(mapping.questions, result.decisions, schema)
+        proposal = dict(original_kwargs)
+        proposal.update(selected)
+        Draft202012Validator(schema).validate(proposal)
+        if tool is not None:
+            errors = tool.validate_args(proposal)
+            if errors:
+                return ShadowArgumentProposal(
+                    "abstained", None, "registry_validation_failed", calls
+                )
+        return ShadowArgumentProposal("proposed", proposal, None, calls)
+    except (ToolArgumentError, SchemaError, ValidationError, TypeError, ValueError) as exc:
+        return ShadowArgumentProposal("abstained", None, f"{type(exc).__name__}: {exc}")
+
+
+def submit_tool_argument_shadow(
+    *,
+    primitives: Any,
+    tool_name: str,
+    tool: Any,
+    original_kwargs: Mapping[str, Any],
+    state: str,
+    role: str,
+    prepared: PreparedAction,
+    validation: ValidationResult,
+    outcome: Mapping[str, str],
+    receipt_path: Path,
+    mode: str = "json",
+) -> bool:
+    """Queue the Q4 observer; never wait for it or change executed arguments."""
+    full_schema = registry_parameters_to_full_schema(getattr(tool, "parameters", None))
+    tool_snapshot = copy.copy(tool)
+    tool_snapshot.parameters = copy.deepcopy(getattr(tool, "parameters", {}))
+    return submit_bounded_shadow_work(
+        _run_tool_argument_shadow,
+        primitives=primitives,
+        tool_name=tool_name,
+        tool=tool_snapshot,
+        original_kwargs=copy.deepcopy(dict(original_kwargs)),
+        full_schema=copy.deepcopy(full_schema),
+        state=str(state),
+        role=str(role),
+        prepared=prepared,
+        validation=validation,
+        outcome=dict(outcome),
+        request_trace_keys=copy.deepcopy(getattr(primitives, "_request_trace_keys", {})),
+        receipt_path=Path(receipt_path),
+        mode=mode,
+    )
+
+
+def _run_tool_argument_shadow(
+    *,
+    primitives: Any,
+    tool_name: str,
+    tool: Any,
+    original_kwargs: Mapping[str, Any],
+    full_schema: Mapping[str, Any] | None,
+    state: str,
+    role: str,
+    prepared: PreparedAction,
+    validation: ValidationResult,
+    outcome: Mapping[str, str],
+    request_trace_keys: Mapping[str, Any],
+    receipt_path: Path,
+    mode: str,
+) -> None:
+    """Run after foreground completion with isolated usage and one receipt."""
+    started = time.perf_counter()
+    proposal = ShadowArgumentProposal("abstained", None, "shadow_not_run")
+    try:
+        # A shallow clone retains the same backend/slot but detaches mutable
+        # foreground counters, call log and bound request ledger. ContextVars
+        # were copied at submission for cancellation/deadline/placement.
+        shadow_primitives = copy.copy(primitives)
+        # record_llm_calls and some harnesses wrap llm_call on the instance.
+        # A shallow copy would retain that closure bound to the foreground.
+        # Fail closed instead of logging or billing shadow work to it.
+        if "llm_call" in vars(primitives):
+            proposal = ShadowArgumentProposal("abstained", None, "instance_llm_call_override")
+            raise _ShadowInstanceOverride
+        shadow_primitives.call_log = []
+        shadow_primitives._request_trace_keys = dict(request_trace_keys)
+        bind_usage = getattr(shadow_primitives, "bind_request_usage", None)
+        if callable(bind_usage):
+            bind_usage(request_id=f"td29-shadow-{time.time_ns()}")
+        if validation.status == "accepted":
+            cancel_getter = getattr(shadow_primitives, "get_request_cancel_check", None)
+            cancel_check = cancel_getter() if callable(cancel_getter) else None
+            deadline_getter = getattr(shadow_primitives, "get_request_deadline_s", None)
+            deadline_s = deadline_getter() if callable(deadline_getter) else None
+            if callable(cancel_check) and cancel_check():
+                proposal = ShadowArgumentProposal("abstained", None, "request_cancelled")
+            elif isinstance(deadline_s, (int, float)) and time.perf_counter() >= deadline_s:
+                proposal = ShadowArgumentProposal("abstained", None, "request_deadline_expired")
+            else:
+                proposal = propose_shadow_typed_arguments(
+                    tool_name=tool_name,
+                    full_schema=full_schema,
+                    original_kwargs=original_kwargs,
+                    primitives=shadow_primitives,
+                    role=role,
+                    state=state,
+                    mode=mode,
+                    tool=tool,
+                )
+        else:
+            proposal = ShadowArgumentProposal("abstained", None, f"host_{validation.status}")
+    except _ShadowInstanceOverride:
+        pass
+    except Exception as exc:
+        logger.warning("tool argument shadow failed", exc_info=True)
+        proposal = ShadowArgumentProposal("abstained", None, f"{type(exc).__name__}: {exc}")
+    receipt = make_receipt(
+        prepared,
+        validation,
+        authorization_result="denied" if validation.status == "unauthorized" else "allowed",
+        component_timing_ms={"selection": (time.perf_counter() - started) * 1000.0},
+        total_timing_ms=(time.perf_counter() - started) * 1000.0,
+        observed_downstream_outcome=outcome,
+        proposed_arguments=proposal.proposed,
+        executed_arguments=original_kwargs,
+        selector_status=proposal.status,
+        selector_reason=proposal.reason,
+        selector_calls=proposal.calls,
+        shadow_mode=mode,
+    )
+    try:
+        append_receipt(receipt_path, receipt)
+    except Exception:
+        logger.warning("tool argument shadow receipt write failed", exc_info=True)
+
 
 __all__ = ["maybe_typed_arguments", "registry_parameters_to_schema"]
 

@@ -54,6 +54,7 @@ Executor note:
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import inspect
 import json
@@ -282,6 +283,26 @@ def submit_shadow(
     except Exception:
         _release_slot()
         logger.warning("typed-decisions shadow submit failed on %s", surface, exc_info=True)
+        return False
+    future.add_done_callback(_release_slot)
+    return True
+
+
+def submit_bounded_shadow_work(callback, /, *args, **kwargs) -> bool:
+    """Submit tool-argument shadow work on the existing bounded daemon worker.
+
+    The caller owns its feature gate and immutable input snapshot.  A copied
+    Context is needed for request deadline, cancellation and placement values;
+    the callback must isolate its usage collectors before invoking a model.
+    """
+    if not _reserve_slot():
+        return False
+    context = contextvars.copy_context()
+    try:
+        future = _get_executor().submit(context.run, callback, *args, **kwargs)
+    except Exception:
+        _release_slot()
+        logger.warning("typed tool-argument shadow submission failed", exc_info=True)
         return False
     future.add_done_callback(_release_slot)
     return True

@@ -622,58 +622,55 @@ class _ContextMixin:
         chain_index = int(getattr(self, "_active_tool_chain_index", 0))
         caller_type = "chain" if chain_id else "direct"
 
-        # TD-4: closed-set typed argument selection (flag
-        # ``typed_decisions_tool_args``, default off). Fail-open: None keeps
-        # the model-provided kwargs and the existing validation path.
+        # TD-29 Q4: tool-argument selection is shadow-only until v11.  Capture
+        # the original arguments before any observer work.  The foreground
+        # invocation below always receives these model-provided arguments.
         from src.features import features
 
-        decision_started = time.perf_counter()
         prepared = None
+        original_kwargs = None
+        shadow_state = ""
+        shadow_tool = None
         typed_enabled = features().typed_decisions_tool_args
         if typed_enabled:
             from src.typed_decisions.prepared_action import prepare_action
 
-            catalog, read_set, revision = self._tool_decision_snapshot()
-            offered = self._eligible_tool_choices(catalog, caller_type)
-            if offered:
-                prepared = prepare_action(
-                    task_revision=revision,
-                    catalog=catalog,
-                    read_set=read_set,
-                    expires_at_ns=time.time_ns() + 60_000_000_000,
-                    offered_choices=offered,
-                    requested_model=f"role:{self.role}",
-                )
-        # Only a prepared action consumes typed arguments; with the flag off
-        # (or nothing offered) the result would be discarded, so skip the call.
-        typed_arguments = self._typed_tool_arguments(tool_name) if prepared is not None else None
-        selection_ms = (time.perf_counter() - decision_started) * 1000
+            try:
+                catalog, read_set, revision = self._tool_decision_snapshot()
+                offered = self._eligible_tool_choices(catalog, caller_type)
+                if offered:
+                    import copy
+
+                    original_kwargs = copy.deepcopy(kwargs)
+                    shadow_state = str(getattr(self, "context", ""))
+                    live_tool = getattr(getattr(self, "tool_registry", None), "_tools", {}).get(
+                        tool_name
+                    )
+                    if live_tool is not None:
+                        shadow_tool = copy.copy(live_tool)
+                        shadow_tool.parameters = copy.deepcopy(getattr(live_tool, "parameters", {}))
+                    prepared = prepare_action(
+                        task_revision=revision,
+                        catalog=catalog,
+                        read_set=read_set,
+                        expires_at_ns=time.time_ns() + 60_000_000_000,
+                        offered_choices=offered,
+                        requested_model=f"role:{self.role}",
+                    )
+            except Exception:
+                log.exception("tool argument shadow preparation failed")
+                prepared = None
         validation = None
         authorized = False
-        validation_started = time.perf_counter()
         if prepared is not None:
-            from dataclasses import replace
-
             from src.typed_decisions.prepared_action import validate_prepared_action
 
-            primitives = getattr(self, "llm_primitives", None)
-            get_meta = getattr(primitives, "get_last_inference_meta", None)
-            try:
-                meta = get_meta() if callable(get_meta) else None
-            except Exception:
-                meta = None
-            if typed_arguments is not None and isinstance(meta, dict):
-                model_name = meta.get("model")
-                prepared = replace(
-                    prepared,
-                    resolved_model=model_name if isinstance(model_name, str) else None,
-                )
             catalog, read_set, revision = self._tool_decision_snapshot()
             current_offered = self._eligible_tool_choices(catalog, caller_type)
             authorized = tool_name in current_offered
             validation = validate_prepared_action(
                 prepared,
-                selected_id=tool_name if typed_arguments is not None else None,
+                selected_id=tool_name,
                 current_task_revision=revision,
                 current_catalog=catalog,
                 current_read_set=read_set,
@@ -681,13 +678,10 @@ class _ContextMixin:
                 authorized=authorized,
                 model_available=self._selector_model_available(),
             )
-            if validation.status == "accepted":
-                kwargs = typed_arguments
-        validation_ms = (time.perf_counter() - validation_started) * 1000
+            # A typed proposal is never assigned to kwargs on this path.
 
         # Fall back to REPL globals for tools like run_python_code that are
         # registered as direct REPL functions, not in the tool registry.
-        dispatch_started = time.perf_counter()
         outcome = {"status": "error", "detail": "not_dispatched"}
         try:
             try:
@@ -719,30 +713,29 @@ class _ContextMixin:
         finally:
             if prepared is not None and validation is not None:
                 from src.config import get_config
-                from src.typed_decisions.prepared_action import append_receipt, make_receipt
+                from src.typed_decisions.tool_args_integration import submit_tool_argument_shadow
 
-                receipt = make_receipt(
-                    prepared,
-                    validation,
-                    authorization_result="allowed" if authorized else "denied",
-                    component_timing_ms={
-                        "selection": selection_ms,
-                        "validation": validation_ms,
-                        "dispatch": (time.perf_counter() - dispatch_started) * 1000,
-                    },
-                    total_timing_ms=(time.perf_counter() - decision_started) * 1000,
-                    observed_downstream_outcome=outcome,
-                )
-                self._last_decision_receipt = receipt
                 try:
-                    append_receipt(
-                        get_config().paths.artifacts_dir
-                        / "typed_decisions"
-                        / "decision_receipts.jsonl",
-                        receipt,
-                    )
+                    if shadow_tool is not None and original_kwargs is not None:
+                        submit_tool_argument_shadow(
+                            primitives=getattr(self, "llm_primitives", None),
+                            tool_name=tool_name,
+                            tool=shadow_tool,
+                            original_kwargs=original_kwargs,
+                            state=shadow_state,
+                            role=self.role,
+                            prepared=prepared,
+                            validation=validation,
+                            outcome=outcome,
+                            receipt_path=(
+                                get_config().paths.artifacts_dir
+                                / "typed_decisions"
+                                / "decision_receipts.jsonl"
+                            ),
+                            mode="json",
+                        )
                 except Exception:
-                    log.exception("could not persist decision receipt")
+                    log.exception("could not submit tool argument shadow")
         if chain_id:
             self._active_tool_chain_index = chain_index + 1
 

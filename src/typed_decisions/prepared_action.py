@@ -61,6 +61,12 @@ class DecisionReceipt:
     component_timing_ms: Mapping[str, float]
     total_timing_ms: float
     observed_downstream_outcome: Mapping[str, str]
+    proposed_arguments: Mapping[str, Any] | None = None
+    executed_arguments: Mapping[str, Any] | None = None
+    selector_status: str | None = None
+    selector_reason: str | None = None
+    selector_calls: tuple[Mapping[str, Any], ...] = ()
+    shadow_mode: str | None = None
 
 
 def prepare_action(
@@ -152,6 +158,12 @@ def make_receipt(
     component_timing_ms: Mapping[str, float],
     total_timing_ms: float,
     observed_downstream_outcome: Mapping[str, str],
+    proposed_arguments: Mapping[str, Any] | None = None,
+    executed_arguments: Mapping[str, Any] | None = None,
+    selector_status: str | None = None,
+    selector_reason: str | None = None,
+    selector_calls: Sequence[Mapping[str, Any]] = (),
+    shadow_mode: str | None = None,
 ) -> DecisionReceipt:
     return DecisionReceipt(
         schema_version=SCHEMA_VERSION,
@@ -169,13 +181,30 @@ def make_receipt(
         component_timing_ms=dict(component_timing_ms),
         total_timing_ms=total_timing_ms,
         observed_downstream_outcome=dict(observed_downstream_outcome),
+        proposed_arguments=dict(proposed_arguments) if proposed_arguments is not None else None,
+        executed_arguments=dict(executed_arguments) if executed_arguments is not None else None,
+        selector_status=selector_status,
+        selector_reason=selector_reason,
+        selector_calls=tuple(dict(call) for call in selector_calls),
+        shadow_mode=shadow_mode,
     )
 
 
 def append_receipt(path: Path, receipt: DecisionReceipt) -> None:
     """Append one complete JSONL record with a single O_APPEND write."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = (json.dumps(asdict(receipt), sort_keys=True, allow_nan=False) + "\n").encode()
+    row = asdict(receipt)
+    if receipt.selector_status is None:
+        for key in (
+            "proposed_arguments",
+            "executed_arguments",
+            "selector_status",
+            "selector_reason",
+            "selector_calls",
+            "shadow_mode",
+        ):
+            row.pop(key)
+    payload = (json.dumps(row, sort_keys=True, allow_nan=False) + "\n").encode()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         if os.write(fd, payload) != len(payload):

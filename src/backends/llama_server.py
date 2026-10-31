@@ -984,6 +984,7 @@ class LlamaServerBackend(ModelBackend):
                 prompt_tokens=int(prompt_tokens) if prompt_tokens else None,
                 cached_prompt_tokens=cached_prompt_tokens,
                 reasoning_content=reasoning_content,
+                timings=dict(timings) if isinstance(timings, dict) and timings else None,
                 output_tokens_reported=output_tokens_reported,
                 output_tokens_source=(
                     "llama_server:/v1/chat/completions.usage.completion_tokens"
@@ -2088,6 +2089,7 @@ class LlamaServerBackend(ModelBackend):
                 prompt_tokens=prompt_tokens,
                 cached_prompt_tokens=cached_prompt_tokens,
                 reasoning_content="".join(reasoning_chunks) or None,
+                timings=dict(stream_timings) if stream_timings else None,
                 tool_calls=[tool_call_parts[index] for index in sorted(tool_call_parts)],
                 output_tokens_reported=output_tokens_reported,
                 output_tokens_source=(

@@ -526,6 +526,9 @@ class _Tool:
         self.name = name
         self.parameters = parameters
 
+    def validate_args(self, args):
+        return []
+
 
 class _FakeRegistry:
     def __init__(self, tool: _Tool):
@@ -606,8 +609,15 @@ def test_call_site_skips_typed_path_when_off(monkeypatch, disabled):
     ]
 
 
-def test_call_site_forwards_schema_and_state_when_on(enabled, monkeypatch, tmp_path):
-    """Flag on: the call site hands the tool's projected schema and task state over."""
+def _shadow_receipt(tmp_path):
+    from src.typed_decisions.shadow import drain_shadow
+
+    drain_shadow()
+    path = tmp_path / "typed_decisions" / "decision_receipts.jsonl"
+    return json.loads(path.read_text().strip())
+
+
+def _set_receipt_path(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     import src.config
@@ -617,15 +627,10 @@ def test_call_site_forwards_schema_and_state_when_on(enabled, monkeypatch, tmp_p
         "get_config",
         lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
     )
-    recorded: list[dict] = []
-    original = integration.maybe_typed_arguments
 
-    def _recording(**kwargs):
-        recorded.append(kwargs)
-        return original(**kwargs)
 
-    monkeypatch.setattr(integration, "maybe_typed_arguments", _recording)
-
+def test_call_site_shadow_records_proposal_but_executes_original(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
     mapping = tool_schema_to_questions("deploy", schema)
     primitives = _FakePrimitives(
@@ -634,141 +639,499 @@ def test_call_site_forwards_schema_and_state_when_on(enabled, monkeypatch, tmp_p
     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
     repl = _make_repl(primitives, registry)
 
-    repl._dispatch_tool("deploy", mode="fast", dry_run=False)
-
-    assert len(recorded) == 1
-    assert recorded[0]["tool_name"] == "deploy"
-    assert recorded[0]["parameters"]["properties"]["mode"]["enum"] == ["fast", "safe"]
-    assert recorded[0]["state"] == STATE
-
-
-def test_call_site_uses_typed_arguments_when_on(enabled, monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
-    import src.config
-
-    monkeypatch.setattr(
-        src.config,
-        "get_config",
-        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
-    )
-    schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
-    mapping = tool_schema_to_questions("deploy", schema)
-    primitives = _FakePrimitives(
-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
-    )
-    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
-    repl = _make_repl(primitives, registry)
-
-    result = repl._dispatch_tool("deploy", mode="fast", dry_run=False)
-
-    assert result == "tool-result"
-    assert registry.invocations == [
-        {"tool_name": "deploy", "role": "worker", "kwargs": {"mode": "safe", "dry_run": True}}
-    ]
-    rows = (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().splitlines()
-    receipt = json.loads(rows[0])
-    assert len(rows) == 1
-    assert receipt["schema_version"] == "decision_receipt.v1"
-    assert receipt["selected_id"] == "deploy"
-    assert receipt["validation_result"] == "accepted"
-    assert receipt["authorization_result"] == "allowed"
-    assert receipt["fallback"] is None
-    assert receipt["observed_downstream_outcome"]["status"] == "returned"
-
-
-def test_call_site_rechecks_task_revision_and_uses_incumbent(enabled, monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
-    import src.config
-
-    monkeypatch.setattr(
-        src.config,
-        "get_config",
-        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
-    )
-    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
-    repl = _make_repl(_FakePrimitives(), registry)
-
-    def _mutating_choice(tool_name):
-        repl.context = "changed after selection"
-        return {"mode": "safe", "dry_run": True}
-
-    monkeypatch.setattr(repl, "_typed_tool_arguments", _mutating_choice)
     assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
     assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
-    receipt = json.loads(
-        (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().strip()
-    )
+    receipt = _shadow_receipt(tmp_path)
+    assert receipt["schema_version"] == "decision_receipt.v1"
+    assert receipt["validation_result"] == "accepted"
+    assert receipt["selector_status"] == "proposed"
+    assert receipt["proposed_arguments"] == {"mode": "safe", "dry_run": True}
+    assert receipt["executed_arguments"] == {"mode": "fast", "dry_run": False}
+    assert receipt["observed_downstream_outcome"]["status"] == "returned"
+    assert receipt["shadow_mode"] == "json"
+
+
+def test_call_site_rechecks_task_revision_without_selector(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    primitives = _FakePrimitives()
+    repl = _make_repl(primitives, registry)
+    original = repl._tool_decision_snapshot
+    calls = 0
+
+    def changed_snapshot():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            repl.context = "changed after preparation"
+        return original()
+
+    monkeypatch.setattr(repl, "_tool_decision_snapshot", changed_snapshot)
+    assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+    receipt = _shadow_receipt(tmp_path)
     assert receipt["validation_result"] == "stale"
-    assert receipt["fallback"] == "incumbent_fallback"
+    assert receipt["selector_status"] == "abstained"
+    assert primitives.calls == []
+    assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
 
 
-@pytest.mark.parametrize("mutation", ["catalog", "model", "circuit"])
-def test_call_site_rechecks_catalog_and_model(enabled, monkeypatch, tmp_path, mutation):
-    from types import SimpleNamespace
-
-    import src.config
-
-    monkeypatch.setattr(
-        src.config,
-        "get_config",
-        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
-    )
+def test_call_site_rechecks_catalog_and_skips_shadow(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS.copy()))
     primitives = _FakePrimitives()
-    circuit = {"available": True}
-    if mutation == "circuit":
-        primitives.server_urls = {ROLE: "http://selector.invalid"}
-        primitives.health_tracker = SimpleNamespace(is_available=lambda url: circuit["available"])
     repl = _make_repl(primitives, registry)
+    original = repl._tool_decision_snapshot
+    calls = 0
 
-    def _mutating_choice(tool_name):
-        if mutation == "catalog":
-            registry._tools[tool_name].parameters = {"changed": {"type": "string"}}
-        elif mutation == "model":
-            primitives.llm_call = None
-        else:
-            circuit["available"] = False
-        return {"mode": "safe", "dry_run": True}
+    def changed_snapshot():
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            registry._tools["deploy"].parameters = {"changed": {"type": "string"}}
+        return original()
 
-    monkeypatch.setattr(repl, "_typed_tool_arguments", _mutating_choice)
+    monkeypatch.setattr(repl, "_tool_decision_snapshot", changed_snapshot)
     assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
-    assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
-    receipt = json.loads(
-        (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().strip()
-    )
-    assert receipt["validation_result"] == (
-        "stale" if mutation == "catalog" else "model_unavailable"
-    )
-    assert receipt["fallback"] == "incumbent_fallback"
+    receipt = _shadow_receipt(tmp_path)
+    assert receipt["validation_result"] == "stale"
+    assert receipt["selector_status"] == "abstained"
+    assert primitives.calls == []
 
 
-def test_call_site_selection_cannot_authorize_tool(enabled, monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
-    import src.config
-
-    monkeypatch.setattr(
-        src.config,
-        "get_config",
-        lambda: SimpleNamespace(paths=SimpleNamespace(artifacts_dir=tmp_path)),
-    )
+def test_call_site_revoked_permission_cannot_be_granted_by_shadow(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
     repl = _make_repl(_FakePrimitives(), registry)
+    original = registry.can_use_tool
+    calls = 0
 
-    def _revoked_choice(tool_name):
-        registry.allowed = False
-        return {"mode": "safe", "dry_run": True}
+    def revoke_after_prepare(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            registry.allowed = False
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(repl, "_typed_tool_arguments", _revoked_choice)
+    monkeypatch.setattr(registry, "can_use_tool", revoke_after_prepare)
     with pytest.raises(PermissionError, match="tool denied"):
         repl._dispatch_tool("deploy", mode="fast", dry_run=False)
-    assert registry.invocations == []
-    receipt = json.loads(
-        (tmp_path / "typed_decisions" / "decision_receipts.jsonl").read_text().strip()
-    )
+    receipt = _shadow_receipt(tmp_path)
     assert receipt["validation_result"] == "unauthorized"
     assert receipt["authorization_result"] == "denied"
-    assert receipt["fallback"] == "incumbent_fallback"
+    assert receipt["selector_status"] == "abstained"
     assert receipt["observed_downstream_outcome"]["detail"] == "PermissionError"
+
+
+def test_shadow_preserves_unmappable_optional_fields_on_original_td4_cohort():
+    from src.typed_decisions.tool_args_pilot import build_cases
+
+    for case in build_cases():
+        mapping = tool_schema_to_questions(case.tool, case.parameters)
+        answers = {}
+        for question in mapping.questions:
+            if "__" in question.id:
+                name, label = question.id.split("__", 1)
+                answers[question.id] = label in case.expected[name]
+            else:
+                answers[question.id] = case.expected[question.id]
+        optional = next(iter(set(case.parameters["properties"]) - set(case.expected)))
+        original = {**case.expected, optional: f"original-{case.case_id}"}
+        primitives = _FakePrimitives(_canned_response(mapping.questions, answers))
+        proposal = integration.propose_shadow_typed_arguments(
+            tool_name=case.tool,
+            full_schema=case.parameters,
+            original_kwargs=original,
+            primitives=primitives,
+            state=case.state,
+            role=ROLE,
+            mode="json",
+        )
+        assert proposal.status == "proposed", (case.case_id, proposal.reason)
+        assert proposal.proposed == original
+        assert proposal.proposed[optional] == original[optional]
+        assert len(primitives.calls) == 1
+
+
+def test_shadow_required_unmappable_declines_without_model_call():
+    primitives = _FakePrimitives()
+    result = integration.propose_shadow_typed_arguments(
+        tool_name="search",
+        full_schema=_REQUIRED_UNMAPPABLE,
+        original_kwargs={"query": "exact"},
+        primitives=primitives,
+        state=STATE,
+        role=ROLE,
+    )
+    assert result.status == "abstained"
+    assert result.reason == "required_argument_unmappable"
+    assert primitives.calls == []
+
+
+def test_shadow_full_validation_rejects_extra_and_constraint_violations():
+    schema = _FULLY_MAPPABLE
+    mapping = tool_schema_to_questions("deploy", schema)
+    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    result = integration.propose_shadow_typed_arguments(
+        tool_name="deploy",
+        full_schema=schema,
+        original_kwargs={"mode": "fast", "dry_run": False, "extra": "unregistered"},
+        primitives=_FakePrimitives(response),
+        state=STATE,
+        role=ROLE,
+    )
+    assert result.status == "abstained"
+    assert result.proposed is None
+    assert "ValidationError" in result.reason
+
+    constrained = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 2, "maximum": 4},
+        },
+        "required": ["count"],
+        "additionalProperties": False,
+    }
+    questions = tool_schema_to_questions("count", constrained).questions
+    result = integration.propose_shadow_typed_arguments(
+        tool_name="count",
+        full_schema=constrained,
+        original_kwargs={"count": 3},
+        primitives=_FakePrimitives(_canned_response(questions, {"count": 1})),
+        state=STATE,
+        role=ROLE,
+    )
+    assert result.status == "abstained"
+    assert result.proposed is None
+
+
+def test_shadow_refuses_unknown_registry_constraint_including_nested():
+    assert (
+        integration.registry_parameters_to_full_schema(
+            {"name": {"type": "string", "x-secret-rule": True}}
+        )
+        is None
+    )
+    assert (
+        integration.registry_parameters_to_full_schema(
+            {
+                "labels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "x-secret-rule": True,
+                    },
+                }
+            }
+        )
+        is None
+    )
+    assert integration.registry_parameters_to_full_schema(
+        {"mode": {"type": "string", "enum": ["fast", "safe"], "required": True}}
+    )["properties"]["mode"]["enum"] == ["fast", "safe"]
+
+
+def test_dispatch_never_waits_for_blocked_shadow(enabled, monkeypatch, tmp_path):
+    import threading
+
+    _set_receipt_path(monkeypatch, tmp_path)
+    schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+    mapping = tool_schema_to_questions("deploy", schema)
+    started, release = threading.Event(), threading.Event()
+
+    class BlockingPrimitives(_FakePrimitives):
+        def llm_call(self, prompt, **kwargs):
+            started.set()
+            assert release.wait(3)
+            return super().llm_call(prompt, **kwargs)
+
+    primitives = BlockingPrimitives(
+        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    )
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    repl = _make_repl(primitives, registry)
+    try:
+        assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+        assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
+        assert started.wait(2)
+    finally:
+        release.set()
+    assert _shadow_receipt(tmp_path)["selector_status"] == "proposed"
+
+
+def test_shadow_worker_observes_cancel_and_keeps_cost_separate(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
+
+    class CountedPrimitives(_FakePrimitives):
+        def __init__(self, response):
+            super().__init__(response)
+            self.total_calls = 0
+            self.cancelled = False
+
+        def llm_call(self, prompt, **kwargs):
+            self.total_calls += 1
+            return super().llm_call(prompt, **kwargs)
+
+        def get_request_cancel_check(self):
+            return lambda: self.cancelled
+
+    schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+    mapping = tool_schema_to_questions("deploy", schema)
+    primitives = CountedPrimitives(
+        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    )
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    repl = _make_repl(primitives, registry)
+    assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+    assert _shadow_receipt(tmp_path)["selector_status"] == "proposed"
+    assert primitives.total_calls == 0  # model work ran on an isolated primitives copy
+
+    other_path = tmp_path / "cancelled"
+    _set_receipt_path(monkeypatch, other_path)
+    primitives.cancelled = True
+    assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+    receipt = _shadow_receipt(other_path)
+    assert receipt["selector_reason"] == "request_cancelled"
+    assert receipt["selector_calls"] == []
+    assert primitives.total_calls == 0
+
+
+def test_bounded_shadow_executor_saturates_without_calling_fifth():
+    import threading
+
+    from src.typed_decisions.shadow import (
+        _reset_for_tests,
+        drain_shadow,
+        submit_bounded_shadow_work,
+    )
+
+    _reset_for_tests()
+    release = threading.Event()
+    calls = []
+
+    def block(i):
+        calls.append(i)
+        release.wait(3)
+
+    try:
+        assert all(submit_bounded_shadow_work(block, i) for i in range(4))
+        assert not submit_bounded_shadow_work(block, 4)
+    finally:
+        release.set()
+        drain_shadow()
+    assert sorted(calls) == list(range(4))
+
+
+def test_shadow_failure_and_malformed_response_never_change_dispatch(
+    enabled, monkeypatch, tmp_path
+):
+    _set_receipt_path(monkeypatch, tmp_path)
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    primitives = _FakePrimitives("not-json")
+    repl = _make_repl(primitives, registry)
+    assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+    receipt = _shadow_receipt(tmp_path)
+    assert receipt["selector_status"] == "abstained"
+    assert receipt["proposed_arguments"] is None
+    assert receipt["executed_arguments"] == {"mode": "fast", "dry_run": False}
+    assert registry.invocations[0]["kwargs"] == receipt["executed_arguments"]
+
+    class FailingPrimitives(_FakePrimitives):
+        def llm_call(self, prompt, **kwargs):
+            raise RuntimeError("selector unavailable")
+
+    other = tmp_path / "failure"
+    _set_receipt_path(monkeypatch, other)
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    assert (
+        _make_repl(FailingPrimitives(), registry)._dispatch_tool(
+            "deploy", mode="fast", dry_run=False
+        )
+        == "tool-result"
+    )
+    receipt = _shadow_receipt(other)
+    assert receipt["selector_status"] == "abstained"
+    assert "selector unavailable" in receipt["selector_reason"]
+    assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
+
+
+def test_shadow_carries_request_context_across_worker_delay(enabled, monkeypatch, tmp_path):
+    import contextvars
+    import threading
+
+    _set_receipt_path(monkeypatch, tmp_path)
+    marker = contextvars.ContextVar("td29_request_marker", default="missing")
+    started, release = threading.Event(), threading.Event()
+    seen = []
+
+    def delayed_proposal(**kwargs):
+        started.set()
+        assert release.wait(3)
+        seen.append((marker.get(), kwargs["state"], kwargs["original_kwargs"]))
+        return integration.ShadowArgumentProposal("abstained", None, "test")
+
+    monkeypatch.setattr(integration, "propose_shadow_typed_arguments", delayed_proposal)
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    repl = _make_repl(_FakePrimitives(), registry)
+    token = marker.set("request-A")
+    try:
+        assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+        assert started.wait(2)
+    finally:
+        marker.reset(token)
+        release.set()
+    receipt = _shadow_receipt(tmp_path)
+    assert seen == [("request-A", STATE, {"mode": "fast", "dry_run": False})]
+    assert receipt["selector_status"] == "abstained"
+
+
+def test_shadow_rejects_foreground_instance_llm_wrapper(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
+    primitives = _FakePrimitives()
+    foreground_calls = []
+    primitives.llm_call = lambda *args, **kwargs: foreground_calls.append((args, kwargs))
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    assert _make_repl(primitives, registry)._dispatch_tool(
+        "deploy", mode="fast", dry_run=False
+    ) == "tool-result"
+    receipt = _shadow_receipt(tmp_path)
+    assert receipt["selector_reason"] == "instance_llm_call_override"
+    assert receipt["selector_calls"] == []
+    assert foreground_calls == []
+    assert registry.invocations[0]["kwargs"] == {"mode": "fast", "dry_run": False}
+
+
+def test_concurrent_foreground_and_shadow_isolate_meta_and_cost(enabled, monkeypatch, tmp_path):
+    import contextvars
+    import threading
+
+    _set_receipt_path(monkeypatch, tmp_path)
+    schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+    mapping = tool_schema_to_questions("deploy", schema)
+    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    started, release = threading.Event(), threading.Event()
+
+    class ConcurrentPrimitives(_FakePrimitives):
+        def __init__(self):
+            super().__init__(response)
+            self.total_calls = 0
+            self.call_log = []
+            self._request_trace_keys = {}
+            self._meta = contextvars.ContextVar("td29_concurrent_meta", default=None)
+            self.bound_request_id = "foreground"
+
+        def bind_request_usage(self, request_id=None):
+            self.bound_request_id = request_id
+
+        def get_last_inference_meta(self):
+            return self._meta.get()
+
+        def llm_call(self, prompt, **kwargs):
+            self.total_calls += 1
+            self.call_log.append({"prompt": prompt})
+            if self.bound_request_id != "foreground":
+                started.set()
+                assert release.wait(3)
+                self._meta.set({"prompt_n": 11, "cache_n": 0, "prompt_tokens": 11})
+            else:
+                self._meta.set({"prompt_n": 99, "cache_n": 0, "prompt_tokens": 99})
+            return response
+
+    primitives = ConcurrentPrimitives()
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    repl = _make_repl(primitives, registry)
+    try:
+        assert repl._dispatch_tool("deploy", mode="fast", dry_run=False) == "tool-result"
+        assert started.wait(2)
+        primitives.llm_call("foreground")
+        assert primitives.get_last_inference_meta()["prompt_n"] == 99
+    finally:
+        release.set()
+    receipt = _shadow_receipt(tmp_path)
+    assert receipt["selector_status"] == "proposed"
+    assert receipt["selector_calls"][0]["prompt_n"] == 11
+    assert primitives.total_calls == 1
+    assert len(primitives.call_log) == 1
+    assert primitives.call_log[0]["prompt"] == "foreground"
+    assert primitives.bound_request_id == "foreground"
+    assert primitives.get_last_inference_meta()["prompt_n"] == 99
+
+
+def test_queued_shadow_freezes_request_trace_keys(enabled, monkeypatch, tmp_path):
+    _set_receipt_path(monkeypatch, tmp_path)
+    pending = []
+    seen = []
+    primitives = _FakePrimitives()
+    primitives._request_trace_keys = {"x_session_id": "request-A"}
+
+    def queue_only(fn, **kwargs):
+        pending.append((fn, kwargs))
+        return True
+
+    def observe(**kwargs):
+        seen.append(kwargs["primitives"]._request_trace_keys)
+        return integration.ShadowArgumentProposal("abstained", None, "test")
+
+    monkeypatch.setattr(integration, "submit_bounded_shadow_work", queue_only)
+    monkeypatch.setattr(integration, "propose_shadow_typed_arguments", observe)
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    assert _make_repl(primitives, registry)._dispatch_tool(
+        "deploy", mode="fast", dry_run=False
+    ) == "tool-result"
+    assert len(pending) == 1
+    primitives._request_trace_keys = {"x_session_id": "request-B"}
+    fn, kwargs = pending.pop()
+    fn(**kwargs)
+    assert seen == [{"x_session_id": "request-A"}]
+    assert _shadow_receipt(tmp_path)["selector_status"] == "abstained"
+
+
+def test_real_primitives_usage_ledger_isolated_during_shadow(enabled, monkeypatch, tmp_path):
+    import threading
+
+    from src.llm_primitives.primitives import LLMPrimitives
+
+    primitives = LLMPrimitives(mock_mode=True)
+    _set_receipt_path(monkeypatch, tmp_path)
+    monkeypatch.setattr("src.llm_primitives.usage_log.write_usage_event", lambda *a, **k: None)
+    schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+    mapping = tool_schema_to_questions("deploy", schema)
+    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
+    started, release = threading.Event(), threading.Event()
+    ledgers = []
+
+    def fake_llm_call(self, prompt, **kwargs):
+        self.total_calls += 1
+        ledger = self._get_usage_ledger()
+        ticket = ledger.begin("worker")
+        if ledger.request_id != "foreground":
+            ledgers.append(ledger)
+            started.set()
+            assert release.wait(3)
+            count = 11
+        else:
+            count = 99
+        ledger.finish(ticket, prompt_tokens=count, completion_tokens=1,
+                      provenance="estimated", source="mock:unit", finish_reason="stop")
+        self._last_inference_meta_ctx.set(
+            {"prompt_n": count, "cache_n": 0, "prompt_tokens": count}
+        )
+        return response
+
+    monkeypatch.setattr(LLMPrimitives, "llm_call", fake_llm_call)
+    primitives.bind_request_usage("foreground")
+    registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+    try:
+        assert _make_repl(primitives, registry)._dispatch_tool(
+            "deploy", mode="fast", dry_run=False
+        ) == "tool-result"
+        assert started.wait(2)
+        primitives.llm_call("foreground")
+    finally:
+        release.set()
+    receipt = _shadow_receipt(tmp_path)
+    assert receipt["selector_calls"][0]["prompt_n"] == 11
+    assert len(ledgers) == 1
+    assert ledgers[0].summary()["prompt_tokens"] == 11
+    assert primitives.get_request_usage()["prompt_tokens"] == 99
+    assert primitives.total_calls == 1
+    assert primitives.get_last_inference_meta()["prompt_n"] == 99
