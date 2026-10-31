@@ -2076,15 +2076,16 @@ def _finite_or_none(value: Any) -> float | None:
 def _rows_from_meta(meta: Any) -> list[Mapping[str, Any]]:
     """Extract the ``completion_probabilities`` rows from an inference meta dict.
 
-    Missing / malformed meta yields ``[]``, which every position then reports
-    as a typed failure — never as a default answer.
+    Missing / malformed outer meta yields ``[]``. A malformed individual row
+    remains an empty placeholder: generated-token positions must never shift.
+    The existing candidate check reports that slot as a typed failure.
     """
     if not isinstance(meta, Mapping):
         return []
     rows = meta.get("completion_probabilities")
     if not isinstance(rows, list):
         return []
-    return [row for row in rows if isinstance(row, Mapping)]
+    return [row if isinstance(row, Mapping) else {} for row in rows]
 
 
 def _row_token_text(row: Mapping[str, Any]) -> str | None:
