@@ -1,0 +1,23 @@
+==> schema
+  (no orchestration/last_task_ir.json to validate)
+  (no architecture/architecture_ir.json to validate)
+==> shellcheck
+
+In scripts/session/start_orchestrator_test.sh line 157:
+for i in {1..30}; do
+^-^ SC2034 (warning): i appears unused. Verify use (or export if used externally).
+
+
+In scripts/benchmark/kill_seeding.sh line 15:
+HEAVY_PORTS=(8070 8083 8085 8087)
+^---------^ SC2034 (warning): HEAVY_PORTS appears unused. Verify use (or export if used externally).
+
+
+In scripts/benchmark/dripreview1_filler_job.sh line 34:
+[ -n "${FILLER_LIB:-}" ] && . "$FILLER_LIB"
+                              ^-----------^ SC1090 (warning): ShellCheck can't follow non-constant source. Use a directive to specify location.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC1090 -- ShellCheck can't follow non-const...
+  https://www.shellcheck.net/wiki/SC2034 -- HEAVY_PORTS appears unused. Verif...
+make: *** [Makefile:103: shellcheck] Error 1

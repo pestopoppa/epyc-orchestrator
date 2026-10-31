@@ -29,7 +29,7 @@ import sqlite3
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 from urllib.parse import quote
 
 import httpx
@@ -38,6 +38,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from src.roles import Role
+from src.api.routes.dashboard_machine_frame import project_machine_frame
 from src.runtime.live_telemetry import (
     live_batch_activity_summary,
     live_telemetry_frame,
@@ -7191,8 +7192,8 @@ _SNAPSHOT_SERVE_PATH_STALL_S = 30.0
 
 
 @router.get("/dashboard/api/snapshot")
-async def snapshot() -> JSONResponse:
-    """Point-in-time state: all slots + recent decisions + counters."""
+async def snapshot(view: Literal["full", "machine"] = "full") -> JSONResponse:
+    """Point-in-time state; machine view omits only an equal live-frame alias."""
     stats = _SNAPSHOT_BUILD_STATS
     started = time.time()
     stats["last_attempt_ts"] = started
@@ -7206,6 +7207,12 @@ async def snapshot() -> JSONResponse:
     stats["last_success_ts"] = done
     stats["last_duration_s"] = round(done - started, 3)
     stats["build_count"] += 1
+    if view == "machine":
+        return JSONResponse(
+            project_machine_frame(json.loads(resp.body)),
+            status_code=resp.status_code,
+            headers={key: value for key, value in resp.headers.items() if key != "content-length"},
+        )
     return resp
 
 
@@ -7386,11 +7393,11 @@ async def _snapshot_impl() -> JSONResponse:
 
 
 @router.get("/dashboard/events/stream")
-async def stream(request: Request) -> StreamingResponse:
+async def stream(request: Request, view: Literal["full", "machine"] = "full") -> StreamingResponse:
     """Push-first Server-Sent Events stream of authoritative live frames."""
 
     async def event_gen():
-        async for payload in _snapshot_payloads():
+        async for payload in _snapshot_payloads(view=view):
             if await request.is_disconnected():
                 return
             yield f"data: {payload}\n\n"
@@ -7417,7 +7424,7 @@ async def stream(request: Request) -> StreamingResponse:
 _PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 
 
-async def _snapshot_payloads():
+async def _snapshot_payloads(*, view: Literal["full", "machine"] = "full"):
     """Yield transition-driven snapshots, coalesced to at most 2 Hz.
 
     Runs until cancelled — the multiplex main loop is the SOLE reader of the
@@ -7445,6 +7452,10 @@ async def _snapshot_payloads():
                         for pid, sequence in (lifecycle.get("source_sequences") or {}).items()
                     )
                 )
+                if view == "machine":
+                    payload = JSONResponse(project_machine_frame(payload_frame)).body.decode(
+                        "utf-8"
+                    )
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)})
                 emitted_event_sequence = last_event_sequence
