@@ -295,6 +295,10 @@ def score_completed_task(
         force_role: Optional forced role from request context.
         real_mode: Whether request was real_mode.
     """
+    from src.backends.prompt_layout import current_request_source, is_non_learning_source
+
+    if is_non_learning_source(current_request_source()):
+        return
     if should_skip_background_scoring(force_role=force_role, real_mode=real_mode):
         return
     scorer = getattr(state, "q_scorer", None)
@@ -352,6 +356,10 @@ def score_completed_task_with_mode(
         task_id: The task ID to score.
         mode: Execution mode used ("direct", "react", or "repl").
     """
+    from src.backends.prompt_layout import current_request_source, is_non_learning_source
+
+    if is_non_learning_source(current_request_source()):
+        return
     scorer = getattr(state, "q_scorer", None)
     enabled = getattr(state, "q_scorer_enabled", False)
     if scorer is None or enabled is not True:

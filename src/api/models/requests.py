@@ -114,7 +114,7 @@ class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
 
     x_request_source: str | None = Field(
-        default=None, description="Optional prompt-log source label; never affects routing."
+        default=None, description="Optional source label; smoke/probe/health opt out of episodic scoring, not routing."
     )
 
     @field_validator("x_request_source", mode="before")

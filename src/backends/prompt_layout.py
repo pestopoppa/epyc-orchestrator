@@ -46,7 +46,8 @@ KINDS = (
     "system", "tools", "rules", "task", "state", "context",
     "reference_code", "skill", "routing", "doc_chunk", "tool_output",
 )
-SOURCES = ("interactive", "autopilot", "benchmark", "repl_experiment")
+NON_LEARNING_SOURCES = frozenset({"smoke", "probe", "health"})
+SOURCES = ("interactive", "autopilot", "benchmark", "repl_experiment", "smoke", "probe", "health")
 HEAD_CHARS = 256
 MAX_AGE_S = 600.0
 
@@ -59,6 +60,16 @@ def normalize_source(value: Any) -> str | None:
     if isinstance(value, str) and value.strip().lower() in SOURCES:
         return value.strip().lower()
     return None
+
+
+def is_non_learning_source(source: Any) -> bool:
+    """Only explicit diagnostic tags opt a request out of episodic scoring."""
+    return normalize_source(source) in NON_LEARNING_SOURCES
+
+
+def current_request_source() -> str | None:
+    """Request-bound label only; never infer it from global environment."""
+    return _request_source.get()
 
 
 def producer_source(default: str, explicit: str | None = None) -> str | None:

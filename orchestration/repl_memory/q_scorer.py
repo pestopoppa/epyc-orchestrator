@@ -1398,6 +1398,13 @@ class QScorer:
         if not task_outcome:
             return {"error": "Task not completed yet"}
 
+        # The explicit request tag is journaled at dispatch, so this also protects
+        # idle replay after the request context and process have gone away.
+        start_data = task_started.data if task_started and isinstance(task_started.data, dict) else {}
+        if isinstance(start_data.get("request_source"), str) and start_data["request_source"] in {"smoke", "probe", "health"}:
+            return {"memories_updated": 0, "memories_created": 0,
+                    "skipped": "non_learning_request_source", "reward": None}
+
         # An INFRA failure is the ABSENCE of a measurement, never a bad one, so
         # it must not reach the reward writer at all. The serving pipeline
         # stamps the structural disposition onto the TASK_FAILED entry

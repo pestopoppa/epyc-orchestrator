@@ -65,7 +65,7 @@ def _chat(role: str, session_id: str, timeout: float = 90.0) -> dict:
     t0 = time.time()
     try:
         with httpx.Client(timeout=timeout) as c:
-            r = c.post(f"{API}/chat", json=payload)
+            r = c.post(f"{API}/chat", json=payload, headers={"X-Request-Source": "probe"})
         ans = ""
         try:
             ans = (r.json().get("answer") or r.json().get("response") or "")[:60]

@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from src.api.dependencies import dep_app_state
 from src.api.models import ChatRequest, ChatResponse, RewardRequest
 from src.api.state import AppState
-from src.backends.prompt_layout import source_scope, source_stream
+from src.backends.prompt_layout import normalize_source, source_scope, source_stream
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.repl_environment import knowledge_fence
@@ -211,6 +211,14 @@ def _note_unfenced_eval_request(request: ChatRequest) -> None:
         )
 
 
+def _request_with_source_header(request: ChatRequest, http_request: Request | None) -> ChatRequest:
+    """Accept an explicit source header when the request has no body label."""
+    if request.x_request_source is not None or http_request is None:
+        return request
+    source = normalize_source(http_request.headers.get("x-request-source"))
+    return request.model_copy(update={"x_request_source": source}) if source else request
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -229,6 +237,7 @@ async def chat(
     - Cache statistics in response
     - Full orchestration loop with Root LM (Phase 8)
     """
+    request = _request_with_source_header(request, http_request)
     from src.runtime.live_telemetry import emit_lifecycle_transition
 
     if not request.request_id:
@@ -1343,6 +1352,7 @@ async def _handle_chat(
 async def chat_stream(
     request: ChatRequest,
     state: AppState = Depends(dep_app_state),
+    http_request: Request = None,
 ) -> StreamingResponse:
     """SSE streaming endpoint with routing metadata.
 
@@ -1364,6 +1374,7 @@ async def chat_stream(
     Note: Uses sse-starlette when available (via feature flag), otherwise
     falls back to manual SSE formatting for backward compatibility.
     """
+    request = _request_with_source_header(request, http_request)
     # INF-78 review fix F2: neither streaming path below installs a task scope or a
     # quiescence carrier (compare /chat's `begin_request_scope` / `quiescence.begin` in the
     # `try` block above) — a caller that sends task_root/read_roots/quiescent_after/edit_mode
@@ -1411,6 +1422,8 @@ async def chat_stream(
             "routing_preferences": request.routing_preferences,
         }
         task_ir = canonicalize_task_ir(task_ir)
+        if request.x_request_source in {"smoke", "probe", "health"}:
+            task_ir["request_source"] = request.x_request_source
         if state.progress_logger:
             state.progress_logger.log_task_started(
                 task_id=task_id,

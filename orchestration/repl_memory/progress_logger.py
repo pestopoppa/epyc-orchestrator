@@ -445,6 +445,9 @@ class ProgressLogger:
                 "workload_class": self._task_workload_class(task_ir),
                 "objective": task_ir.get("objective", "")[:PROGRESS_OBJECTIVE_LOG_LEN],
                 "priority": task_ir.get("priority"),
+                **({"request_source": task_ir["request_source"]}
+                   if isinstance(task_ir.get("request_source"), str)
+                   and task_ir["request_source"] in {"smoke", "probe", "health"} else {}),
             },
         )
         self.log(task_started_entry)
@@ -1120,8 +1123,11 @@ class ProgressReader:
         completed_tasks: set[str] = set()
         scored_memory_ids: set[str] = set()
         routing_entries: list[tuple[str, str | None]] = []
+        non_learning_tasks: set[str] = set()
 
         for entry in entries:
+            if entry.event_type == EventType.TASK_STARTED and isinstance(entry.data, dict) and isinstance(entry.data.get("request_source"), str) and entry.data["request_source"] in {"smoke", "probe", "health"}:
+                non_learning_tasks.add(entry.task_id)
             if entry.event_type in (EventType.TASK_COMPLETED, EventType.TASK_FAILED):
                 completed_tasks.add(entry.task_id)
             elif entry.event_type == EventType.Q_VALUE_UPDATED:
@@ -1138,7 +1144,7 @@ class ProgressReader:
                 elif not memory_id:
                     unscored.add(task_id)
 
-        result = list(unscored)
+        result = list(unscored - non_learning_tasks)
         self._unscored_cache = result
         self._unscored_cache_ts = now
         return result
