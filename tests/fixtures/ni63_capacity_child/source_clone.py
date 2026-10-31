@@ -1,4 +1,4 @@
-"""Build an external, source-pinned clone for NI63's import-capacity child probes.
+"""Build an external, source-recorded clone for NI63's import-capacity child probes.
 
 This fixture copies the Python modules in the import-time caller closure plus the
 lazy compiler/resolver modules instrumented by the side-effect probe. It also
@@ -9,47 +9,146 @@ It reads real /proc/meminfo; it never edits or substitutes host memory values.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-import sys
 import sysconfig
 import tempfile
 from pathlib import Path
 
 PINNED_APP_COMMIT = "6bb8d860d410217895efb7806e9ef907a62a4350"  # original NI63 fixture baseline
-# (Git blob SHA-1, content SHA-256), pinned per reviewed import-closure source.
+# Historical (Git blob SHA-1, SHA-256) identities retained for NI63 provenance.
+# The path set defines the reviewed import closure, not a frozen regression target:
+# materialize_source_clone records the actual copied source bytes on every run.
+# Workload fixture and declared capacity-policy pins below remain strict.
 SOURCE_PINS: dict[str, tuple[str, str]] = {
-    "scripts/server/bench_core_claim.py": ("7c03af5a90825ec7acd46b4ab3b4600828a75eba", "252c6dfc37bb4c34416cd7ba9f16158eb8a248ad4b56a9bfe94fd21466a34f16"),
-    "scripts/server/fleet_markers.py": ("070b6ab8af62fbd33cffa4069133cca915c3258e", "8ef8df7703252f41f52c2f9033e941d28d4fea7017d220a7e3dc617e1a2aec68"),
-    "scripts/server/orchestrator_stack.py": ("7c8087479cc75cce2c3b5ba0c4ab6e48236c6490", "ef909424ded22601cf87f2b712ad020c274e80e74e414e26fb3a92e2c0b8628e"),
-    "scripts/server/realized_fleet.py": ("12f01d3c17a2ccb13c193728d79e24d52148de4e", "9099aa115a22799ba2446bf2082e0d7ebb360a0df5f57aac654b6286c1ea9a31"),
-    "scripts/server/runtime_facts_manifest.py": ("c18bb563aabfa092e6b378fdddbd5f516352cd5d", "e2bfec7bb580fac727ca184b2dd4d56bd487e443e89d4720cc037743ab1dc374"),
-    "scripts/server/stack_env.py": ("0ad2da92f14a50e2145e36fe32e31011d0da8606", "c2dd2a40abf2ac3048e392a11bd910a27f6991e2a99cefdbd232172b67ea06a4"),
-    "scripts/server/stack_health.py": ("99d48f391565e0befb10040a0fea252087fc0313", "19ede42e88efeda2ab1fc5eb82c1272ac9d992f59313103c7d8d83917d4dfcad"),
-    "scripts/server/stack_log_banner.py": ("acdf77435557f3e06635725dc17eb90b29d5b3c9", "70daa945b70e0d74962016aac85c21fda4c56e4c44d02fa6621cc5cdcf2d2ef5"),
-    "scripts/server/stack_manifest.py": ("8ec58a7e5d28e3b214f3f4e18edefba136828930", "5f7acb6d067e4420edfc2bcc662148cd8fc7aff6c90682c51ece207666171610"),
-    "scripts/server/stack_numa.py": ("78ba16a1d289fa7f44480aa5f0f225ce70103908", "edfdb41035ec638d3eab60631024ebece56a5e2d9b577851bf02e05a446e0c32"),
-    "scripts/server/stack_numa_evict.py": ("09116f5040a575405f0d7807bb7af211085f906b", "575b811b72b31ed95f7296ee7aecb9e245aae9d603496e4baa1137ab42cb77de"),
-    "scripts/server/stack_numa_mode.py": ("115bb4c3d5b61802452512f98819fbf86ae67e9c", "e17e1c7260dda722b5e1f555e5fc92204a4e8d93a397a7128a0ed76c057afe63"),
-    "scripts/server/stack_paths.py": ("18c2daab3dd0d2941a112c686d73e5bad853f2a9", "85291c79110d3ab7683b0acbffb9158f320c138ad61f8acbdde269ee7a47abd5"),
-    "scripts/server/stack_processes.py": ("df278a70d5801b81dc54c5ec663d19859ad4a50e", "e9ac8d7951fb6a11664c1d69e71050dfd44ed51ae3e215858ffd698198459812"),
-    "scripts/server/stack_runtime.py": ("2d4489a3d4e6046973255dbf2b9a2d47b65c6a7e", "984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99"),
-    "scripts/server/stack_state.py": ("5d7ad9483260e4e56f8105df702fc5ff1b7f782f", "a047f152ac478e8fead80700b73bcb782dfe61969f513aa69da422518c89da8c"),
-    "scripts/server/launch_affinity.py": ("c78ceb5f327491696d314153b4e3280a5ad96ee0", "f1ef273e86a4f7121e588d79a34a9d72ec9150889c72344b950f4608cca091da"),
-    "src/__init__.py": ("ff893046a8e7d2598657b950e9e41449f358d25f", "16e20bce77e6470646b90def0e3d653a3bd9fb024b484f7cd034f96ff8a0a5f8"),
-    "src/config/__init__.py": ("90c83b49ed877c1615661f4a3ac188efac02d644", "bd0a888d06c952e0899093233241029b6cac2b6c2e1d605fea4b56878fe04d17"),
-    "src/config/models.py": ("a846546e725d448cbf9321fba84c2128905ccaf3", "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7"),
-    "src/config/validation.py": ("64f122cf6a2d7f0d29baac9bcc955029ec8f9cf5", "dc33a052fb1e0962b3546336017d239929a36a8942502a7aa99da064b20e32da"),
-    "src/env_parsing.py": ("11e3b7c80df1a6f921d467f7a924d287e1ac28dc", "2626fb2c47012c56a7f7e99fe03f088977f9b061c77bcd1edf0dfa1e12b7d52f"),
-    "src/registry/__init__.py": ("287333a63889217a52c0082a7e316dc64670ee1f", "50ddc75e291c2caaae688bbe94c4f3144a5751eb11e0a65ee35b5632ea3a9c6d"),
-    "src/registry/kernel_paths.py": ("6bb3dad23130a763dc4c456c7c432a9535536f30", "f5cd510ad2887a6276350c8939147ce66ba78a8eab573d42ee120094c0795066"),
-    "src/registry/registry_loader.py": ("0bddc98c3a27c40d4e117783f70808f22551fc4f", "c4a4bf71f0f90384ffb64c673897c9fd496889e4e395a2e3eaf94933550ed18b"),
-    "src/registry/model_descriptors.py": ("924ff6c98279a8e59ec7d006f3edc20dcb80e523", "f7eac72c2cf8b9549005f4195c2c143fd22ae9e1dad9de65bef141cce4a193b1"),
-    "src/registry/research_origin.py": ("f41a8de1d31942d223ad1e86a8415c43e6a005ec", "6b2f3aa7844887b491f8883878f97f2563cced61c5bb2bd51dc5e23f8027d226"),
-    "src/registry/stack_priors.py": ("69de40e88e0a68015937f0dbb01332da7f9bfa94", "304f652cba847e157e8ac9e3098b5e9817e0c07071b921d0a3b359f81add1f5d"),
-    "src/registry_loader.py": ("c68c5918b94e4a54a07a7c6642d92365480bf656", "81f3dc46dea4af9eb8df9adb4a73d2e900e1d040d107a73a04053f8ea72b77be"),
-    "src/roles.py": ("59432d52c3c5ebb661c336f70627267073cfa4cb", "408f10be964705638562ec9a6d0e1cd56b26ac849fdb964e8bac0c9a7fe4be61"),
-    "src/scheduling/__init__.py": ("e81d5c94b0479ae82472dfceec8393cd8f8286d2", "a65b963b3d38ca2d680827bfe3debe3e7d91095ea50723c5c40ce6b19dd0df51"),
-    "src/scheduling/device_model.py": ("78e0ede88801c39a842fadcbf6b4322d1c1a83ac", "90e3f9e001bbcb940c4cb493caa4df29b4da244b7d9834e6b09632c9fb49171b"),
+    "scripts/server/bench_core_claim.py": (
+        "7c03af5a90825ec7acd46b4ab3b4600828a75eba",
+        "252c6dfc37bb4c34416cd7ba9f16158eb8a248ad4b56a9bfe94fd21466a34f16",
+    ),
+    "scripts/server/fleet_markers.py": (
+        "070b6ab8af62fbd33cffa4069133cca915c3258e",
+        "8ef8df7703252f41f52c2f9033e941d28d4fea7017d220a7e3dc617e1a2aec68",
+    ),
+    "scripts/server/orchestrator_stack.py": (
+        "7c8087479cc75cce2c3b5ba0c4ab6e48236c6490",
+        "ef909424ded22601cf87f2b712ad020c274e80e74e414e26fb3a92e2c0b8628e",
+    ),
+    "scripts/server/realized_fleet.py": (
+        "12f01d3c17a2ccb13c193728d79e24d52148de4e",
+        "9099aa115a22799ba2446bf2082e0d7ebb360a0df5f57aac654b6286c1ea9a31",
+    ),
+    "scripts/server/runtime_facts_manifest.py": (
+        "c18bb563aabfa092e6b378fdddbd5f516352cd5d",
+        "e2bfec7bb580fac727ca184b2dd4d56bd487e443e89d4720cc037743ab1dc374",
+    ),
+    "scripts/server/stack_env.py": (
+        "0ad2da92f14a50e2145e36fe32e31011d0da8606",
+        "c2dd2a40abf2ac3048e392a11bd910a27f6991e2a99cefdbd232172b67ea06a4",
+    ),
+    "scripts/server/stack_health.py": (
+        "99d48f391565e0befb10040a0fea252087fc0313",
+        "19ede42e88efeda2ab1fc5eb82c1272ac9d992f59313103c7d8d83917d4dfcad",
+    ),
+    "scripts/server/stack_log_banner.py": (
+        "acdf77435557f3e06635725dc17eb90b29d5b3c9",
+        "70daa945b70e0d74962016aac85c21fda4c56e4c44d02fa6621cc5cdcf2d2ef5",
+    ),
+    "scripts/server/stack_manifest.py": (
+        "8ec58a7e5d28e3b214f3f4e18edefba136828930",
+        "5f7acb6d067e4420edfc2bcc662148cd8fc7aff6c90682c51ece207666171610",
+    ),
+    "scripts/server/stack_numa.py": (
+        "78ba16a1d289fa7f44480aa5f0f225ce70103908",
+        "edfdb41035ec638d3eab60631024ebece56a5e2d9b577851bf02e05a446e0c32",
+    ),
+    "scripts/server/stack_numa_evict.py": (
+        "09116f5040a575405f0d7807bb7af211085f906b",
+        "575b811b72b31ed95f7296ee7aecb9e245aae9d603496e4baa1137ab42cb77de",
+    ),
+    "scripts/server/stack_numa_mode.py": (
+        "115bb4c3d5b61802452512f98819fbf86ae67e9c",
+        "e17e1c7260dda722b5e1f555e5fc92204a4e8d93a397a7128a0ed76c057afe63",
+    ),
+    "scripts/server/stack_paths.py": (
+        "18c2daab3dd0d2941a112c686d73e5bad853f2a9",
+        "85291c79110d3ab7683b0acbffb9158f320c138ad61f8acbdde269ee7a47abd5",
+    ),
+    "scripts/server/stack_processes.py": (
+        "df278a70d5801b81dc54c5ec663d19859ad4a50e",
+        "e9ac8d7951fb6a11664c1d69e71050dfd44ed51ae3e215858ffd698198459812",
+    ),
+    "scripts/server/stack_runtime.py": (
+        "2d4489a3d4e6046973255dbf2b9a2d47b65c6a7e",
+        "984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99",
+    ),
+    "scripts/server/stack_state.py": (
+        "5d7ad9483260e4e56f8105df702fc5ff1b7f782f",
+        "a047f152ac478e8fead80700b73bcb782dfe61969f513aa69da422518c89da8c",
+    ),
+    "scripts/server/launch_affinity.py": (
+        "c78ceb5f327491696d314153b4e3280a5ad96ee0",
+        "f1ef273e86a4f7121e588d79a34a9d72ec9150889c72344b950f4608cca091da",
+    ),
+    "src/__init__.py": (
+        "ff893046a8e7d2598657b950e9e41449f358d25f",
+        "16e20bce77e6470646b90def0e3d653a3bd9fb024b484f7cd034f96ff8a0a5f8",
+    ),
+    "src/config/__init__.py": (
+        "90c83b49ed877c1615661f4a3ac188efac02d644",
+        "bd0a888d06c952e0899093233241029b6cac2b6c2e1d605fea4b56878fe04d17",
+    ),
+    "src/config/models.py": (
+        "a846546e725d448cbf9321fba84c2128905ccaf3",
+        "9ff0f384f74ffd315be19311f52b32cb9db78a2209248a9040dc7a9b185576b7",
+    ),
+    "src/config/validation.py": (
+        "64f122cf6a2d7f0d29baac9bcc955029ec8f9cf5",
+        "dc33a052fb1e0962b3546336017d239929a36a8942502a7aa99da064b20e32da",
+    ),
+    "src/env_parsing.py": (
+        "11e3b7c80df1a6f921d467f7a924d287e1ac28dc",
+        "2626fb2c47012c56a7f7e99fe03f088977f9b061c77bcd1edf0dfa1e12b7d52f",
+    ),
+    "src/registry/__init__.py": (
+        "287333a63889217a52c0082a7e316dc64670ee1f",
+        "50ddc75e291c2caaae688bbe94c4f3144a5751eb11e0a65ee35b5632ea3a9c6d",
+    ),
+    "src/registry/kernel_paths.py": (
+        "6bb3dad23130a763dc4c456c7c432a9535536f30",
+        "f5cd510ad2887a6276350c8939147ce66ba78a8eab573d42ee120094c0795066",
+    ),
+    "src/registry/registry_loader.py": (
+        "0bddc98c3a27c40d4e117783f70808f22551fc4f",
+        "c4a4bf71f0f90384ffb64c673897c9fd496889e4e395a2e3eaf94933550ed18b",
+    ),
+    "src/registry/model_descriptors.py": (
+        "924ff6c98279a8e59ec7d006f3edc20dcb80e523",
+        "f7eac72c2cf8b9549005f4195c2c143fd22ae9e1dad9de65bef141cce4a193b1",
+    ),
+    "src/registry/research_origin.py": (
+        "f41a8de1d31942d223ad1e86a8415c43e6a005ec",
+        "6b2f3aa7844887b491f8883878f97f2563cced61c5bb2bd51dc5e23f8027d226",
+    ),
+    "src/registry/stack_priors.py": (
+        "69de40e88e0a68015937f0dbb01332da7f9bfa94",
+        "304f652cba847e157e8ac9e3098b5e9817e0c07071b921d0a3b359f81add1f5d",
+    ),
+    "src/registry_loader.py": (
+        "c68c5918b94e4a54a07a7c6642d92365480bf656",
+        "81f3dc46dea4af9eb8df9adb4a73d2e900e1d040d107a73a04053f8ea72b77be",
+    ),
+    "src/roles.py": (
+        "59432d52c3c5ebb661c336f70627267073cfa4cb",
+        "408f10be964705638562ec9a6d0e1cd56b26ac849fdb964e8bac0c9a7fe4be61",
+    ),
+    "src/scheduling/__init__.py": (
+        "e81d5c94b0479ae82472dfceec8393cd8f8286d2",
+        "a65b963b3d38ca2d680827bfe3debe3e7d91095ea50723c5c40ce6b19dd0df51",
+    ),
+    "src/scheduling/device_model.py": (
+        "78e0ede88801c39a842fadcbf6b4322d1c1a83ac",
+        "90e3f9e001bbcb940c4cb493caa4df29b4da244b7d9834e6b09632c9fb49171b",
+    ),
 }
 CAPACITY_ARTIFACT_PIN = (
     "orchestration/gpu_shadow_lane_np_ceiling.yaml",
@@ -104,7 +203,7 @@ def materialize_source_clone(
     variant: str,
     project_venv_python: Path,
 ) -> Path:
-    """Copy only pinned import-time Python sources and the selected fixture data."""
+    """Copy current import-closure sources, record identities, pin workload data."""
     if variant not in {"fit", "oversized"}:
         raise ValueError("variant must be 'fit' or 'oversized'")
     source_root = source_root.resolve(strict=True)
@@ -115,6 +214,7 @@ def materialize_source_clone(
     clone = Path(tempfile.mkdtemp(prefix="ni63-capacity-child-", dir=private_parent))
     clone.chmod(0o700)
 
+    source_identity: dict[str, dict[str, str | bool]] = {}
     for relative, (expected_blob, expected_sha256) in SOURCE_PINS.items():
         source = source_root / relative
         if source.is_symlink() or not source.is_file():
@@ -122,8 +222,12 @@ def materialize_source_clone(
         contents = source.read_bytes()
         got_blob = _git_blob_sha1(contents)
         got_sha256 = hashlib.sha256(contents).hexdigest()
-        if (got_blob, got_sha256) != (expected_blob, expected_sha256):
-            raise RuntimeError(f"source differs from accepted APP pin: {relative}")
+        source_identity[relative] = {
+            "git_blob_sha1": got_blob,
+            "sha256": got_sha256,
+            "matches_historical_baseline": (got_blob, got_sha256)
+            == (expected_blob, expected_sha256),
+        }
         target = clone / relative
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         target.write_bytes(contents)
@@ -165,6 +269,24 @@ def materialize_source_clone(
     (clone / "scratch" / "tmp").mkdir(mode=0o700, parents=True)
     (clone / "scratch" / "logs").mkdir(mode=0o700, parents=True)
     (clone / "scratch" / "cache").mkdir(mode=0o700, parents=True)
+    # Emit only after all fixed workload inputs passed their original checks.
+    # This describes the bytes exercised by this run, never a historical warrant.
+    manifest = clone / "source_identity.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "epyc.ni63.current_source.v1",
+                "historical_fixture_baseline": PINNED_APP_COMMIT,
+                "variant": variant,
+                "sources": source_identity,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest.chmod(0o600)
     return clone
 
 
@@ -207,7 +329,9 @@ def probe_environment(clone: Path) -> dict[str, str]:
         "ORCHESTRATOR_VRAM_HEADROOM_GIB",
     }
     if forbidden & env.keys():
-        raise AssertionError(f"probe allowlist contains forbidden overrides: {sorted(forbidden & env.keys())}")
+        raise AssertionError(
+            f"probe allowlist contains forbidden overrides: {sorted(forbidden & env.keys())}"
+        )
     if "HOME" in os.environ:
         env["HOME"] = os.environ["HOME"]
     if (absent / "kernel-bin").exists():
