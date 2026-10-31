@@ -14,3 +14,10 @@ b6867f1661b84167ac64825284a09b42d11d3735e45c738899f9fe1918e1b170  scripts/server
 5d4f6e4c10de0b5ddab9f9569f45880b604d961b23429c5c30505cee97a6da78  tests/unit/test_orchestrator_stack_reload.py
 904d79529f0a721276703fc9f7d77aa863a6515434fb6c4d7044495b5b04d4ea  tests/unit/test_stack_manifest_imports.py
 e73c1b1821ebccccc5a066ee2b88012b58b599861a253205968a588784605feb  tests/unit/test_stack_priors_compiler.py
+
+Publication and ancestry:
+serialized_push agent: codex-ni-01a16d6b
+origin/main at verified fetch: 47cf1abe388e19abf4c96b5b494fe13bb2374861
+Published implementation commit: eda654775ddac4a7bec41b36563d7e4860cd895d
+Published proof commit: 47cf1abe388e19abf4c96b5b494fe13bb2374861
+Verification: `git merge-base --is-ancestor <commit> origin/main` passed for both commits; `git cherry origin/main HEAD` was empty.
