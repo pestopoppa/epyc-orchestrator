@@ -46,7 +46,10 @@ ingest_long_context --ports 8083 --holder autokernel --expected-end +45m
 
 Windows for AutoKernel are opened by the G1 executor
 (``python -m src.runtime.gpu_window_executor open ...``), the only writer of this
-file besides the orchestrator's ``request_preempt``. ``park`` refuses while the
+file with a serving handover. Manual ``park`` only writes the window file; it
+does NOT stop servers or free the GPU. Use ``gpu_window_executor open`` with a
+schedule entry and compute grant to stop servers (60 min default cap).
+``park`` refuses while the
 holder is not ``production``; ``--expected-end`` is capped at +60 min; ``restore``
 runs the executor's serving proof before writing ``holder=production``.
     python -m src.runtime.gpu_window status
@@ -681,6 +684,13 @@ def _split_csv(values: list[str] | None) -> list[str]:
     return out
 
 
+PARK_WARNING = (
+    "park only writes the window file; it does NOT stop servers or free the GPU. "
+    "To stop servers, use gpu_window_executor open with a schedule entry and "
+    "compute grant (60 min default cap)."
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.runtime.gpu_window",
@@ -688,7 +698,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--file", help=f"window file (default ${PATH_ENV} or {DEFAULT_PATH})")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_park = sub.add_parser("park", help="write holder=autokernel with the parked roles/ports")
+    p_park = sub.add_parser("park", help="write the window file only; does NOT stop servers",
+                            description=PARK_WARNING)
     p_park.add_argument("--roles", action="append", default=[], help="comma-separated roles")
     p_park.add_argument("--ports", action="append", default=[], help="comma-separated ports")
     p_park.add_argument("--holder", default="autokernel", choices=("autokernel", "released"))
@@ -722,6 +733,7 @@ def main(argv: list[str] | None = None) -> int:
                 with gwe.LeaseLock(window):
                     out = park(roles=_split_csv(args.roles), ports=ports, holder=args.holder,
                                expected_end=end, path=window)
+                print(f"warning: {PARK_WARNING}", file=sys.stderr)
         else:
             out = status(path=path)
     except (ValueError, RuntimeError, OSError) as exc:

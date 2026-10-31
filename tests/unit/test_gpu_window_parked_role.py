@@ -154,7 +154,11 @@ def test_cli_park_status_restore(window, capsys, monkeypatch):
     assert data["parked_roles"] == sorted(PARKED_ROLES)
     assert data["parked_ports"] == [8083]
     assert data["preempt_requested_at"] is None and data["since"] and data["expected_end"]
-    capsys.readouterr()
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == data
+    assert "does NOT stop servers" in captured.err
+    assert "gpu_window_executor open" in captured.err
+    assert "schedule entry" in captured.err and "compute grant" in captured.err
 
     assert gw.main(["status"]) == 0
     status = json.loads(capsys.readouterr().out)
