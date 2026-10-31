@@ -3,7 +3,7 @@
 Regression for the import-time ``os.execv`` re-exec in
 ``scripts/server/orchestrator_stack.py``: it replaced the *importer's* process
 with ``orchestrator_stack.py <importer's argv[1:]>``. These probes import an
-external, source-pinned fixture clone so the real host capacity guard is active
+external, source-recorded fixture clone so the real host capacity guard is active
 without importing the accepted production lineup into the pytest process.
 """
 
@@ -174,10 +174,10 @@ def test_explicit_host_capacity_guard_refuses_oversized_fixture(tmp_path: Path) 
         variant="oversized",
         project_venv_python=VENV_PY,
     )
-    proc = _run_probe(
-        clone, _import_code(clone, "m.validate_serving_shape_capacity()"), []
+    proc = _run_probe(clone, _import_code(clone, "m.validate_serving_shape_capacity()"), [])
+    assert proc.returncode != 0, (
+        "oversized synthetic lineup unexpectedly passed host capacity guard"
     )
-    assert proc.returncode != 0, "oversized synthetic lineup unexpectedly passed host capacity guard"
     assert proc.stdout == ""
     assert "Declared serving_shape lineup does not fit the hardware" in proc.stderr
     assert "device host (CPU RAM) OVERSUBSCRIBED" in proc.stderr
