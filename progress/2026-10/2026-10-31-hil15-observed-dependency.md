@@ -1,0 +1,7 @@
+# HIL-15 observed dependency logging — 2026-10-31
+
+APP source commit `3aff25784d8286589070d6ea6b7e328b9d33feb5` is on `origin/main`. The source partial closes the native-call gap in the existing HIL-15 implementation: combined REPL operations now record dependencies at each inner registry invocation, independently of step-event logging, and aggregate wrapper results are excluded from native dependency classification. The `observed` grade remains unchanged.
+
+Verification: `tests/unit/test_dependency_log.py`, `test_combined_ops.py`, `test_step_events.py`, `test_exploration_core.py`, and `test_replay_tier.py` passed 95/95 under the 32-33 prep mutex on SMT siblings 128,129; OMP=1; sampled group peak RSS 273368 KiB. The test matrix covers both combined builtins and both logging flags on/off. The telemetry-failure test preserves the successful native result and the original registry exception. Full command/output and source hashes are in [`verification.md`](../../artifacts/audit/hil15-observed-dependency-20261031/verification.md); raw output is in [`cpu-tests.log`](../../artifacts/audit/hil15-observed-dependency-20261031/cpu-tests.log).
+
+Acceptance boundary: existing HIL-15 history records RUN-1 with AUC status `INSUFFICIENT` (too few failures). The full HIL-15a AUC-over-run-size table with task-resampled interval remains owed until its inference window; this code work does not close the parent HIL-15 row. No ROOT handoff/index/source-table edit or inference run was made.
