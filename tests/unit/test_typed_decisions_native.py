@@ -2538,3 +2538,44 @@ class TestSingleTokenKeys:
         prompt = pool[0].calls[0]["prompt"]
         assert "   candidates: A = p1 | B = p2 | C = p3 | D = p4\n" in prompt
         assert prompt.endswith("\nseverity: ")
+
+
+class TestCapturedRowPositions:
+    @pytest.mark.parametrize("malformed", [None, [], 17, "lost row"])
+    def test_bad_cue_cannot_move_later_score_into_answer_position(self, malformed):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        thinking = {"id": 123456, "token": "<think>", "top_logprobs": []}
+        later = _v9_row("true", math.log(0.9), [("true", math.log(0.9)), ("false", math.log(0.1))])
+        primitives = _FakePrimitives(
+            "true", {"completion_probabilities": [malformed, thinking, later]}
+        )
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer, cue_style=CueStyle.ID_ONLY)
+        assert result.decisions == ()
+        assert len(result.failures) == 1
+        assert result.failures[0].reason == REASON_NATIVE_UNKNOWN_CANDIDATE
+        assert "emitted token" in result.failures[0].detail
+        report = native_diagnostics(result, primitives)
+        assert report["rows_captured"] == 3
+
+    def test_bad_answer_cannot_be_replaced_by_a_later_valid_score(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        later = _v9_row("true", math.log(0.9), [("true", math.log(0.9)), ("false", math.log(0.1))])
+        meta = _build_meta([NOUL], [later], tokenizer, CueStyle.ID_ONLY)
+        meta["completion_probabilities"][1] = None
+        meta["completion_probabilities"].append(later)
+        primitives = _FakePrimitives("true", meta)
+        result = _run(primitives, [NOUL], tokenize_fn=tokenizer, cue_style=CueStyle.ID_ONLY)
+        assert result.decisions == () and len(result.failures) == 1
+        assert native_diagnostics(result, primitives)["rows_captured"] == 3
+
+    def test_bad_first_answer_does_not_erase_a_valid_later_question(self):
+        tokenizer = _FakeTokenizer(fallback=(_CUE_TOKEN,))
+        second = Question(id="second", kind=QuestionKind.NOUL, text="Continue?")
+        answer = _v9_row("true", math.log(0.9), [("true", math.log(0.9)), ("false", math.log(0.1))])
+        meta = _build_meta([NOUL, second], [answer, answer], tokenizer, CueStyle.ID_ONLY)
+        meta["completion_probabilities"][1] = None
+        primitives = _FakePrimitives("true true", meta)
+        result = _run(primitives, [NOUL, second], tokenize_fn=tokenizer, cue_style=CueStyle.ID_ONLY)
+        assert [decision.question_id for decision in result.decisions] == ["second"]
+        assert len(result.failures) == 1
+        assert native_diagnostics(result, primitives)["rows_captured"] == 4
