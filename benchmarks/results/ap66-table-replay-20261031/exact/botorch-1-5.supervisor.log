@@ -1,0 +1,6 @@
+running botorch 1
+running botorch 2
+running botorch 3
+running botorch 4
+running botorch 5
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 546.8286329300608, "sampled_peak_tree_rss_bytes": 575152128, "samples": 5410, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 1800529, "leader_birth": 157639894, "child_rc": 0, "children_drained": true, "failure": null}

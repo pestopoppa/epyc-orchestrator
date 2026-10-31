@@ -297,7 +297,8 @@ def _per_suite_baseline_min_n() -> int:
 
 
 def _per_suite_regression_binding(
-    suite_delta: float, result_n: int | None, baseline_n: int | None
+    suite_delta: float, result_n: int | None, baseline_n: int | None,
+    *, binding_cap_observer: Any = None,
 ) -> bool:
     """Whether a threshold-crossing per-suite drop should fail the trial."""
     if result_n is None or baseline_n is None:
@@ -312,7 +313,13 @@ def _per_suite_regression_binding(
         return False
     if min(result_n, baseline_n) >= PER_SUITE_BINDING_MIN_COUNT:
         return True
-    return suite_delta < -PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP
+    binding = suite_delta < -PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP
+    if binding and binding_cap_observer is not None:
+        try:
+            binding_cap_observer(PER_SUITE_LOW_SUPPORT_CATASTROPHIC_DROP)
+        except Exception:
+            pass
+    return binding
 
 
 ARCHITECT_ROUTING_CAP = 0.80  # Max fraction routed to architect-tier
@@ -1771,10 +1778,20 @@ def quality_rebaseline_hold_leg(resident_era: str, active_era: str | None) -> Ga
     )
 
 
-def quality_floor_leg(quality: float, tier: int) -> GateLeg:
+def _observe_overage(observer: Any, name: str, values: Any) -> None:
+    """Best-effort private telemetry; an observer can never alter a verdict."""
+    if observer is not None:
+        try:
+            observer(name, *values())
+        except Exception:  # telemetry is never on the safety decision path
+            pass
+
+
+def quality_floor_leg(quality: float, tier: int, *, observer: Any = None) -> GateLeg:
     """1. Tier-aware absolute quality floor."""
     quality_floor = QUALITY_FLOOR_T0 if tier == 0 else QUALITY_FLOOR_T1
     if quality < quality_floor:
+        _observe_overage(observer, "quality_floor", lambda: (quality_floor - quality, quality_floor))
         return GateLeg(
             violations=(f"Quality floor violation: {quality:.3f} < {quality_floor} (tier {tier})",),
             categories=("quality_floor",),
@@ -1782,7 +1799,7 @@ def quality_floor_leg(quality: float, tier: int) -> GateLeg:
     return GateLeg()
 
 
-def regression_leg(quality: float, baseline_q: float | None) -> tuple[GateLeg, bool]:
+def regression_leg(quality: float, baseline_q: float | None, *, observer: Any = None) -> tuple[GateLeg, bool]:
     """2. Relative regression vs the strict same-tier baseline.
 
     Returns the leg and whether the result is an improvement-or-flat against a positive
@@ -1792,6 +1809,7 @@ def regression_leg(quality: float, baseline_q: float | None) -> tuple[GateLeg, b
         return GateLeg(), False
     relative_delta = (quality - baseline_q) / baseline_q
     if relative_delta < REGRESSION_THRESHOLD:
+        _observe_overage(observer, "regression", lambda: (REGRESSION_THRESHOLD - relative_delta, -REGRESSION_THRESHOLD))
         return GateLeg(
             violations=(
                 f"Quality regression: {quality:.3f} vs baseline {baseline_q:.3f} "
@@ -1880,6 +1898,7 @@ def per_suite_regression_leg(
     baseline_suites: Any,
     result_counts: Any,
     baseline_counts: Any,
+    *, observer: Any = None,
 ) -> GateLeg:
     """3. Resolution-aware per-suite regression (N-aware binding; see check())."""
     violations: list[str] = []
@@ -1913,35 +1932,49 @@ def per_suite_regression_leg(
                     )
                     if "tool_use_regression_advisory" not in categories:
                         categories.append("tool_use_regression_advisory")
-                elif _per_suite_regression_binding(suite_delta, result_n, baseline_n):
-                    violations.append(msg)
-                    if "per_suite_regression" not in categories:
-                        categories.append("per_suite_regression")
                 else:
-                    min_baseline_n = _per_suite_baseline_min_n()
-                    if baseline_n is not None and 0 < baseline_n < min_baseline_n:
-                        # 2026-07-16 thrash: a tiny-n baseline cannot certify a HARD
-                        # rollback; the suite still counts in aggregate scoring.
-                        warnings.append(
-                            f"{msg} treated as advisory (small-sample baseline): "
-                            f"baseline n={baseline_n} < {min_baseline_n} is too "
-                            "sparse to certify a hard rollback."
-                        )
+                    binding_cap: list[float] = []
+                    binding = _per_suite_regression_binding(
+                        suite_delta, result_n, baseline_n,
+                        binding_cap_observer=binding_cap.append if observer is not None else None,
+                    )
+                    if binding:
+                        violations.append(msg)
+                        def observed_cap() -> float:
+                            caps = [-threshold, *binding_cap]
+                            if suite == "tool_use":
+                                caps.append(TOOL_USE_CATASTROPHIC_REGRESSION)
+                            return max(caps)
+                        _observe_overage(observer, f"per_suite:{suite}", lambda: (
+                            -suite_delta - observed_cap(), observed_cap()))
+                        if "per_suite_regression" not in categories:
+                            categories.append("per_suite_regression")
                     else:
-                        warnings.append(
-                            f"{msg} treated as advisory because per-suite support "
-                            f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
-                            "drop is not catastrophic."
-                        )
-                    if "per_suite_regression_advisory" not in categories:
-                        categories.append("per_suite_regression_advisory")
+                        min_baseline_n = _per_suite_baseline_min_n()
+                        if baseline_n is not None and 0 < baseline_n < min_baseline_n:
+                            # 2026-07-16 thrash: a tiny-n baseline cannot certify a HARD
+                            # rollback; the suite still counts in aggregate scoring.
+                            warnings.append(
+                                f"{msg} treated as advisory (small-sample baseline): "
+                                f"baseline n={baseline_n} < {min_baseline_n} is too "
+                                "sparse to certify a hard rollback."
+                            )
+                        else:
+                            warnings.append(
+                                f"{msg} treated as advisory because per-suite support "
+                                f"is below n={PER_SUITE_BINDING_MIN_COUNT} and the "
+                                "drop is not catastrophic."
+                            )
+                        if "per_suite_regression_advisory" not in categories:
+                            categories.append("per_suite_regression_advisory")
     return GateLeg(tuple(violations), tuple(warnings), tuple(categories))
 
 
-def routing_diversity_leg(routing_distribution: Any) -> GateLeg:
+def routing_diversity_leg(routing_distribution: Any, *, observer: Any = None) -> GateLeg:
     """4. Architect-tier routing cap."""
     architect_frac = routing_distribution.get("architect", 0.0)
     if architect_frac > ARCHITECT_ROUTING_CAP:
+        _observe_overage(observer, "routing_diversity", lambda: (architect_frac - ARCHITECT_ROUTING_CAP, ARCHITECT_ROUTING_CAP))
         return GateLeg(
             violations=(
                 f"Routing diversity violation: {architect_frac:.1%} architect-tier "
@@ -1968,6 +2001,7 @@ def throughput_leg(
     speed_rebaseline_hold: bool = False,
     resident_speed_era: str = "",
     active_speed_era: str | None = None,
+    observer: Any = None,
 ) -> GateLeg:
     """5. Throughput floor. Host throttle state and the speed-era hold are INPUTS here;
     check() reads the host (read-only) only when :func:`throughput_below_floor`."""
@@ -2011,6 +2045,7 @@ def throughput_leg(
             categories.append("exogenous_cache_flush")
         elif not speed_rebaseline_hold:
             violations.append(base_msg)
+            _observe_overage(observer, "throughput", lambda: (frontdoor_speed * 0.8 - speed, frontdoor_speed * 0.8))
             categories.append("throughput")
     elif speed < frontdoor_speed * 0.9:
         warnings.append(
@@ -2638,6 +2673,23 @@ class SafetyGate:
             )
         return block
 
+    def check_with_constraint_observation(self, result: EvalResult, **kwargs: Any) -> tuple[SafetyVerdict, list[tuple[str, float, float]] | None]:
+        """Return the ordinary verdict plus optional exact overage/cap observations.
+
+        Cached or unencoded verdicts produce unknown, never invented numbers.
+        """
+        records: list[tuple[str, float, float]] = []
+        def observe(name: str, overage: float, cap: float) -> None:
+            records.append((name, overage, cap))
+        verdict = self.check(result, _constraint_observer=observe, **kwargs)
+        try:
+            valid = (len(records) == len(verdict.violations) and all(
+                math.isfinite(overage) and math.isfinite(cap) and overage > 0 and cap > 0
+                for _, overage, cap in records))
+        except Exception:
+            valid = False
+        return verdict, records if valid else None
+
     def check(
         self,
         result: EvalResult,
@@ -2650,6 +2702,7 @@ class SafetyGate:
         prior_rate_obs: Any = None,
         candidate: str = "",
         core_id: str = "",
+        _constraint_observer: Any = None,
     ) -> SafetyVerdict:
         """Run all safety checks on an eval result.
 
@@ -2778,7 +2831,7 @@ class SafetyGate:
 
         if not reliability_blocked and not quality_unmeasured:
             # 1. Quality floor (tier-aware)
-            _add(quality_floor_leg(result.quality, result.tier), violations, warnings, categories)
+            _add(quality_floor_leg(result.quality, result.tier, observer=_constraint_observer), violations, warnings, categories)
 
             # 2. Regression vs the STRICT same-tier baseline (SG-3, B3a: no cross-tier legacy
             # fallback). With no same-tier baseline the gate is skipped and update_baseline
@@ -2795,7 +2848,7 @@ class SafetyGate:
                     "(baseline will seed on the next eligible promotion).",
                     result.tier,
                 )
-            regression, improved = regression_leg(result.quality, baseline_q)
+            regression, improved = regression_leg(result.quality, baseline_q, observer=_constraint_observer)
             _add(regression, violations, warnings, categories)
             if improved:
                 if seq_inputs_ready:
@@ -2827,6 +2880,7 @@ class SafetyGate:
                     else self.baseline.per_suite_for_tier(result.tier),
                     getattr(result, "per_suite_counts", None) or {},
                     self.baseline.per_suite_counts_for_tier(result.tier),
+                    observer=_constraint_observer,
                 ),
                 violations,
                 warnings,
@@ -2834,7 +2888,7 @@ class SafetyGate:
             )
 
         # 4. Routing diversity
-        _add(routing_diversity_leg(result.routing_distribution), violations, warnings, categories)
+        _add(routing_diversity_leg(result.routing_distribution, observer=_constraint_observer), violations, warnings, categories)
 
         # 5. Throughput floor. speed == 0 on a reliability-blocked trial is the ABSENCE of a
         # measurement, not a slow one (trial 1459, 2026-08-03), so it is never charged. Below
@@ -2869,6 +2923,7 @@ class SafetyGate:
                 speed_rebaseline_hold=speed_rebaseline_hold,
                 resident_speed_era=self.baseline.autopilot_speed_era,
                 active_speed_era=self._autopilot_speed_era,
+                observer=_constraint_observer,
             ),
             violations,
             warnings,

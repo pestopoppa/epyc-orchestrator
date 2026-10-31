@@ -12,7 +12,7 @@ def test_study_name_uses_persistent_instrument_era_label() -> None:
     swarm = _swarm_with_epoch("E5-autopilot-speed")
 
     assert swarm._study_name("think_harder") == (
-        "autopilot_think_harder_era_E5_autopilot_speed"
+        "autopilot_think_harder_constraints_v1_task_rate_qph_era_E5_autopilot_speed"
     )
 
 
@@ -20,7 +20,7 @@ def test_study_name_keeps_structural_epoch_inside_instrument_era() -> None:
     swarm = _swarm_with_epoch("E5-autopilot-speed", epoch=2)
 
     assert swarm._study_name("monitor") == (
-        "autopilot_monitor_era_E5_autopilot_speed_epoch2"
+        "autopilot_monitor_constraints_v1_task_rate_qph_era_E5_autopilot_speed_epoch2"
     )
 
 

@@ -7,6 +7,7 @@ multi-objective search, and cluster-based robust selection.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -144,6 +145,15 @@ SURFACES: dict[str, list[ParamSpec]] = {
 }
 
 
+# New study namespace: old studies used unconstrained selection and may contain
+# tokens/second on axis 1. Never mix those observations with task-rate studies.
+CONSTRAINT_STUDY_VERSION = "constraints_v1_task_rate_qph"
+
+
+def _constraints(trial: Any) -> tuple[float]:
+    return (float(trial.user_attrs["constraint_violation"]),)
+
+
 class NumericSwarm:
     """Species 1: Optuna-based multi-objective parameter optimization."""
 
@@ -177,24 +187,26 @@ class NumericSwarm:
         storage = f"sqlite:///{self.db_path}"
         study_name = self._study_name(surface)
 
+        sampler = optuna.samplers.NSGAIISampler(seed=self.seed, constraints_func=_constraints)
         try:
             study = optuna.load_study(
                 study_name=study_name,
                 storage=storage,
+                sampler=sampler,
             )
             log.info("Loaded existing study '%s' with %d trials", study_name, len(study.trials))
         except KeyError:
-            sampler = optuna.samplers.NSGAIISampler(seed=self.seed)
             study = optuna.create_study(
                 study_name=study_name,
                 storage=storage,
                 sampler=sampler,
                 directions=["maximize", "maximize", "maximize", "maximize"],
-                # quality, speed, -cost, reliability
+                # quality, questions/hour, -cost, reliability
             )
             log.info("Created new study '%s'", study_name)
 
         self._studies[surface] = study
+        self._flush_pending(study)
         return study
 
     def suggest_trial(self, surface: str) -> dict[str, Any]:
@@ -221,36 +233,86 @@ class NumericSwarm:
         log.info("Trial %d for surface '%s': %s", trial.number, surface, params)
         return {"trial_number": trial.number, "params": params, "surface": surface}
 
-    def report_result(
-        self,
-        surface: str,
-        trial_number: int,
-        objectives: tuple[float, float, float, float],
-    ) -> None:
-        """Report trial result (quality, speed, -cost, reliability)."""
+    @staticmethod
+    def _set_attrs(study: Any, trial_number: int, attrs: dict[str, Any]) -> None:
+        trial = study.trials[trial_number]
+        for key, value in attrs.items():
+            study._storage.set_trial_user_attr(trial._trial_id, key, value)
+
+    @staticmethod
+    def _anchor(study: Any) -> list[float] | None:
+        # Only native qualified vectors are eligible. Cost is explicitly a
+        # reported cost-tier estimate; fallback and synthetic values are excluded.
+        vectors = [t.values for t in study.trials
+                   if t.state.name == "COMPLETE" and t.user_attrs.get("objective_source") == "native_qualified"
+                   and t.values is not None and all(math.isfinite(v) for v in t.values)]
+        return [min(values) for values in zip(*vectors)] if vectors else None
+
+    def _flush_pending(self, study: Any) -> None:
+        anchor = self._anchor(study)
+        if anchor is None:
+            return
+        for trial in study.trials:
+            if trial.state.name == "RUNNING" and trial.user_attrs.get("anchor_queued"):
+                self._set_attrs(study, trial.number, {
+                    "objective_source": "synthetic_worst_observed", "anchor_trial_values": anchor})
+                study.tell(trial.number, anchor)
+
+    def report_result(self, surface: str, trial_number: int,
+                      objectives: tuple[float, float, float, float], *,
+                      normalized_overages: list[float] | None = None,
+                      overage_cap_pairs: list[tuple[float, float]] | None = None,
+                      outcome_class: str | None = None,
+                      cost_tier_observed_count: int,
+                      reliability_observed_count: int) -> None:
+        """Tell native objectives with qualified cost/reliability provenance."""
+        if len(objectives) != 4 or not all(math.isfinite(v) for v in objectives):
+            raise ValueError("objectives must contain four finite values")
+        if (type(cost_tier_observed_count) is not int or cost_tier_observed_count <= 0
+                or type(reliability_observed_count) is not int or reliability_observed_count <= 0
+                or cost_tier_observed_count > reliability_observed_count):
+            raise ValueError("qualified cost-tier and reliability counts are required")
+        overages = list(normalized_overages or [])
+        if any(not math.isfinite(x) or x < 0 for x in overages):
+            raise ValueError("normalized overages must be finite and nonnegative")
+        total = sum(overages)
+        violation = 1.0 - 1.0 / (1.0 + total) if total else 0.0
+        if outcome_class == "slo_miss" and violation == 0:
+            violation = math.nextafter(0.0, 1.0)
+        # Clamp strictly below crash even with floating-point rounding.
+        violation = min(violation, math.nextafter(1.0, 0.0))
         study = self._get_study(surface)
+        self._set_attrs(study, trial_number, {"objective_source": "native_qualified",
+            "constraint_violation": violation, "normalized_overages": overages,
+            "overage_cap_pairs": overage_cap_pairs or [],
+            "cost_tier_observed_count": cost_tier_observed_count,
+            "reliability_observed_count": reliability_observed_count,
+            "cost_source": "reported_cost_tier_estimate",
+            "outcome_class": outcome_class or ("slo_miss" if total else "ok")})
         study.tell(trial_number, list(objectives))
-        log.info(
-            "Reported trial %d on '%s': %s",
-            trial_number, surface, objectives,
-        )
+        self._flush_pending(study)
+
+    def report_infeasible(self, surface: str, trial_number: int, *,
+                          outcome_class: str, reason: str) -> None:
+        """Record a config-caused crash; wait durably for a qualified anchor."""
+        if outcome_class not in {"startup", "preflight", "runtime"}:
+            raise ValueError("invalid infeasible outcome class")
+        study = self._get_study(surface)
+        # Write the pending marker last, after all data needed to resume tell.
+        self._set_attrs(study, trial_number, {"objective_source": "unknown",
+            "constraint_violation": 1.0, "outcome_class": outcome_class,
+            "outcome_reason": reason,
+            "observed_native_values": {
+                "quality": None, "task_rate_qph": None, "cost": None, "reliability": None},
+            "anchor_queued": True})
+        self._flush_pending(study)
 
     def mark_failed(self, surface: str, trial_number: int, reason: str = "") -> None:
-        """Mark an Optuna trial failed when params could not be applied."""
+        """Terminate a non-answer without presenting it as optimizer evidence."""
         from optuna.trial import TrialState
-
         study = self._get_study(surface)
-        try:
-            study.tell(trial_number, state=TrialState.FAIL)
-            log.warning(
-                "Marked trial %d on '%s' failed: %s",
-                trial_number, surface, reason,
-            )
-        except ValueError as e:
-            log.warning(
-                "Could not mark trial %d on '%s' failed: %s",
-                trial_number, surface, e,
-            )
+        self._set_attrs(study, trial_number, {"outcome_class": "unknown", "outcome_reason": reason, "constraint_violation": 0.0})
+        study.tell(trial_number, state=TrialState.PRUNED)
 
     def best_params(self, surface: str, method: str = "cluster") -> dict[str, Any]:
         """Get best parameters using cluster-based robust selection.
@@ -267,8 +329,10 @@ class NumericSwarm:
             return self._cluster_select(study, surface)
         elif method == "best_quality":
             # Best trial by first objective (quality)
-            best = max(study.best_trials, key=lambda t: t.values[0])
-            return dict(best.params)
+            eligible = [t for t in study.best_trials
+                        if t.user_attrs.get("objective_source") == "native_qualified"
+                        and t.user_attrs.get("constraint_violation") == 0]
+            return dict(max(eligible, key=lambda t: t.values[0]).params) if eligible else {}
         else:
             raise ValueError(f"Unknown selection method: {method}")
 
@@ -281,7 +345,9 @@ class NumericSwarm:
         """
         import numpy as np
 
-        trials = [t for t in study.trials if t.state.name == "COMPLETE"]
+        trials = [t for t in study.trials if t.state.name == "COMPLETE" and t.user_attrs.get("objective_source") == "native_qualified" and t.user_attrs.get("constraint_violation") == 0]
+        if not trials:
+            return {}
         if len(trials) < 5:
             # Not enough for clustering, return best
             best = max(trials, key=lambda t: t.values[0])
@@ -339,12 +405,18 @@ class NumericSwarm:
         try:
             from optuna.importance import FanovaImportanceEvaluator
             study = self._get_study(surface)
-            if len(study.trials) < 10:
+            measured = [t for t in study.trials
+                        if t.state.name == "COMPLETE"
+                        and t.user_attrs.get("objective_source") == "native_qualified"
+                        and t.user_attrs.get("constraint_violation") == 0]
+            if len(measured) < 10:
                 return {}
+            measured_study = self._optuna.create_study(directions=study.directions)
+            measured_study.add_trials(measured)
             evaluator = FanovaImportanceEvaluator(seed=self.seed)
-            # Importance for first objective (quality)
+            # Never interpret a synthetic optimizer carrier as a measurement.
             return self._optuna.importance.get_param_importances(
-                study, evaluator=evaluator, target=lambda t: t.values[0]
+                measured_study, evaluator=evaluator, target=lambda t: t.values[0]
             )
         except Exception as e:
             log.debug("fANOVA importance not available: %s", e)
@@ -391,7 +463,7 @@ class NumericSwarm:
 
     def _study_name(self, surface: str) -> str:
         """Get study name with optional epoch suffix."""
-        base = f"autopilot_{surface}"
+        base = f"autopilot_{surface}_{CONSTRAINT_STUDY_VERSION}"
         if self.epoch_label:
             base = f"{base}_era_{self.epoch_label}"
         epoch = getattr(self, "_epoch", 0)
@@ -405,7 +477,7 @@ class NumericSwarm:
         for surface in SURFACES:
             try:
                 study = self._get_study(surface)
-                trials = [t for t in study.trials if t.state.name == "COMPLETE"]
+                trials = [t for t in study.trials if t.state.name == "COMPLETE" and t.user_attrs.get("objective_source") == "native_qualified"]
                 result[surface] = {
                     "n_trials": len(trials),
                     "best_quality": max((t.values[0] for t in trials), default=0),

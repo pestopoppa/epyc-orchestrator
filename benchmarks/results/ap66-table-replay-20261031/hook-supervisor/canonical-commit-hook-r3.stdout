@@ -1,0 +1,4 @@
+supervisor refusal: monitoring/admission gap: process identity changed while sampling
+/workspace/scripts/hooks/pii_precommit.sh: line 607: wait: pid 2474949 is not a child of this shell
+/workspace/scripts/hooks/pii_precommit.sh: line 608: wait: pid 2474950 is not a child of this shell
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 12.86081903311424, "sampled_peak_tree_rss_bytes": 70225920, "samples": 124, "verified_exited_processes": 11, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 2474427, "leader_birth": 157993793, "child_rc": -15, "children_drained": true, "failure": "monitoring/admission gap: process identity changed while sampling"}

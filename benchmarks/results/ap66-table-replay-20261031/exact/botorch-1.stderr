@@ -1,0 +1,296 @@
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/torch/jit/_script.py:1491: FutureWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/replay_exact.py:56: ExperimentalWarning: BoTorchSampler is experimental (supported from v2.4.0). The interface can change in the future.
+  sampler=BoTorchSampler(candidates_func=candidates,constraints_func=viol,seed=args.seed,n_startup_trials=20)
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/botorch/acquisition/multi_objective/logei.py:602: UserWarning: Failed to compile fused qLogEHVI C++ extension: Ninja is required to load C++ extensions (pip install ninja to get it). Falling back to the pure-Python implementation. To get ~3x speedup, ensure a C++ compiler and the `ninja` package are installed.
+  _try_load_fused_kernel()
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/botorch/optim/optimize.py:844: RuntimeWarning: Optimization failed in `gen_candidates_scipy` with the following warning(s):
+[OptimizationWarning('Optimization failed within `scipy.optimize.minimize` with status 2 and message ABNORMAL: .')]
+Trying again with a new set of initial conditions.
+  return _optimize_acqf_batch(opt_inputs=opt_inputs)
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/botorch/optim/optimize.py:844: RuntimeWarning: Optimization failed on the second try, after generating a new set of initial conditions.
+  return _optimize_acqf_batch(opt_inputs=opt_inputs)
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-06 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-06 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-06 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-06 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-06 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-08 to the diagonal
+  warnings.warn(
+/mnt/raid0/llm/tmp/codex3-ap66-20261031/deps/linear_operator/utils/cholesky.py:41: NumericalWarning: A not p.d., added jitter of 1.0e-07 to the diagonal
+  warnings.warn(
