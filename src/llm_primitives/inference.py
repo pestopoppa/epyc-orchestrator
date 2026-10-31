@@ -919,6 +919,10 @@ class InferenceMixin:
                 if hasattr(self, "get_request_cancel_check") else None,
             )
         except RuntimeError as primary_error:
+            from src.backends.native_tool_parse import NativeToolParseLoss
+
+            if isinstance(primary_error, NativeToolParseLoss):
+                raise
             if streamed_chunks:
                 raise
             # Model fallback: try same-tier alternatives on infrastructure failure

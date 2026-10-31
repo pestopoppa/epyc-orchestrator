@@ -1326,3 +1326,134 @@ def test_guard_flag_is_on_by_default_in_production():
     spec = next(s for s in _FEATURE_REGISTRY if s.name == "v1_client_session_guard")
     assert spec.default_prod is True
     assert spec.env_var == "V1_CLIENT_SESSION_GUARD"
+
+# UFH14-LB4.2: run the real HTTP adapter through primitives and the route.
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("case", ["opener", "opener_reasoning", "double_encoded"])
+def test_native_tool_parser_loss_reaches_client_once(client, monkeypatch, tmp_path, case, stream):
+    from src.structured_output import parse_events
+    import src.features as feature_module
+
+    monkeypatch.setenv("ORCHESTRATOR_PARSE_EVENTS_LOG", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("ORCHESTRATOR_SERVING_CALLS_LOG", str(tmp_path / "serving.jsonl"))
+    backend = _backend(True)
+    primitives = _install_real(monkeypatch, backend)
+    # A normal RuntimeError would be retried on another model when enabled.
+    features = feature_module.features()
+    monkeypatch.setattr("src.roles.get_fallback_roles", lambda role: ["worker"])
+    monkeypatch.setattr(features, "model_fallback", True)
+    calls = []
+    raw = ('<tool_call>\n' if case.startswith('opener') else
+           'Let me check.\n<tool_call>\n{"name":"read","arguments":"{\\"path\\":\\"secret\\"}"}\n</tool_call>')
+    message = ({"role": "assistant", "content": ""} if case.startswith("opener") else
+               {"role": "assistant", "content": "Let me check.", "tool_calls": [
+                   {"id": "c", "type": "function", "function": {"name": "read", "arguments": "{}"}}]})
+    if case == "opener_reasoning":
+        message["reasoning_content"] = "internal reasoning"
+    response = _http_response(message, "length" if case.startswith("opener") else "tool_calls")
+    response.json.return_value["__verbose"] = {"content": raw, "prompt": "PRIVATE_PROMPT"}
+
+    def post(path, json=None, timeout=None):
+        calls.append((path, json))
+        return response
+
+    monkeypatch.setattr(backend.client, "post", post)
+    r = client.post("/v1/chat/completions", json=_body(max_tokens=64, stream=stream))
+    assert r.status_code == (200 if stream else 502), r.text
+    reason = "truncated_tool_call_opener" if case.startswith("opener") else "double_encoded_arguments_lost"
+    assert reason in r.text
+    assert len(calls) == 1 and calls[0][1]["verbose"] is True
+    rows = list(parse_events.read_events(tmp_path / "events.jsonl"))
+    assert len(rows) == 1 and rows[0]["reason"] == reason
+    assert rows[0]["truncated_by_length"] is (case.startswith("opener"))
+    assert rows[0]["finish_reason_source"] == "explicit"
+    for path in tmp_path.iterdir():
+        assert "PRIVATE_PROMPT" not in path.read_text()
+        assert "secret" not in path.read_text()
+    assert primitives.call_log[-1].error
+
+
+@pytest.mark.parametrize("raw,message,finish,reason", [
+    ('<tool_call>\n{"name":"bash","arguments":{}}\n</tool_call>',
+     {"role":"assistant", "content":None, "tool_calls":[{"id":"c", "type":"function", "function":{"name":"bash", "arguments":"{}"}}]}, 'tool_calls', None),
+    (None, {"role":"assistant", "content":None, "tool_calls":[{"id":"c", "type":"function", "function":{"name":"bash", "arguments":"{}"}}]}, 'tool_calls', 'raw_output_unavailable'),
+    ('<tool_call>\n{"name":"read","arguments":"{\\"path\\":\\"x\\"}"}\n</tool_call>',
+     {"role":"assistant", "content":None, "tool_calls":[{"id":"c", "type":"function", "function":{"name":"bash", "arguments":"{}"}}]}, 'tool_calls', None),
+    ('', {"role":"assistant", "content":""}, 'stop', None),
+    ('hello', {"role":"assistant", "content":"hello"}, 'stop', None),
+])
+def test_native_tool_parser_controls(client, monkeypatch, tmp_path, raw, message, finish, reason):
+    from src.structured_output import parse_events
+
+    monkeypatch.setenv("ORCHESTRATOR_PARSE_EVENTS_LOG", str(tmp_path / "events.jsonl"))
+    backend = _backend(True)
+    _install_real(monkeypatch, backend)
+    response = _http_response(message, finish)
+    if raw is not None:
+        response.json.return_value["__verbose"] = {"content": raw}
+    post = Mock(return_value=response)
+    monkeypatch.setattr(backend.client, "post", post)
+    r = client.post("/v1/chat/completions", json=_body())
+    assert r.status_code == 200, r.text
+    assert post.call_count == 1
+    path = tmp_path / "events.jsonl"
+    rows = list(parse_events.read_events(path)) if path.exists() else []
+    assert [row["reason"] for row in rows] == ([reason] if reason else [])
+    if reason:
+        assert rows[0]["status"] == "provenance_unknown"
+        assert parse_events.classify(rows)["native_tool_call:llama_chat_completions"]["provenance_unknown"] == 1
+
+
+def test_native_tool_stream_emits_validated_content(client, monkeypatch):
+    backend = _backend(True)
+    _install_real(monkeypatch, backend)
+    response = _http_response({"role": "assistant", "content": "hello"}, "stop")
+    response.json.return_value["__verbose"] = {"content": "hello"}
+    post = Mock(return_value=response)
+    monkeypatch.setattr(backend.client, "post", post)
+    r = client.post("/v1/chat/completions", json=_body(stream=True))
+    assert r.status_code == 200
+    events = _sse_events(r.text)
+    assert "".join(event.get("choices", [{}])[0].get("delta", {}).get("content", "") or ""
+                   for event in events if event.get("choices")) == "hello"
+    assert post.call_count == 1
+    assert post.call_args.kwargs["json"]["stream"] is False
+
+
+def test_native_tool_missing_raw_and_usage_preserves_unknown(client, monkeypatch, tmp_path):
+    from src.structured_output import parse_events
+
+    monkeypatch.setenv("ORCHESTRATOR_PARSE_EVENTS_LOG", str(tmp_path / "events.jsonl"))
+    backend = _backend(True)
+    _install_real(monkeypatch, backend)
+    response = _http_response({"role": "assistant", "content": ""}, "")
+    response.json.return_value["usage"] = {}
+    monkeypatch.setattr(backend.client, "post", Mock(return_value=response))
+    r = client.post("/v1/chat/completions", json=_body())
+    assert r.status_code == 200, r.text
+    event, = parse_events.read_events(tmp_path / "events.jsonl")
+    assert event["status"] == "provenance_unknown"
+    assert event["n_tokens"] is None
+    assert event["truncated_by_length"] is None
+
+
+def test_native_tool_stream_forwards_definitions_and_returns_whole_call(client, monkeypatch):
+    backend = _backend(True)
+    _install_real(monkeypatch, backend)
+    response = _http_response(
+        {"role": "assistant", "content": None, "tool_calls": [MODEL_TOOL_CALL]}, "tool_calls"
+    )
+    response.json.return_value["__verbose"] = {
+        "content": '<tool_call>\n{"name":"read","arguments":{"path":"README.md"}}\n</tool_call>'
+    }
+    post = Mock(return_value=response)
+    monkeypatch.setattr(backend.client, "post", post)
+    r = client.post("/v1/chat/completions", json=_body(stream=True))
+    assert r.status_code == 200
+    events = _sse_events(r.text)
+    calls = [tc for event in events for choice in event.get("choices", [])
+             for tc in choice.get("delta", {}).get("tool_calls", [])]
+    assert calls == [{"index": 0, **MODEL_TOOL_CALL}]
+    assert post.call_count == 1
+    assert post.call_args.kwargs["json"]["tools"] == [READ_TOOL, BASH_TOOL]
+    assert post.call_args.kwargs["json"]["stream"] is False

@@ -300,7 +300,8 @@ def classify(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, int]]:
     A failure is ``status in {"failed", "unrecoverable"}`` or a review ``ParseFailure``
     (any status other than ``parsed``/``repaired``/``declined`` for review_decision).
     ``repaired`` counts as a parse miss that the repair turn recovered
-    (``repaired_after_length`` / ``repaired_after_stop``).
+    (``repaired_after_length`` / ``repaired_after_stop``). A
+    ``provenance_unknown`` diagnostic has its own bucket and is not a parse failure.
     """
     out: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for row in rows:
@@ -310,6 +311,8 @@ def classify(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, int]]:
         out[key]["events"] += 1
         if status == "parsed":
             out[key]["parsed"] += 1
+        elif status == "provenance_unknown":
+            out[key]["provenance_unknown"] += 1
         elif status == "declined":
             out[key]["declined"] += 1
         elif status == "repaired":

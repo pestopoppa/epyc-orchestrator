@@ -1226,12 +1226,13 @@ class TestChatCompletionsSchemaForwarding:
         assert "json_schema" not in captured
 
     def test_streaming_chat_payload_emits_text_and_assembles_whole_tool_calls(self, role_config):
+        """Exercise the SSE assembler without tool definitions; tools use batch validation."""
         backend = self._backend(use_chat_completions=False)
         request = InferenceRequest(
             role="frontdoor", prompt="ignored", n_tokens=64,
             chat_payload={
                 "messages": [{"role": "user", "content": "read it"}],
-                "tools": [{"type": "function", "function": {"name": "read"}}],
+                "tools": [],
                 "tool_choice": "auto",
             },
         )

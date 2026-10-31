@@ -1,0 +1,9 @@
+source ffc1bac82eeca6f9099e1ccd9ba49703c460a115 committed 2026-09-21T14:36:50Z
+version: 10303 (ffc1bac82)
+built with GNU 15.2.0 for Linux x86_64
+version: 10303 (ffc1bac82)
+built with GNU 15.2.0 for Linux x86_64
+2026-09-21 14:37:51.645760952 +0000 /mnt/raid0/llm/kernels/production/cpu/libllama-server-impl.so
+2026-09-21 14:39:05.013403385 +0000 /mnt/raid0/llm/kernels/production/gpu/libllama-server-impl.so
+__verbose
+__verbose

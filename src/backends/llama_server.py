@@ -29,6 +29,7 @@ from typing import Any, Iterator
 import httpx
 
 from src.backends import serving_calls
+from src.backends.native_tool_parse import NativeToolParseLoss, detect_loss
 from src.backends.grammar_guard import reject_unsafe_grammar
 from src.backends.context_overflow import (
     ContextOverflowInfo,
@@ -789,6 +790,9 @@ class LlamaServerBackend(ModelBackend):
             "cache_prompt": _cache_prompt(request),
         }
         if chat_payload is not None:
+            if chat_payload.get("tools"):
+                # v10 exposes raw generated text only in this transient field.
+                payload["verbose"] = True
             if chat_payload.get("tools") is not None:
                 payload["tools"] = chat_payload["tools"]
             if chat_payload.get("tool_choice") is not None:
@@ -875,12 +879,16 @@ class LlamaServerBackend(ModelBackend):
                 return _context_overflow_result(role_config, overflow, time.time() - start_time)
             response.raise_for_status()
             data = response.json()
+            verbose = data.pop("__verbose", None)
+            raw_generation = verbose.get("content") if isinstance(verbose, dict) else None
+            del verbose
 
             elapsed = time.time() - start_time
 
             choices = data.get("choices", [])
             output = ""
             completion_reason = "stop"
+            reported_finish_reason = None
             chat_logprob_rows: list[dict[str, Any]] = []
             tool_calls: list[dict[str, Any]] = []
             reasoning_content: str | None = None
@@ -894,7 +902,8 @@ class LlamaServerBackend(ModelBackend):
                 raw_tool_calls = msg.get("tool_calls") if chat_payload is not None else None
                 if isinstance(raw_tool_calls, list):
                     tool_calls = [tc for tc in raw_tool_calls if isinstance(tc, dict)]
-                completion_reason = str(choices[0].get("finish_reason") or "stop")
+                reported_finish_reason = choices[0].get("finish_reason")
+                completion_reason = str(reported_finish_reason or "stop")
                 # OpenAI-shape logprobs.content rows carry a top-level
                 # "logprob" per token — the confidence extractor
                 # (_completion_probabilities_confidence) consumes them as-is.
@@ -927,6 +936,30 @@ class LlamaServerBackend(ModelBackend):
                     role_config.name, prompt_tokens, tokens_generated, payload["max_tokens"],
                 )
                 completion_reason = "context_limit"
+
+            if chat_payload is not None and chat_payload.get("tools"):
+                from src.structured_output import parse_events
+
+                reason = (detect_loss(raw_generation, output, tool_calls,
+                                      completion_reason)
+                          if isinstance(raw_generation, str) else None)
+                # Missing raw output does not prove loss. Preserve compatible servers'
+                # existing behavior and distinguish this diagnostic in classification.
+                unknown = not isinstance(raw_generation, str)
+                if reason or unknown:
+                    with parse_events.generation_context(
+                        finish_reason=completion_reason if reported_finish_reason else "unknown",
+                        n_tokens=output_tokens_reported,
+                        max_tokens=int(payload["max_tokens"]),
+                        call_site="llama_chat_completions",
+                    ):
+                        parse_events.record_parse_event(
+                            "native_tool_call", "llama_chat_completions",
+                            "failed" if reason else "provenance_unknown",
+                            reason=reason or "raw_output_unavailable",
+                        )
+                if reason:
+                    raise NativeToolParseLoss(reason)
 
             # llama-server's OpenAI shim doesn't always emit timings; estimate
             timings = data.get("timings", {}) or {}
@@ -991,6 +1024,8 @@ class LlamaServerBackend(ModelBackend):
                     if output_tokens_reported is not None else None
                 ),
             )
+        except NativeToolParseLoss:
+            raise
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
             overflow = _overflow_from_error_response(e.response)
@@ -1185,11 +1220,15 @@ class LlamaServerBackend(ModelBackend):
 
         self._refuse_if_parked(role_config)
 
-        # Preserve the established whole-response tool path unless a caller
-        # explicitly observes real content chunks. In that case structured
-        # tool-call deltas are assembled and returned as whole calls below.
-        if _chat_payload(request) is not None and on_chunk is None:
-            return self.infer(role_config, request)
+        # Tool-enabled calls need the complete raw response for loss detection.
+        chat_payload = _chat_payload(request)
+        if chat_payload is not None and (on_chunk is None or chat_payload.get("tools")):
+            # The final streaming response has no raw generated content; defer
+            # tool-enabled text until the batch parser-loss check has passed.
+            result = self.infer(role_config, request)
+            if on_chunk is not None and result.success and result.output:
+                on_chunk(result.output)
+            return result
 
         start_time = time.time()
         self.cache_stats.total_requests += 1
