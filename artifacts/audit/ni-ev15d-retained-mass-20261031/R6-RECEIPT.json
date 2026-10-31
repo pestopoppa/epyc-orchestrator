@@ -1,0 +1,140 @@
+{
+  "scope": "MODEL_FREE_R6_ONLY",
+  "family": "34-35",
+  "actual_cpus": [
+    82,
+    83
+  ],
+  "start_utc": "2026-10-31T19:02:57.594853+00:00",
+  "end_utc": "2026-10-31T19:03:01.491630+00:00",
+  "own_pid": 1993273,
+  "own_start_ticks": "159585082",
+  "runner_pid": 1993253,
+  "runner_start_ticks": "159585077",
+  "boot_id": "3be2fb1a-7293-4c34-b733-c85d772b9474",
+  "live_grants": [
+    {
+      "id": "codex3-cs45-tail-rescore-20261031",
+      "class": "block-correctness",
+      "regions": "48-71",
+      "start": "2026-10-31T17:57Z",
+      "end": "2026-11-01T03:57Z"
+    },
+    {
+      "id": "codex3-pareval120-k20-gen-20261031",
+      "class": "block-correctness",
+      "regions": "0-23",
+      "start": "2026-10-31T16:09Z",
+      "end": "2026-10-31T20:09Z"
+    },
+    {
+      "id": "refactor-a4a-c4-27b-pair-20261031",
+      "class": "block-timing-pairable",
+      "regions": "mi210_0,184-191",
+      "start": "2026-10-31T18:47Z",
+      "end": "2026-10-31T20:47Z"
+    },
+    {
+      "id": "yarn-oolong-s2-host256-eligible26-v32-20261031",
+      "class": "block-correctness",
+      "regions": "24-47",
+      "start": "2026-10-31T16:26Z",
+      "end": "2026-11-01T04:26Z"
+    }
+  ],
+  "staged_closure": [
+    " M docs/reference/ev15e-paired-distributional-consumer.md",
+    " M src/typed_decisions/paired_distributional_readout.py",
+    " M tests/unit/test_paired_distributional_readout.py",
+    "?? src/typed_decisions/score_token_head.py",
+    "?? tests/unit/test_score_token_head.py"
+  ],
+  "returncode": 0,
+  "failure": null,
+  "elapsed_s": 3.9186196350492537,
+  "sampled_peak_tree_rss_bytes": 213286912,
+  "kernel_childset_empty": true,
+  "captured": [
+    {
+      "pid": 1993273,
+      "birth": 159585082,
+      "ppid": 1993253,
+      "uid": 1000
+    },
+    {
+      "pid": 1993274,
+      "birth": 159585082,
+      "ppid": 1993273,
+      "uid": 1000
+    },
+    {
+      "pid": 1993279,
+      "birth": 159585083,
+      "ppid": 1993273,
+      "uid": 1000
+    },
+    {
+      "pid": 1993317,
+      "birth": 159585285,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993326,
+      "birth": 159585299,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993331,
+      "birth": 159585313,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993334,
+      "birth": 159585327,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993335,
+      "birth": 159585341,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993337,
+      "birth": 159585355,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993338,
+      "birth": 159585370,
+      "ppid": 1993279,
+      "uid": 1000
+    },
+    {
+      "pid": 1993344,
+      "birth": 159585383,
+      "ppid": 1993279,
+      "uid": 1000
+    }
+  ],
+  "native_or_GPU_execution": false,
+  "source_closure": [
+    " M docs/reference/ev15e-paired-distributional-consumer.md",
+    " M src/typed_decisions/paired_distributional_readout.py",
+    " M tests/unit/test_paired_distributional_readout.py",
+    "?? src/typed_decisions/score_token_head.py",
+    "?? tests/unit/test_score_token_head.py"
+  ],
+  "adapted_script_sha256": "41c49b73973580d0f09d2c656aad7efe291d0d34d87a3705f337ff2a46a49edc",
+  "output_log_sha256": "8876741638c8972c77118ac19595e8ffcdd6bbf96b73b276705ee8f2270e9aa4",
+  "rss_sampler": {
+    "interval_s": 0.1,
+    "limit_bytes": 8589934592,
+    "source": "/proc/<pid>/statm"
+  }
+}

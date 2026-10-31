@@ -1,0 +1,14 @@
+{
+  "classification": "validation-preflight-failure; no pytest executed",
+  "start_utc": "2026-10-31T19:02:44.108318+00:00",
+  "end_utc": "2026-10-31T19:02:44.214315+00:00",
+  "pid": 1992991,
+  "start_ticks": "159583734",
+  "boot_id": "3be2fb1a-7293-4c34-b733-c85d772b9474",
+  "cpus": [82, 83],
+  "mutex": "34-35",
+  "exit_code": 1,
+  "reason": "Ruff format --check requested reformatting of tests/unit/test_paired_distributional_readout.py",
+  "drained": true,
+  "superseded_by": "R6-RECEIPT.json"
+}
