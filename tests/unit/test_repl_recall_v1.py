@@ -219,3 +219,66 @@ def test_v1_route_repl_recall_returns_fixture_memories(monkeypatch, fixture_stor
     data = _unwrap(repl._recall("where is main?"))
     assert data["status"] == "ok"
     assert [h["task"] for h in data["results"]] == ["find the entrypoint"]
+
+
+@pytest.mark.parametrize("shared", [False, True], ids=["legacy", "shared"])
+def test_recall_reports_seed_import_scope_without_live_writeback(
+    shared, tmp_path, fixture_store_cls, monkeypatch
+):
+    """A real explicit import is visible; unrelated live routing rows are not."""
+    from orchestration.repl_memory.episodic_store import EpisodicStore
+    from orchestration.repl_memory.progress_logger import EventType, ProgressLogger, ProgressReader
+    from orchestration.repl_memory.retriever import TwoPhaseRetriever
+    import orchestration.repl_memory.embedder as embedder_mod
+    import orchestration.repl_memory.episodic_store as store_mod
+
+    store = fixture_store_cls()
+    vector = _FixtureEmbedder().embed_exploration("x", "", side="query")
+    store.store(
+        embedding=vector, action="explicit imported exploration", action_type="exploration",
+        context={"objective": "manually imported entry", "is_seed": False},
+        outcome="success", initial_q=0.9,
+    )
+    store.store(
+        embedding=vector, action="live routing outcome", action_type="routing",
+        context={"objective": "live routed task"}, outcome="success", initial_q=1.0,
+    )
+    assert isinstance(store, EpisodicStore)
+    before = store.count("exploration")
+    journal = ProgressLogger(log_dir=tmp_path / "journal", buffer_size=1)
+    if shared:
+        retriever = TwoPhaseRetriever(store=store, embedder=_FixtureEmbedder())
+    else:
+        retriever = None
+        monkeypatch.setattr(store_mod, "EpisodicStore", fixture_store_cls)
+        monkeypatch.setattr(embedder_mod, "TaskEmbedder", _FixtureEmbedder)
+    repl = REPLEnvironment(context="an actual new exploration", retriever=retriever,
+                           progress_logger=journal, task_id="m22-synthetic-task")
+    try:
+        repl.log_exploration_completed(success=True, result="new exploration result")
+        journal.flush()
+        entries = ProgressReader(journal.log_dir).get_task_trajectory(repl.task_id)
+        assert any(entry.event_type == EventType.EXPLORATION_COMPLETED for entry in entries)
+        data = _unwrap(repl._recall("entrypoint", limit=5))
+        assert data["status"] == "ok"
+        assert {row["task"] for row in data["results"]} == {
+            "find the entrypoint", "manually imported entry",
+        }
+        assert data["memory_scope"]["namespace"] == "exploration"
+        assert data["memory_scope"]["population"] == "seeds_or_explicit_writes"
+        assert data["memory_scope"]["automatic_live_repl_writeback"] is False
+        assert store.count("exploration") == before == 2
+    finally:
+        journal.flush()
+        store.close()
+
+
+def test_recall_unavailable_keeps_population_scope_separate_from_availability():
+    retriever = MagicMock()
+    retriever.retrieve_for_exploration.side_effect = RuntimeError("temporary store failure")
+    repl = REPLEnvironment(context="x", retriever=retriever)
+    data = _unwrap(repl._recall("anything"))
+    assert data["status"] == "unavailable"
+    assert data["results"] == []
+    assert data["memory_scope"]["automatic_live_repl_writeback"] is False
+    assert "temporary store failure" in data["error"]

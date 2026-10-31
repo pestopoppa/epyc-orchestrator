@@ -428,7 +428,7 @@ Models now have agency in routing decisions through 5 REPL functions. On the fir
 | `route_advice(task)` | MemRL Q-values + recommended role |
 | `delegate(prompt, role, reason)` | Tracked delegation with outcome logging |
 | `escalate(reason, target_role)` | Request escalation to specific target |
-| `recall(query)` | Episodic memory search with Q-values |
+| `recall(query)` | Seed/import/explicit-write exploration lookup with Q-values |
 
 **Routing context** injected on turn 0: compact MemRL Q-values for similar tasks (TOON-encoded when >=2 results). Models use this to make informed routing decisions without explicit REPL calls.
 
@@ -764,3 +764,32 @@ This chapter's design choices map directly to the architecture review's research
 ---
 
 *Previous: [Chapter 06: TOON Encoding](06-toon-encoding.md)* | *Next: [Chapter 08: Graph-Based Reasoning](08-graph-reasoning.md)*
+
+### Recall population and evaluation scope (M-22 / M-20)
+
+`recall()` queries the `exploration` namespace through both the shared retriever
+and the legacy fallback. It can return offline seed examples and records supplied
+by an explicit import or writer. Normal live REPL completion records an
+`EXPLORATION_COMPLETED` progress event, but the task scorer does not turn that
+event into an exploration-memory write. Its routing and escalation memories are
+separate; the ordinary `/chat/reward` endpoint uses the routing namespace.
+
+Every recall response includes `memory_scope` with namespace `exploration`,
+population `seeds_or_explicit_writes`, and
+`automatic_live_repl_writeback: false`. This describes the current capture
+contract, not a claim that each returned row is a seed, nor an observation about
+the live database's row count. The same scope accompanies an unavailable response;
+availability remains explicit in `status` and `error`.
+
+The generic Python APIs `store_external_reward(..., action_type="exploration")`
+and `QScorer.score_external_result(...)`, direct store calls, and offline seed
+loaders can explicitly populate the namespace. Such writes are not prohibited or
+hidden by this label. Adding automatic exploration writeback later must update
+this contract and its tests.
+
+M-20's recall arm therefore evaluates retrieval and use of the pinned seed/import
+population, not learning from normal live REPL explorations. Record the population
+and any explicit writes during that study; a frozen-population comparison needs
+its own snapshot. `route_advice()` reads routing memories and retains its separate
+live-routing evaluation scope. No live-memory learning or tool-efficacy result is
+established by documenting this boundary.

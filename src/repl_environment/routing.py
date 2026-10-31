@@ -21,6 +21,16 @@ _MAX_SCHEMA_RETRIES = 2
 logger = logging.getLogger(__name__)
 
 
+
+def _recall_memory_scope() -> dict:
+    """Describe the capture contract, not the provenance of an individual hit."""
+    return {
+        "namespace": "exploration",
+        "population": "seeds_or_explicit_writes",
+        "automatic_live_repl_writeback": False,
+    }
+
+
 def _recall_unavailable(reason: str) -> dict:
     """Explicit "recall is broken/unavailable" payload.
 
@@ -29,6 +39,7 @@ def _recall_unavailable(reason: str) -> dict:
     """
     return {
         "status": "unavailable",
+        "memory_scope": _recall_memory_scope(),
         "results": [],
         "best_action": None,
         "confidence": None,
@@ -80,7 +91,11 @@ class _RoutingMixin:
     """
 
     def _recall(self, query: str, limit: int = 5) -> str:
-        """Search episodic memory for similar past tasks with Q-values.
+        """Search seeded or explicitly written exploration memories with Q-values.
+
+        Normal REPL completion journals exploration but does not automatically
+        write exploration memories. Explicit imports and external Python writers
+        may populate this namespace; this is not a live REPL history lookup.
 
         Args:
             query: Natural language description of what you're looking for.
@@ -140,6 +155,7 @@ class _RoutingMixin:
 
             response = {
                 "status": "ok",
+                "memory_scope": _recall_memory_scope(),
                 "results": results,
                 "best_action": best_action,
                 "confidence": best_conf,
@@ -215,6 +231,7 @@ class _RoutingMixin:
 
             response = {
                 "status": "ok",
+                "memory_scope": _recall_memory_scope(),
                 "results": results,
                 "best_action": None,
                 "confidence": None,
