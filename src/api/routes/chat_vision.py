@@ -792,15 +792,23 @@ Important rules:
 
     try:
         async with httpx.AsyncClient(timeout=_get_config().timeouts.vision_inference) as client:
-            resp = await client.post(
-                vl_url,
-                json={
-                    "messages": messages,
-                    "max_tokens": 2048,
-                    "temperature": 0.0,
-                    "stop": [QWEN_STOP],
-                },
-            )
+            _t0 = time.time()
+            _resp, _exc = None, None
+            try:
+                resp = _resp = await client.post(
+                    vl_url,
+                    json={
+                        "messages": messages,
+                        "max_tokens": 2048,
+                        "temperature": 0.0,
+                        "stop": [QWEN_STOP],
+                    },
+                )
+            except BaseException as _e:
+                _exc = _e
+                raise
+            finally:
+                _record_vl_call("vision_react_final", "vision_react", _base, _t0, _resp, _exc, 2048)
         if resp.status_code == 200:
             data = resp.json()
             choices = data.get("choices", [])

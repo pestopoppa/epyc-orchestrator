@@ -1,0 +1,17 @@
+# LB6 Vision ReAct final synthesis — source controls
+
+The original UFH14-LB6 parent remains OPEN: restored live per-call recording has not been demonstrated. This patch does not manufacture a separate quota completion or claim a new live record. Prior source wrappers already cover the historical bypass list; the remaining actual gap is the distinct final synthesis POST after Vision ReAct turn exhaustion.
+
+The source edit applies the existing _record_vl_call finally pattern to that POST, using method vision_react_final. Payload, URL, token limit, timeout, response parsing, fallback answer and exception flow are preserved. The existing recorder helper remains fail-silent; no new measurement, correctness judgment, stream gap statistic or grade is invented.
+
+Independent integrated-checkout replay passed five controls and configured Ruff; see `integrated-controls.log` and `integrated-controls-r6.json`. Five direct controls passed using the actual async function, real recorder, and retained private JSONL files: successful final answer, HTTP503 fallback, transport exception fallback, recorder failure neutrality, and a genuine one-tool-turn exhaustion sequence with exactly one turn record and one final record. Original source fails four recording assertions (zero errors); answer-neutrality still passes. Configured APP Ruff passes. Final controls use physical76–77; final mutation/lint use74–75. All admitted R6 receipts, peak about145MB, no native/GPU execution and empty captured childsets.
+
+No-delete lifecycle: unittest is invoked directly (no pytest tmp_path/conftest cleanup). tempfile.mkdtemp retains each directory permanently. The writer's documented MAX_MB env is zero, disabling rotation (which otherwise unlinks/renames). An audit hook is installed before application imports and rejects/counts Python remove/rmdir/rename plus sqlite3.connect; every completed test asserts zero attempts. Real writer uses append-only JSONL and retained flock file. No SQLite database or native filesystem-cleanup library is invoked. LB6_RETAIN_ROOT may select an existing caller-owned parent outside Git; an in-Git parent is refused before creating fixtures. This is Python audit evidence plus source lifecycle review, not a syscall tracing claim. Prior four-control receipt and every retained directory remain in private scratch.
+
+GitNexus exact symbol reports LOW1: one production caller _execute_vision_multimodal, one module and zero indexed processes; context also names five preexisting tests. Canonical index is stale84f6f6f, source lane head00c1b789; SOURCE-PINS records whether the entire edited function AST matches indexed source. No shared index was mutated. New artifact test symbols are UNKNOWN/unindexed. Review must account for index staleness before integration.
+
+Replay after applying to a private owner lane, through current R6 admission:
+
+    env LB6_RETAIN_ROOT=/fresh/caller-owned/tmp-parent LB6_SOURCE=/path/to/owner/src/api/routes/chat_vision.py /workspace/repos/epyc-orchestrator/.venv/bin/python /path/to/owner/artifacts/engineering/lb6-vision-final-20261031/test_final_synthesis.py
+
+The replay script reads native dependencies from its pinned current APP owner path, while LB6_SOURCE selects the candidate file explicitly. Run outside production; its retained roots are placed under the explicitly selected existing tmp parent. Do not use production logging paths or enable rotation. No live-recording, runtime reload, scientific measurement or adoption is claimed. The parent handoff remains open.
