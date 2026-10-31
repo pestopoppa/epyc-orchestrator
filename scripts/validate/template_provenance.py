@@ -83,15 +83,37 @@ def build_row(
     if upstream is None:
         return {**row, "status": "upstream_unavailable"}
     row["upstream_template_sha256"] = ai.template_sha256(upstream)
+    # Decode strictly: replacement characters can collapse distinct byte streams.
+    try:
+        upstream_text = upstream.decode("utf-8")
+        served_text = served.decode("utf-8")
+        rendering_note = ""
+    except UnicodeDecodeError:
+        # Use the same reversible rendering for both sides, with byte offsets.
+        def hex_lines(data: bytes) -> str:
+            return "".join(
+                f"{offset:08x}: {data[offset:offset + 32].hex()}\n"
+                for offset in range(0, len(data), 32)
+            )
+
+        upstream_text, served_text = hex_lines(upstream), hex_lines(served)
+        rendering_note = "# Non-UTF-8 input: both sides rendered as offset: hexadecimal bytes\n"
     diff_dir.mkdir(parents=True, exist_ok=True)
     diff_lines = list(difflib.unified_diff(
-        upstream.decode("utf-8", "replace").splitlines(keepends=True),
-        served.decode("utf-8", "replace").splitlines(keepends=True),
+        upstream_text.splitlines(keepends=True),
+        served_text.splitlines(keepends=True),
         fromfile=f"upstream:{upstream_info.get('upstream_ref', '?')}@{upstream_info.get('upstream_revision', '?')[:12]}"
                  f" sha256={row['upstream_template_sha256'][:12]}",
         tofile=f"served:{served_source} sha256={row['served_template_sha256'][:12]}",
     ))
-    body = "".join(diff_lines) if diff_lines else "# identical: served template bytes equal the upstream template\n"
+    if upstream == served:
+        body = "# identical: served template bytes equal the upstream template\n"
+    else:
+        # Unified diff does not itself delimit unterminated source lines.
+        body = rendering_note + "".join(
+            line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+            for line in diff_lines
+        )
     (diff_dir / f"{role}.diff").write_text(body)
     row["template_diff"] = f"{diff_rel_prefix.rstrip('/')}/{role}.diff"
     row["identical"] = row["upstream_template_sha256"] == row["served_template_sha256"]
