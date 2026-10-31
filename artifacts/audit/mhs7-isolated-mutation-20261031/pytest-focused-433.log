@@ -1,0 +1,29 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/worktrees/mains/codex-ni-orchestrator
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 433 items
+
+tests/unit/test_prompt_forge_mutation_safety.py ........................ [  5%]
+........................................................................ [ 22%]
+.....                                                                    [ 23%]
+tests/unit/test_prompt_forge_safety.py ...........................       [ 29%]
+tests/unit/test_prompt_forge_leakage_and_risk.py ....................... [ 34%]
+..................................................                       [ 46%]
+tests/unit/test_worktree_manager.py ...........                          [ 48%]
+tests/unit/test_autopilot_actions.py ................................... [ 57%]
+........................................................................ [ 73%]
+..........................................                               [ 83%]
+tests/unit/test_ap53_rejected_mutation_ledger.py .............           [ 86%]
+tests/unit/test_gate_frontier_c_and_b.py ............................... [ 93%]
+............................                                             [100%]
+
+=============================== warnings summary ===============================
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================== 433 passed, 1 warning in 69.19s (0:01:09) ===================
