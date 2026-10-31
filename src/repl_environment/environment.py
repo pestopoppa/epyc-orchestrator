@@ -629,18 +629,29 @@ class REPLEnvironment(
         if self.tool_registry is None:
             if absolute not in self._session_read_artifacts:
                 raise PermissionError("not a registered session artifact")
-            return {"success": True, "content": self._read_registered_artifact(absolute, -1, 0)}
-        if tool is None:
-            raise ValueError("Unknown tool: read_file")
-        handler = getattr(tool, "handler", None)
-        trusted_builtin = (
-            getattr(handler, "__module__", None) == "src.builtin_tools"
-            and getattr(handler, "__qualname__", None) == "_register_file_tools.<locals>.read_file"
-        )
-        if absolute in self._session_read_artifacts and trusted_builtin:
-            with registry_artifact_read(absolute, self._read_registered_artifact):
-                return self._invoke_tool("read_file", path=absolute)
-        return self._invoke_tool("read_file", path=path)
+            result = {"success": True, "content": self._read_registered_artifact(absolute, -1, 0)}
+        else:
+            if tool is None:
+                raise ValueError("Unknown tool: read_file")
+            handler = getattr(tool, "handler", None)
+            trusted_builtin = (
+                getattr(handler, "__module__", None) == "src.builtin_tools"
+                and getattr(handler, "__qualname__", None) == "_register_file_tools.<locals>.read_file"
+            )
+            if absolute in self._session_read_artifacts and trusted_builtin:
+                with registry_artifact_read(absolute, self._read_registered_artifact):
+                    result = self._invoke_tool("read_file", path=absolute)
+            else:
+                result = self._invoke_tool("read_file", path=path)
+        try:
+            from src.features import features
+            if features().context_arm_ab is True and absolute in self._session_read_artifacts:
+                raw = result.output if getattr(result, "ok", False) else result
+                if isinstance(raw, dict) and raw.get("success") is True:
+                    self._exploration_log.add_event("read_file", {"file_path": absolute}, raw.get("content", ""))
+        except Exception:
+            pass  # Experiment telemetry must never affect the permitted read.
+        return result
 
     def _validate_file_path(self, path: str) -> tuple[bool, str | None]:
         """Validate that a file path is allowed.
@@ -902,6 +913,15 @@ class REPLEnvironment(
         Returns:
             Original output if within cap, or summary string with spill path.
         """
+        from src.features import features
+        if features().context_arm_ab is True:
+            from src.graph.context_arm_ab import settings
+            settings()
+            if self._context_bundle is not None:
+                raise RuntimeError("context arms do not support capped context bundles")
+            # The experimental graph applies its own spill preview after logging the
+            # complete text that has passed the existing redaction policy.
+            return output
         if len(output) <= self.config.output_cap:
             return output
 
