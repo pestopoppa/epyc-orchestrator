@@ -32,6 +32,7 @@ from src.typed_decisions.tool_args_pilot import (
     _DECODE_SEED,
     _FREE_FORM_N_TOKENS,
     _free_form_prompt,
+    _extract_json_object,
     _parse_free_form_arguments,
     build_cases,
 )
@@ -96,7 +97,9 @@ class _Capture:
         original_send = self.original_send
         capture = self
 
-        def observed_send(client: httpx.Client, request: httpx.Request, *args: Any, **kwargs: Any) -> Any:
+        def observed_send(
+            client: httpx.Client, request: httpx.Request, *args: Any, **kwargs: Any
+        ) -> Any:
             record = getattr(capture.local, "record", None)
             if record is not None and request.url.path == "/v1/chat/completions":
                 record["wire_route"] = request.url.path
@@ -196,14 +199,48 @@ def _prefix_record(url: str, calls: list[dict[str, Any]]) -> dict[str, Any] | No
         "typed_tokens": len(right_ids),
         "first_tool_text": left[:100],
         "first_typed_text": right[:100],
-        "first_tool_bytes_at_break": left.encode()[common_bytes:common_bytes + 32].decode(errors="backslashreplace"),
-        "first_typed_bytes_at_break": right.encode()[common_bytes:common_bytes + 32].decode(errors="backslashreplace"),
+        "first_tool_bytes_at_break": left.encode()[common_bytes : common_bytes + 32].decode(
+            errors="backslashreplace"
+        ),
+        "first_typed_bytes_at_break": right.encode()[common_bytes : common_bytes + 32].decode(
+            errors="backslashreplace"
+        ),
     }
 
 
+def _original_free_form_arguments(
+    raw_text: str,
+    parameters: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Keep parsed model kwargs even when validation rejects them.
+
+    The pilot parser intentionally returns no arguments after a schema error.
+    This dispatch observer must instead expose the original invalid object to
+    the real registry and shadow, while retaining that error for pair validity.
+    No parseable object means no dispatch; never invent empty arguments.
+    """
+    validated, error = _parse_free_form_arguments(raw_text, parameters)
+    if validated is not None:
+        return validated, error
+    candidate = _extract_json_object(raw_text)
+    if candidate is None:
+        return None, error
+    try:
+        original = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None, error
+    return (original if isinstance(original, dict) else None), error
+
+
 def run(
-    *, url: str, output: Path, role: str, mode: str, limit: int = 18,
-    deadline_epoch: float | None = None, stopfile: Path | None = None,
+    *,
+    url: str,
+    output: Path,
+    role: str,
+    mode: str,
+    limit: int = 18,
+    deadline_epoch: float | None = None,
+    stopfile: Path | None = None,
 ) -> dict[str, Any]:
     cases = build_cases()
     if len(cases) != 18 or not 1 <= limit <= 18:
@@ -273,7 +310,7 @@ def run(
                             temperature=0.0,
                             seed=_DECODE_SEED,
                         )
-                        kwargs, tool_error = _parse_free_form_arguments(
+                        kwargs, tool_error = _original_free_form_arguments(
                             str(raw or ""), case.parameters
                         )
                     except Exception as exc:
@@ -281,10 +318,13 @@ def run(
                         tool_error = f"{type(exc).__name__}: {exc}"
                     capture.stage = "typed_shadow"
                     dispatch_error = None
-                    try:
-                        repl._dispatch_tool(case.tool, **(kwargs or {}))
-                    except Exception as exc:
-                        dispatch_error = f"{type(exc).__name__}: {exc}"
+                    if kwargs is None:
+                        dispatch_error = "not_dispatched: free-form arguments unavailable"
+                    else:
+                        try:
+                            repl._dispatch_tool(case.tool, **kwargs)
+                        except Exception as exc:
+                            dispatch_error = f"{type(exc).__name__}: {exc}"
                     drain_shadow()
                 receipt = None
                 if receipt_path.exists():
