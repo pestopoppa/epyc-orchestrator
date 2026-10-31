@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-24T14:19:37+00:00
-# Cache key:   c4a5743699ceac48...
+# Compiled at: 2026-10-31T12:41:01+00:00
+# Cache key:   379ce531da87caf7...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -48,7 +48,7 @@ runtime_defaults:
     request_timeout: 600
     parallel_slots: 4
     flash_attention: true
-    ubatch_size: 8192
+    ubatch_size: 2048
     kv_cache_type_k: q4_0
     kv_cache_type_v: f16
   agent_file_compression_operating_point: none
@@ -526,6 +526,31 @@ dflash_drafters:
     format: safetensors
     status: downloaded
 deprecated_models:
+- model: cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M
+  path_was: /mnt/raid0/llm/models/bartowski/cerebras_Qwen3-Coder-REAP-25B-A3B-GGUF/cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf
+  size_gb: 15.2
+  reason: 'DELETED 2026-10-28 in the operator-approved disk reclaim (REVIEW-ws58 section 3); roles.reap_25b + server_mode.reap_25b (catalogue-only). Hashes and sizes: /mnt/raid0/llm/archive/retired-models-20261028.md'
+  deleted: 2026-10-28
+- model: MathSmith-Hard-Problem-Synthesizer-Qwen3-8B.Q8_0
+  path_was: /mnt/raid0/llm/models/mradermacher/MathSmith-Hard-Problem-Synthesizer-Qwen3-8B-GGUF/MathSmith-Hard-Problem-Synthesizer-Qwen3-8B.Q8_0.gguf
+  size_gb: 8.7
+  reason: 'DELETED 2026-10-28 in the operator-approved disk reclaim (REVIEW-ws58 section 3); roles.formalizer repointed to the kept Q4_K_M sibling. Hashes and sizes: /mnt/raid0/llm/archive/retired-models-20261028.md'
+  deleted: 2026-10-28
+- model: Qwen3-4B-Instruct-2507 BF16
+  path_was: /mnt/raid0/llm/models/Qwen3-4B-Instruct-2507-GGUF/Qwen_Qwen3-4B-Instruct-2507-bf16.gguf
+  size_gb: 8.1
+  reason: 'DELETED 2026-10-28 in the operator-approved disk reclaim (REVIEW-ws58 section 3); roles.qwen3_4b_2507_bf16 (catalogue-only). Hashes and sizes: /mnt/raid0/llm/archive/retired-models-20261028.md'
+  deleted: 2026-10-28
+- model: Qwen3-4B-Instruct-2507 Q8_0
+  path_was: /mnt/raid0/llm/models/Qwen3-4B-Instruct-2507-GGUF/Qwen_Qwen3-4B-Instruct-2507-Q8_0.gguf
+  size_gb: 4.3
+  reason: 'DELETED 2026-10-28 in the operator-approved disk reclaim (REVIEW-ws58 section 3); roles.qwen3_4b_2507_q8 (catalogue-only). Hashes and sizes: /mnt/raid0/llm/archive/retired-models-20261028.md'
+  deleted: 2026-10-28
+- model: Qwen3-4B-SFT-Fable5-Glint Q8_0
+  path_was: /mnt/raid0/llm/models/qwen3-4b-sft-fable5-glint.q8_0.gguf
+  size_gb: 4.3
+  reason: 'DELETED 2026-10-28 in the operator-approved disk reclaim (REVIEW-ws58 section 3); roles.qwen3_4b_fable5_glint_local_q8 (catalogue-only). Hashes and sizes: /mnt/raid0/llm/archive/retired-models-20261028.md'
+  deleted: 2026-10-28
 - model: gemma-4-26B-A4B-it (all quants + both MTP assistant heads)
   path_was: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-{ORIG-Q8_0,ORIG-Q4_K_M,Q4_K_M,Q4_K_M-current,assistant-Q8_0,assistant-v6-Q8_0}.gguf
   size_gb: 70
@@ -550,6 +575,15 @@ deprecated_models:
     (SSU-F2 open, stack-change gate skipped with --allow-known-gaps), so until that closes the role is unmeasured AND unbacked. The unsloth Q4_K_M copy was a second, never-deployed download of the same
     weights.'
   deleted: 2026-09-23
+- model: Qwen3.5-122B-A10B (MTP UD-Q4_K_M 3-shard + UD-IQ2_M), 2026-10-28 re-download
+  path_was: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/{UD-Q4_K_M/,UD-IQ2_M/}
+  size_gb: 110.5
+  reason: 'DELETED 2026-10-29 ~07:20Z with operator approval. A second graveyard row for the same weights as the 2026-09-23 row above: the UD-Q4_K_M 3-shard set (72.89 GiB) and the UD-IQ2_M file (37.60
+    GiB), 118,638,266,048 B = 110.50 GiB together, were re-downloaded on 2026-10-28 for one consumer only, the INF-34 DR-3e P-GPU-1 rerun (the 122B quant-asymmetric K2 lane: a Q4 CPU verifier with an IQ2
+    MI210 drafter). The operator retired DR-3/DR-3e the same day because Qwen3.5-122B is deprecated (epyc-root 84dff9d39), which left the copy with no consumer. Not a rollback anchor; roles.qwen35_122b_q4km
+    and roles.qwen35_122b_iq2m stay deprecated catalogue rows. Where the unarmed DR-3e preparation is kept is recorded in epyc-root handoffs/active/mi210-big-model-and-acceleration-roadmap.md (DR-3/DR-3e
+    RETIRED note). None of its 122B evidence transfers to Flash-Next.'
+  deleted: 2026-10-29
 - model: GLM-5.3-Flash-UD-Q4_K_XL (unsloth, 6 shards)
   path_was: /mnt/raid0/llm/models/unsloth/GLM-5.3-Flash-GGUF/UD-Q4_K_XL/
   size_gb: 186
