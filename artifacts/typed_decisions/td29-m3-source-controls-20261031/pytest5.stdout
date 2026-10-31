@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.2.0, pluggy-1.7.0
+rootdir: /mnt/raid0/llm/tmp/codex3-td29-json-trim-20261031
+configfile: pyproject.toml
+collected 86 items
+
+tests/unit/test_td29_shadow_value_only.py ....                           [  4%]
+tests/unit/test_typed_decisions_tool_args_integration.py ............... [ 22%]
+.........................                                                [ 51%]
+tests/unit/test_typed_decisions.py ..................................... [ 94%]
+.....                                                                    [100%]
+
+=============================== warnings summary ===============================
+../codex3-k4a-20261031/testdeps/_pytest/config/__init__.py:1636
+  /mnt/raid0/llm/tmp/codex3-k4a-20261031/testdeps/_pytest/config/__init__.py:1636: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+tests/unit/test_typed_decisions_tool_args_integration.py::test_call_site_skips_typed_path_when_off
+  /mnt/raid0/llm/tmp/refactor-01a16fc3/hil15-runtime-fix/private-runtime-v1/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 86 passed, 2 warnings in 1.12s ========================

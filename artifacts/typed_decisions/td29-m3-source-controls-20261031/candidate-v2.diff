@@ -1,0 +1,459 @@
+diff --git a/src/typed_decisions/runner.py b/src/typed_decisions/runner.py
+index 29c0fa7a..de38ed4b 100644
+--- a/src/typed_decisions/runner.py
++++ b/src/typed_decisions/runner.py
+@@ -125,6 +125,12 @@ Rules:
+ """
+ 
+ 
++_VALUE_ONLY_INSTRUCTIONS = """Answer every question in one JSON object with a single 'answers' key.
++Each question id must appear exactly once, with only its value key: choice, score,
++or noul. Use only the candidate labels in the catalogue. No prose or other fields.
++"""
++
++
+ def run_typed_decisions(
+     primitives: Any,
+     *,
+@@ -136,6 +142,7 @@ def run_typed_decisions(
+     n_tokens: int | None = None,
+     cue_style: CueStyle | str = "id_only",
+     tokenize_fn: TokenizeFn | None = None,
++    value_only: bool = False,
+ ) -> DecisionResult:
+     """Run one typed-decision pass and return typed decisions / failures.
+ 
+@@ -165,6 +172,9 @@ def run_typed_decisions(
+             enum's value string because importing ``CueStyle`` at module scope
+             here would close an import cycle (``native`` imports this module's
+             validation contract).
++        value_only: For JSON shadow selection, request only selected values.
++            Decisions carry an empty probability mapping and confidence None.
++            The default retains the full distribution schema. Native mode ignores it.
+         tokenize_fn: Text -> token ids seam for native-mode candidate binding
+             (TD-1b). IGNORED by the JSON arm, which never tokenizes
+             candidates; forwarded to the native runner, which resolves a
+@@ -195,8 +205,8 @@ def run_typed_decisions(
+         raise ValueError(f"unknown typed-decisions mode: {mode!r}")
+     catalogue = _validated_catalogue(questions)
+ 
+-    schema = build_response_schema(catalogue)
+-    prompt = _build_prompt(state, catalogue, schema)
++    schema = build_response_schema(catalogue, value_only=value_only)
++    prompt = _build_prompt(state, catalogue, schema, value_only=value_only)
+     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+     if n_tokens is None:
+         n_tokens = _default_n_tokens(catalogue)
+@@ -212,7 +222,7 @@ def run_typed_decisions(
+     for attempt in range(1, attempts + 1):
+         call_prompt = prompt
+         if failure_context is not None:
+-            call_prompt = prompt + _correction_message(*failure_context)
++            call_prompt = prompt + _correction_message(*failure_context, value_only=value_only)
+         raw_text = str(
+             primitives.llm_call(
+                 call_prompt,
+@@ -251,7 +261,9 @@ def run_typed_decisions(
+             prompt_sha256=prompt_sha256,
+         )
+ 
+-    decisions, answer_failures = _decisions_from_answers(parsed, catalogue, mode)
++    decisions, answer_failures = _decisions_from_answers(
++        parsed, catalogue, mode, value_only=value_only
++    )
+     return DecisionResult(
+         decisions=tuple(decisions),
+         failures=tuple(failures + answer_failures),
+@@ -294,7 +306,9 @@ def _default_n_tokens(questions: Sequence[Question]) -> int:
+     )
+ 
+ 
+-def _build_prompt(state: str, questions: Sequence[Question], schema: dict[str, Any]) -> str:
++def _build_prompt(
++    state: str, questions: Sequence[Question], schema: dict[str, Any], *, value_only: bool = False
++) -> str:
+     """Build the canonical prompt: stable prefix + state + question catalogue.
+ 
+     The instruction block and the schema are identical for identical
+@@ -303,8 +317,9 @@ def _build_prompt(state: str, questions: Sequence[Question], schema: dict[str, A
+     prompts (asserted by the prompt-stability test).
+     """
+     schema_text = json.dumps(schema, indent=2, sort_keys=True)
++    instructions = _INSTRUCTIONS if not value_only else _VALUE_ONLY_INSTRUCTIONS
+     return (
+-        f"{_INSTRUCTIONS}\n"
++        f"{instructions}\n"
+         f"RESPONSE JSON SCHEMA (authoritative):\n{schema_text}\n\n"
+         f"STATE:\n{neutralise_control_tokens(state)}\n\n"  # CT-12.3c: state is untrusted
+         f"QUESTION CATALOG:\n{_build_catalog(questions)}\n"
+@@ -335,18 +350,20 @@ def _candidate_labels(question: Question) -> list[str]:
+     return ["true", "false"]
+ 
+ 
+-def _correction_message(reason: str, detail: str) -> str:
++def _correction_message(reason: str, detail: str, *, value_only: bool = False) -> str:
+     if reason == REASON_SCHEMA_VIOLATION:
+         problem = f"the response did not match the schema ({detail})"
+     elif reason == REASON_NO_JSON:
+         problem = f"no single JSON object could be extracted ({detail})"
+     else:
+         problem = f"{reason}: {detail}"
++    requirements = "every question id present exactly once"
++    if not value_only:
++        requirements += " and every probabilities object summing to 1.0"
+     return (
+         f"\n\n{_CORRECTION_HEADER}: your previous reply was unusable — "
+         f"{problem}. Return exactly one JSON object matching the RESPONSE JSON "
+-        "SCHEMA above, with every question id present exactly once and every "
+-        "probabilities object summing to 1.0."
++        f"SCHEMA above, with {requirements}."
+     )
+ 
+ 
+@@ -430,6 +447,8 @@ def _decisions_from_answers(
+     obj: dict[str, Any],
+     questions: Sequence[Question],
+     mode: str,
++    *,
++    value_only: bool = False,
+ ) -> tuple[list[Decision], list[ParseFailure]]:
+     """Turn a schema-valid response into decisions plus per-question failures.
+ 
+@@ -451,7 +470,7 @@ def _decisions_from_answers(
+             )
+             continue
+         try:
+-            decisions.append(_decision_from_entry(entry, question, mode))
++            decisions.append(_decision_from_entry(entry, question, mode, value_only=value_only))
+         except ValueError as exc:
+             failures.append(ParseFailure(REASON_INVALID_VALUE, f"question {question.id!r}: {exc}"))
+     known_ids = {question.id for question in questions}
+@@ -460,7 +479,28 @@ def _decisions_from_answers(
+     return decisions, failures
+ 
+ 
+-def _decision_from_entry(entry: Mapping[str, Any], question: Question, mode: str) -> Decision:
++def _decision_from_entry(
++    entry: Mapping[str, Any], question: Question, mode: str, *, value_only: bool = False
++) -> Decision:
++    if value_only:
++        key = {
++            QuestionKind.CHOICE: "choice",
++            QuestionKind.SCORE: "score",
++            QuestionKind.NOUL: "noul",
++        }[question.kind]
++        value = entry.get(key)
++        if question.kind is QuestionKind.CHOICE and value not in question.options:
++            raise ValueError("choice outside options")
++        if question.kind is QuestionKind.SCORE and (
++            type(value) is not int or value not in question.levels
++        ):
++            raise ValueError("score outside levels")
++        if question.kind is QuestionKind.NOUL and not isinstance(value, bool):
++            raise ValueError("noul is not boolean")
++        return Decision(
++            question_id=question.id, kind=question.kind, value=value,
++            probabilities={}, confidence=None, mode=mode,
++        )
+     raw_probabilities = entry.get("probabilities")
+     if not isinstance(raw_probabilities, Mapping):
+         raise ValueError("'probabilities' is not an object")
+diff --git a/src/typed_decisions/schema.py b/src/typed_decisions/schema.py
+index 4cb8d6bd..e13656c5 100644
+--- a/src/typed_decisions/schema.py
++++ b/src/typed_decisions/schema.py
+@@ -50,8 +50,10 @@ _GBNF_PRIMITIVES = "\n".join(
+ )
+ 
+ 
+-def build_response_schema(questions: Sequence[Question]) -> dict[str, Any]:
+-    """Build the Draft 2020-12 schema for one all-questions JSON response."""
++def build_response_schema(
++    questions: Sequence[Question], *, value_only: bool = False
++) -> dict[str, Any]:
++    """Build a strict all-questions schema; value_only omits confidence data."""
+     questions = list(questions)
+     return {
+         "$schema": _JSON_SCHEMA_DRAFT,
+@@ -64,7 +66,10 @@ def build_response_schema(questions: Sequence[Question]) -> dict[str, Any]:
+                 "type": "object",
+                 "additionalProperties": False,
+                 "required": [question.id for question in questions],
+-                "properties": {question.id: _answer_schema(question) for question in questions},
++                "properties": {
++                    question.id: _answer_schema(question, value_only=value_only)
++                    for question in questions
++                },
+             }
+         },
+     }
+@@ -120,23 +125,26 @@ def build_gbnf(questions: Sequence[Question]) -> str | None:
+     return "\n".join(rules) + "\n"
+ 
+ 
+-def _answer_schema(question: Question) -> dict[str, Any]:
++def _answer_schema(question: Question, *, value_only: bool = False) -> dict[str, Any]:
+     if question.kind is QuestionKind.CHOICE:
+         return _object_answer_schema(
+             value_key="choice",
+             value_schema={"type": "string", "enum": list(question.options)},
+             labels=list(question.options),
++            value_only=value_only,
+         )
+     if question.kind is QuestionKind.SCORE:
+         return _object_answer_schema(
+             value_key="score",
+             value_schema={"type": "integer", "enum": list(question.levels)},
+             labels=[str(level) for level in question.levels],
++            value_only=value_only,
+         )
+     return _object_answer_schema(
+         value_key="noul",
+         value_schema={"type": "boolean"},
+         labels=["true", "false"],
++        value_only=value_only,
+     )
+ 
+ 
+@@ -145,7 +153,15 @@ def _object_answer_schema(
+     value_key: str,
+     value_schema: dict[str, Any],
+     labels: list[str],
++    value_only: bool = False,
+ ) -> dict[str, Any]:
++    if value_only:
++        return {
++            "type": "object",
++            "additionalProperties": False,
++            "required": [value_key],
++            "properties": {value_key: value_schema},
++        }
+     return {
+         "type": "object",
+         "additionalProperties": False,
+diff --git a/src/typed_decisions/tool_args_integration.py b/src/typed_decisions/tool_args_integration.py
+index c8fed4bc..9e2109db 100644
+--- a/src/typed_decisions/tool_args_integration.py
++++ b/src/typed_decisions/tool_args_integration.py
+@@ -262,6 +262,7 @@ def propose_shadow_typed_arguments(
+                 questions=mapping.questions,
+                 role=role,
+                 mode=mode,
++                value_only=(mode == "json"),
+             )
+         calls = tuple(dict(call) for call in call_log.calls)
+         if result.failures:
+diff --git a/src/typed_decisions/types.py b/src/typed_decisions/types.py
+index 4ef17a86..7734db15 100644
+--- a/src/typed_decisions/types.py
++++ b/src/typed_decisions/types.py
+@@ -18,10 +18,11 @@ Design rules:
+       ``bool`` for noul; ``kind`` says how to read the Python type.
+     * ``Decision.probabilities`` is a mapping (candidate label -> float)
+       normalized to sum to 1, computed by
+-      ``confidence.normalize_probabilities``.
++      ``confidence.normalize_probabilities``. An empty mapping means no
++      distribution was requested or measured (value-only shadow JSON).
+     * ``Decision.confidence`` is a LOCAL uncertainty statistic derived from
+       that distribution, not a calibrated probability (see
+-      ``confidence.py``).
++      ``confidence.py``); ``None`` means unavailable, never zero.
+     * ``mode`` records the decoding path that produced the decision
+       (``"json"`` today, ``"native"`` from TD-1a).
+ """
+@@ -148,7 +149,7 @@ class Decision:
+     kind: QuestionKind
+     value: object
+     probabilities: Mapping[str | int, float]
+-    confidence: float
++    confidence: float | None
+     mode: str
+     token_logprob: float | None = None
+     native_key: str | None = None
+diff --git a/tests/unit/test_td29_shadow_value_only.py b/tests/unit/test_td29_shadow_value_only.py
+new file mode 100644
+index 00000000..08a8fe26
+--- /dev/null
++++ b/tests/unit/test_td29_shadow_value_only.py
+@@ -0,0 +1,90 @@
++import json
++
++from src.registry.tool_registry import Tool, ToolCategory, ToolRegistry
++from src.typed_decisions.runner import run_typed_decisions
++from src.typed_decisions.tool_args import tool_schema_to_questions
++from src.typed_decisions.tool_args_integration import (
++    propose_shadow_typed_arguments, registry_parameters_to_full_schema,
++)
++
++
++class Canned:
++    def __init__(self, response):
++        self.response = json.dumps(response)
++        self.schemas = []
++
++    def llm_call(self, prompt, **kwargs):
++        self.schemas.append(kwargs['json_schema'])
++        return self.response
++
++
++def registry_fixture():
++    tool = Tool(name='example', description='example', category=ToolCategory.DATA,
++                parameters={'mode': {'type': 'string', 'enum': ['safe', 'fast'], 'required': True},
++                            'count': {'type': 'integer', 'minimum': 1, 'maximum': 3, 'required': True},
++                            'dry': {'type': 'boolean', 'required': True}})
++    registry = ToolRegistry()
++    registry.register_tool(tool)
++    return registry._tools['example']
++
++
++def test_registry_shadow_value_only_and_unavailable_confidence():
++    tool = registry_fixture()
++    schema = registry_parameters_to_full_schema(tool.parameters)
++    response = {'answers': {'mode': {'choice': 'safe'}, 'count': {'score': 2}, 'dry': {'noul': True}}}
++    fake = Canned(response)
++    proposal = propose_shadow_typed_arguments(tool_name=tool.name, full_schema=schema,
++        original_kwargs={'mode': 'fast', 'count': 1, 'dry': False}, primitives=fake,
++        role='worker', state='state', tool=tool)
++    assert proposal.status == 'proposed'
++    assert proposal.proposed == {'mode': 'safe', 'count': 2, 'dry': True}
++    answer = fake.schemas[0]['properties']['answers']['properties']
++    assert all(set(spec['properties']) in ({'choice'}, {'score'}, {'noul'}) for spec in answer.values())
++    result = run_typed_decisions(Canned(response), state='state',
++        questions=tool_schema_to_questions(tool.name, schema).questions, role='worker', value_only=True)
++    assert all(d.confidence is None and d.probabilities == {} for d in result.decisions)
++
++
++def test_registry_shadow_rejects_extra_confidence_and_invalid_value():
++    tool = registry_fixture()
++    schema = registry_parameters_to_full_schema(tool.parameters)
++    for mode in ({'choice': 'safe', 'confidence': 1}, {'choice': 'invented'}):
++        fake = Canned({'answers': {'mode': mode, 'count': {'score': 2}, 'dry': {'noul': True}}})
++        proposal = propose_shadow_typed_arguments(tool_name=tool.name, full_schema=schema,
++            original_kwargs={'mode': 'fast', 'count': 1, 'dry': False}, primitives=fake,
++            role='worker', state='state', tool=tool)
++        assert proposal.status == 'abstained' and proposal.proposed is None
++
++
++def test_default_runner_still_requires_probability_and_confidence():
++    tool = registry_fixture()
++    schema = registry_parameters_to_full_schema(tool.parameters)
++    fake = Canned({'answers': {'mode': {'choice': 'safe'}, 'count': {'score': 2}, 'dry': {'noul': True}}})
++    result = run_typed_decisions(fake, state='state', questions=tool_schema_to_questions(tool.name, schema).questions,
++                                 role='worker', max_retries=0)
++    assert result.failures and not result.decisions
++    assert 'confidence' in fake.schemas[0]['properties']['answers']['properties']['mode']['required']
++
++
++def test_shadow_retry_does_not_request_forbidden_fields():
++    tool = registry_fixture()
++    schema = registry_parameters_to_full_schema(tool.parameters)
++    response = {'answers': {'mode': {'choice': 'safe'}, 'count': {'score': 2}, 'dry': {'noul': True}}}
++
++    class RetryCanned:
++        def __init__(self):
++            self.prompts = []
++
++        def llm_call(self, prompt, **kwargs):
++            self.prompts.append(prompt)
++            return 'not JSON' if len(self.prompts) == 1 else json.dumps(response)
++
++    fake = RetryCanned()
++    proposal = propose_shadow_typed_arguments(tool_name=tool.name, full_schema=schema,
++        original_kwargs={'mode': 'fast', 'count': 1, 'dry': False}, primitives=fake,
++        role='worker', state='state', tool=tool)
++    assert len(fake.prompts) == 2
++    assert 'CORRECTION' in fake.prompts[1]
++    assert 'probabilities' not in fake.prompts[1] and 'confidence' not in fake.prompts[1]
++    # A recovered retry still abstains under the existing conservative policy.
++    assert proposal.status == 'abstained' and proposal.reason == 'typed_failure'
+diff --git a/tests/unit/test_typed_decisions_tool_args_integration.py b/tests/unit/test_typed_decisions_tool_args_integration.py
+index e1ac49a5..6d230351 100644
+--- a/tests/unit/test_typed_decisions_tool_args_integration.py
++++ b/tests/unit/test_typed_decisions_tool_args_integration.py
+@@ -150,6 +150,14 @@ def _canned_response(questions: Sequence[Question], values: Mapping[str, object]
+     return json.dumps({"answers": answers})
+ 
+ 
++def _shadow_response(questions: Sequence[Question], values: Mapping[str, object]) -> str:
++    payload = json.loads(_canned_response(questions, values))
++    for answer in payload["answers"].values():
++        answer.pop("probabilities")
++        answer.pop("confidence")
++    return json.dumps(payload)
++
++
+ def _decision(question: Question, value: object, mode: str = "native") -> Decision:
+     return Decision(
+         question_id=question.id,
+@@ -634,7 +642,7 @@ def test_call_site_shadow_records_proposal_but_executes_original(enabled, monkey
+     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+     mapping = tool_schema_to_questions("deploy", schema)
+     primitives = _FakePrimitives(
+-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
++        _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
+     )
+     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+     repl = _make_repl(primitives, registry)
+@@ -736,7 +744,7 @@ def test_shadow_preserves_unmappable_optional_fields_on_original_td4_cohort():
+                 answers[question.id] = case.expected[question.id]
+         optional = next(iter(set(case.parameters["properties"]) - set(case.expected)))
+         original = {**case.expected, optional: f"original-{case.case_id}"}
+-        primitives = _FakePrimitives(_canned_response(mapping.questions, answers))
++        primitives = _FakePrimitives(_shadow_response(mapping.questions, answers))
+         proposal = integration.propose_shadow_typed_arguments(
+             tool_name=case.tool,
+             full_schema=case.parameters,
+@@ -770,7 +778,7 @@ def test_shadow_required_unmappable_declines_without_model_call():
+ def test_shadow_full_validation_rejects_extra_and_constraint_violations():
+     schema = _FULLY_MAPPABLE
+     mapping = tool_schema_to_questions("deploy", schema)
+-    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
++    response = _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
+     result = integration.propose_shadow_typed_arguments(
+         tool_name="deploy",
+         full_schema=schema,
+@@ -796,7 +804,7 @@ def test_shadow_full_validation_rejects_extra_and_constraint_violations():
+         tool_name="count",
+         full_schema=constrained,
+         original_kwargs={"count": 3},
+-        primitives=_FakePrimitives(_canned_response(questions, {"count": 1})),
++        primitives=_FakePrimitives(_shadow_response(questions, {"count": 1})),
+         state=STATE,
+         role=ROLE,
+     )
+@@ -845,7 +853,7 @@ def test_dispatch_never_waits_for_blocked_shadow(enabled, monkeypatch, tmp_path)
+             return super().llm_call(prompt, **kwargs)
+ 
+     primitives = BlockingPrimitives(
+-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
++        _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
+     )
+     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+     repl = _make_repl(primitives, registry)
+@@ -877,7 +885,7 @@ def test_shadow_worker_observes_cancel_and_keeps_cost_separate(enabled, monkeypa
+     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+     mapping = tool_schema_to_questions("deploy", schema)
+     primitives = CountedPrimitives(
+-        _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
++        _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
+     )
+     registry = _FakeRegistry(_Tool("deploy", _REGISTRY_PARAMETERS))
+     repl = _make_repl(primitives, registry)
+@@ -1007,7 +1015,7 @@ def test_concurrent_foreground_and_shadow_isolate_meta_and_cost(enabled, monkeyp
+     _set_receipt_path(monkeypatch, tmp_path)
+     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+     mapping = tool_schema_to_questions("deploy", schema)
+-    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
++    response = _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
+     started, release = threading.Event(), threading.Event()
+ 
+     class ConcurrentPrimitives(_FakePrimitives):
+@@ -1095,7 +1103,7 @@ def test_real_primitives_usage_ledger_isolated_during_shadow(enabled, monkeypatc
+     monkeypatch.setattr("src.llm_primitives.usage_log.write_usage_event", lambda *a, **k: None)
+     schema = registry_parameters_to_schema(_REGISTRY_PARAMETERS)
+     mapping = tool_schema_to_questions("deploy", schema)
+-    response = _canned_response(mapping.questions, {"mode": "safe", "dry_run": True})
++    response = _shadow_response(mapping.questions, {"mode": "safe", "dry_run": True})
+     started, release = threading.Event(), threading.Event()
+     ledgers = []
+ 
