@@ -1,0 +1,368 @@
+diff --git a/src/api/routes/dashboard.py b/src/api/routes/dashboard.py
+index 9b857590..705b4aab 100644
+--- a/src/api/routes/dashboard.py
++++ b/src/api/routes/dashboard.py
+@@ -29,7 +29,7 @@ import sqlite3
+ from collections import deque
+ from datetime import datetime, timezone
+ from pathlib import Path
+-from typing import Any, Iterable
++from typing import Any, Iterable, Literal
+ from urllib.parse import quote
+ 
+ import httpx
+@@ -38,6 +38,7 @@ from fastapi import APIRouter, HTTPException, Request
+ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+ 
+ from src.roles import Role
++from src.api.routes.dashboard_machine_frame import project_machine_frame
+ from src.runtime.live_telemetry import (
+     live_batch_activity_summary,
+     live_telemetry_frame,
+@@ -7191,8 +7192,8 @@ _SNAPSHOT_SERVE_PATH_STALL_S = 30.0
+ 
+ 
+ @router.get("/dashboard/api/snapshot")
+-async def snapshot() -> JSONResponse:
+-    """Point-in-time state: all slots + recent decisions + counters."""
++async def snapshot(view: Literal["full", "machine"] = "full") -> JSONResponse:
++    """Point-in-time state; machine view omits only an equal live-frame alias."""
+     stats = _SNAPSHOT_BUILD_STATS
+     started = time.time()
+     stats["last_attempt_ts"] = started
+@@ -7206,6 +7207,12 @@ async def snapshot() -> JSONResponse:
+     stats["last_success_ts"] = done
+     stats["last_duration_s"] = round(done - started, 3)
+     stats["build_count"] += 1
++    if view == "machine":
++        return JSONResponse(
++            project_machine_frame(json.loads(resp.body)),
++            status_code=resp.status_code,
++            headers={key: value for key, value in resp.headers.items() if key != "content-length"},
++        )
+     return resp
+ 
+ 
+@@ -7386,11 +7393,11 @@ async def _snapshot_impl() -> JSONResponse:
+ 
+ 
+ @router.get("/dashboard/events/stream")
+-async def stream(request: Request) -> StreamingResponse:
++async def stream(request: Request, view: Literal["full", "machine"] = "full") -> StreamingResponse:
+     """Push-first Server-Sent Events stream of authoritative live frames."""
+ 
+     async def event_gen():
+-        async for payload in _snapshot_payloads():
++        async for payload in _snapshot_payloads(view=view):
+             if await request.is_disconnected():
+                 return
+             yield f"data: {payload}\n\n"
+@@ -7417,7 +7424,7 @@ async def stream(request: Request) -> StreamingResponse:
+ _PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
+ 
+ 
+-async def _snapshot_payloads():
++async def _snapshot_payloads(*, view: Literal["full", "machine"] = "full"):
+     """Yield transition-driven snapshots, coalesced to at most 2 Hz.
+ 
+     Runs until cancelled — the multiplex main loop is the SOLE reader of the
+@@ -7445,6 +7452,10 @@ async def _snapshot_payloads():
+                         for pid, sequence in (lifecycle.get("source_sequences") or {}).items()
+                     )
+                 )
++                if view == "machine":
++                    payload = JSONResponse(project_machine_frame(payload_frame)).body.decode(
++                        "utf-8"
++                    )
+             except Exception as exc:
+                 payload = json.dumps({"error": str(exc)})
+                 emitted_event_sequence = last_event_sequence
+diff --git a/src/api/routes/dashboard_machine_frame.py b/src/api/routes/dashboard_machine_frame.py
+new file mode 100644
+index 00000000..9e29ce22
+--- /dev/null
++++ b/src/api/routes/dashboard_machine_frame.py
+@@ -0,0 +1,46 @@
++"""Lossless transport projection for the hub machine page.
++
++The full snapshot remains the diagnostic contract. The machine view carries
++its complete canonical ``live_frame`` once, omitting only an equal nested
++alias. Divergent observations are retained so transport cannot hide them.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++
++def _same_json_value(left: Any, right: Any) -> bool:
++    """Compare deep native JSON without recursion, preserving types and signed zero."""
++    pending = [(left, right)]
++    while pending:
++        current, other = pending.pop()
++        if type(current) is not type(other):
++            return False
++        if isinstance(current, dict):
++            if current.keys() != other.keys():
++                return False
++            pending.extend((value, other[key]) for key, value in current.items())
++        elif isinstance(current, list):
++            if len(current) != len(other):
++                return False
++            pending.extend(zip(current, other))
++        elif isinstance(current, float):
++            if current.hex() != other.hex():
++                return False
++        elif current != other:
++            return False
++    return True
++
++
++def project_machine_frame(payload: dict[str, Any]) -> dict[str, Any]:
++    """Remove an exact duplicate without mutating the native snapshot."""
++    canonical = payload.get("live_frame")
++    locks = payload.get("region_locks")
++    if not isinstance(canonical, dict) or not isinstance(locks, dict):
++        return payload
++    alias = locks.get("live_frame")
++    if not isinstance(alias, dict) or not _same_json_value(alias, canonical):
++        return payload
++    projected_locks = {key: value for key, value in locks.items() if key != "live_frame"}
++    return {**payload, "region_locks": projected_locks}
+diff --git a/tests/unit/test_dashboard_machine_frame.py b/tests/unit/test_dashboard_machine_frame.py
+new file mode 100644
+index 00000000..2bef0955
+--- /dev/null
++++ b/tests/unit/test_dashboard_machine_frame.py
+@@ -0,0 +1,231 @@
++"""Machine-view transport controls over native reducer records; no live sampling."""
++
++from __future__ import annotations
++
++import asyncio
++from copy import deepcopy
++import json
++from types import SimpleNamespace
++
++from fastapi import FastAPI
++from fastapi.responses import JSONResponse
++from fastapi.testclient import TestClient
++import pytest
++
++from src.api.routes import dashboard
++from src.api.routes.dashboard_machine_frame import project_machine_frame
++from src.runtime.live_telemetry import LiveTelemetryReducer, _merge_worker_frames
++
++
++def native_snapshot(*, host: bool = False) -> dict:
++    reducer = LiveTelemetryReducer(queue_capacity=64, history_capacity=64)
++    for index in range(24):
++        reducer.emit(
++            "api_request_started",
++            request_id=f"request-λ-{index}",
++            task_id=f"task-{index}",
++            batch_id="fixture-batch",
++            role="frontdoor",
++            source_ts=100.0 + index,
++        )
++    lifecycle = reducer.frame()
++    if host:
++        second = deepcopy(lifecycle)
++        second["process_id"] = 102
++        lifecycle["process_id"] = 101
++        lifecycle = _merge_worker_frames(
++            {101: lifecycle, 102: second},
++            expected_pids=[101, 102, 103],
++            now=125.0,
++            stale_after_s=1.0,
++            expected_worker_count=3,
++        )
++    live = {
++        "frame_id": "fixture-frame",
++        "observed_at": {"tap": 125.0, "slots_completed": 124.5},
++        "status": "backend_unknown",
++        "unanswered_ports": [8070],
++        "lifecycle": lifecycle,
++        "reconciliation": {"status": "unknown", "history_overwritten": False},
++    }
++    return {
++        "generated_at": 125.0,
++        "frame_id": "fixture-frame",
++        "live_frame": live,
++        "region_locks": {
++            "frame_id": "fixture-frame",
++            "generated_at": 124.0,
++            "live_frame": deepcopy(live),
++            "by_role": {"frontdoor": {"unknown": True}},
++            "occupancy": {"entries": [{"token": "fixture-lease", "role": "frontdoor"}]},
++        },
++        "api_lifecycle": lifecycle["batch_activity"],
++        "slots_poll_meta": {"unanswered_ports": [8070]},
++        "topology": {"nodes": [{"port": 8070, "role": "frontdoor", "running": False}]},
++        "placement_telemetry": {"status": "backend_unknown", "frame_id": "fixture-frame"},
++        "_freshness": {"generated_at": 125.0, "status": "stale", "sources": []},
++        "future_native_field": {"identity": "retained", "unknown": None},
++    }
++
++
++@pytest.mark.parametrize("host", [False, True])
++def test_projection_preserves_every_field_except_equal_alias_and_never_mutates(host):
++    native = native_snapshot(host=host)
++    before = deepcopy(native)
++
++    projected = project_machine_frame(native)
++
++    expected = deepcopy(before)
++    del expected["region_locks"]["live_frame"]
++    assert projected == expected
++    assert native == before
++    assert projected["live_frame"] == before["live_frame"]
++    assert len(JSONResponse(projected).body) < len(JSONResponse(native).body)
++
++
++@pytest.mark.parametrize(
++    "variant", ["divergent", "missing_alias", "missing_canonical", "null", "error"]
++)
++def test_projection_preserves_disagreement_missing_unknown_and_error(variant):
++    native = native_snapshot()
++    if variant == "divergent":
++        native["region_locks"]["live_frame"]["observed_at"]["tap"] = 123.0
++    elif variant == "missing_alias":
++        del native["region_locks"]["live_frame"]
++    elif variant == "missing_canonical":
++        del native["live_frame"]
++    elif variant == "null":
++        native["live_frame"] = native["region_locks"]["live_frame"] = None
++    else:
++        native = {"error": "native source unavailable"}
++    before = deepcopy(native)
++    assert project_machine_frame(native) == before
++    assert native == before
++
++
++def test_real_snapshot_route_default_bytes_headers_and_query_validation(monkeypatch):
++    native = native_snapshot(host=True)
++    original = JSONResponse(native, headers={"x-native": "retained", "cache-control": "no-store"})
++
++    async def build():
++        return original
++
++    monkeypatch.setattr(dashboard, "_snapshot_impl", build)
++    monkeypatch.setattr(dashboard, "_SNAPSHOT_BUILD_STATS", {"build_count": 0})
++    app = FastAPI()
++    app.include_router(dashboard.router)
++    with TestClient(app) as client:
++        full = client.get("/dashboard/api/snapshot")
++        explicit = client.get("/dashboard/api/snapshot?view=full")
++        machine = client.get("/dashboard/api/snapshot?view=machine")
++        invalid = client.get("/dashboard/api/snapshot?view=other")
++    assert full.content == explicit.content == original.body
++    assert machine.json() == project_machine_frame(native)
++    assert machine.headers["x-native"] == "retained"
++    assert machine.headers["cache-control"] == "no-store"
++    assert int(machine.headers["content-length"]) == len(machine.content)
++    assert original.body == JSONResponse(native).body
++    assert invalid.status_code == 422
++
++
++def test_real_snapshot_route_projects_deep_native_json_without_changing_legacy_bytes(monkeypatch):
++    nested = {"identity": "deep-fixture", "unknown": None, "observed_at": 125.0}
++    for index in range(650):
++        nested = {"child": nested} if index % 2 == 0 else [nested]
++    frame = {"frame_id": "deep-fixture", "future_native_value": nested}
++    native = {"generated_at": 125.0, "live_frame": frame, "region_locks": {"live_frame": frame}}
++    original = JSONResponse(native)
++
++    async def build():
++        return original
++
++    monkeypatch.setattr(dashboard, "_snapshot_impl", build)
++    monkeypatch.setattr(dashboard, "_SNAPSHOT_BUILD_STATS", {"build_count": 0})
++    app = FastAPI()
++    app.include_router(dashboard.router)
++    with TestClient(app) as client:
++        full = client.get("/dashboard/api/snapshot")
++        assert full.content == original.body
++        machine = client.get("/dashboard/api/snapshot?view=machine")
++    assert machine.status_code == 200
++    projected = machine.json()
++    assert "live_frame" not in projected["region_locks"]
++    assert len(machine.content) < len(original.body)
++    assert original.body == full.content
++    current = projected["live_frame"]["future_native_value"]
++    for _ in range(650):
++        current = current["child"] if isinstance(current, dict) else current[0]
++    assert current == {"identity": "deep-fixture", "unknown": None, "observed_at": 125.0}
++
++
++@pytest.mark.parametrize("native_value,alias_value", [(True, 1), (1, 1.0), (0.0, -0.0)])
++def test_projection_keeps_json_type_disagreements(native_value, alias_value):
++    native = native_snapshot()
++    native["live_frame"]["future_value"] = native_value
++    native["region_locks"]["live_frame"]["future_value"] = alias_value
++    assert "live_frame" in project_machine_frame(native)["region_locks"]
++
++
++@pytest.mark.parametrize("view", ["full", "machine"])
++def test_native_sse_keeps_transition_acknowledgment_and_frame_identity(monkeypatch, view):
++    sequences = iter(((("101", 0), ("102", 0)), (("101", 0), ("102", 1))))
++    monotonic = iter((3.0, 3.1, 3.7, 3.8))
++    originals = []
++
++    async def snapshot():
++        native = native_snapshot(host=True)
++        index = len(originals)
++        native["live_frame"]["lifecycle"]["source_sequences"] = {"101": 0, "102": index}
++        native["region_locks"]["live_frame"] = deepcopy(native["live_frame"])
++        response = JSONResponse(native)
++        originals.append(response.body.decode("utf-8"))
++        return response
++
++    async def no_sleep(_delay):
++        pass
++
++    monkeypatch.setattr(dashboard, "snapshot", snapshot)
++    monkeypatch.setattr(dashboard, "live_telemetry_sequence", lambda: next(sequences))
++    monkeypatch.setattr(dashboard, "time", SimpleNamespace(monotonic=lambda: next(monotonic)))
++    monkeypatch.setattr(dashboard.asyncio, "sleep", no_sleep)
++
++    async def collect():
++        stream = dashboard._snapshot_payloads(view=view)
++        try:
++            return [await anext(stream), await anext(stream)]
++        finally:
++            await stream.aclose()
++
++    emitted = asyncio.run(collect())
++    assert len(originals) == 2
++    if view == "full":
++        assert emitted == originals
++    else:
++        assert [json.loads(item) for item in emitted] == [
++            project_machine_frame(json.loads(item)) for item in originals
++        ]
++    for item in emitted:
++        frame = json.loads(item)
++        assert (
++            frame["frame_id"]
++            == frame["live_frame"]["frame_id"]
++            == frame["region_locks"]["frame_id"]
++        )
++
++
++def test_real_stream_route_forwards_only_opted_in_view(monkeypatch):
++    observed = []
++
++    async def payloads(*, view="full"):
++        observed.append(view)
++        yield '{"error":"native unavailable"}'
++
++    monkeypatch.setattr(dashboard, "_snapshot_payloads", payloads)
++    app = FastAPI()
++    app.include_router(dashboard.router)
++    with TestClient(app) as client:
++        for query in ("", "?view=machine"):
++            response = client.get("/dashboard/events/stream" + query)
++            assert response.content == b'data: {"error":"native unavailable"}\n\n'
++        assert client.get("/dashboard/events/stream?view=other").status_code == 422
++    assert observed == ["full", "machine"]

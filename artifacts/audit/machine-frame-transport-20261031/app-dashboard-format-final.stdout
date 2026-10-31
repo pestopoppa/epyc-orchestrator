@@ -1,0 +1,136 @@
+--- src/api/routes/dashboard.py
++++ src/api/routes/dashboard.py
+@@ -3044,7 +3044,9 @@
+     """Data probe for the cockpit: HTTP 200 only for ``ok``; 503 for absent/degraded."""
+     try:
+         payload = await _decision_cockpit_payload(None, None)
+-        health = dict(payload.get("health") or {"status": "degraded", "reasons": ["no health fold"]})
++        health = dict(
++            payload.get("health") or {"status": "degraded", "reasons": ["no health fold"]}
++        )
+         health["evidence_freshness"] = payload.get("evidence_freshness")
+     except Exception as exc:  # noqa: BLE001
+         health = {"status": "degraded", "reasons": [f"builder failed: {exc}"[:300]]}
+@@ -3064,8 +3066,11 @@
+ 
+     now = time.time() if now is None else now
+     window_file = gpu_window.window_path()
+-    status_path = (window_file.with_name(window_file.name + ".executor-status.json")
+-                   if window_file is not None else GPU_WINDOW_STATUS_PATH)
++    status_path = (
++        window_file.with_name(window_file.name + ".executor-status.json")
++        if window_file is not None
++        else GPU_WINDOW_STATUS_PATH
++    )
+     reasons: list[str] = []
+     try:
+         status = json.loads(status_path.read_text())
+@@ -3082,7 +3087,9 @@
+         if age > float(status.get("fresh_for_s") or 180):
+             reasons.append(f"watchdog stale ({age:.0f}s since last tick)")
+         if status.get("verdict") == "alarm":
+-            reasons.append(f"window alarm: {status.get('last_action')} {status.get('detail')}"[:300])
++            reasons.append(
++                f"window alarm: {status.get('last_action')} {status.get('detail')}"[:300]
++            )
+     if reasons:
+         health = "absent" if status is None else "degraded"
+     else:
+@@ -3103,8 +3110,10 @@
+     try:
+         payload = _gpu_window_payload()
+     except Exception as exc:  # noqa: BLE001 — render the failure, not a 500
+-        payload = {"error": str(exc)[:300],
+-                   "health": {"status": "degraded", "reasons": [f"builder failed: {exc}"[:300]]}}
++        payload = {
++            "error": str(exc)[:300],
++            "health": {"status": "degraded", "reasons": [f"builder failed: {exc}"[:300]]},
++        }
+     return JSONResponse(_stamp(payload, "gpu_window"), headers=_NO_STORE_HEADERS)
+ 
+ 
+@@ -3115,8 +3124,9 @@
+         health = dict(_gpu_window_payload()["health"])
+     except Exception as exc:  # noqa: BLE001
+         health = {"status": "degraded", "reasons": [f"builder failed: {exc}"[:300]]}
+-    return JSONResponse(health, status_code=200 if health.get("status") == "ok" else 503,
+-                        headers=_NO_STORE_HEADERS)
++    return JSONResponse(
++        health, status_code=200 if health.get("status") == "ok" else 503, headers=_NO_STORE_HEADERS
++    )
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -3649,7 +3659,9 @@
+     eval_details = row.get("eval_details")
+     if not isinstance(eval_details, dict):
+         eval_details = {}
+-    policy = str(eval_details.get("objective_policy_live") or row.get("objective_policy_live") or "")
++    policy = str(
++        eval_details.get("objective_policy_live") or row.get("objective_policy_live") or ""
++    )
+     if policy not in _CERTIFIED_RATE_OBJECTIVE_POLICIES:
+         return {
+             **_TASK_RATE_NULL_FIELDS,
+@@ -5761,17 +5773,15 @@
+         "policy_version": multitier_policy.get("policy_version")
+         or multitier_bundle.get("policy_version"),
+         "required_tiers": multitier_policy.get("required_tiers") or [2, 3],
+-        "baseline_tiers": sorted(
+-            int(tier)
+-            for tier in multitier_tiers
+-            if str(tier).isdigit()
+-        )
++        "baseline_tiers": sorted(int(tier) for tier in multitier_tiers if str(tier).isdigit())
+         if isinstance(multitier_tiers, dict)
+         else [],
+         "status": (
+             str(multitier_pending.get("status") or "pending")
+             if multitier_pending
+-            else "ready" if multitier_policy.get("enabled") is True else "disabled"
++            else "ready"
++            if multitier_policy.get("enabled") is True
++            else "disabled"
+         ),
+         "next_tier": multitier_pending.get("next_tier") if multitier_pending else None,
+         "candidate": multitier_pending.get("candidate") if multitier_pending else None,
+@@ -6911,24 +6921,32 @@
+         out = req
+         port = _req_port(req)
+         terminal = str(req.get("status") or "") == "complete"
+-        busy = [
+-            s for s in (slots_by_port.get(port) or [])
+-            if isinstance(s, dict) and s.get("is_processing")
+-        ] if port is not None and not terminal else []
++        busy = (
++            [
++                s
++                for s in (slots_by_port.get(port) or [])
++                if isinstance(s, dict) and s.get("is_processing")
++            ]
++            if port is not None and not terminal
++            else []
++        )
+         if busy:
++
+             def _decoded(slot: dict[str, Any]) -> int | None:
+                 nxt = slot.get("next_token")
+                 if isinstance(nxt, list) and nxt and isinstance(nxt[0], dict):
+                     val = nxt[0].get("n_decoded")
+                     return int(val) if isinstance(val, (int, float)) else None
+                 return None
++
+             decoded = [d for d in (_decoded(s) for s in busy) if d is not None]
+             out = dict(req)
+             out["slot_progress"] = {
+                 "is_processing": True,
+                 "n_prompt_tokens": sum(int(s.get("n_prompt_tokens") or 0) for s in busy),
+                 "n_prompt_tokens_processed": sum(
+-                    int(s.get("n_prompt_tokens_processed") or 0) for s in busy),
++                    int(s.get("n_prompt_tokens_processed") or 0) for s in busy
++                ),
+                 "n_decoded": sum(decoded) if decoded else None,
+                 "sampled_at": round(sampled_at, 3),
+                 "ambiguous": len(busy) > 1 or live_on_port.get(port, 0) > 1,
+
+1 file would be reformatted

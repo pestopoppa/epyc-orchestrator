@@ -1,0 +1,4 @@
+COMMAND: ['/mnt/raid0/llm/epyc-orchestrator/.venv/bin/ruff', 'check', 'src/autopilot_core/mutation_guards.py', 'tests/unit/test_prompt_forge_eval_identity.py']
+All checks passed!
+
+EXIT: 0

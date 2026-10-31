@@ -1,0 +1,10 @@
+1 file reformatted
+........................................................................ [ 45%]
+........................................................................ [ 90%]
+...............                                                          [100%]
+159 passed in 5.08s
+All checks passed!
+1 file already formatted
+setattr: exact original guard rejects native call, but ACCEPTS force reset when call is grandfathered
+delattr: exact original guard rejects native call, but ACCEPTS force reset when call is grandfathered
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 6.5124749429523945, "sampled_peak_tree_rss_bytes": 242499584, "samples": 65, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 609583, "leader_birth": 158875582, "child_rc": 0, "children_drained": true, "failure": null}

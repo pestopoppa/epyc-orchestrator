@@ -1495,7 +1495,7 @@ class PromptForge:
         1. Syntax (ast.parse)
         2. No catastrophic size reduction (>60% shrinkage)
         3. Public names preserved (classes, functions defined at module level)
-        4. RTG-55 MHS-2 static safety screen (AST denylist + effect classification)
+        4. RTG-55 static safety screen (MHS-12 UNSAFE takes precedence over 2/3)
 
         This function NEVER writes into the source tree and NEVER imports or
         execs the candidate in this process. The pre-RTG-55 step 4 wrote the
@@ -1510,6 +1510,16 @@ class PromptForge:
             return StaticSafetyReport(
                 False, MutationEffect.UNSAFE, (_truncate_reason(f"syntax error: {e}"),)
             )
+
+        # MHS-12 must report UNSAFE even when removing forced routing also
+        # triggers a generic REPLACE rejection below. Cache the static report;
+        # every other existing validation keeps its original precedence.
+        report = screen_static_safety(mutated, original=original, strict=is_new_file)
+        if any(
+            violation.startswith(("eval_identity_added_read:", "force_role_handling_changed:"))
+            for violation in report.violations
+        ):
+            return report
 
         # 2. Catastrophic shrinkage — reject if >60% of lines removed
         orig_lines = len(original.splitlines())
@@ -1540,7 +1550,6 @@ class PromptForge:
         #    "write the candidate over the live file and importlib-import it"
         #    step: no repo write, no in-process execution, no sys.path games.
         #    `new_file` proposals get the strict inertness denylist.
-        report = screen_static_safety(mutated, original=original, strict=is_new_file)
         if not report.safe:
             log.warning(
                 "Static safety screen rejected mutation on %s: %s", target_file, report.reason

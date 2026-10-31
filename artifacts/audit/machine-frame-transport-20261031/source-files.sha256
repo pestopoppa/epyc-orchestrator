@@ -1,0 +1,3 @@
+8bb48461e75e8773a2e3ff305394b3ced66e6d59f68567869e7440d8d8ab974b  src/api/routes/dashboard.py
+4fd0c03b98d0ec0303ac6e60f3d2894e7eb611c37e4ef4406f5a410aaa463603  src/api/routes/dashboard_machine_frame.py
+c0b8084e606cecff5567a5e4f2ff5486ce980cd74d419a1b95d8b7663f46e525  tests/unit/test_dashboard_machine_frame.py

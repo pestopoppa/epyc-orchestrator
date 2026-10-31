@@ -1,0 +1,1720 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/tmp/codex3-machineframe-20261031/app
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 15 items / 14 deselected / 1 selected
+
+tests/unit/test_dashboard_machine_frame.py F                             [100%]
+
+=================================== FAILURES ===================================
+_ test_real_snapshot_route_projects_deep_native_json_without_changing_legacy_bytes _
+tests/unit/test_dashboard_machine_frame.py:149: in test_real_snapshot_route_projects_deep_native_json_without_changing_legacy_bytes
+    machine = client.get("/dashboard/api/snapshot?view=machine")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/testclient.py:473: in get
+    return super().get(
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/httpx/_client.py:1053: in get
+    return self.request(
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/testclient.py:445: in request
+    return super().request(
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/httpx/_client.py:825: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/httpx/_client.py:914: in send
+    response = self._send_handling_auth(
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/httpx/_client.py:942: in _send_handling_auth
+    response = self._send_handling_redirects(
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/httpx/_client.py:979: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/httpx/_client.py:1014: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/testclient.py:348: in handle_request
+    raise exc
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/testclient.py:345: in handle_request
+    portal.call(self.app, scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/anyio/from_thread.py:334: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/mnt/raid0/users/daniele/.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/mnt/raid0/users/daniele/.local/share/uv/python/cpython-3.11.17-linux-x86_64-gnu/lib/python3.11/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/anyio/from_thread.py:259: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/applications.py:90: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/middleware/exceptions.py:63: in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/fastapi/middleware/asyncexitstack.py:18: in __call__
+    await self.app(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/routing.py:660: in __call__
+    await self.middleware_stack(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/routing.py:680: in app
+    await route.handle(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/routing.py:276: in handle
+    await self.app(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/fastapi/routing.py:134: in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:53: in wrapped_app
+    raise exc
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/starlette/_exception_handler.py:42: in wrapped_app
+    await app(scope, receive, sender)
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/fastapi/routing.py:120: in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/fastapi/routing.py:674: in app
+    raw_response = await run_endpoint_function(
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/fastapi/routing.py:328: in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard.py:7212: in snapshot
+    project_machine_frame(json.loads(resp.body)),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:37: in project_machine_frame
+    if not isinstance(alias, dict) or not _same_json_value(alias, canonical):
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+src/api/routes/dashboard_machine_frame.py:23: in <genexpr>
+    _same_json_value(value, other) for value, other in zip(left, right)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:18: in _same_json_value
+    return left.keys() == right.keys() and all(
+src/api/routes/dashboard_machine_frame.py:19: in <genexpr>
+    _same_json_value(value, right[key]) for key, value in left.items()
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/dashboard_machine_frame.py:22: in _same_json_value
+    return len(left) == len(right) and all(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+E   RecursionError: maximum recursion depth exceeded in comparison
+=============================== warnings summary ===============================
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_dashboard_machine_frame.py::test_real_snapshot_route_projects_deep_native_json_without_changing_legacy_bytes
+================= 1 failed, 14 deselected, 1 warning in 1.35s ==================
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 6.007116495165974, "sampled_peak_tree_rss_bytes": 214970368, "samples": 60, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 548791, "leader_birth": 158840983, "child_rc": 1, "children_drained": true, "failure": null}

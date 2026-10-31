@@ -1,0 +1,3 @@
+COMMAND: ['git', 'diff', '--check', '--', 'src/autopilot_core/mutation_guards.py']
+
+EXIT: 0

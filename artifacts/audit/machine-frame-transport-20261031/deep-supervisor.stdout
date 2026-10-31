@@ -1,0 +1,12 @@
+deep-after-suite 0 lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 143 passed, 1 warning in 4.24s ========================
+
+deep-after-ruff 0 All checks passed!
+
+deep-after-format 0 2 files already formatted
+
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 9.049961538054049, "sampled_peak_tree_rss_bytes": 218083328, "samples": 90, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 554833, "leader_birth": 158847358, "child_rc": 0, "children_drained": true, "failure": null}

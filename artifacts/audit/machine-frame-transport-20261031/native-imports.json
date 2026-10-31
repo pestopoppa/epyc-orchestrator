@@ -1,0 +1,1238 @@
+[
+  {
+    "module": "orchestration.repl_memory",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/__init__.py"
+  },
+  {
+    "module": "orchestration.repl_memory.embedder",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/embedder.py"
+  },
+  {
+    "module": "orchestration.repl_memory.episodic_store",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/episodic_store.py"
+  },
+  {
+    "module": "orchestration.repl_memory.failure_graph",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/failure_graph.py"
+  },
+  {
+    "module": "orchestration.repl_memory.hybrid_router",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/hybrid_router.py"
+  },
+  {
+    "module": "orchestration.repl_memory.hypothesis_graph",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/hypothesis_graph.py"
+  },
+  {
+    "module": "orchestration.repl_memory.indexed_memory_policy",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/indexed_memory_policy.py"
+  },
+  {
+    "module": "orchestration.repl_memory.memory_record",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/memory_record.py"
+  },
+  {
+    "module": "orchestration.repl_memory.progress_logger",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/progress_logger.py"
+  },
+  {
+    "module": "orchestration.repl_memory.q_judge",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/q_judge.py"
+  },
+  {
+    "module": "orchestration.repl_memory.q_reward",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/q_reward.py"
+  },
+  {
+    "module": "orchestration.repl_memory.q_scorer",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/q_scorer.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/__init__.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.candidates",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/candidates.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.engine",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/engine.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.meta_agent",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/meta_agent.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.metrics",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/metrics.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.skill_replay",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/skill_replay.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.trajectory",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/trajectory.py"
+  },
+  {
+    "module": "orchestration.repl_memory.replay.warm_start",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/replay/warm_start.py"
+  },
+  {
+    "module": "orchestration.repl_memory.retrieval_config",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/retrieval_config.py"
+  },
+  {
+    "module": "orchestration.repl_memory.retriever",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/retriever.py"
+  },
+  {
+    "module": "orchestration.repl_memory.routing_classifier",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/routing_classifier.py"
+  },
+  {
+    "module": "orchestration.repl_memory.routing_fast_path",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/routing_fast_path.py"
+  },
+  {
+    "module": "orchestration.repl_memory.routing_risk",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/routing_risk.py"
+  },
+  {
+    "module": "orchestration.repl_memory.skill_bank",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/skill_bank.py"
+  },
+  {
+    "module": "orchestration.repl_memory.skill_retriever",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/skill_retriever.py"
+  },
+  {
+    "module": "orchestration.repl_memory.staged_scorer",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/staged_scorer.py"
+  },
+  {
+    "module": "orchestration.repl_memory.strategy_store",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/orchestration/repl_memory/strategy_store.py"
+  },
+  {
+    "module": "scripts.analysis.task_rate_goodput_replay",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/analysis/task_rate_goodput_replay.py"
+  },
+  {
+    "module": "scripts.autopilot.autopilot_restart_advisor",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/autopilot/autopilot_restart_advisor.py"
+  },
+  {
+    "module": "scripts.autopilot.journal_shards",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/autopilot/journal_shards.py"
+  },
+  {
+    "module": "scripts.autopilot.phase_status",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/autopilot/phase_status.py"
+  },
+  {
+    "module": "scripts.autopilot.state_lock",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/autopilot/state_lock.py"
+  },
+  {
+    "module": "scripts.autopilot.state_ownership",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/autopilot/state_ownership.py"
+  },
+  {
+    "module": "scripts.graph_router.action_space",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/graph_router/action_space.py"
+  },
+  {
+    "module": "scripts.server.fleet_markers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/fleet_markers.py"
+  },
+  {
+    "module": "scripts.server.realized_fleet",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/realized_fleet.py"
+  },
+  {
+    "module": "scripts.server.runtime_facts_manifest",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/runtime_facts_manifest.py"
+  },
+  {
+    "module": "scripts.server.stack_log_banner",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/stack_log_banner.py"
+  },
+  {
+    "module": "scripts.server.stack_manifest",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/stack_manifest.py"
+  },
+  {
+    "module": "scripts.server.stack_numa",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/stack_numa.py"
+  },
+  {
+    "module": "scripts.server.stack_numa_mode",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/stack_numa_mode.py"
+  },
+  {
+    "module": "scripts.server.stack_paths",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/stack_paths.py"
+  },
+  {
+    "module": "scripts.server.stack_processes",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/scripts/server/stack_processes.py"
+  },
+  {
+    "module": "src",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/__init__.py"
+  },
+  {
+    "module": "src.api",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/__init__.py"
+  },
+  {
+    "module": "src.api.admission",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/admission.py"
+  },
+  {
+    "module": "src.api.dashboard_cors",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/dashboard_cors.py"
+  },
+  {
+    "module": "src.api.dependencies",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/dependencies.py"
+  },
+  {
+    "module": "src.api.health_tracker",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/health_tracker.py"
+  },
+  {
+    "module": "src.api.models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/models/__init__.py"
+  },
+  {
+    "module": "src.api.models.openai",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/models/openai.py"
+  },
+  {
+    "module": "src.api.models.requests",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/models/requests.py"
+  },
+  {
+    "module": "src.api.models.responses",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/models/responses.py"
+  },
+  {
+    "module": "src.api.models.sessions",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/models/sessions.py"
+  },
+  {
+    "module": "src.api.rate_limit",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/rate_limit.py"
+  },
+  {
+    "module": "src.api.routes",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/__init__.py"
+  },
+  {
+    "module": "src.api.routes.chat",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat.py"
+  },
+  {
+    "module": "src.api.routes.chat_delegation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_delegation.py"
+  },
+  {
+    "module": "src.api.routes.chat_delegation_config",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_delegation_config.py"
+  },
+  {
+    "module": "src.api.routes.chat_delegation_decision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_delegation_decision.py"
+  },
+  {
+    "module": "src.api.routes.chat_delegation_reports",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_delegation_reports.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/__init__.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.delegation_stage",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/delegation_stage.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.direct_stage",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/direct_stage.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.proactive_stage",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/proactive_stage.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.repl_executor",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/repl_executor.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.routing",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/routing.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.routing_decision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/routing_decision.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.script_interceptor",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/script_interceptor.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.stages",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/stages.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.telemetry",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/telemetry.py"
+  },
+  {
+    "module": "src.api.routes.chat_pipeline.vision_stage",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_pipeline/vision_stage.py"
+  },
+  {
+    "module": "src.api.routes.chat_review",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_review.py"
+  },
+  {
+    "module": "src.api.routes.chat_routing",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_routing.py"
+  },
+  {
+    "module": "src.api.routes.chat_summarization",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_summarization.py"
+  },
+  {
+    "module": "src.api.routes.chat_utils",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_utils.py"
+  },
+  {
+    "module": "src.api.routes.chat_vision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/chat_vision.py"
+  },
+  {
+    "module": "src.api.routes.config",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/config.py"
+  },
+  {
+    "module": "src.api.routes.dashboard",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_freshness",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_freshness.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_machine_frame",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_machine_frame.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_panels",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_panels.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_snapshot",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_snapshot.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_tap",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_tap.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_tasks",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_tasks.py"
+  },
+  {
+    "module": "src.api.routes.dashboard_topology",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/dashboard_topology.py"
+  },
+  {
+    "module": "src.api.routes.delegate",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/delegate.py"
+  },
+  {
+    "module": "src.api.routes.documents",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/documents.py"
+  },
+  {
+    "module": "src.api.routes.gates",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/gates.py"
+  },
+  {
+    "module": "src.api.routes.health",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/health.py"
+  },
+  {
+    "module": "src.api.routes.openai_compat",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/openai_compat.py"
+  },
+  {
+    "module": "src.api.routes.passthrough",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/passthrough.py"
+  },
+  {
+    "module": "src.api.routes.path_validation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/path_validation.py"
+  },
+  {
+    "module": "src.api.routes.sessions",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/sessions.py"
+  },
+  {
+    "module": "src.api.routes.stats",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/stats.py"
+  },
+  {
+    "module": "src.api.routes.typed_judge",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/typed_judge.py"
+  },
+  {
+    "module": "src.api.routes.v1_escalation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/v1_escalation.py"
+  },
+  {
+    "module": "src.api.routes.v1_subagent_link",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/v1_subagent_link.py"
+  },
+  {
+    "module": "src.api.routes.vision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/vision.py"
+  },
+  {
+    "module": "src.api.routes.vision_serving",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/vision_serving.py"
+  },
+  {
+    "module": "src.api.routes.voice",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/routes/voice.py"
+  },
+  {
+    "module": "src.api.services",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/services/__init__.py"
+  },
+  {
+    "module": "src.api.services.memrl",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/services/memrl.py"
+  },
+  {
+    "module": "src.api.services.routing_models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/services/routing_models.py"
+  },
+  {
+    "module": "src.api.state",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/state.py"
+  },
+  {
+    "module": "src.api.structured_logging",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/api/structured_logging.py"
+  },
+  {
+    "module": "src.autopilot_core",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/__init__.py"
+  },
+  {
+    "module": "src.autopilot_core.action_identity",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/action_identity.py"
+  },
+  {
+    "module": "src.autopilot_core.instrument_era_guard",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/instrument_era_guard.py"
+  },
+  {
+    "module": "src.autopilot_core.journal_reconstruction",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/journal_reconstruction.py"
+  },
+  {
+    "module": "src.autopilot_core.learning_exclusions",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/learning_exclusions.py"
+  },
+  {
+    "module": "src.autopilot_core.measurement_guards",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/measurement_guards.py"
+  },
+  {
+    "module": "src.autopilot_core.multitier_decision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/multitier_decision.py"
+  },
+  {
+    "module": "src.autopilot_core.pareto_math",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/pareto_math.py"
+  },
+  {
+    "module": "src.autopilot_core.rlvr_tiers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/rlvr_tiers.py"
+  },
+  {
+    "module": "src.autopilot_core.sequential_verdict",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/sequential_verdict.py"
+  },
+  {
+    "module": "src.autopilot_core.tier_specs",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/autopilot_core/tier_specs.py"
+  },
+  {
+    "module": "src.backends",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/__init__.py"
+  },
+  {
+    "module": "src.backends.anthropic",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/anthropic.py"
+  },
+  {
+    "module": "src.backends.context_limits",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/context_limits.py"
+  },
+  {
+    "module": "src.backends.context_overflow",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/context_overflow.py"
+  },
+  {
+    "module": "src.backends.grammar_guard",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/grammar_guard.py"
+  },
+  {
+    "module": "src.backends.llama_server",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/llama_server.py"
+  },
+  {
+    "module": "src.backends.native_tool_parse",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/native_tool_parse.py"
+  },
+  {
+    "module": "src.backends.openai",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/openai.py"
+  },
+  {
+    "module": "src.backends.prompt_layout",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/prompt_layout.py"
+  },
+  {
+    "module": "src.backends.protocol",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/protocol.py"
+  },
+  {
+    "module": "src.backends.serving_calls",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/backends/serving_calls.py"
+  },
+  {
+    "module": "src.classifiers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/__init__.py"
+  },
+  {
+    "module": "src.classifiers.config_loader",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/config_loader.py"
+  },
+  {
+    "module": "src.classifiers.factual_risk",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/factual_risk.py"
+  },
+  {
+    "module": "src.classifiers.keyword_matcher",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/keyword_matcher.py"
+  },
+  {
+    "module": "src.classifiers.output_parser",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/output_parser.py"
+  },
+  {
+    "module": "src.classifiers.quality_detector",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/quality_detector.py"
+  },
+  {
+    "module": "src.classifiers.role_taxonomy",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/role_taxonomy.py"
+  },
+  {
+    "module": "src.classifiers.types",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/classifiers/types.py"
+  },
+  {
+    "module": "src.config",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/config/__init__.py"
+  },
+  {
+    "module": "src.config.models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/config/models.py"
+  },
+  {
+    "module": "src.config.validation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/config/validation.py"
+  },
+  {
+    "module": "src.constants",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/constants.py"
+  },
+  {
+    "module": "src.db",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/db/__init__.py"
+  },
+  {
+    "module": "src.db.chroma_client",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/db/chroma_client.py"
+  },
+  {
+    "module": "src.db.models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/db/models/__init__.py"
+  },
+  {
+    "module": "src.db.models.vision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/db/models/vision.py"
+  },
+  {
+    "module": "src.delegation_reports",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/delegation_reports.py"
+  },
+  {
+    "module": "src.embedding_dims",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/embedding_dims.py"
+  },
+  {
+    "module": "src.env_parsing",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/env_parsing.py"
+  },
+  {
+    "module": "src.escalation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/escalation.py"
+  },
+  {
+    "module": "src.exceptions",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/exceptions.py"
+  },
+  {
+    "module": "src.features",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/features.py"
+  },
+  {
+    "module": "src.graph",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/__init__.py"
+  },
+  {
+    "module": "src.graph.answer_resolution",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/answer_resolution.py"
+  },
+  {
+    "module": "src.graph.budgets",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/budgets.py"
+  },
+  {
+    "module": "src.graph.compaction",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/compaction.py"
+  },
+  {
+    "module": "src.graph.decision_gates",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/decision_gates.py"
+  },
+  {
+    "module": "src.graph.error_classifier",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/error_classifier.py"
+  },
+  {
+    "module": "src.graph.escalation_helpers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/escalation_helpers.py"
+  },
+  {
+    "module": "src.graph.file_artifacts",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/file_artifacts.py"
+  },
+  {
+    "module": "src.graph.graph",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/graph.py"
+  },
+  {
+    "module": "src.graph.helpers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/helpers.py"
+  },
+  {
+    "module": "src.graph.langgraph",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/langgraph/__init__.py"
+  },
+  {
+    "module": "src.graph.langgraph.state",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/langgraph/state.py"
+  },
+  {
+    "module": "src.graph.nodes",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/nodes.py"
+  },
+  {
+    "module": "src.graph.observability",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/observability.py"
+  },
+  {
+    "module": "src.graph.repl_tap",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/repl_tap.py"
+  },
+  {
+    "module": "src.graph.session_summary",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/session_summary.py"
+  },
+  {
+    "module": "src.graph.state",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/state.py"
+  },
+  {
+    "module": "src.graph.task_ir_helpers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/task_ir_helpers.py"
+  },
+  {
+    "module": "src.graph.think_harder",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/think_harder.py"
+  },
+  {
+    "module": "src.graph.workspace",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/graph/workspace.py"
+  },
+  {
+    "module": "src.inference",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/inference/__init__.py"
+  },
+  {
+    "module": "src.inference.model_server",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/inference/model_server.py"
+  },
+  {
+    "module": "src.inference_lock",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/inference_lock.py"
+  },
+  {
+    "module": "src.llm_primitives",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/__init__.py"
+  },
+  {
+    "module": "src.llm_primitives.backend",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/backend.py"
+  },
+  {
+    "module": "src.llm_primitives.config",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/config.py"
+  },
+  {
+    "module": "src.llm_primitives.cost_tracking",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/cost_tracking.py"
+  },
+  {
+    "module": "src.llm_primitives.inference",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/inference.py"
+  },
+  {
+    "module": "src.llm_primitives.mock",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/mock.py"
+  },
+  {
+    "module": "src.llm_primitives.persona",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/persona.py"
+  },
+  {
+    "module": "src.llm_primitives.primitives",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/primitives.py"
+  },
+  {
+    "module": "src.llm_primitives.stat_tests",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/stat_tests.py"
+  },
+  {
+    "module": "src.llm_primitives.stats",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/stats.py"
+  },
+  {
+    "module": "src.llm_primitives.teleport",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/teleport.py"
+  },
+  {
+    "module": "src.llm_primitives.tokens",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/tokens.py"
+  },
+  {
+    "module": "src.llm_primitives.types",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/types.py"
+  },
+  {
+    "module": "src.llm_primitives.usage",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/llm_primitives/usage.py"
+  },
+  {
+    "module": "src.model_server",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/inference/model_server.py"
+  },
+  {
+    "module": "src.models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/models/__init__.py"
+  },
+  {
+    "module": "src.models.document",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/models/document.py"
+  },
+  {
+    "module": "src.models.odl_structured",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/models/odl_structured.py"
+  },
+  {
+    "module": "src.observability",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/observability.py"
+  },
+  {
+    "module": "src.orchestration",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/__init__.py"
+  },
+  {
+    "module": "src.orchestration.delegation_reports",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/delegation_reports.py"
+  },
+  {
+    "module": "src.orchestration.escalation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/escalation.py"
+  },
+  {
+    "module": "src.orchestration.interaction",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/interaction.py"
+  },
+  {
+    "module": "src.orchestration.task_ir",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/task_ir.py"
+  },
+  {
+    "module": "src.parallel_step_executor",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/parallel_step_executor.py"
+  },
+  {
+    "module": "src.prompt_builders",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/__init__.py"
+  },
+  {
+    "module": "src.prompt_builders.builder",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/builder.py"
+  },
+  {
+    "module": "src.prompt_builders.code_utils",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/code_utils.py"
+  },
+  {
+    "module": "src.prompt_builders.constants",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/constants.py"
+  },
+  {
+    "module": "src.prompt_builders.formatting",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/formatting.py"
+  },
+  {
+    "module": "src.prompt_builders.resolver",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/resolver.py"
+  },
+  {
+    "module": "src.prompt_builders.reusable_blocks",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/reusable_blocks.py"
+  },
+  {
+    "module": "src.prompt_builders.review",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/review.py"
+  },
+  {
+    "module": "src.prompt_builders.types",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/prompt_builders/types.py"
+  },
+  {
+    "module": "src.registry",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/__init__.py"
+  },
+  {
+    "module": "src.registry.kernel_paths",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/kernel_paths.py"
+  },
+  {
+    "module": "src.registry.model_descriptors",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/model_descriptors.py"
+  },
+  {
+    "module": "src.registry.registry_loader",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/registry_loader.py"
+  },
+  {
+    "module": "src.registry.slot_declarations",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/slot_declarations.py"
+  },
+  {
+    "module": "src.registry.stack_priors",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/stack_priors.py"
+  },
+  {
+    "module": "src.registry_loader",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/registry/registry_loader.py"
+  },
+  {
+    "module": "src.repl_environment",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/__init__.py"
+  },
+  {
+    "module": "src.repl_environment._fence_rules",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/_fence_rules.py"
+  },
+  {
+    "module": "src.repl_environment.archive_tools",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/archive_tools.py"
+  },
+  {
+    "module": "src.repl_environment.code_search",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/code_search.py"
+  },
+  {
+    "module": "src.repl_environment.combined_ops",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/combined_ops.py"
+  },
+  {
+    "module": "src.repl_environment.context",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/context.py"
+  },
+  {
+    "module": "src.repl_environment.document_tools",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/document_tools.py"
+  },
+  {
+    "module": "src.repl_environment.environment",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/environment.py"
+  },
+  {
+    "module": "src.repl_environment.external_access",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/external_access.py"
+  },
+  {
+    "module": "src.repl_environment.file_exploration",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/file_exploration.py"
+  },
+  {
+    "module": "src.repl_environment.file_mutation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/file_mutation.py"
+  },
+  {
+    "module": "src.repl_environment.file_tools",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/file_tools.py"
+  },
+  {
+    "module": "src.repl_environment.knowledge_fence",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/knowledge_fence.py"
+  },
+  {
+    "module": "src.repl_environment.parallel_dispatch",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/parallel_dispatch.py"
+  },
+  {
+    "module": "src.repl_environment.procedure_tools",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/procedure_tools.py"
+  },
+  {
+    "module": "src.repl_environment.routing",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/routing.py"
+  },
+  {
+    "module": "src.repl_environment.safe_pickle",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/safe_pickle.py"
+  },
+  {
+    "module": "src.repl_environment.security",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/security.py"
+  },
+  {
+    "module": "src.repl_environment.state",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/state.py"
+  },
+  {
+    "module": "src.repl_environment.suggestions",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/suggestions.py"
+  },
+  {
+    "module": "src.repl_environment.task_root",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/task_root.py"
+  },
+  {
+    "module": "src.repl_environment.types",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/types.py"
+  },
+  {
+    "module": "src.repl_environment.unicode_sanitizer",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/repl_environment/unicode_sanitizer.py"
+  },
+  {
+    "module": "src.research_context",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/research_context.py"
+  },
+  {
+    "module": "src.retrieval",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/retrieval/__init__.py"
+  },
+  {
+    "module": "src.retrieval.colbert_encoder",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/retrieval/colbert_encoder.py"
+  },
+  {
+    "module": "src.retrieval.kb_rag_query_telemetry",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/retrieval/kb_rag_query_telemetry.py"
+  },
+  {
+    "module": "src.roles",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/roles.py"
+  },
+  {
+    "module": "src.runtime",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/__init__.py"
+  },
+  {
+    "module": "src.runtime.config_attestation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/config_attestation.py"
+  },
+  {
+    "module": "src.runtime.cpu_region_lock",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/cpu_region_lock.py"
+  },
+  {
+    "module": "src.runtime.git_head",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/git_head.py"
+  },
+  {
+    "module": "src.runtime.gpu_window",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/gpu_window.py"
+  },
+  {
+    "module": "src.runtime.inference_lock",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/inference_lock.py"
+  },
+  {
+    "module": "src.runtime.instance_topology",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/instance_topology.py"
+  },
+  {
+    "module": "src.runtime.live_telemetry",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/live_telemetry.py"
+  },
+  {
+    "module": "src.runtime.lock_queue",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/lock_queue.py"
+  },
+  {
+    "module": "src.runtime.long_prefill_lease",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/long_prefill_lease.py"
+  },
+  {
+    "module": "src.runtime.measurement_windows",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/measurement_windows.py"
+  },
+  {
+    "module": "src.runtime.quiescence",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/quiescence.py"
+  },
+  {
+    "module": "src.runtime.routing_stage_timing",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/runtime/routing_stage_timing.py"
+  },
+  {
+    "module": "src.scheduling",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/__init__.py"
+  },
+  {
+    "module": "src.scheduling.contention",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/contention.py"
+  },
+  {
+    "module": "src.scheduling.contention_gate",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/contention_gate.py"
+  },
+  {
+    "module": "src.scheduling.contention_gate_capture",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/contention_gate_capture.py"
+  },
+  {
+    "module": "src.scheduling.device_model",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/device_model.py"
+  },
+  {
+    "module": "src.scheduling.gate_observation",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/gate_observation.py"
+  },
+  {
+    "module": "src.scheduling.kv_pool_admission",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/kv_pool_admission.py"
+  },
+  {
+    "module": "src.scheduling.prefix_history",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/scheduling/prefix_history.py"
+  },
+  {
+    "module": "src.security",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/security/__init__.py"
+  },
+  {
+    "module": "src.security.control_tokens",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/security/control_tokens.py"
+  },
+  {
+    "module": "src.services",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/services/__init__.py"
+  },
+  {
+    "module": "src.services.document_chunker",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/services/document_chunker.py"
+  },
+  {
+    "module": "src.services.document_client",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/services/document_client.py"
+  },
+  {
+    "module": "src.services.document_preprocessor",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/services/document_preprocessor.py"
+  },
+  {
+    "module": "src.services.figure_analyzer",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/services/figure_analyzer.py"
+  },
+  {
+    "module": "src.services.mtmd_probe",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/services/mtmd_probe.py"
+  },
+  {
+    "module": "src.session",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/__init__.py"
+  },
+  {
+    "module": "src.session.document_cache",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/document_cache.py"
+  },
+  {
+    "module": "src.session.lease",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/lease.py"
+  },
+  {
+    "module": "src.session.models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/models.py"
+  },
+  {
+    "module": "src.session.persister",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/persister.py"
+  },
+  {
+    "module": "src.session.protocol",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/protocol.py"
+  },
+  {
+    "module": "src.session.sqlite_store",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/session/sqlite_store.py"
+  },
+  {
+    "module": "src.spec_policy",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/spec_policy.py"
+  },
+  {
+    "module": "src.sse_utils",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/sse_utils.py"
+  },
+  {
+    "module": "src.structured_output",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/structured_output/__init__.py"
+  },
+  {
+    "module": "src.structured_output.repair",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/structured_output/repair.py"
+  },
+  {
+    "module": "src.task_ir",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/orchestration/task_ir.py"
+  },
+  {
+    "module": "src.typed_decisions",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/__init__.py"
+  },
+  {
+    "module": "src.typed_decisions.coherence_judge",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/coherence_judge.py"
+  },
+  {
+    "module": "src.typed_decisions.confidence",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/confidence.py"
+  },
+  {
+    "module": "src.typed_decisions.native",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/native.py"
+  },
+  {
+    "module": "src.typed_decisions.runner",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/runner.py"
+  },
+  {
+    "module": "src.typed_decisions.schema",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/schema.py"
+  },
+  {
+    "module": "src.typed_decisions.types",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/typed_decisions/types.py"
+  },
+  {
+    "module": "src.vision",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/__init__.py"
+  },
+  {
+    "module": "src.vision.analyzers",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/__init__.py"
+  },
+  {
+    "module": "src.vision.analyzers.base",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/base.py"
+  },
+  {
+    "module": "src.vision.analyzers.clip_embed",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/clip_embed.py"
+  },
+  {
+    "module": "src.vision.analyzers.exif",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/exif.py"
+  },
+  {
+    "module": "src.vision.analyzers.face_detect",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/face_detect.py"
+  },
+  {
+    "module": "src.vision.analyzers.face_embed",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/face_embed.py"
+  },
+  {
+    "module": "src.vision.analyzers.insightface_loader",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/insightface_loader.py"
+  },
+  {
+    "module": "src.vision.analyzers.vl_describe",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/analyzers/vl_describe.py"
+  },
+  {
+    "module": "src.vision.batch",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/batch.py"
+  },
+  {
+    "module": "src.vision.clustering",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/clustering.py"
+  },
+  {
+    "module": "src.vision.config",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/config.py"
+  },
+  {
+    "module": "src.vision.models",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/models.py"
+  },
+  {
+    "module": "src.vision.pipeline",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/pipeline.py"
+  },
+  {
+    "module": "src.vision.search",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/search.py"
+  },
+  {
+    "module": "src.vision.video",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/vision/video.py"
+  },
+  {
+    "module": "src.workload_model",
+    "path": "/mnt/raid0/llm/tmp/codex3-machineframe-20261031/app/src/workload_model.py"
+  }
+]
