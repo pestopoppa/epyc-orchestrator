@@ -671,6 +671,7 @@ def test_local_frontdoor_alias_ignores_ingest_env(monkeypatch) -> None:
 
 
 def test_local_chat_alias_posts_draft_chat_payload_with_force_role(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_REQUEST_SOURCE", raising=False)
     captured: dict[str, Any] = {}
 
     class FakeResponse:
@@ -729,12 +730,14 @@ def test_local_chat_alias_posts_draft_chat_payload_with_force_role(monkeypatch) 
         "request_priority": "background",
         "workload_class": "campaign",
         "request_id": "planner-local-chat-01234567",
+        "x_request_source": "autopilot",
         "force_role": "ingest_long_context",
     }
     assert captured["archive"]["url"] == "http://127.0.0.1:8000/chat"
 
 
 def test_local_chat_alias_disabling_force_role_omits_payload_field(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_REQUEST_SOURCE", raising=False)
     captured: dict[str, Any] = {}
 
     class FakeResponse:
@@ -782,11 +785,13 @@ def test_local_chat_alias_disabling_force_role_omits_payload_field(monkeypatch) 
         "request_priority": "background",
         "workload_class": "campaign",
         "request_id": "planner-local-chat-01234567",
+        "x_request_source": "autopilot",
     }
     assert "force_role" not in captured["payload"]
 
 
 def test_local_chat_alias_posts_critique_payload_without_force_role(monkeypatch) -> None:
+    monkeypatch.delenv("ORCHESTRATOR_REQUEST_SOURCE", raising=False)
     captured: dict[str, Any] = {}
 
     class FakeResponse:
@@ -834,6 +839,7 @@ def test_local_chat_alias_posts_critique_payload_without_force_role(monkeypatch)
         "request_priority": "background",
         "workload_class": "campaign",
         "request_id": "planner-local-chat-01234567",
+        "x_request_source": "autopilot",
     }
     assert "force_role" not in captured["payload"]
 
