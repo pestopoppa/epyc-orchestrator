@@ -3435,7 +3435,11 @@ def main() -> int:
 
     # Start command
     start_parser = subparsers.add_parser("start", help="Start the stack")
-    start_parser.add_argument("--hot-only", action="store_true", help="Start HOT models only")
+    start_parser.add_argument(
+        "--hot-only",
+        action="store_true",
+        help="Start HOT models only (default); incompatible with --only and --include-warm",
+    )
     start_parser.add_argument(
         "--include-warm", nargs="+", metavar="ROLE", help="Include WARM models"
     )
@@ -3633,6 +3637,13 @@ def main() -> int:
     subparsers.add_parser("status", help="Show status")
 
     args = parser.parse_args()
+
+    # The default start already selects the HOT tier.  Keep --hot-only as an
+    # explicit, compatible spelling of that choice, but refuse combinations
+    # that would silently select WARM servers through --only/--include-warm.
+    if args.command == "start" and args.hot_only and (args.include_warm or args.only):
+        print("[REFUSED] --hot-only cannot be combined with --only or --include-warm")
+        return 2
 
     # Lazy import — stack_commands imports back into this module's helpers
     # (start_server, init_memrl_and_tools, the thin process/state wrappers).
