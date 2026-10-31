@@ -50,9 +50,15 @@ undetected, so every call site must state its intent. `ROLE_NONE` is the
 explicit legacy escape hatch for stores built before this change — it is a
 choice a caller makes visibly, not a fallback.
 
-Prepending the prefix STRING is equivalent to pylate's id insertion only when
-the prefix ENCODES to exactly one token; `ensure_loaded()` verifies that by
-encoding it and refuses the prefixed roles otherwise.
+Native prefixed roles tokenize the body at cap-1, then insert the trained ID
+at position 1, after CLS. Document outputs prune the PyLate 1.4 effective
+punctuation skiplist, retaining CLS, the marker and SEP. qd-v2 stamps this new
+contract; qd-v1 stores must be rebuilt separately before serving it.
+
+The loader verifies each marker by encoding its literal with special tokens
+and padding disabled: it must produce exactly one token, and match the declared
+ID when one is provided. Runtime encoding inserts that verified ID after CLS;
+it does not concatenate the prefix string to the body.
 
 The distinction is load-bearing and was wrong here until 2026-08-22. The check
 used to be `token_to_id(prefix) is not None`, which reads the BASE vocabulary.
@@ -101,10 +107,12 @@ def locked_state():
 
 def state_transaction(function):
     """Serialize a state operation without changing its loading policy."""
+
     @wraps(function)
     def guarded(*args, **kwargs):
         with locked_state():
             return function(*args, **kwargs)
+
     return guarded
 
 
@@ -179,13 +187,15 @@ def _onnx_threads() -> int:
     except ValueError:
         logger.warning(
             "COLBERT_ENCODE_ONNX_THREADS=%r is not an integer; using %d",
-            raw, _DEFAULT_ONNX_THREADS,
+            raw,
+            _DEFAULT_ONNX_THREADS,
         )
         return _DEFAULT_ONNX_THREADS
     if value <= 0:
         logger.warning(
             "COLBERT_ENCODE_ONNX_THREADS=%d must be positive; using %d",
-            value, _DEFAULT_ONNX_THREADS,
+            value,
+            _DEFAULT_ONNX_THREADS,
         )
         return _DEFAULT_ONNX_THREADS
     return value
@@ -205,8 +215,9 @@ ROLE_NONE = "none"
 VALID_ROLES = (ROLE_QUERY, ROLE_DOCUMENT, ROLE_NONE)
 
 # Identifier stamped alongside stored vectors so an index can always say which
-# convention produced it. Bump when the prefix semantics change.
-PREFIX_CONVENTION = "qd-v1"
+# convention produced it. qd-v2 matches native PyLate 1.4 tokenization and
+# document punctuation pruning; qd-v1 stores must be rebuilt in a fresh path.
+PREFIX_CONVENTION = "qd-v2"
 # Convention of every embedding written before OP-24 (2026-08-12).
 LEGACY_CONVENTION = "none"
 
@@ -225,6 +236,8 @@ _input_names: tuple = ()
 # `Lowercase` normalizer appears in tokenizer.json -- so nothing in this module
 # would fold case and a cased query would be fed to a lower-case-trained model.
 _do_lower_case = False
+_document_skip_ids: tuple[int, ...] = ()
+_legacy_do_lower_case = False
 
 
 def _load_declared_prefixes(model_dir: Path) -> tuple[str, str]:
@@ -237,7 +250,10 @@ def _load_declared_prefixes(model_dir: Path) -> tuple[str, str]:
     except (OSError, ValueError) as e:
         logger.warning(
             "ColBERT: could not read %s (%s); using fallback prefixes %r / %r",
-            cfg_path, e, _FALLBACK_QUERY_PREFIX, _FALLBACK_DOCUMENT_PREFIX,
+            cfg_path,
+            e,
+            _FALLBACK_QUERY_PREFIX,
+            _FALLBACK_DOCUMENT_PREFIX,
         )
         return _FALLBACK_QUERY_PREFIX, _FALLBACK_DOCUMENT_PREFIX
     q = cfg.get("query_prefix")
@@ -278,6 +294,31 @@ def _load_declared_config(model_dir: Path) -> dict:
     return merged
 
 
+def _effective_native_contract(model_dir: Path) -> dict:
+    """Resolve PyLate 1.4 transformer preprocessing and document row pruning.
+
+    Transformer lowercasing lives in sentence_bert_config, independently of the
+    ColBERT config. PyLate 1.4 defaults an absent/empty saved skiplist to ASCII
+    punctuation; this is vocabulary lookup, never text re-tokenization.
+    """
+    import json
+    import string
+
+    cfg = _load_declared_config(model_dir)
+    try:
+        transformer_cfg = json.loads((model_dir / "sentence_bert_config.json").read_text())
+    except (OSError, ValueError):
+        transformer_cfg = {}
+    cfg["do_lower_case"] = cfg.get("do_lower_case", transformer_cfg.get("do_lower_case", False))
+    cfg["skiplist_words"] = cfg.get("skiplist_words") or list(string.punctuation)
+    return cfg
+
+
+def document_output_mask(input_ids: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
+    """Native document positions: attended tokens except vocabulary skip IDs."""
+    return (attention_mask == 1) & ~np.isin(input_ids, _document_skip_ids)
+
+
 def _validate_query_expansion_config(model_dir: Path) -> None:
     """Refuse a declared query-expansion mode this encoder cannot implement.
 
@@ -293,9 +334,7 @@ def _validate_query_expansion_config(model_dir: Path) -> None:
     if type(value) is not bool:
         raise ValueError("do_query_expansion must be a boolean when declared")
     if value:
-        raise RuntimeError(
-            "do_query_expansion=true is unsupported by the ColBERT encoder"
-        )
+        raise RuntimeError("do_query_expansion=true is unsupported by the ColBERT encoder")
 
 
 def _load_declared_prefix_ids(model_dir: Path) -> dict:
@@ -366,7 +405,9 @@ def refresh_model_dir() -> "tuple[Path, str]":
         logger.warning(
             "ColBERT encoder re-pointed from %s to %s (slot %s); dropping the "
             "loaded session so the next encode uses the model now configured.",
-            _MODEL_DIR, model_dir, slot,
+            _MODEL_DIR,
+            model_dir,
+            slot,
         )
     _clear_loaded_state()
     _generation += 1
@@ -403,9 +444,7 @@ def _declared_lengths(model_dir: Path) -> "tuple[int | None, int | None]":
     for cfg_key in ("query_length", "document_length"):
         value = cfg.get(cfg_key)
         ok = (
-            isinstance(value, int)
-            and not isinstance(value, bool)
-            and value >= _MIN_DECLARED_TOKENS
+            isinstance(value, int) and not isinstance(value, bool) and value >= _MIN_DECLARED_TOKENS
         )
         values.append(value if ok else None)
     out = (values[0], values[1])
@@ -420,7 +459,8 @@ def max_query_tokens() -> int:
     if declared is None:
         logger.warning(
             "ColBERT: %s declares no usable query_length; using fallback %d",
-            _MODEL_DIR, _FALLBACK_QUERY_TOKENS,
+            _MODEL_DIR,
+            _FALLBACK_QUERY_TOKENS,
         )
         return _FALLBACK_QUERY_TOKENS
     return declared
@@ -433,7 +473,8 @@ def max_document_tokens() -> int:
     if declared is None:
         logger.warning(
             "ColBERT: %s declares no usable document_length; using fallback %d",
-            _MODEL_DIR, _FALLBACK_DOCUMENT_TOKENS,
+            _MODEL_DIR,
+            _FALLBACK_DOCUMENT_TOKENS,
         )
         return _FALLBACK_DOCUMENT_TOKENS
     return declared
@@ -467,6 +508,9 @@ def _clear_loaded_state() -> None:
     """Caller holds the state lock; failed loads publish no partial state."""
     global _session, _tokenizer, _tokenizer_sha256, _count_tokenizer
     global _query_prefix, _document_prefix, _prefix_tokens_ok, _input_names, _do_lower_case
+    global _document_skip_ids, _legacy_do_lower_case
+    _document_skip_ids = ()
+    _legacy_do_lower_case = False
     _session = _tokenizer = _tokenizer_sha256 = _count_tokenizer = None
     _query_prefix, _document_prefix = _FALLBACK_QUERY_PREFIX, _FALLBACK_DOCUMENT_PREFIX
     _prefix_tokens_ok = False
@@ -482,7 +526,14 @@ def ensure_loaded() -> bool:
     dependencies are missing or model files cannot be opened.
     """
     global _session, _tokenizer, _query_prefix, _document_prefix, _prefix_tokens_ok
-    global _input_names, _do_lower_case, _count_tokenizer, _tokenizer_sha256, _generation
+    global \
+        _input_names, \
+        _do_lower_case, \
+        _count_tokenizer, \
+        _tokenizer_sha256, \
+        _generation, \
+        _document_skip_ids, \
+        _legacy_do_lower_case
 
     if _session is not None and _tokenizer is not None:
         return True
@@ -526,14 +577,34 @@ def ensure_loaded() -> bool:
 
         loaded_query_prefix, loaded_document_prefix = _load_declared_prefixes(_MODEL_DIR)
         declared = _load_declared_prefix_ids(_MODEL_DIR)
-        loaded_do_lower_case = bool(_load_declared_config(_MODEL_DIR).get("do_lower_case", False))
+        native_config = _effective_native_contract(_MODEL_DIR)
+        loaded_do_lower_case = bool(native_config["do_lower_case"])
+        # HF convert_tokens_to_ids uses unk_token_id for absent punctuation.
+        import json
+
+        try:
+            token_config = json.loads((_MODEL_DIR / "tokenizer_config.json").read_text())
+        except (OSError, ValueError):
+            token_config = {}
+        unk = token_config.get("unk_token")
+        if isinstance(unk, dict):
+            unk = unk.get("content")
+        unknown_id = loaded_tokenizer.token_to_id(unk) if unk else None
+        loaded_skip_ids = []
+        for word in native_config["skiplist_words"]:
+            token_id = loaded_tokenizer.token_to_id(word)
+            if token_id is None:
+                token_id = unknown_id
+            if token_id is not None:
+                loaded_skip_ids.append(token_id)
         q_id = loaded_tokenizer.token_to_id(loaded_query_prefix)
         d_id = loaded_tokenizer.token_to_id(loaded_document_prefix)
         # K6: encode-round-trip, NOT base-vocab membership. See
         # _prefix_encodes_to_one_token for why token_to_id cannot answer this.
-        loaded_prefix_tokens_ok = (
-            _prefix_encodes_to_one_token(loaded_tokenizer, loaded_query_prefix, declared.get("query"))
-            and _prefix_encodes_to_one_token(loaded_tokenizer, loaded_document_prefix, declared.get("document"))
+        loaded_prefix_tokens_ok = _prefix_encodes_to_one_token(
+            loaded_tokenizer, loaded_query_prefix, declared.get("query")
+        ) and _prefix_encodes_to_one_token(
+            loaded_tokenizer, loaded_document_prefix, declared.get("document")
         )
         if not loaded_prefix_tokens_ok:
             logger.error(
@@ -542,8 +613,13 @@ def ensure_loaded() -> bool:
                 "refused; only ROLE_NONE can be encoded. A non-None base-vocab id here "
                 "with a failing probe is the silent-corruption case: the config declares "
                 "a prefix the tokenizer never promoted into added_tokens.",
-                loaded_query_prefix, loaded_document_prefix, _TOKENIZER_PATH, q_id, d_id,
-                declared.get("query"), declared.get("document"),
+                loaded_query_prefix,
+                loaded_document_prefix,
+                _TOKENIZER_PATH,
+                q_id,
+                d_id,
+                declared.get("query"),
+                declared.get("document"),
             )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -551,13 +627,18 @@ def ensure_loaded() -> bool:
             "ColBERT encoder loaded: %s (%.0fms), prefixes %r=%r %r=%r",
             _MODEL_PATH.name,
             elapsed_ms,
-            loaded_query_prefix, q_id, loaded_document_prefix, d_id,
+            loaded_query_prefix,
+            q_id,
+            loaded_document_prefix,
+            d_id,
         )
         _session, _tokenizer = loaded_session, loaded_tokenizer
         _tokenizer_sha256 = loaded_tokenizer_sha256
         _input_names = loaded_input_names
         _query_prefix, _document_prefix = loaded_query_prefix, loaded_document_prefix
         _do_lower_case, _prefix_tokens_ok = loaded_do_lower_case, loaded_prefix_tokens_ok
+        _document_skip_ids = tuple(loaded_skip_ids)
+        _legacy_do_lower_case = bool(_load_declared_config(_MODEL_DIR).get("do_lower_case", False))
         _generation += 1
         return True
     except ImportError as e:
@@ -584,7 +665,9 @@ def encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None:
             default on purpose.
 
     Returns:
-        Array shape (n_real_tokens, 128) or None on failure.
+        Array shape (n_retained_tokens, embedding_dim) or None on failure.
+        Document rows exclude native skiplist IDs; query rows retain punctuation.
+        ROLE_NONE preserves the pre-PREFIX-4 preprocessing for legacy stores.
 
     Raises:
         ValueError: `role` is not one of `VALID_ROLES`, or a prefixed role was
@@ -602,16 +685,31 @@ def encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None:
         return None
 
     try:
-        _tokenizer.enable_truncation(max_length=max_tokens)
-        _tokenizer.enable_padding(length=max_tokens)
+        if max_tokens < (3 if prefix else 2):
+            raise ValueError("max_tokens cannot hold special tokens and role marker")
+        # Native PyLate tokenizes the body first, reserving one marker position.
+        _tokenizer.enable_truncation(max_length=max_tokens - int(bool(prefix)))
+        if role == ROLE_NONE:
+            _tokenizer.enable_padding(length=max_tokens)
+        else:
+            _tokenizer.no_padding()
         # K8: fold case only when the checkpoint declares it, and only on the
         # TEXT -- never the prefix, which is a literal added token and would
         # stop matching the trie if lower-cased.
-        body = text.lower() if _do_lower_case else text
-        encoded = _tokenizer.encode(prefix + body)
-
-        input_ids = np.array([encoded.ids], dtype=np.int64)
-        attention_mask = np.array([encoded.attention_mask], dtype=np.int64)
+        lower_case = _legacy_do_lower_case if role == ROLE_NONE else _do_lower_case
+        body = text if role == ROLE_NONE else text.strip()
+        body = body.lower() if lower_case else body
+        encoded = _tokenizer.encode(body)
+        ids = list(encoded.ids)
+        mask = list(encoded.attention_mask)
+        if prefix:
+            prefix_id = _tokenizer.encode(prefix, add_special_tokens=False).ids
+            if len(prefix_id) != 1:
+                raise ValueError("role marker is no longer one token")
+            ids.insert(1, prefix_id[0])
+            mask.insert(1, 1)
+        input_ids = np.array([ids], dtype=np.int64)
+        attention_mask = np.array([mask], dtype=np.int64)
 
         # K1: feed exactly the inputs this graph declares. `token_type_ids` is
         # all-zeros for single-segment input, which is all we ever encode.
@@ -632,11 +730,17 @@ def encode(text: str, max_tokens: int, *, role: str) -> np.ndarray | None:
 
         embeddings = outputs[0][0]  # (max_tokens, hidden_dim)
         mask = attention_mask[0]  # (max_tokens,)
-        token_embeddings = embeddings[mask == 1]
+        retained = document_output_mask(input_ids[0], mask) if role == ROLE_DOCUMENT else mask == 1
+        token_embeddings = embeddings[retained]
 
-        # L2 normalize.
+        # A zero/nonfinite vector cannot represent a cosine direction.
         norms = np.linalg.norm(token_embeddings, axis=1, keepdims=True)
-        norms = np.maximum(norms, 1e-8)
+        if (
+            not np.isfinite(token_embeddings).all()
+            or not np.isfinite(norms).all()
+            or np.any(norms <= 0)
+        ):
+            raise ValueError("ColBERT emitted zero or nonfinite token embeddings")
         token_embeddings = token_embeddings / norms
         return token_embeddings
     except Exception as e:  # noqa: BLE001
@@ -679,8 +783,10 @@ def count_tokens(text: str, *, role: str) -> int | None:
             copy.no_truncation()
             copy.no_padding()
             _count_tokenizer = copy
-        body = text.lower() if _do_lower_case else text
-        return len(_count_tokenizer.encode(prefix + body).ids)
+        lower_case = _legacy_do_lower_case if role == ROLE_NONE else _do_lower_case
+        body = text if role == ROLE_NONE else text.strip()
+        body = body.lower() if lower_case else body
+        return len(_count_tokenizer.encode(body).ids) + int(bool(prefix))
     except Exception as e:  # noqa: BLE001 — instrumentation must never fail a query
         logger.debug("ColBERT count_tokens failed (%s): %s", type(e).__name__, e)
         return None
