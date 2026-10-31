@@ -751,7 +751,10 @@ def test_handlers_hash_after_apply_and_before_eval_without_touching_the_action()
     for handler, apply_call in (
         ("def _action_prompt_mutation(", "ctx.forge.apply_mutation(mutation)"),
         ("def _action_gepa_optimize(", "ctx.forge.apply_mutation(mutation)"),
-        ("def _action_code_mutation(", "ctx.forge.apply_code_mutation(mutation)"),
+        (
+            "def _action_code_mutation(",
+            "ctx.forge.apply_code_mutation_in_context(experiment_ctx, mutation)",
+        ),
     ):
         body = source[source.index(handler):]
         body = body[: body.index("\ndef ", 1)]

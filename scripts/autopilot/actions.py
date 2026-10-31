@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1905,117 +1906,138 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     skill_without = _skill_efficacy_without_result(ctx)
     bsv2_baseline = _bsv2_baseline_result(ctx)
-    applied = ctx.forge.apply_code_mutation(mutation)
-    if isinstance(applied, dict) and applied.get("status") not in {"rejected"}:
-        _record_served_content(
-            ctx, [ORCH_ROOT / mutation.file], restore=_mutation_restore("code", mutation)
-        )
-    eval_result = ctx.tower.hybrid_eval()
+    trial_name = f"code-mutation-{uuid.uuid4().hex}"
+    try:
+        with ctx.forge.apply_mutation_isolated(trial_name) as experiment_ctx:
+            applied = ctx.forge.apply_code_mutation_in_context(experiment_ctx, mutation)
+            if isinstance(applied, dict) and applied.get("status") == "rejected":
+                mutation.accepted = False
+                _record_rejected_mutation(
+                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+                    artifact_kind="code", rejecting_gate="isolated_apply",
+                    eval_result=None, description=description,
+                    gate_detail=str(applied.get("reason", "isolated_apply_rejected")),
+                )
+                _discard_mutation_diversity_coverage(ctx)
+                return None, "prompt_forge"
 
-    verdict = _action_gate_check(action, ctx, eval_result)
-    if not verdict:
-        _record_mutation_diversity_coverage(
-            eval_result,
-            ctx,
-            artifact_kind="code",
-            target=target,
-            mutation_type=mutation_type,
-            decision="reverted_safety_gate",
-        )
-        log.warning("Code mutation failed safety gate, reverting")
-        _record_rejected_mutation(
-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
-            artifact_kind="code", rejecting_gate="safety_gate",
-            eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
-        )
-        ctx.forge.revert_code_mutation(mutation)
-        return eval_result, "prompt_forge"
+            _record_served_content(
+                ctx, [ORCH_ROOT / mutation.file], restore=_mutation_restore("code", mutation)
+            )
+            eval_result = ctx.tower.hybrid_eval()
 
-    # AP-10 simplicity check (for code)
-    passed, deficiency = _simplicity_check(
-        mutation,
-        eval_result,
-        ctx,
-        kind="code",
-        log_label="Simplicity criterion:",
-    )
-    if not passed:
-        _record_mutation_diversity_coverage(
-            eval_result,
-            ctx,
-            artifact_kind="code",
-            target=target,
-            mutation_type=mutation_type,
-            decision=f"reverted_simplicity:{deficiency or 'unknown'}",
-        )
-        _record_rejected_mutation(
-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
-            artifact_kind="code", rejecting_gate="simplicity",
-            eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
-        )
-        ctx.forge.revert_code_mutation(mutation)
-        if deficiency == "shrinkage":
-            ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
-        return eval_result, "prompt_forge"
+            verdict = _action_gate_check(action, ctx, eval_result)
+            if not verdict:
+                _record_mutation_diversity_coverage(
+                    eval_result,
+                    ctx,
+                    artifact_kind="code",
+                    target=target,
+                    mutation_type=mutation_type,
+                    decision="reverted_safety_gate",
+                )
+                log.warning("Code mutation failed safety gate, reverting")
+                _record_rejected_mutation(
+                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+                    artifact_kind="code", rejecting_gate="safety_gate",
+                    eval_result=eval_result, description=description, gate_detail=_verdict_detail(verdict),
+                )
+                mutation.accepted = False
+                return eval_result, "prompt_forge"
 
-    if not _skill_efficacy_accepts(
-        without_result=skill_without,
-        with_result=eval_result,
-        artifact_kind="code",
-        target=target,
-        mutation_type=mutation_type,
-    ):
-        _record_mutation_diversity_coverage(
-            eval_result,
-            ctx,
-            artifact_kind="code",
-            target=target,
-            mutation_type=mutation_type,
-            decision="reverted_skill_efficacy",
-        )
-        _record_rejected_mutation(
-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
-            artifact_kind="code", rejecting_gate="skill_efficacy",
-            eval_result=eval_result, description=description, gate_detail="",
-        )
-        ctx.forge.revert_code_mutation(mutation)
-        return eval_result, "prompt_forge"
+            # AP-10 simplicity check (for code)
+            passed, deficiency = _simplicity_check(
+                mutation,
+                eval_result,
+                ctx,
+                kind="code",
+                log_label="Simplicity criterion:",
+            )
+            if not passed:
+                _record_mutation_diversity_coverage(
+                    eval_result,
+                    ctx,
+                    artifact_kind="code",
+                    target=target,
+                    mutation_type=mutation_type,
+                    decision=f"reverted_simplicity:{deficiency or 'unknown'}",
+                )
+                _record_rejected_mutation(
+                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+                    artifact_kind="code", rejecting_gate="simplicity",
+                    eval_result=eval_result, description=description, gate_detail=str(deficiency or ""),
+                )
+                mutation.accepted = False
+                if deficiency == "shrinkage":
+                    ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
+                return eval_result, "prompt_forge"
 
-    if not _bsv2_accepts(
-        baseline_result=bsv2_baseline,
-        candidate_result=eval_result,
-        artifact_kind="code",
-        target=target,
-        mutation_type=mutation_type,
-    ):
-        _record_mutation_diversity_coverage(
-            eval_result,
-            ctx,
-            artifact_kind="code",
-            target=target,
-            mutation_type=mutation_type,
-            decision="reverted_bsv2_accept_gate",
-        )
-        _record_rejected_mutation(
-            ctx, mutation=mutation, target=target, mutation_type=mutation_type,
-            artifact_kind="code", rejecting_gate="bsv2_accept_gate",
-            eval_result=eval_result, description=description, gate_detail="",
-        )
-        ctx.forge.revert_code_mutation(mutation)
-        return eval_result, "prompt_forge"
+            if not _skill_efficacy_accepts(
+                without_result=skill_without,
+                with_result=eval_result,
+                artifact_kind="code",
+                target=target,
+                mutation_type=mutation_type,
+            ):
+                _record_mutation_diversity_coverage(
+                    eval_result,
+                    ctx,
+                    artifact_kind="code",
+                    target=target,
+                    mutation_type=mutation_type,
+                    decision="reverted_skill_efficacy",
+                )
+                _record_rejected_mutation(
+                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+                    artifact_kind="code", rejecting_gate="skill_efficacy",
+                    eval_result=eval_result, description=description, gate_detail="",
+                )
+                mutation.accepted = False
+                return eval_result, "prompt_forge"
 
-    _record_mutation_diversity_coverage(
-        eval_result,
-        ctx,
-        artifact_kind="code",
-        target=target,
-        mutation_type=mutation_type,
-        decision="kept",
-    )
-    _record_accepted_warrant_telemetry(action, ctx, eval_result)
-    ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
-    return eval_result, "prompt_forge"
+            if not _bsv2_accepts(
+                baseline_result=bsv2_baseline,
+                candidate_result=eval_result,
+                artifact_kind="code",
+                target=target,
+                mutation_type=mutation_type,
+            ):
+                _record_mutation_diversity_coverage(
+                    eval_result,
+                    ctx,
+                    artifact_kind="code",
+                    target=target,
+                    mutation_type=mutation_type,
+                    decision="reverted_bsv2_accept_gate",
+                )
+                _record_rejected_mutation(
+                    ctx, mutation=mutation, target=target, mutation_type=mutation_type,
+                    artifact_kind="code", rejecting_gate="bsv2_accept_gate",
+                    eval_result=eval_result, description=description, gate_detail="",
+                )
+                mutation.accepted = False
+                return eval_result, "prompt_forge"
 
+            experiment_ctx.accept(
+                f"autopilot: code {mutation.mutation_type} on {mutation.file}\n\n"
+                f"{mutation.description}"
+            )
+            _record_mutation_diversity_coverage(
+                eval_result,
+                ctx,
+                artifact_kind="code",
+                target=target,
+                mutation_type=mutation_type,
+                decision="kept",
+            )
+            _record_accepted_warrant_telemetry(action, ctx, eval_result)
+            ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
+            return eval_result, "prompt_forge"
+
+
+    except BaseException:
+        mutation.accepted = False
+        raise
 
 def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
     flags = action.get("flags", {})

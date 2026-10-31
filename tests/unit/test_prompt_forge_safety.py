@@ -213,13 +213,7 @@ def test_new_file_code_mutation_apply_and_revert(tmp_path: Path, monkeypatch) ->
     )
     result = forge.apply_code_mutation(mutation)
 
-    assert result["status"] == "applied"
-    assert target.read_text() == "VALUE = 1"
-    assert "--- /dev/null" in mutation.git_diff
-    assert "+++ " in mutation.git_diff
-
-    forge.revert_code_mutation(mutation)
-
+    assert result == {"status": "rejected", "reason": "isolated_context_required"}
     assert not target.exists()
     assert mutation.accepted is False
 

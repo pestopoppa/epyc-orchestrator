@@ -483,7 +483,7 @@ def test_code_mutation_defaults_to_unknown_effect() -> None:
     assert mutation.effect is MutationEffect.UNKNOWN
 
 
-def test_apply_rejects_unsafe_effect(tmp_path: Path) -> None:
+def test_legacy_direct_apply_fails_closed_without_writing(tmp_path: Path) -> None:
     forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
     mutation = CodeMutation(
         file="src/tool_policy.py",
@@ -492,13 +492,13 @@ def test_apply_rejects_unsafe_effect(tmp_path: Path) -> None:
         mutated_content="def f():\n    return 1\n",
     )
     mutation.syntax_valid = True
-    mutation.effect = MutationEffect.UNSAFE
+    mutation.effect = MutationEffect.CONSTRAIN
 
     target = ROOT / "src/tool_policy.py"
     before = target.read_bytes()
     result = forge.apply_code_mutation(mutation)
 
-    assert result == {"status": "rejected", "reason": "effect_unsafe"}
+    assert result == {"status": "rejected", "reason": "isolated_context_required"}
     assert target.read_bytes() == before
     assert mutation.accepted is False
 
@@ -516,6 +516,7 @@ def test_apply_in_context_reports_effect(tmp_path: Path) -> None:
         file="src/tool_policy.py",
         mutation_type="targeted_fix",
         description="d",
+        original_content=(ROOT / "src/tool_policy.py").read_text(),
         mutated_content="def f():\n    return 1\n",
     )
     mutation.syntax_valid = True
@@ -538,6 +539,7 @@ def test_apply_in_context_rejects_unsafe_effect(tmp_path: Path) -> None:
         file="src/tool_policy.py",
         mutation_type="targeted_fix",
         description="d",
+        original_content=(ROOT / "src/tool_policy.py").read_text(),
         mutated_content="def f():\n    return 1\n",
     )
     mutation.syntax_valid = True
@@ -547,3 +549,37 @@ def test_apply_in_context_rejects_unsafe_effect(tmp_path: Path) -> None:
         "status": "rejected",
         "reason": "effect_unsafe",
     }
+
+
+def test_apply_in_context_refuses_stale_preimage(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "project"
+    target = root / "src" / "tool_policy.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("parallel edit\n")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", root)
+    monkeypatch.setattr(prompt_forge_mod, "CODE_MUTATION_ALLOWLIST", {"src/tool_policy.py"})
+
+    class _Ctx:
+        worktree_path = tmp_path
+        applied = False
+
+        def apply_file(self, _path: str, _content: str) -> None:
+            self.applied = True
+
+    mutation = CodeMutation(
+        file="src/tool_policy.py",
+        mutation_type="targeted_fix",
+        description="stale candidate",
+        original_content="proposal preimage\n",
+        mutated_content="candidate\n",
+    )
+    mutation.syntax_valid = True
+    mutation.effect = MutationEffect.CONSTRAIN
+
+    ctx = _Ctx()
+    result = PromptForge(prompts_dir=tmp_path, auto_commit=False).apply_code_mutation_in_context(
+        ctx, mutation
+    )
+    assert result == {"status": "rejected", "reason": "target_changed"}
+    assert ctx.applied is False
+    assert target.read_text() == "parallel edit\n"

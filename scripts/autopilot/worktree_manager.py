@@ -31,8 +31,10 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,13 +95,12 @@ class ExperimentContext:
         """Accept the mutation — commit changes in main repo."""
         if self._decided:
             return
+        msg = commit_message or "autopilot: accept experiment"
+        paths = list(self._applied_files)
+        if paths:
+            _commit_with_private_index(self.project_root, paths, msg)
         self._decided = True
         self._accepted = True
-
-        msg = commit_message or "autopilot: accept experiment"
-        for rel_path in self._applied_files:
-            _git(["add", rel_path], cwd=self.project_root)
-        _git(["commit", "-m", msg], cwd=self.project_root, check=False)
         log.info("Experiment accepted: %s", msg)
 
     def reject(self) -> None:
@@ -219,6 +220,7 @@ def _git(
     cwd: Path | str = DEFAULT_PROJECT_ROOT,
     check: bool = True,
     timeout: int = 30,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a git command."""
     cmd = ["git"] + args
@@ -230,6 +232,7 @@ def _git(
             text=True,
             timeout=timeout,
             check=check,
+            env=env,
         )
     except subprocess.CalledProcessError as e:
         log.warning("git %s failed: %s", " ".join(args), e.stderr.strip())
@@ -237,3 +240,36 @@ def _git(
     except subprocess.TimeoutExpired:
         log.warning("git %s timed out after %ds", " ".join(args), timeout)
         raise
+
+
+def _commit_with_private_index(project_root: Path, paths: list[str], message: str) -> None:
+    """Commit only experiment-owned paths while preserving the shared index."""
+    index_path = Path(
+        _git(["rev-parse", "--git-path", "index"], cwd=project_root).stdout.strip()
+    )
+    if not index_path.is_absolute():
+        index_path = project_root / index_path
+    fd, temporary_name = tempfile.mkstemp(prefix="experiment-index-", dir=index_path.parent)
+    os.close(fd)
+    temporary_index = Path(temporary_name)
+    temporary_index.unlink()
+    env = {**os.environ, "GIT_INDEX_FILE": str(temporary_index)}
+    try:
+        _git(["read-tree", "HEAD"], cwd=project_root, env=env)
+        _git(["add", "-A", "--", *paths], cwd=project_root, env=env)
+        result = _git(
+            ["commit", "-m", message],
+            cwd=project_root,
+            check=False,
+            env=env,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()[:500]
+            raise RuntimeError(f"experiment commit rejected: {detail}")
+
+        # Refresh just the accepted paths after commit. This avoids staging a
+        # parallel edit written after the experiment's commit completed.
+        _git(["reset", "-q", "HEAD", "--", *paths], cwd=project_root, check=False)
+    finally:
+        temporary_index.unlink(missing_ok=True)
+        Path(f"{temporary_index}.lock").unlink(missing_ok=True)

@@ -42,6 +42,35 @@ def _ctx(**overrides):
     return actions._ActionContext(**defaults)
 
 
+class _FakeMutationExperiment:
+    def __init__(self, forge):
+        self.forge = forge
+        self.worktree_path = Path("/tmp/fake-mutation-worktree")
+        self.decided = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.decided:
+            self.forge.reverted += 1
+        return False
+
+    def apply_file(self, path, content):
+        pass
+
+    def accept(self, _message=""):
+        self.decided = True
+
+
+class _FakeIsolatedForge:
+    def apply_mutation_isolated(self, _trial_name):
+        return _FakeMutationExperiment(self)
+
+    def apply_code_mutation_in_context(self, _ctx, _mutation):
+        return {"status": "applied_isolated"}
+
+
 def _isolate_seed_batch_telemetry(monkeypatch, tmp_path):
     """Keep the real recorder enabled while isolating its persisted history."""
     monkeypatch.syspath_prepend(str(ROOT / "scripts" / "benchmark"))
@@ -1864,7 +1893,7 @@ def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_SKILL_EFFICACY_GATE", "true")
     monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
 
-    class FakeForge:
+    class FakeForge(_FakeIsolatedForge):
         def __init__(self):
             self.reverted = 0
 
@@ -1913,7 +1942,7 @@ def test_code_mutation_bsv2_gate_accepts_watch_behavior(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "true")
     monkeypatch.setenv("AUTOPILOT_BSV2_MIN_SHARED_QIDS", "2")
 
-    class FakeForge:
+    class FakeForge(_FakeIsolatedForge):
         def __init__(self):
             self.reverted = 0
 
@@ -1961,6 +1990,54 @@ def test_code_mutation_bsv2_gate_accepts_watch_behavior(monkeypatch) -> None:
     assert detail["gate_decision"] == "pass"
     assert detail["artifact_kind"] == "code"
     assert detail["signature_diff"]["severity"] == "watch"
+
+
+def test_code_mutation_eval_exception_exits_isolated_context(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
+
+    class FakeForge(_FakeIsolatedForge):
+        def __init__(self):
+            self.reverted = 0
+            self.applied = 0
+            self.mutation = None
+
+        def propose_code_mutation(self, **kwargs):
+            self.mutation = SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+                syntax_valid=True,
+                accepted=False,
+            )
+            return self.mutation
+
+        def apply_code_mutation_in_context(self, _ctx, _mutation):
+            self.applied += 1
+            return {"status": "applied_isolated"}
+
+    class RaisingTower:
+        def hybrid_eval(self):
+            raise RuntimeError("fixture eval failure")
+
+    forge = FakeForge()
+    with pytest.raises(RuntimeError, match="fixture eval failure"):
+        actions._action_code_mutation(
+            {"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix"},
+            _ctx(
+                forge=forge,
+                tower=RaisingTower(),
+                gate=_AlwaysPassGate(),
+                swarm=_FakeSwarm(),
+                journal=_FakeJournal(),
+            ),
+        )
+
+    assert forge.applied == 1
+    assert forge.reverted == 1
+    assert forge.mutation.accepted is False
 
 
 def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None:

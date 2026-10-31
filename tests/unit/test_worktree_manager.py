@@ -117,6 +117,165 @@ def test_accept_commits_to_main(temp_git_repo, monkeypatch):
     assert "improved frontdoor" in result.stdout
 
 
+def test_accept_does_not_commit_or_unstage_unrelated_operator_work(temp_git_repo, monkeypatch):
+    import scripts.autopilot.worktree_manager as wm
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+
+    unrelated = temp_git_repo / "src" / "escalation.py"
+    unrelated.write_text("operator staged edit\n")
+    subprocess.run(["git", "add", "--", "src/escalation.py"], cwd=temp_git_repo, check=True)
+
+    with WorktreeManager(temp_git_repo).experiment("test_scoped_accept") as ctx:
+        ctx.apply_file("orchestration/prompts/frontdoor.md", "accepted candidate")
+        ctx.accept("autopilot: accept candidate")
+
+    committed_unrelated = subprocess.run(
+        ["git", "show", "HEAD:src/escalation.py"],
+        cwd=temp_git_repo, capture_output=True, text=True, check=True,
+    ).stdout
+    staged_unrelated = subprocess.run(
+        ["git", "show", ":src/escalation.py"],
+        cwd=temp_git_repo, capture_output=True, text=True, check=True,
+    ).stdout
+    assert committed_unrelated == "# original escalation\ndef escalate(): pass\n"
+    assert staged_unrelated == "operator staged edit\n"
+
+
+def test_accept_commits_private_index_bytes_not_post_stage_worktree_edit(
+    temp_git_repo, monkeypatch
+):
+    import scripts.autopilot.worktree_manager as wm
+
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+    unrelated = temp_git_repo / "src" / "escalation.py"
+    unrelated.write_text("operator staged edit\n")
+    subprocess.run(["git", "add", "--", "src/escalation.py"], cwd=temp_git_repo, check=True)
+    staged_unrelated_before = subprocess.run(
+        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
+        cwd=temp_git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
+    hooks = temp_git_repo / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    pre_commit = hooks / "pre-commit"
+    pre_commit.write_text(
+        "#!/bin/sh\n"
+        f"printf 'parallel post-stage edit\\n' > '{target}'\n"
+    )
+    pre_commit.chmod(0o755)
+
+    with WorktreeManager(temp_git_repo).experiment("test_private_index_commit") as ctx:
+        ctx.apply_file("orchestration/prompts/frontdoor.md", "evaluated candidate\n")
+        ctx.accept("autopilot: accept evaluated candidate")
+
+    committed_target = subprocess.run(
+        ["git", "show", "HEAD:orchestration/prompts/frontdoor.md"],
+        cwd=temp_git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert committed_target == "evaluated candidate\n"
+    assert target.read_text() == "parallel post-stage edit\n"
+    assert subprocess.run(
+        ["git", "diff", "--cached", "--", "orchestration/prompts/frontdoor.md"],
+        cwd=temp_git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout == ""
+    assert subprocess.run(
+        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
+        cwd=temp_git_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout == staged_unrelated_before
+
+
+def test_failed_commit_hook_restores_preimage_and_preserves_shared_index(temp_git_repo, monkeypatch):
+    import scripts.autopilot.worktree_manager as wm
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+    unrelated = temp_git_repo / "src" / "escalation.py"
+    unrelated.write_text("operator staged edit\n")
+    subprocess.run(["git", "add", "--", "src/escalation.py"], cwd=temp_git_repo, check=True)
+    staged_before = subprocess.run(
+        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
+        cwd=temp_git_repo, capture_output=True, text=True, check=True,
+    ).stdout
+
+    hooks = temp_git_repo / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    pre_commit = hooks / "pre-commit"
+    pre_commit.write_text("#!/bin/sh\nexit 1\n")
+    pre_commit.chmod(0o755)
+    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
+    with pytest.raises(RuntimeError, match="experiment commit rejected"):
+        with WorktreeManager(temp_git_repo).experiment("test_hook_reject") as ctx:
+            ctx.apply_file("orchestration/prompts/frontdoor.md", "candidate")
+            ctx.accept("autopilot: rejected by hook")
+
+    assert target.read_text() == "original frontdoor content"
+    assert subprocess.run(
+        ["git", "ls-files", "--stage", "--", "src/escalation.py"],
+        cwd=temp_git_repo, capture_output=True, text=True, check=True,
+    ).stdout == staged_before
+    assert subprocess.run(
+        ["git", "show", "HEAD:orchestration/prompts/frontdoor.md"],
+        cwd=temp_git_repo, capture_output=True, text=True, check=True,
+    ).stdout == "original frontdoor content"
+
+
+def test_auto_reject_on_exception_restores_candidate_and_new_file(temp_git_repo, monkeypatch):
+    import scripts.autopilot.worktree_manager as wm
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+
+    target = temp_git_repo / "orchestration" / "prompts" / "frontdoor.md"
+    new_file = temp_git_repo / "src" / "generated.py"
+    with pytest.raises(RuntimeError, match="eval failed"):
+        with WorktreeManager(temp_git_repo).experiment("test_exception_reject") as ctx:
+            ctx.apply_file("orchestration/prompts/frontdoor.md", "candidate")
+            ctx.apply_file("src/generated.py", "candidate module")
+            raise RuntimeError("eval failed")
+
+    assert target.read_text() == "original frontdoor content"
+    assert not new_file.exists()
+
+
+def test_code_mutation_context_restores_new_file_on_early_exit(temp_git_repo, monkeypatch):
+    import scripts.autopilot.species.prompt_forge as prompt_forge_mod
+    import scripts.autopilot.worktree_manager as wm
+    from scripts.autopilot.species.prompt_forge import CodeMutation, MutationEffect, PromptForge
+
+    monkeypatch.setattr(wm, "WORKTREE_BASE", temp_git_repo / "tmp" / "worktrees")
+    monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", temp_git_repo)
+    monkeypatch.setattr(prompt_forge_mod, "NEW_FILE_MUTATION_ROOT", temp_git_repo / "src")
+    target = temp_git_repo / "src" / "generated.py"
+    mutation = CodeMutation(
+        file="src/generated.py",
+        mutation_type="new_file",
+        description="fixture candidate",
+        original_content="",
+        mutated_content="VALUE = 1\n",
+    )
+    mutation.syntax_valid = True
+    mutation.effect = MutationEffect.CONSTRAIN
+    forge = PromptForge(
+        prompts_dir=temp_git_repo / "orchestration" / "prompts", auto_commit=False
+    )
+    with WorktreeManager(temp_git_repo).experiment("code_mutation_auto_reject") as ctx:
+        result = forge.apply_code_mutation_in_context(ctx, mutation)
+        assert result["status"] == "applied_isolated"
+        assert target.read_text() == "VALUE = 1\n"
+        # An undecided action exit models gate rejection and other early returns.
+
+    assert not target.exists()
+
+
 def test_auto_reject_on_no_decision(temp_git_repo, monkeypatch):
     """If neither accept nor reject is called, auto-reject."""
     import scripts.autopilot.worktree_manager as wm

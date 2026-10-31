@@ -1249,11 +1249,34 @@ class PromptForge:
         gate_reason = mutation_risk_gate_reason(mutation.effect)
         if gate_reason is not None:
             return {"status": "rejected", "reason": gate_reason}
-        ctx.apply_file(mutation.file, mutation.mutated_content)
+
+        try:
+            abs_path = _resolve_code_mutation_target(mutation.file)
+        except FileNotFoundError:
+            return {"status": "rejected", "reason": "target_invalid"}
+        if mutation.mutation_type == "new_file":
+            if mutation.original_content:
+                return {"status": "rejected", "reason": "new_file_has_preimage"}
+            if not _is_under_any(abs_path.parent, new_file_mutation_roots()):
+                return {"status": "rejected", "reason": "new_file_target_invalid"}
+            if abs_path.exists():
+                return {"status": "rejected", "reason": "target_changed"}
+        else:
+            if mutation.file not in CODE_MUTATION_ALLOWLIST:
+                return {"status": "rejected", "reason": "target_not_allowlisted"}
+            try:
+                current_content = abs_path.read_text()
+            except FileNotFoundError:
+                return {"status": "rejected", "reason": "target_missing"}
+            if current_content != mutation.original_content:
+                return {"status": "rejected", "reason": "target_changed"}
+
+        rel_path = abs_path.relative_to(PROJECT_ROOT).as_posix()
+        ctx.apply_file(rel_path, mutation.mutated_content)
         mutation.accepted = True
         return {
             "status": "applied_isolated",
-            "file": mutation.file,
+            "file": rel_path,
             "mutation_type": mutation.mutation_type,
             "effect": MutationEffect.normalize(mutation.effect).value,
             "effect_risk": mutation_effect_risk(mutation.effect),
@@ -1409,65 +1432,9 @@ class PromptForge:
         return mutation
 
     def apply_code_mutation(self, mutation: CodeMutation) -> dict[str, Any]:
-        """Apply a code mutation with syntax validation + git safety."""
-        if not mutation.syntax_valid:
-            return {"status": "rejected", "reason": "syntax_invalid"}
-        if MutationEffect.normalize(mutation.effect) is MutationEffect.UNSAFE:
-            return {"status": "rejected", "reason": "effect_unsafe"}
-        gate_reason = mutation_risk_gate_reason(mutation.effect)
-        if gate_reason is not None:
-            return {"status": "rejected", "reason": gate_reason}
-
-        abs_path = PROJECT_ROOT / mutation.file
-
-        # Git commit current state before mutation (safety net). Only this file: a
-        # checkpoint must never sweep unrelated staged work into an autopilot commit.
-        if abs_path.exists():
-            self._git_commit_paths(
-                [abs_path], f"autopilot: pre-code-mutation checkpoint ({mutation.file})"
-            )  # may fail when there is nothing to commit — that's OK
-
-        # Write the mutated code
-        abs_path.write_text(mutation.mutated_content)
-        mutation.accepted = True
-
-        # Capture diff
-        try:
-            if mutation.mutation_type == "new_file" and not mutation.original_content:
-                result = subprocess.run(
-                    ["git", "diff", "--no-index", "--", "/dev/null", str(abs_path)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(PROJECT_ROOT),
-                )
-            else:
-                result = subprocess.run(
-                    ["git", "diff", str(abs_path)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    cwd=str(PROJECT_ROOT),
-                )
-            mutation.git_diff = result.stdout
-        except Exception:
-            mutation.git_diff = ""
-
-        if self.auto_commit and mutation.git_diff:
-            self._git_commit_file(
-                abs_path,
-                f"autopilot: code {mutation.mutation_type} on {mutation.file}\n\n"
-                f"{mutation.description}",
-            )
-
-        return {
-            "status": "applied",
-            "file": mutation.file,
-            "mutation_type": mutation.mutation_type,
-            "effect": MutationEffect.normalize(mutation.effect).value,
-            "effect_risk": mutation_effect_risk(mutation.effect),
-            "diff_lines": len(mutation.git_diff.splitlines()),
-        }
+        """Refuse legacy direct writes; code mutations require an experiment context."""
+        del mutation
+        return {"status": "rejected", "reason": "isolated_context_required"}
 
     def revert_code_mutation(self, mutation: CodeMutation) -> None:
         """Revert a code mutation to original content and commit the revert."""

@@ -486,7 +486,7 @@ def test_apply_refuses_unknown_effect(tmp_path: Path, monkeypatch) -> None:
     before = target.read_bytes()
     result = forge.apply_code_mutation(mutation)
     assert result["status"] == "rejected"
-    assert result["reason"].startswith("effect_risk_gate:unknown")
+    assert result["reason"] == "isolated_context_required"
     assert target.read_bytes() == before
 
     class _Ctx:
@@ -507,7 +507,10 @@ def test_apply_in_context_reports_risk(tmp_path: Path) -> None:
 
     forge = PromptForge(prompts_dir=tmp_path, auto_commit=False, eval_id_vocabulary=_vocab())
     mutation = CodeMutation(
-        file="src/tool_policy.py", mutation_type="targeted_fix", description="d"
+        file="src/tool_policy.py",
+        mutation_type="targeted_fix",
+        description="d",
+        original_content=(ROOT / "src/tool_policy.py").read_text(),
     )
     mutation.syntax_valid = True
     mutation.effect = MutationEffect.EXPAND

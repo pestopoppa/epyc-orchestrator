@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -77,6 +78,28 @@ class _Forge:
 
     def apply_code_mutation(self, mutation):
         pass
+
+    @contextmanager
+    def apply_mutation_isolated(self, _trial_name):
+        class _Context:
+            worktree_path = Path("/tmp/fake-mutation-worktree")
+            accepted = False
+
+            def apply_file(self, _path, _content):
+                pass
+
+            def accept(self, _message=""):
+                self.accepted = True
+
+        ctx = _Context()
+        try:
+            yield ctx
+        finally:
+            if not ctx.accepted:
+                self.reverted += 1
+
+    def apply_code_mutation_in_context(self, _ctx, _mutation):
+        return {"status": "applied_isolated"}
 
     def revert_mutation(self, mutation):
         self.reverted += 1
