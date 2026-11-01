@@ -6,7 +6,7 @@ Operational reference for running and monitoring the Meta-Harness optimization t
 
 **Tier 1 (Execution Trace Feedback)**: Live inference traces from `inference_tap.log` are fed back into PromptForge's mutation proposals, providing +15 points over score-only feedback (arXiv:2603.28052, Table 3 ablation).
 
-**Tier 2 (Code Mutation Search Space)**: PromptForge can mutate 4 allowlisted Python files in the orchestrator source, with 4-layer validation preventing destructive changes.
+**Tier 2 (Code Mutation Search Space)**: PromptForge can mutate existing files from the 4-file `CODE_MUTATION_ALLOWLIST` and propose new files under directory-scoped roots. Candidates pass syntax, shrinkage, public-name, and static safety checks before isolated evaluation.
 
 ### Key File Paths
 
@@ -69,28 +69,28 @@ Per the arXiv:2603.28052 ablation (Table 3), full execution traces provide +15 a
 
 ### Allowlist enforcement
 
-`CODE_MUTATION_ALLOWLIST` (prompt_forge.py, line 29) is the hard boundary. `propose_code_mutation()` (line 448) raises `ValueError` if the target file is not on the list. Eval, scoring, and safety-gate code are excluded.
+`CODE_MUTATION_ALLOWLIST` (re-exported by `species.prompt_forge`) is the hard boundary for existing-file mutations. `PromptForge.propose_code_mutation()` raises `ValueError` if the target file is not on the list. New-file mutations use the directory-scoped `new_file_mutation_roots()` policy. Eval, scoring, and safety-gate code are excluded.
 
-### The 4-layer validation
+### The four validation checks
 
-`_screen_code_mutation()` (prompt_forge.py; `_validate_code_mutation()` is the `(valid, reason)` wrapper kept for callers) runs all four checks before a mutation is accepted. Since RTG-55 it is **static only** — it never writes into the source tree and never imports or execs the candidate:
+`PromptForge._screen_code_mutation()` runs all four checks before a mutation is accepted; `PromptForge._validate_code_mutation()` remains the `(valid, reason)` compatibility wrapper. Since RTG-55 it is **static only** — it never writes into the source tree and never imports or execs the candidate:
 
-1. **Syntax** (line 587): `ast.parse(mutated)` -- rejects anything that is not valid Python.
-2. **Catastrophic shrinkage** (line 594): If the original has >10 lines and the mutation removes >60% of lines, it is rejected. The threshold is `new_lines < orig_lines * 0.4`.
-3. **Public name preservation** (line 603): Extracts all module-level `FunctionDef`, `AsyncFunctionDef`, and `ClassDef` names from both original and mutated ASTs. Any name present in the original but missing from the mutation triggers rejection.
+1. **Syntax** (`ast.parse` in `PromptForge._screen_code_mutation()`): rejects anything that is not valid Python.
+2. **Catastrophic shrinkage** (`PromptForge._screen_code_mutation()`): If the original has >10 lines and the mutation removes >60% of lines, it is rejected. The threshold is `new_lines < orig_lines * 0.4`.
+3. **Public name preservation** (`_top_level_definition_names`): Extracts all module-level `FunctionDef`, `AsyncFunctionDef`, and `ClassDef` names from both original and mutated ASTs. Any name present in the original but missing from the mutation triggers rejection.
 4. **Static safety screen** (RTG-55 MHS-2, `screen_static_safety()`): an AST denylist over the candidate — module-level statements that do work at import time, imports outside `SAFETY_IMPORT_ALLOWLIST` (first-party roots and capabilities the original file already used are grandfathered), banned calls (`exec`/`eval`/`compile`/`__import__`/`os.system`/`subprocess.*`/…), and dunder attribute access. `new_file` proposals additionally get the strict inertness profile (`SAFETY_STRICT_NODE_DENYLIST`), so MH-9's "default-inert" requirement is compile-time rather than prompt text. The screen also assigns the candidate's `MutationEffect` (MHS-1).
 
    The AutoMem `schema_evolution` lane prompt asks for exactly the shape that strict profile admits — module constants (a `SCHEMA` dict, `SCHEMA_VERSION`, `ACTIONS`, `CHANNELS`) plus pure public `def`s returning `(ok, reason)`, with no imports, no classes, no underscore-prefixed names and no `raise`/`with`/`while`/`lambda`. `MEMORY_SCHEMA_SHAPE_EXAMPLE` is shipped verbatim inside that prompt and is itself screened by a test, so the prompt and the denylist cannot drift apart silently.
 
    Until RTG-55 this layer was an **import test** that wrote the model's code over the live repo file and then `importlib.import_module()`-ed it: the candidate's module top level executed unsandboxed in-process, and any concurrent reader of that path saw the candidate on disk.
 
-`MutationEffect` (MHS-1) is a closed, host-normalized enum — `inert`, `constrain`, `expand`, `replace`, `unsafe`, `unknown` — carried on `CodeMutation.effect` and reported in the `apply_code_mutation*()` result. Both apply paths refuse an `unsafe` effect.
+`MutationEffect` (MHS-1) is a closed, host-normalized enum — `inert`, `constrain`, `expand`, `replace`, `unsafe`, `unknown` — carried on `CodeMutation.effect` and reported in the `PromptForge.apply_code_mutation_in_context()` result. Both apply paths refuse an `unsafe` effect.
 
 **Anti-leakage guard (RTG-55 MHS-3).** Every prompt, code and GEPA mutation is rejected (`safety_valid=False`, reason `eval_instance_leakage: …`) when the text it ADDS names a specific eval instance: an exact pool/core/sentinel id, a member of an id family derived from those ids (`gsm8k_<n>`, `BigCodeBench/<n>`, `hotpot_bridge_<hex>`), a prompt-hash qid, a suite-anchored reference (`gsm8k question 12`), or a generic qualified reference (`sample #12`, `task_id == 17`). The vocabulary is built from the research `question_pool.jsonl` (required), `benchmarks/prompts/core_*.jsonl` and the sentinel YAMLs, and is cached by file identity (~4 s cold). It **fails closed**: if the pool is missing or unreadable, every mutation is rejected with `eval_leakage_vocabulary_unavailable`. `AUTOPILOT_EVAL_ID_VOCAB_SOURCES` (os.pathsep list, all required) overrides the sources.
 
 **ANTI-OVERRIDE risk prior (RTG-55 MHS-4).** `MUTATION_EFFECT_RISK` weights each effect: inert 0.05 < constrain 0.25 < expand 0.50 < replace 0.90 < unknown 1.0 < unsafe ∞. Prompt mutations are classified too (`classify_prompt_effect`: add-only is constrain, any removed/rewritten line is replace). `CodeMutation.effect_risk` / `PromptMutation.effect_risk` carry the weight, `rank_mutations_by_risk()` orders candidates safest-first, and the gate refuses any mutation whose weight reaches `AUTOPILOT_MUTATION_RISK_GATE` (default 1.0, so only unclassified effects are refused; 0.9 is constrain/expand-only; values above 1.0 are ignored). The weights are an ordinal prior, not a calibrated probability. MHS-5 (`scripts/autopilot/species/heldout_effect_corpus.py` → `orchestration/datasets/harness_r1_heldout_effect_corpus.json`, derived labels only, from Harness-R1 @ `411bb548`, Apache-2.0) backs the ordering: all 4 override patches regressed held-out tasks (mean −8.4 pp) while 19 constrain patches averaged +3.9 pp. It also shows constrain is not regression-free: the single worst patch, at −16.9 pp, is a hint-only constrain patch.
 
-If any layer fails, `mutation.syntax_valid` is set to `False` and the mutation content is replaced with the original (line 497). The dispatcher in autopilot.py checks `syntax_valid` (line 553) and skips the trial entirely if validation failed.
+If the static screen fails, `mutation.syntax_valid` is set to `False`; if transfer-safety or risk gating fails, `mutation.safety_valid` is set to `False`. In either case, `PromptForge.propose_code_mutation()` resets the candidate content to the original. `_action_code_mutation()` checks these validity fields and skips the trial when validation fails.
 
 ### Mutation lifecycle
 
@@ -99,12 +99,11 @@ propose_code_mutation()
   |-- read original from disk
   |-- invoke Claude CLI to generate mutated version
   |-- _validate_code_mutation() (4 layers)
-  |-- if invalid: log "Code mutation rejected", return original
+  |-- if invalid: mark rejected and restore original content in the mutation record
   v
-apply_code_mutation()
-  |-- git add + commit current state as pre-mutation checkpoint
-  |-- write mutated content to disk
-  |-- git add + commit the mutation
+`PromptForge.apply_mutation_isolated()` + `PromptForge.apply_code_mutation_in_context()`
+  |-- require valid effect/risk, unchanged preimage, and permitted target
+  |-- apply in an experiment context
   v
 tower.hybrid_eval()
   |-- T0 (10 sentinel questions, fast gate)
@@ -133,15 +132,15 @@ During AR-3 run 2, trial ~25 proposed a code mutation on `src/escalation.py` tha
 
 | # | Gap | Fix | Location |
 |---|-----|-----|----------|
-| 1 | Syntax-only validation | Deep 4-layer validation (syntax + shrinkage + names + import) | `_validate_code_mutation()`, prompt_forge.py line 575 |
-| 2 | No size guard | Catastrophic shrinkage guard: reject if >60% of lines removed | prompt_forge.py line 594; also >50% at dispatch level (autopilot.py line 584) |
-| 3 | No revert commits | `revert_code_mutation()` now auto-commits the revert so HEAD is never corrupted | prompt_forge.py line 552 |
-| 4 | No isolation | Worktree isolation available via `WorktreeManager` | worktree_manager.py (implemented, not yet wired into dispatch) |
-| 5 | No per-trial scope | `apply_code_mutation()` creates a pre-mutation checkpoint commit before writing | prompt_forge.py line 509 |
+| 1 | Syntax-only validation | Deep 4-check validation (syntax + shrinkage + names + static safety screen) | `PromptForge._screen_code_mutation()` |
+| 2 | No size guard | Catastrophic shrinkage guard: reject if >60% of lines removed | `PromptForge._screen_code_mutation()`; also >50% at dispatch level (autopilot.py line 584) |
+| 3 | No revert commits | `PromptForge.revert_code_mutation()` auto-commits the revert when auto-commit is enabled | `PromptForge.revert_code_mutation()` |
+| 4 | No isolation | Worktree-backed experiment context is used by code-mutation dispatch | `PromptForge.apply_mutation_isolated()`; `_action_code_mutation()` (actions.py) |
+| 5 | No per-trial scope | Code mutation application requires an experiment context; the legacy direct-write method rejects | `PromptForge.apply_code_mutation_in_context()` and `PromptForge.apply_code_mutation()` |
 
-### Worktree isolation (available, not yet active)
+### Worktree isolation (active for code mutation dispatch)
 
-`WorktreeManager` (worktree_manager.py) creates a temporary git worktree per trial. The mutated file is committed in the worktree, then copied to the main repo for live eval. On rejection, the original is restored from the worktree's clean snapshot. The `PromptForge` class exposes `apply_code_mutation_in_context()` (line 418) and `apply_mutation_isolated()` (line 372) for worktree-backed mutations. These are not yet wired into the autopilot dispatch loop but are ready for integration.
+`PromptForge.apply_mutation_isolated()` opens an experiment context backed by `WorktreeManager`; `PromptForge.apply_code_mutation_in_context()` applies the code candidate only after its safety and target checks. The autopilot code-mutation action uses this path before evaluation. The context handles the worktree and main-repository file lifecycle, then accepts or restores the mutation according to the evaluation outcome.
 
 Usage pattern:
 ```
@@ -185,14 +184,13 @@ Auto-rejects if neither `accept()` nor `reject()` is called (safe default, line 
                          |
                          v
                    Claude CLI invocation
-                   [prompt_forge.py:179]
+                   [`PromptForge._invoke_claude()`]
                          |
                          v
-                  _validate_code_mutation()   (Tier 2 only)
-                  [prompt_forge.py:575]
+                  `PromptForge._screen_code_mutation()`   (Tier 2 only)
                          |
                          v
-               apply_mutation / apply_code_mutation
+               `PromptForge.apply_mutation()` / `PromptForge.apply_code_mutation_in_context()`
                          |
                          v
                   tower.hybrid_eval()
@@ -236,7 +234,7 @@ The main loop in `_inner_loop()` (autopilot.py, line 779) loads state, builds th
 
 ### During run
 
-- [ ] Watch for `"Code mutation rejected"` in autopilot logs -- this is the 4-layer validation working correctly
+- [ ] Watch for `"Code mutation rejected"` in autopilot logs -- this is the static mutation validation working correctly
 - [ ] Periodically check git log in epyc-orchestrator for revert commits: `git log --oneline -20`
 - [ ] Monitor for empty traces -- if `capture_recent_traces` returns empty, Tier 1 feedback is disabled. Check that inference sessions are running and writing to the tap log.
 - [ ] Watch for `"catastrophic shrinkage"` or `"missing public names"` log warnings -- these indicate the LLM is proposing destructive mutations
