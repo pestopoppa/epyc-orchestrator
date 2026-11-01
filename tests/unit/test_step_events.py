@@ -176,6 +176,91 @@ def test_helpers():
     assert is_mutating("anything", ["modifies_files"]) and not is_mutating("write_x_but_ro", ["read_only"])
 
 
+def test_programmatic_feedback_is_exact_observed_and_provenanced():
+    log = StepEventLog("feedback-run")
+    ordinary = log.observe_call("search", {"query": "Nothing happens."}, "The page says Nothing happens. today")
+    assert ordinary["feedback_parser"] == "programmatic_tool_feedback/v1"
+    assert ordinary["feedback_facts"] == []
+    empty = log.take_feedback()
+    assert empty["facts"] == [] and empty["status"] == "no_matching_facts_observed"
+    near_match = log.observe_call("search", {"query": "status"}, "Nothing happens.\nThe task is still pending.")
+    assert log.take_feedback()["facts"] == []
+
+    no_op = log.observe_call("place", {"item": "mug", "target": "machine"}, "Nothing happens.")
+    facts = log.take_feedback()["facts"]
+    assert len(facts) == 1
+    assert facts[0]["kind"] == "observed_no_op_response"
+    assert facts[0]["step_id"] == no_op["step_id"]
+    assert facts[0]["response"] == "Nothing happens."
+    assert facts[0]["args_hash"] == no_op["args_hash"]
+    assert facts[0]["output_sha256"] == no_op["output_sha256"]
+    assert len(facts[0]["action_signature_sha256"]) == 64
+    assert no_op["feedback_facts"] == [{k: v for k, v in facts[0].items() if k != "step_id"}]
+    assert "mug" not in json.dumps(no_op["feedback_facts"])
+    assert ordinary["step_id"] != no_op["step_id"] != near_match["step_id"]
+    assert log.take_feedback()["status"] == "no_matching_facts_observed"
+
+    unpunctuated = log.observe_call("place", {"item": "cup"}, "Nothing happens")
+    assert log.take_feedback()["facts"][0]["output_sha256"] == unpunctuated["output_sha256"]
+
+
+def test_programmatic_feedback_bounds_untrusted_tool_label_without_losing_signature():
+    name = "unknown_" + ("x" * 10000)
+    log = StepEventLog("long-tool")
+    rec = log.observe_call(name, {"private_arg": "secret"}, "Nothing happens.")
+    fact = log.take_feedback()["facts"][0]
+    assert rec["tool"] == name
+    assert fact["tool"] == name[:128]
+    assert fact["tool_truncated"] is True
+    assert len(fact["action_signature_sha256"]) == 64
+    assert "secret" not in json.dumps(rec["feedback_facts"])
+
+
+def test_repeated_action_is_informational_even_for_declared_read_only_poll():
+    log = StepEventLog("repeat-run")
+    first = log.observe_call("place", {"item": "mug", "target": "machine"}, "No state change")
+    second = log.observe_call("place", {"target": "machine", "item": "mug"}, "No state change")
+    facts = log.take_feedback()["facts"]
+    repeat = next(f for f in facts if f["kind"] == "repeated_action_observed")
+    assert repeat["step_id"] == second["step_id"]
+    assert repeat["prior_step_id"] == first["step_id"]
+    assert repeat["intent"] == "unknown; repetition alone is not failure"
+    assert repeat["output_sha256"] == second["output_sha256"]
+    assert repeat["prior_output_sha256"] == first["output_sha256"]
+
+    log.observe_call("poll_status", {"job": 7}, "running", side_effects=["read_only"])
+    poll2 = log.observe_call("poll_status", {"job": 7}, "running", side_effects=["read_only"])
+    poll_repeat = next(f for f in log.take_feedback()["facts"] if f["kind"] == "repeated_action_observed")
+    assert poll_repeat["step_id"] == poll2["step_id"]
+    assert poll_repeat["intent"] == "unknown; repetition alone is not failure"
+
+
+def test_feedback_bounds_report_omitted_facts_without_replaying_them(monkeypatch):
+    import src.trace.step_events as step_events
+
+    monkeypatch.setattr(step_events, "MAX_PENDING_FEEDBACK", 2)
+    log = StepEventLog("bounded-run")
+    for idx in range(3):
+        log.observe_call(f"place_{idx}", {"item": idx}, "Nothing happens.")
+    report = log.take_feedback(max_facts=1)
+    assert len(report["facts"]) == 1
+    assert report["complete"] is False
+    assert report["omitted_count"] == 2
+    assert log.take_feedback()["facts"] == []
+    assert log.records[-1]["feedback_prompt_status"] == "omitted_pending_capacity"
+
+
+def test_seen_action_limit_marks_history_incomplete(monkeypatch):
+    import src.trace.step_events as step_events
+
+    monkeypatch.setattr(step_events, "MAX_SEEN_ACTIONS", 1)
+    log = StepEventLog("bounded-actions")
+    log.observe_call("place", {"item": "mug"}, "ok")
+    second = log.observe_call("place", {"item": "cup"}, "ok")
+    assert second["action_history_complete"] is False
+    assert log.take_feedback()["action_history_complete"] is False
+
+
 # --------------------------------------------------------------------------- detector fixtures via the loader
 def _final(log: StepEventLog) -> None:
     log.observe_turn_end(SimpleNamespace(is_final=True, final_answer="done", error=None), log.ordinal)
