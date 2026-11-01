@@ -1,0 +1,41 @@
+/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/pytest_asyncio/plugin.py:300: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the "fixture" caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to "function" scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.2.0, pluggy-1.7.0
+rootdir: /home/runner/work/epyc-orchestrator/epyc-orchestrator
+configfile: pyproject.toml
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 287 items
+
+tests/unit/test_kv_pool_unique_cells.py ............................     [  9%]
+tests/unit/test_kv_prefix_history.py ................................    [ 20%]
+tests/unit/test_prefix_index_admission.py ........                       [ 23%]
+tests/unit/test_prefix_index_review_fixes.py ........................... [ 33%]
+...............                                                          [ 38%]
+tests/unit/test_prefix_index_flag_off.py ......                          [ 40%]
+tests/unit/test_review_p2b_defects.py ......                             [ 42%]
+tests/unit/test_kv_pool_long_prefill.py ................................ [ 53%]
+............                                                             [ 57%]
+tests/unit/test_kv_pool_cross_process_lease.py ...................       [ 64%]
+tests/unit/test_context_overflow_handling.py ..........ss............... [ 73%]
+................................s.................s.....s                [ 93%]
+tests/unit/test_context_limits_model_cap.py .................s           [100%]
+
+=============================== warnings summary ===============================
+src/graph/graph.py:10
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/src/graph/graph.py:10: PydanticGraphDeprecationWarning: Importing `Graph` from `pydantic_graph` is deprecated. The `BaseNode`-based `Graph` runner and its persistence machinery are deprecated and will be removed (or repurposed) in v2; use the builder-based `GraphBuilder` API instead, or pin to `pydantic_graph<2` to keep using them.
+    from pydantic_graph import Graph
+
+tests/unit/test_context_overflow_handling.py::TestFrozenServerPayloadShape::test_fixture_strings_match_frozen_source
+  /opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/fixtures.py:1392: PytestRemovedIn10Warning: Class-scoped fixtures defined as instance methods are deprecated.
+  Instance attributes set in the 'sources' fixture will NOT be visible to test methods,
+  as each test gets a new instance while the fixture runs only once per class.
+  Use a @classmethod decorator below @pytest.fixture and set attributes on cls instead.
+  See https://docs.pytest.org/en/stable/deprecations.html#class-scoped-fixture-as-instance-method
+    fixturefunc = resolve_fixture_function(fixturedef, request)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+-------- generated xml file: /home/runner/work/_temp/ni-kpf24/junit.xml --------
+================= 281 passed, 6 skipped, 2 warnings in 37.77s ==================

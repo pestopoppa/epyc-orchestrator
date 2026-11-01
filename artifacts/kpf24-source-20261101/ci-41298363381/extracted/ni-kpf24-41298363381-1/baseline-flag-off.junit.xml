@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="6" time="4.144" timestamp="2026-11-01T10:39:49.155269+00:00" hostname="runnervm48cm3"><testcase classname="tests.unit.test_prefix_index_flag_off" name="test_flags_and_callers_compute_nothing" time="0.079" /><testcase classname="tests.unit.test_prefix_index_flag_off" name="test_admission_record_and_status_are_the_legacy_shape" time="0.003"><failure message="AssertionError: assert {'admission_t...redited', ...} == {'cache_credi..._tokens', ...}&#10;  &#10;  Extra items in the left set:&#10;  'admission_ticket'&#10;  'lease_holder_ticket'&#10;  'lease_wait_observed_ms'&#10;  'lease_held_at_admission'&#10;  &#10;  Full diff: (-: missing in left side, +: extra in left side)&#10;    {&#10;  +     'admission_ticket',&#10;        'cache_credit_matched_chars',&#10;        'cache_credit_prefix_tokens_est',&#10;        'cache_credit_source',&#10;        'cache_credit_unavailable',&#10;        'cache_credited',&#10;[+10 more lines; full report in element text]">tests/unit/test_prefix_index_flag_off.py:114: in test_admission_record_and_status_are_the_legacy_shape
+    assert set(pool.admission_record(a)) == LEGACY_RECORD_KEYS
+E   AssertionError: assert {'admission_t...redited', ...} == {'cache_credi..._tokens', ...}
+E     
+E     Extra items in the left set:
+E     'admission_ticket'
+E     'lease_holder_ticket'
+E     'lease_wait_observed_ms'
+E     'lease_held_at_admission'
+E     
+E     Full diff: (-: missing in left side, +: extra in left side)
+E       {
+E     +     'admission_ticket',
+E           'cache_credit_matched_chars',
+E           'cache_credit_prefix_tokens_est',
+E           'cache_credit_source',
+E           'cache_credit_unavailable',
+E           'cache_credited',
+E           'cache_credited_tokens',
+E     +     'lease_held_at_admission',
+E     +     'lease_holder_ticket',
+E     +     'lease_wait_observed_ms',
+E           'long_prefill',
+E           'long_prefill_threshold',
+E           'prefill_tokens_est',
+E           'prompt_tokens_est',
+E           'queue_wait_ms',
+E       }</failure></testcase><testcase classname="tests.unit.test_prefix_index_flag_off" name="test_review_fix_surfaces_are_inert_with_the_flag_off" time="0.010" /><testcase classname="tests.unit.test_prefix_index_flag_off" name="test_primitives_lane_payload_is_unchanged" time="1.191"><failure message="AssertionError: assert {'admission_t...redited', ...} &lt;= {'cache_credi...ailable', ...}&#10;  &#10;  Extra items in the left set:&#10;  'admission_ticket'&#10;  'lease_holder_ticket'&#10;  'lease_wait_observed_ms'&#10;  'lease_held_at_admission'">tests/unit/test_prefix_index_flag_off.py:224: in test_primitives_lane_payload_is_unchanged
+    assert LEGACY_RECORD_KEYS &lt;= set(rec["kv_admission"]) &lt;= (
+E   AssertionError: assert {'admission_t...redited', ...} &lt;= {'cache_credi...ailable', ...}
+E     
+E     Extra items in the left set:
+E     'admission_ticket'
+E     'lease_holder_ticket'
+E     'lease_wait_observed_ms'
+E     'lease_held_at_admission'</failure></testcase><testcase classname="tests.unit.test_prefix_index_flag_off" name="test_passthrough_forwards_raw_bytes_and_records_no_index" time="2.217"><failure message="assert False&#10; +  where False = all(&lt;generator object test_passthrough_forwards_raw_bytes_and_records_no_index.&lt;locals&gt;.&lt;genexpr&gt; at 0x7f2f2d4d35a0&gt;)">tests/unit/test_prefix_index_flag_off.py:257: in test_passthrough_forwards_raw_bytes_and_records_no_index
+    assert all(LEGACY_RECORD_KEYS &lt;= set(r["kv_admission"])
+E   assert False
+E    +  where False = all(&lt;generator object test_passthrough_forwards_raw_bytes_and_records_no_index.&lt;locals&gt;.&lt;genexpr&gt; at 0x7f2f2d4d35a0&gt;)</failure></testcase><testcase classname="tests.unit.test_prefix_index_flag_off" name="test_kpf21_trunk_prefill_and_kpf25_ordering_are_inert_with_the_flag_off" time="0.212" /></testsuite></testsuites>
