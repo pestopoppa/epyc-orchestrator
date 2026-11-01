@@ -37,3 +37,29 @@ def test_refusal_never_passes(monkeypatch):
         raise instrument.exec_sandbox.ContainmentUnavailable('no kernel support')
     monkeypatch.setattr(instrument.exec_sandbox, 'wrap', refuse)
     assert instrument.evaluate(instrument.FIXTURES[0], instrument.FIXTURES[0].gold) == 'unavailable'
+
+
+def test_candidate_cannot_forge_or_disable_oracle():
+    fixture = instrument.FIXTURES[0]
+    for code in (
+        "import inspect\np=inspect.currentframe().f_back.f_globals['p']\nprint(p['token'])\nraise SystemExit(0)",
+        "import inspect\np=inspect.currentframe().f_back.f_globals['p']\np['cases'].clear()\ndef clamp(n, low, high): return n",
+    ):
+        assert instrument.evaluate(fixture, code) == 'fail'
+
+
+def test_candidate_cannot_fork():
+    fixture = instrument.FIXTURES[0]
+    code = "import os\nos.fork()\ndef clamp(n, low, high): return max(low, min(n, high))\n"
+    assert instrument.evaluate(fixture, code) == 'fail'
+
+
+def test_candidate_cannot_read_fixture_source():
+    fixture = instrument.FIXTURES[0]
+    code = f"open({instrument.__file__!r}).read()\n" + fixture.gold
+    assert instrument.evaluate(fixture, code) == 'fail'
+
+
+def test_extra_output_is_not_a_result():
+    fixture = instrument.FIXTURES[0]
+    assert instrument.evaluate(fixture, "print('noise')\n" + fixture.gold) == 'fail'

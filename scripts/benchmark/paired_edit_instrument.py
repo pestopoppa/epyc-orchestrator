@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import signal
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 
@@ -52,9 +50,41 @@ def prompt(fixture: Fixture, variant: str) -> str:
     return f"{getattr(fixture, variant)}\n\nReturn the complete Python file.\n\n{fixture.initial}"
 
 
-# Runs inside the existing containment shim. Oracle is passed to the child only at
-# evaluation time, never to prompt(). A malformed/empty attempt cannot pass.
-_HARNESS = '''import copy, json, sys\np = json.load(sys.stdin)\nns = {}\nexec(compile(p["code"], "<attempt>", "exec"), ns)\nf = ns[p["entry"]]\nfor args, expected in p["cases"]:\n    original = copy.deepcopy(args)\n    if f(*args) != expected or args != original:\n        sys.exit(1)\nprint(p["token"])\n'''
+# Candidate receives one input at a time. Expected values and the verdict stay
+# in the trusted parent. Strict JSON framing rejects early exit and extra output.
+_HARNESS = """import json, os, resource, sys
+try:
+    if os.geteuid() == 0:
+        raise RuntimeError('root bypasses RLIMIT_NPROC')
+    with open('/proc/self/status') as status:
+        effective = next(int(line.split()[1], 16) for line in status if line.startswith('CapEff:'))
+    if effective & ((1 << 21) | (1 << 24)):
+        raise RuntimeError('capabilities bypass RLIMIT_NPROC')
+    resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+    if resource.getrlimit(resource.RLIMIT_NPROC) != (1, 1):
+        raise RuntimeError('RLIMIT_NPROC not enforced')
+except Exception:
+    print('paired-edit: process control unavailable', file=sys.stderr)
+    sys.exit(126)
+p = json.load(sys.stdin)
+ns = {}
+exec(compile(p['code'], '<attempt>', 'exec'), ns)
+result = ns[p['entry']](*p['args'])
+print(json.dumps({'result': result, 'args': p['args']}, allow_nan=False))
+"""
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON key')
+        result[key] = value
+    return result
+
+
+def _invalid_constant(value):
+    raise ValueError(f'invalid JSON constant: {value}')
 
 
 def evaluate(fixture: Fixture, attempt: str, timeout: float = 5.0) -> str:
@@ -64,31 +94,53 @@ def evaluate(fixture: Fixture, attempt: str, timeout: float = 5.0) -> str:
     if not fixture.cases or not fixture.entry.isidentifier() or not 0 < timeout <= 30:
         raise ValueError('invalid oracle or timeout')
     try:
-        argv, extra = exec_sandbox.wrap([sys.executable, '-I', '-c', _HARNESS], policy=exec_sandbox.Policy())
+        argv, extra = exec_sandbox.wrap(
+            ['/usr/bin/python3', '-I', '-c', _HARNESS], policy=exec_sandbox.Policy(),
+            deny_paths=[*exec_sandbox.credential_paths(), '/home', '/workspace', '/mnt'],
+        )
         env = exec_containment.child_env(extra)
         with tempfile.TemporaryDirectory(prefix='paired-edit-') as scratch:
-            # Files instead of PIPEs prevent unbounded output accumulation in memory.
-            with tempfile.TemporaryFile(mode='w+') as out, tempfile.TemporaryFile(mode='w+') as err:
-                token = secrets.token_hex(32)
-                process = subprocess.Popen(argv, stdin=subprocess.PIPE, text=True, stdout=out, stderr=err,
-                                           cwd=scratch, env=env, start_new_session=True)
-                try:
-                    process.communicate(json.dumps({'code': attempt, 'entry': fixture.entry,
-                                                    'cases': fixture.cases, 'token': token}), timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.communicate()
-                    return 'timeout'
-                err.seek(0)
-                note = err.read(4096)
-                out.seek(0, 2)
-                size = out.tell()
-                out.seek(max(0, size - 256))
-                tail = out.read()
-        if exec_sandbox.shim_failure_note(process.returncode, note):
-            return 'unavailable'
-        return 'pass' if process.returncode == 0 and tail.splitlines()[-1:] == [token] else 'fail'
-    except subprocess.TimeoutExpired:
-        return 'timeout'
+            for args, expected in fixture.cases:
+                with tempfile.TemporaryFile(mode='w+') as out, tempfile.TemporaryFile(mode='w+') as err:
+                    process = subprocess.Popen(argv, stdin=subprocess.PIPE, text=True, stdout=out, stderr=err,
+                                               cwd=scratch, env=env, start_new_session=True)
+                    try:
+                        pidfd = os.pidfd_open(process.pid)
+                    except OSError:
+                        # Popen still owns this unreaped child PID; do not leave it running.
+                        process.kill()
+                        process.communicate()
+                        return 'unavailable'
+                    try:
+                        try:
+                            process.communicate(json.dumps({'code': attempt, 'entry': fixture.entry,
+                                                            'args': args}), timeout=timeout)
+                        except subprocess.TimeoutExpired:
+                            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                            process.communicate()
+                            return 'timeout'
+                    finally:
+                        os.close(pidfd)
+                    err.seek(0)
+                    note = err.read(4096)
+                    if (exec_sandbox.shim_failure_note(process.returncode, note)
+                            or (process.returncode == 126 and 'paired-edit: process control unavailable' in note)):
+                        return 'unavailable'
+                    if process.returncode != 0:
+                        return 'fail'
+                    out.seek(0, 2)
+                    if out.tell() > 65536:
+                        return 'fail'
+                    out.seek(0)
+                    try:
+                        response = json.loads(out.read(), object_pairs_hook=_unique_object,
+                                              parse_constant=_invalid_constant)
+                    except (ValueError, UnicodeError, RecursionError):
+                        return 'fail'
+                    if (not isinstance(response, dict) or set(response) != {'result', 'args'}
+                            or json.dumps(response['result'], sort_keys=True) != json.dumps(expected, sort_keys=True)
+                            or json.dumps(response['args']) != json.dumps(args)):
+                        return 'fail'
+        return 'pass'
     except (exec_sandbox.ContainmentUnavailable, OSError):
         return 'unavailable'
