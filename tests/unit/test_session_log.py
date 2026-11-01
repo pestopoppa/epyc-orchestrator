@@ -523,3 +523,30 @@ def test_compaction_quality_monitor_serialization():
     assert restored.segments_compacted == 3
     assert restored.post_compaction_references == 1
     assert restored.miss_rate == pytest.approx(1 / 3)
+
+
+def test_compaction_quality_monitor_records_terminal_outcome_rates_and_reads_legacy_rows():
+    mon = CompactionQualityMonitor()
+    mon.record_task_outcome(
+        "Can you help me fix this? Could you clarify the request?", repl_mode=False
+    )
+    mon.record_task_outcome("[Max turns reached without FINAL()]", repl_mode=True)
+
+    assert mon.task_outcomes == 2
+    assert mon.give_up_outcomes == 1
+    assert mon.give_up_rate == pytest.approx(0.5)
+    assert mon.repl_task_outcomes == 1
+    assert mon.repl_max_turns_outcomes == 1
+    assert mon.repl_max_turns_rate == pytest.approx(1.0)
+
+    legacy = CompactionQualityMonitor.from_dict(
+        {
+            "compactions_performed": 2,
+            "segments_compacted": 5,
+            "post_compaction_references": 1,
+            "quality_checks": 3,
+        }
+    )
+    assert legacy.task_outcomes == 0
+    assert legacy.give_up_rate == 0.0
+    assert legacy.repl_max_turns_rate == 0.0

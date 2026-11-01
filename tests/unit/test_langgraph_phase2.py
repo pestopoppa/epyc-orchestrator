@@ -185,6 +185,10 @@ class TestSkipToLG:
             "segments_compacted": 3,
             "post_compaction_references": 1,
             "quality_checks": 0,
+            "task_outcomes": 0,
+            "give_up_outcomes": 0,
+            "repl_task_outcomes": 0,
+            "repl_max_turns_outcomes": 0,
         }
         assert isinstance(lg["compaction_quality_monitor"], dict)
 
@@ -211,6 +215,10 @@ class TestSkipToLG:
             "segments_compacted": 5,
             "post_compaction_references": 1,
             "quality_checks": 3,
+            "task_outcomes": 0,
+            "give_up_outcomes": 0,
+            "repl_task_outcomes": 0,
+            "repl_max_turns_outcomes": 0,
         }
 
     def test_task_manager_excluded(self):

@@ -572,6 +572,10 @@ class CompactionQualityMonitor:
     segments_compacted: int = 0
     post_compaction_references: int = 0   # times compacted content was re-referenced
     quality_checks: int = 0
+    task_outcomes: int = 0
+    give_up_outcomes: int = 0
+    repl_task_outcomes: int = 0
+    repl_max_turns_outcomes: int = 0
 
     def record_compaction(self, n_segments: int) -> None:
         self.compactions_performed += 1
@@ -583,6 +587,33 @@ class CompactionQualityMonitor:
 
     def record_quality_check(self) -> None:
         self.quality_checks += 1
+
+    def record_task_outcome(self, answer: str, *, repl_mode: bool) -> None:
+        """Record terminal give-up and REPL non-termination signals."""
+        from src.pipeline_monitor.anomaly import (
+            detect_assistant_help_request,
+            detect_repl_max_turns,
+        )
+
+        self.task_outcomes += 1
+        if detect_assistant_help_request(answer):
+            self.give_up_outcomes += 1
+        if repl_mode:
+            self.repl_task_outcomes += 1
+            if detect_repl_max_turns(answer, "repl"):
+                self.repl_max_turns_outcomes += 1
+
+    @property
+    def give_up_rate(self) -> float:
+        if self.task_outcomes == 0:
+            return 0.0
+        return self.give_up_outcomes / self.task_outcomes
+
+    @property
+    def repl_max_turns_rate(self) -> float:
+        if self.repl_task_outcomes == 0:
+            return 0.0
+        return self.repl_max_turns_outcomes / self.repl_task_outcomes
 
     @property
     def miss_rate(self) -> float:
@@ -597,6 +628,10 @@ class CompactionQualityMonitor:
             "segments_compacted": self.segments_compacted,
             "post_compaction_references": self.post_compaction_references,
             "quality_checks": self.quality_checks,
+            "task_outcomes": self.task_outcomes,
+            "give_up_outcomes": self.give_up_outcomes,
+            "repl_task_outcomes": self.repl_task_outcomes,
+            "repl_max_turns_outcomes": self.repl_max_turns_outcomes,
         }
 
     @classmethod

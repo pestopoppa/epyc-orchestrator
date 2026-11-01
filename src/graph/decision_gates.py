@@ -164,6 +164,13 @@ def _timeout_skip(ctx: Ctx, error_msg: str) -> bool:
 
 def _make_end_result(ctx: Ctx, answer: str, success: bool) -> End[TaskResult]:
     """Create an End node with a TaskResult."""
+    quality_monitor = ctx.state.compaction_quality_monitor
+    if quality_monitor is not None:
+        quality_monitor.record_task_outcome(
+            answer,
+            repl_mode=ctx.state.repl_executions > 0,
+        )
+
     try:  # TOC-SP-6 trajectory artifact finalize (default off; no-op and never raises)
         from src.graph import trajectory_artifact
 

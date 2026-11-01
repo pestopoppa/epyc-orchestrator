@@ -308,3 +308,30 @@ class TestMakeEndResult:
         assert result.data.turns == 5
         assert len(result.data.role_history) == 2
         assert len(result.data.delegation_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_end_result_records_compaction_quality_outcomes_only_when_monitor_exists(self, graph_ctx):
+        from src.graph.session_log import CompactionQualityMonitor
+
+        state, deps = graph_ctx()
+        state.compaction_quality_monitor = CompactionQualityMonitor()
+        state.repl_executions = 1
+        ctx = _make_ctx(state, deps)
+
+        _make_end_result(
+            ctx,
+            "[Max turns reached without FINAL()] Can you help me? Could you clarify?",
+            False,
+        )
+
+        monitor = state.compaction_quality_monitor
+        assert monitor.task_outcomes == 1
+        assert monitor.give_up_rate == pytest.approx(1.0)
+        assert monitor.repl_max_turns_rate == pytest.approx(1.0)
+
+    @pytest.mark.asyncio
+    async def test_end_result_does_not_create_compaction_monitor_when_absent(self, graph_ctx):
+        state, deps = graph_ctx()
+        assert state.compaction_quality_monitor is None
+        _make_end_result(_make_ctx(state, deps), "ordinary answer", True)
+        assert state.compaction_quality_monitor is None
