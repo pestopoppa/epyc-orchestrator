@@ -17,6 +17,10 @@ from src.features import Features, feature_sources
 
 _IDENTITY_TIMEOUT_S = 2.5
 _IDENTITY_MAX_CONCURRENCY = 8
+_CREDENTIAL_FIELD_PATHS = {
+    ("external_backends", "anthropic", "api_key"),
+    ("external_backends", "openai", "api_key"),
+}
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -34,49 +38,28 @@ def _process_start_id(pid: int) -> str:
 
 
 def _nonsecret_config_identity() -> dict[str, Any]:
-    """Return the loaded request-routing config fields needed for AP-70 comparison."""
+    """Return the complete effective config without raw provider credentials."""
     from src.config import get_config
 
     config = get_config()
-    fields = (
-        "llm",
-        "server",
-        "server_urls",
-        "timeouts",
-        "vision",
-        "chat",
-        "delegation",
-        "think_harder",
-    )
-    selected: dict[str, Any] = {}
-    for name in fields:
-        value = getattr(config, name, None)
-        if value is None:
-            continue
-        if name == "server_urls" and hasattr(value, "as_dict"):
-            selected[name] = value.as_dict()
-        elif is_dataclass(value):
-            selected[name] = asdict(value)
-        else:
-            selected[name] = value
+    if not is_dataclass(config):
+        raise ValueError("loaded orchestrator config is not a dataclass snapshot")
+    complete_config = asdict(config)
 
-    def scrub(value: Any) -> Any:
+    def scrub(value: Any, path: tuple[str, ...] = ()) -> Any:
+        if path in _CREDENTIAL_FIELD_PATHS:
+            # Credential rotation is deliberately identity-neutral; presence still
+            # records whether the corresponding provider is configured.
+            return {"configured": bool(value)}
         if isinstance(value, dict):
-            return {
-                str(key): scrub(item)
-                for key, item in value.items()
-                if not any(
-                    part in str(key).lower()
-                    for part in ("secret", "token", "password", "api_key", "authorization")
-                )
-            }
+            return {str(key): scrub(item, (*path, str(key))) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
-            return [scrub(item) for item in value]
+            return [scrub(item, path) for item in value]
         if isinstance(value, (set, frozenset)):
-            return sorted(scrub(item) for item in value)
+            return sorted((scrub(item, path) for item in value), key=repr)
         return value
 
-    return scrub(selected)
+    return scrub(complete_config)
 
 
 def _role_endpoints(config_identity: dict[str, Any]) -> dict[str, list[str]]:
@@ -213,7 +196,7 @@ async def collect_served_runtime_identity(current: Features) -> dict[str, Any]:
         "status": "observed",
         "identity_basis": [
             "request-worker-pid-and-proc-start-ticks",
-            "loaded-nonsecret-routing-config-sha256",
+            "loaded-full-nonsecret-config-sha256",
             "configured-role-to-endpoint-map",
             "local-listener-pid-and-proc-start-ticks",
             "llama-server-props-model-path-build-and-default-generation-settings",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import asyncio
+from dataclasses import dataclass
 
 from src.features import Features
 from src.runtime import config_attestation
@@ -80,3 +81,71 @@ def test_served_runtime_identity_is_unavailable_if_any_role_cannot_be_observed(m
     identity = asyncio.run(config_attestation.collect_served_runtime_identity(Features()))
     assert identity["status"] == "unavailable"
     assert "no /props response" in identity["reason"]
+
+
+def test_full_config_identity_includes_behavior_knobs_but_omits_provider_secrets(monkeypatch):
+    @dataclass
+    class LLM:
+        qwen_stop_token: str = "<|im_end|>"
+        max_tokens: int = 2048
+
+    @dataclass
+    class REPL:
+        timeout_seconds: int = 30
+
+    @dataclass
+    class Chat:
+        token_budget_max: int = 4096
+
+    @dataclass
+    class Provider:
+        api_key: str = "first-secret"
+        default_model: str = "provider-model-v1"
+
+    @dataclass
+    class Providers:
+        anthropic: Provider
+        openai: Provider
+
+    @dataclass
+    class Config:
+        llm: LLM
+        repl: REPL
+        chat: Chat
+        external_backends: Providers
+
+    config = Config(LLM(), REPL(), Chat(), Providers(Provider(), Provider("openai-secret")))
+    monkeypatch.setattr("src.config.get_config", lambda: config)
+
+    baseline = config_attestation._nonsecret_config_identity()
+    baseline_digest = config_attestation._canonical_sha256(baseline)
+    assert "first-secret" not in repr(baseline)
+    assert "openai-secret" not in repr(baseline)
+
+    config.llm.qwen_stop_token = "<|stop|>"
+    assert (
+        config_attestation._canonical_sha256(config_attestation._nonsecret_config_identity())
+        != baseline_digest
+    )
+    config.llm.qwen_stop_token = "<|im_end|>"
+
+    config.chat.token_budget_max = 8192
+    assert (
+        config_attestation._canonical_sha256(config_attestation._nonsecret_config_identity())
+        != baseline_digest
+    )
+    config.chat.token_budget_max = 4096
+
+    config.repl.timeout_seconds = 45
+    assert (
+        config_attestation._canonical_sha256(config_attestation._nonsecret_config_identity())
+        != baseline_digest
+    )
+
+    config.repl.timeout_seconds = 30
+    config.external_backends.anthropic.api_key = "rotated-secret"
+    config.external_backends.openai.api_key = "rotated-openai-secret"
+    rotated = config_attestation._nonsecret_config_identity()
+    assert config_attestation._canonical_sha256(rotated) == baseline_digest
+    assert "rotated-secret" not in repr(rotated)
+    assert "rotated-openai-secret" not in repr(rotated)
