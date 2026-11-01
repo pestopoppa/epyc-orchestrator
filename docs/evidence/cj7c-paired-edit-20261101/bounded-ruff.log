@@ -1,0 +1,2 @@
+All checks passed!
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 0.11340241599828005, "sampled_peak_tree_rss_bytes": 16949248, "samples": 2, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 2258491, "leader_birth": 162568193, "child_rc": 0, "children_drained": true, "failure": null}

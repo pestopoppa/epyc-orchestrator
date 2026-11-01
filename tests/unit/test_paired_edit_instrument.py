@@ -63,3 +63,8 @@ def test_candidate_cannot_read_fixture_source():
 def test_extra_output_is_not_a_result():
     fixture = instrument.FIXTURES[0]
     assert instrument.evaluate(fixture, "print('noise')\n" + fixture.gold) == 'fail'
+
+
+def test_output_size_limit_stops_runaway_output():
+    fixture = instrument.FIXTURES[0]
+    assert instrument.evaluate(fixture, "while True: print('x' * 4096, flush=True)") == 'fail'

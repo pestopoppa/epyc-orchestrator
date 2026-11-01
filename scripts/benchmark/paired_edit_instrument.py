@@ -61,6 +61,8 @@ try:
     if effective & ((1 << 21) | (1 << 24)):
         raise RuntimeError('capabilities bypass RLIMIT_NPROC')
     resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (65536, 65536))
+    resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
     if resource.getrlimit(resource.RLIMIT_NPROC) != (1, 1):
         raise RuntimeError('RLIMIT_NPROC not enforced')
 except Exception:
