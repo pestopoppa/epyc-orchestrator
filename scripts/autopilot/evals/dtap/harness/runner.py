@@ -52,8 +52,8 @@ FIXTURE_PROFILES = {
         "scenario_path": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "scenarios.json",
         "manifest_path": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "source_manifest.json",
         "judges_dir": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "judges",
-        "registry_sha256": "f503832ee43984a669926d993e2a54dac1967938efbb15fde7920a394c9f13e3",
-        "contract_sha256": "1ccf5ed71ba2496b6548e342c96c22ea7d6bc2b6865947f45722a95f164d7368",
+        "registry_sha256": "8e3d0d5d3496b659cd82d63fde73d315ab5cf89731eca84d45fc3d3b83a24ede",
+        "contract_sha256": "936293547784ae8d38ca1823be1fd3df845e608c8c6f41aecdb6598036eb5290",
         "manifest_sha256": "e3c5b10ee2e90b0ef7aac647876a43549a7a35d37f74efcade1647bdac9ccd73",
         "scenario_sha256": "30501b02079f67f48760174dbecc8856d970d1a074893d0042def5f31e725cd3",
         "judge_sha256": {

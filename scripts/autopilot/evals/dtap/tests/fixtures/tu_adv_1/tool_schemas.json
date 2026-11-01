@@ -9,8 +9,8 @@
     "repository": "https://github.com/pestopoppa/epyc-orchestrator",
     "commit": "fixture-artifact-tu-adv-1-v1",
     "path": "scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/cases.json",
-    "git_blob": "0ce42172e9b168ff066369e6de8e8bab34700835",
-    "sha256": "f503832ee43984a669926d993e2a54dac1967938efbb15fde7920a394c9f13e3"
+    "git_blob": "a0b99f3cda29091a9b5ce7936f241208d52b2ff9",
+    "sha256": "8e3d0d5d3496b659cd82d63fde73d315ab5cf89731eca84d45fc3d3b83a24ede"
   },
   "server_catalogs": {
     "tuadv1_fixture": [
