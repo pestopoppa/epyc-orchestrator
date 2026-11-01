@@ -549,7 +549,9 @@ class ToolRegistry:
             # path arguments confined to task_root + read_roots. No-op without a scope.
             from src.repl_environment.task_root import check_registry_tool_scope
 
-            _fence_denial = check_registry_tool_scope(tool_name, kwargs, tool.side_effects)
+            _fence_denial = check_registry_tool_scope(
+                tool_name, kwargs, tool.side_effects, registry=self, tool=tool,
+            )
             _denial_key = "task_scope"
         if _fence_denial is not None:
             elapsed = (time.perf_counter() - start) * 1000

@@ -1,0 +1,32 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1 item
+
+tests/unit/test_oab1_task_scope.py F                                     [100%]
+
+=================================== FAILURES ===================================
+_______________ test_chat_route_installs_echoes_and_clears_scope _______________
+tests/unit/test_oab1_task_scope.py:407: in test_chat_route_installs_echoes_and_clears_scope
+    response = await chat(request, _FakeHttpRequest(), MagicMock())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/chat.py:240: in chat
+    request = _request_with_source_header(request, http_request)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/api/routes/chat.py:218: in _request_with_source_header
+    source = normalize_source(http_request.headers.get("x-request-source"))
+                              ^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: '_FakeHttpRequest' object has no attribute 'headers'
+=============================== warnings summary ===============================
+../../../../../../workspace/repos/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /workspace/repos/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_oab1_task_scope.py::test_chat_route_installs_echoes_and_clears_scope
+========================= 1 failed, 1 warning in 0.31s =========================
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 3.0293676028959453, "sampled_peak_tree_rss_bytes": 168665088, "samples": 31, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 1525438, "leader_birth": 162405731, "child_rc": 1, "children_drained": true, "failure": null}

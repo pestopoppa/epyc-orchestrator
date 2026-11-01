@@ -73,6 +73,90 @@ def test_truncation_peek_pointer(setup_case):
     assert text[offset:offset + min(n, 100)] in result
 
 
+def test_query_memory_tool_scope_and_grounding(setup_case, monkeypatch):
+    from pathlib import Path
+    from src.registry.tool_registry import Tool
+
+    _, root, artifacts, _, state = setup_case
+    monkeypatch.setenv('ORCHESTRATOR_QUERY_MEMORY', '1')
+    token = task_root._scope.set(task_root.TaskScope(root=str(root), edit_mode='direct'))
+    try:
+        registry = ToolRegistry()
+        register_builtin_tools(registry)
+        registry.set_role_permissions('frontdoor', ToolPermissions(allowed_categories=[ToolCategory.FILE]))
+        calls = []
+        foreign = ToolRegistry()
+        foreign.set_role_permissions('frontdoor', ToolPermissions(allowed_categories=[ToolCategory.FILE]))
+        foreign.register_tool(Tool(name='query_memory', description='forged', category=ToolCategory.FILE,
+                                   parameters={}, handler=lambda: 'foreign secret'))
+        class LLM:
+            def llm_call(self, **kwargs):
+                calls.append(kwargs)
+                nested = foreign.invoke('query_memory', 'frontdoor')
+                assert nested.get('task_scope') == 'denied'
+                with pytest.raises(PermissionError):
+                    other.tool_registry.invoke('query_memory', 'frontdoor')
+                return 'unique answer 42'
+        repl = REPLEnvironment(context='test', task_id='owner', role='frontdoor',
+                               tool_registry=registry, llm_primitives=LLM(), structured_mode=True)
+        other = REPLEnvironment(context='other', task_id='owner', role='frontdoor',
+                                tool_registry=registry, llm_primitives=LLM())
+        assert 'query_memory' not in registry._tools
+        assert repl.tool_registry is not other.tool_registry
+        assert any(t['name'] == 'query_memory' for t in repl._list_tools())
+        text = 'prefix\n' * 300 + 'unique answer 42\n' + 'tail\n' * 300
+        excerpt = file_artifacts._spill_if_truncated(text, 700, 'output', state, repl=repl)
+        path = Path(re.search(r'file_path="([^"]+)"', excerpt).group(1))
+        result = repl.execute("print(TOOL('query_memory', key=1, question='answer?'))")
+        assert not result.error, result.error
+        assert 'unique answer 42' in result.output
+        assert len(calls) == 1 and calls[0]['context_slice'] == text
+        assert repl._invoked_tools[-1].tool_name == 'query_memory'
+        assert other.tool_registry.invoke('query_memory', 'frontdoor', key=1, question='answer?')['error']
+        assert foreign.invoke('query_memory', 'frontdoor').get('task_scope') == 'denied'
+        repl.llm_primitives.llm_call = lambda **kwargs: 'invented answer'
+        assert 'error' in repl.tool_registry.invoke('query_memory', 'frontdoor', key=1, question='answer?')
+        outside = artifacts / 'outside'
+        outside.write_text('foreign secret')
+        path.unlink()
+        path.symlink_to(outside)
+        assert 'error' in repl.tool_registry.invoke('query_memory', 'frontdoor', key=1, question='answer?')
+        registry.set_role_permissions('frontdoor', ToolPermissions(forbidden_tools=['query_memory']))
+        with pytest.raises(PermissionError):
+            repl.tool_registry.invoke('query_memory', 'frontdoor')
+    finally:
+        task_root._scope.reset(token)
+
+
+def test_query_memory_off_by_default_and_large_input_refused(setup_case, monkeypatch):
+    _, _, _, _, state = setup_case
+    registry = ToolRegistry()
+    registry.set_role_permissions('frontdoor', ToolPermissions(allowed_categories=[ToolCategory.FILE]))
+    llm = SimpleNamespace(llm_call=lambda **kwargs: pytest.fail('must not call LLM'))
+    monkeypatch.delenv('ORCHESTRATOR_QUERY_MEMORY', raising=False)
+    off = REPLEnvironment(context='test', task_id='owner', role='frontdoor', tool_registry=registry, llm_primitives=llm)
+    assert off.tool_registry is registry and 'query_memory' not in registry._tools
+    monkeypatch.setenv('ORCHESTRATOR_QUERY_MEMORY', '1')
+    repl = REPLEnvironment(context='test', task_id='owner', role='frontdoor', tool_registry=registry, llm_primitives=llm)
+    file_artifacts._spill_if_truncated('x' * 13000, 700, 'output', state, repl=repl)
+    result = repl.tool_registry.invoke('query_memory', 'frontdoor', key=1, question='question')
+    assert 'too long' in result['error']
+
+
+def test_query_memory_does_not_replace_existing_registry_tool(setup_case, monkeypatch):
+    from src.registry.tool_registry import Tool
+
+    monkeypatch.setenv('ORCHESTRATOR_QUERY_MEMORY', '1')
+    registry = ToolRegistry()
+    existing = Tool(name='query_memory', description='existing', category=ToolCategory.FILE,
+                    parameters={}, handler=lambda: 'existing')
+    registry.register_tool(existing)
+    with pytest.raises(ValueError, match='already registered'):
+        REPLEnvironment(context='test', tool_registry=registry,
+                        llm_primitives=SimpleNamespace(llm_call=lambda **kwargs: ''))
+    assert registry._tools['query_memory'] is existing
+
+
 def test_session_log_peek_pointer(setup_case):
     _, _, artifacts, repl, state = setup_case
     state.session_summary_cache = 'summary'

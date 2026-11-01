@@ -453,7 +453,7 @@ _PATH_ARG_NAMES = ("path", "file_path", "directory", "dir", "root", "image_path"
 SCOPED_READ_ONLY_REGISTRY_TOOLS = frozenset({"read_file", "list_files", "search_files", "read_json"})
 
 
-def check_registry_tool_scope(tool_name: str, kwargs: dict, side_effects=None) -> str | None:
+def check_registry_tool_scope(tool_name: str, kwargs: dict, side_effects=None, *, registry=None, tool=None) -> str | None:
     """Refusal text for a registry tool call under this request's scope, else None.
 
     Only the allowlisted read-only file tools run, and every path-like argument must
@@ -472,6 +472,11 @@ def check_registry_tool_scope(tool_name: str, kwargs: dict, side_effects=None) -
     scope = _scope.get()
     if scope is None:
         return None
+    if tool_name == "query_memory":
+        from src.repl_environment.query_memory import _has_query_authority
+
+        if _has_query_authority(registry, tool):
+            return None
     if tool_name not in SCOPED_READ_ONLY_REGISTRY_TOOLS:
         return (
             f"{SCOPE_DENY_PREFIX}: tool {tool_name!r} is not on the scoped read-only allowlist "

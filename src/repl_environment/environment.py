@@ -304,6 +304,13 @@ class REPLEnvironment(
         self._bundle_print_cap_bytes: int | None = None
         self._bundle_preview_chars: int | None = None
 
+        if (self.tool_registry is not None and self.llm_primitives is not None
+                and os.environ.get("ORCHESTRATOR_QUERY_MEMORY", "").strip().lower()
+                in {"1", "true", "yes", "on"}):
+            from src.repl_environment.query_memory import registry_with_query_memory
+
+            self.tool_registry = registry_with_query_memory(self.tool_registry, self)
+
         # Build restricted globals
         self._globals = self._build_globals()
         # Snapshot built-in/injected globals so get_state() can highlight

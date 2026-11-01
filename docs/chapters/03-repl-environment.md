@@ -145,6 +145,21 @@ Two token caps in `src/graph/helpers.py` limit completion length per REPL turn (
 
 Too-low caps cause restart loops: the model writes reasoning prose, gets truncated mid-expression, the REPL finds no executable code, and the next turn restarts fresh.
 
+## Session artifact recall
+
+`ORCHESTRATOR_QUERY_MEMORY=1` enables the `query_memory` registry tool for a
+REPL with both a tool registry and LLM primitives. It is off by default. Use
+`list_tools()` to discover it; `TOOL("query_memory")` lists the current session's
+one-based artifact keys and paths, and
+`TOOL("query_memory", key=1, question="...")` makes one tracked worker call.
+The result contains an exact contiguous quote from the registered artifact, or
+an error if the answer cannot be verified as such. A quote's relevance to the
+question is not guaranteed. Keys last only for this REPL session. Artifact
+identity, role permissions, and the knowledge fence are checked on every read.
+Artifacts over 12,000 characters are refused without truncation; use their
+existing `peek` pointer to read pages. Questions are limited to 1,000 characters.
+This tool also lists other session artifacts registered through the same mechanism.
+
 ## Structured Mode Chaining (Phase 2a)
 
 Structured mode now uses AST-based tool-call discovery for gate decisions. This removes regex false positives from comments and string literals.
