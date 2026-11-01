@@ -20,7 +20,7 @@ import os
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
@@ -1384,30 +1384,46 @@ def _action_gate_check(
     if not getattr(ctx.gate, "use_sequential", False):
         return ctx.gate.check(eval_result)
 
+    def fallback():
+        cached = getattr(eval_result, "gate_verdict", None)
+        if cached is not None and getattr(cached, "seq", None) is not None:
+            eval_result.gate_verdict = replace(cached, seq=None)
+        return ctx.gate.check(eval_result)
+
     seq_inputs_for_trial = _autopilot_attr("_seq_inputs_for_trial")
     # SEQ-B: the paired rate measurement, not the Pareto/goodput one. Must match the
     # incumbent comparator `_seq_inputs_for_trial` builds or an unchanged config scores a
     # rate regression on every trial.
     seq_task_rate_qph_from = _autopilot_attr("seq_task_rate_qph_from")
-    if seq_inputs_for_trial is None or seq_task_rate_qph_from is None:
+    quality_cutoff = _autopilot_attr("_quality_exclude_before_ts_from_state")
+    speed_cutoff = _autopilot_attr("_seq_speed_cutoff_from_state")
+    prepare_cache = _autopilot_attr("_seq_prepare_cached_verdict")
+    attach_witness = _autopilot_attr("_seq_attach_rate_era_witness")
+    if any(helper is None for helper in (
+        seq_inputs_for_trial, seq_task_rate_qph_from, quality_cutoff, speed_cutoff,
+        prepare_cache, attach_witness,
+    )):
         _record_seq_action_gate(
             eval_result,
             applied=False,
             reason="autopilot_seq_helpers_unavailable",
         )
         log.warning("Sequential action gate fell back to legacy check: helpers unavailable")
-        return ctx.gate.check(eval_result)
+        return fallback()
     if ctx.journal is None:
         _record_seq_action_gate(eval_result, applied=False, reason="journal_unavailable")
         log.warning("Sequential action gate fell back to legacy check: journal unavailable")
-        return ctx.gate.check(eval_result)
+        return fallback()
 
     try:
         seq_inputs = seq_inputs_for_trial(
             journal=ctx.journal,
             action=action,
             tier=eval_result.tier,
+            quality_exclude_before_ts=quality_cutoff(ctx.state),
+            rate_exclude_before_ts=speed_cutoff(ctx.state),
         )
+        seq_may_be_fresh = prepare_cache(eval_result, seq_inputs)
         verdict = ctx.gate.check(
             eval_result,
             question_results=list(getattr(eval_result, "question_results", []) or []),
@@ -1419,6 +1435,8 @@ def _action_gate_check(
             candidate=seq_inputs["candidate"],
             core_id=seq_inputs["core_id"],
         )
+        if seq_may_be_fresh:
+            attach_witness(verdict, seq_inputs)
         _record_seq_action_gate(
             eval_result,
             applied=verdict.seq is not None,
@@ -1434,7 +1452,7 @@ def _action_gate_check(
             reason=f"seq_action_gate_error:{type(exc).__name__}",
         )
         log.warning("Sequential action gate fell back to legacy check: %s", exc)
-        return ctx.gate.check(eval_result)
+        return fallback()
 
 
 def _simplicity_check(

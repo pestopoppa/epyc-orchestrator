@@ -2655,6 +2655,7 @@ def _maybe_defer_seq_unreachable_candidate_action(
         action=action,
         tier=tier,
         quality_exclude_before_ts=_quality_exclude_before_ts_from_state(state),
+        rate_exclude_before_ts=_seq_speed_cutoff_from_state(state),
     )
     alpha_wealth = candidate_inputs.get("alpha_wealth") or {}
     alpha_dispatch_allowed = alpha_wealth.get(
@@ -3824,6 +3825,66 @@ def _seq_trial_is_incumbent_representative(entry: Any) -> bool:
     return False
 
 
+def _seq_validated_cutoff(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("invalid sequential era cutoff")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid sequential era cutoff") from exc
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError("invalid sequential era cutoff")
+    return result
+
+
+def _seq_speed_cutoff_from_state(state: dict[str, Any]) -> float | None:
+    cutoff = _archive_epoch_params_from_state(state)[2]
+    if cutoff is not None or _numeric_swarm_epoch_label_from_state(state) is not None:
+        _seq_validated_cutoff(state.get("pareto_exclude_before_ts"))
+    if _active_eval_quality_era_from_state(state) is not None:
+        _seq_validated_cutoff(state.get("quality_exclude_before_ts"))
+    return cutoff
+
+
+def _seq_attach_rate_era_witness(verdict: Any, seq_inputs: dict[str, Any]) -> None:
+    seq = getattr(verdict, "seq", None)
+    z_rate = seq.get("z_rate") if isinstance(seq, dict) else None
+    if (isinstance(seq, dict) and seq.get("rate_axis_available") is True
+            and type(z_rate) in (int, float) and math.isfinite(z_rate)):
+        seq["rate_era_witness"] = dict(seq_inputs["rate_era_witness"])
+
+
+def _seq_rate_witness_matches(witness: Any, expected: dict[str, Any]) -> bool:
+    return (
+        isinstance(witness, dict)
+        and set(witness) == set(expected)
+        and type(witness.get("version")) is int and witness["version"] == 1
+        and all(
+            (witness[key] is None and expected[key] is None)
+            or (type(witness[key]) in (int, float) and math.isfinite(witness[key])
+                and witness[key] == expected[key])
+            for key in ("speed_exclude_before_ts", "quality_exclude_before_ts")
+        )
+    )
+
+
+def _seq_prepare_cached_verdict(result: Any, seq_inputs: dict[str, Any]) -> bool:
+    """Remove unproven cached seq; the gate may upgrade a passed cache without side effects."""
+    cached = getattr(result, "gate_verdict", None)
+    seq = getattr(cached, "seq", None)
+    if seq is None:
+        return True
+    witness = seq_inputs["rate_era_witness"]
+    if (seq is not None and witness["speed_exclude_before_ts"] is not None
+            and (not isinstance(seq, dict)
+                 or not _seq_rate_witness_matches(seq.get("rate_era_witness"), witness))):
+        result.gate_verdict = dataclasses.replace(cached, seq=None)
+        return True
+    return seq is None
+
+
 def _seq_inputs_for_trial(
     *,
     journal: ExperimentJournal,
@@ -3831,6 +3892,7 @@ def _seq_inputs_for_trial(
     tier: int,
     candidate_override: str | None = None,
     quality_exclude_before_ts: float | None = None,
+    rate_exclude_before_ts: float | None = None,
 ) -> dict[str, Any]:
     """Build default-off W4 shadow inputs from trusted prior journal evidence.
 
@@ -3840,8 +3902,13 @@ def _seq_inputs_for_trial(
     (baseline) profile, prior quality/rate observations, and the seq/alpha-wealth candidate
     sets — so pre-boundary PRIORS never pool with post-boundary evidence in the anytime-valid
     e-process wealth. When ``None`` (default) the fence is inert and all rows fold, so the
-    unit contract is unchanged.
+    unit contract is unchanged. The independently ratified speed boundary additionally
+    fences the rate comparator and rate observations, without changing quality or alpha.
     """
+    quality_exclude_before_ts = _seq_validated_cutoff(quality_exclude_before_ts)
+    rate_exclude_before_ts = _seq_validated_cutoff(rate_exclude_before_ts)
+    rate_witness = {"version": 1, "speed_exclude_before_ts": rate_exclude_before_ts,
+                    "quality_exclude_before_ts": quality_exclude_before_ts}
     candidate = candidate_override or _config_fingerprint(action)
     prior_quality_obs: list[tuple[int | None, float]] = []
     prior_rate_obs: list[tuple[int | None, float]] = []
@@ -3863,6 +3930,10 @@ def _seq_inputs_for_trial(
             entry_ts = _parse_journal_timestamp(getattr(entry, "timestamp", ""))
             if entry_ts is None or entry_ts < quality_exclude_before_ts:
                 continue
+        rate_in_era = True
+        if rate_exclude_before_ts is not None:
+            entry_ts = _parse_journal_timestamp(getattr(entry, "timestamp", ""))
+            rate_in_era = entry_ts is not None and entry_ts >= rate_exclude_before_ts
         try:
             if int(getattr(entry, "tier", -1)) != int(tier):
                 continue
@@ -3885,7 +3956,7 @@ def _seq_inputs_for_trial(
             and len(baseline_trials) < SEQ_BASELINE_PROFILE_LIMIT
         ):
             baseline_trials.append(outcome_map)
-        if incumbent_representative and len(baseline_task_rates) < SEQ_BASELINE_PROFILE_LIMIT:
+        if rate_in_era and incumbent_representative and len(baseline_task_rates) < SEQ_BASELINE_PROFILE_LIMIT:
             # SEQ-B: the incumbent comparator MUST be the same measurement as the
             # candidate's (`seq_task_rate_qph_from`). `n_questions` is deliberately NOT
             # passed: `seq_task_rate_qph` derives the numerator from question_results —
@@ -3918,7 +3989,9 @@ def _seq_inputs_for_trial(
                 prior_quality_obs.append((entry.trial_id, float(seq["z"])))
             except (TypeError, ValueError):
                 pass
-        if len(prior_rate_obs) < SEQ_PRIOR_OBS_LIMIT and "z_rate" in seq:
+        witness_matches = _seq_rate_witness_matches(seq.get("rate_era_witness"), rate_witness)
+        if (rate_in_era and (rate_exclude_before_ts is None or witness_matches)
+                and len(prior_rate_obs) < SEQ_PRIOR_OBS_LIMIT and "z_rate" in seq):
             try:
                 prior_rate_obs.append((entry.trial_id, float(seq["z_rate"])))
             except (TypeError, ValueError):
@@ -3956,6 +4029,7 @@ def _seq_inputs_for_trial(
         "baseline_task_rate": baseline_task_rate,
         "prior_quality_obs": list(reversed(prior_quality_obs)),
         "prior_rate_obs": list(reversed(prior_rate_obs)),
+        "rate_era_witness": rate_witness,
         "baseline_reference": _seq_baseline_reference_state(journal, tier=tier),
         "alpha_wealth": _seq_alpha_wealth_state(
             seq_candidates,
@@ -8684,6 +8758,7 @@ def _run_loop_inner(
     journal = ExperimentJournal()
     _sync_segment_snapshot_scope(journal, state)  # W3: scope rollover snapshots from the start
     _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
+    _seq_speed_cutoff_from_state(state)  # Validate raw cutoff types before using the canonical value.
     archive_payload = _journal_archive_payload_for_authority(
         journal,
         deinflate_before_ts=_deinfl_ts,
@@ -10509,6 +10584,7 @@ def _run_loop_inner(
                         str(seq_fresh_eval_context.get("candidate")) if seq_fresh_eval_context else None
                     ),
                     quality_exclude_before_ts=quality_exclude_before_ts,
+                    rate_exclude_before_ts=_exclude_ts,
                 )
             except Exception:
                 trial_info = state.pop("_current_optuna_trial", None)
@@ -10517,6 +10593,7 @@ def _run_loop_inner(
                                       "safety gate inputs unavailable")
                 raise
             try:
+                seq_may_be_fresh = _seq_prepare_cached_verdict(eval_result, seq_inputs)
                 verdict, numeric_observation = run_numeric_gate_check(
                     state, gate, eval_result,
                     question_results=list(getattr(eval_result, "question_results", []) or []),
@@ -10531,6 +10608,8 @@ def _run_loop_inner(
                     candidate=seq_inputs["candidate"],
                     core_id=seq_inputs["core_id"],
                 )
+                if seq_may_be_fresh:
+                    _seq_attach_rate_era_witness(verdict, seq_inputs)
             except Exception as exc:  # noqa: BLE001 - SEQ-3b: seq inputs must never crash the loop
                 # SEQ-3b: mirror the actions.py action-gate fallback
                 # (_action_gate_check). A corrupt journal-derived seq input (e.g. an
