@@ -23,7 +23,7 @@ jobs:
       ORCHESTRATOR_MOCK_MODE: 'true'
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONHASHSEED: '0'
-      PYTHONPATH: tests
+      PYTHONPATH: tests/unit:tests
       ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-origin-main-unit-baseline/empty-kernel-path
       ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-origin-main-unit-baseline/empty-kernel-path/llama-mtmd-cli
       ORCHESTRATOR_PATHS_LLAMA_SERVER: /tmp/ni-origin-main-unit-baseline/empty-kernel-path/llama-server
@@ -139,6 +139,7 @@ jobs:
           import json
           import os
           from pathlib import Path
+          from importlib.metadata import PackageNotFoundError, version
 
           CAPTURE_DIR = Path(os.environ["NI_PYTEST_CAPTURE_DIR"])
           MODE = os.environ["NI_PYTEST_CAPTURE_MODE"]
@@ -160,10 +161,21 @@ jobs:
                   module = getattr(plugin, "__name__", None) or getattr(
                       plugin, "__module__", plugin.__class__.__module__
                   )
+                  distribution = {
+                      "asyncio": "pytest-asyncio",
+                      "subtests": "pytest-subtests",
+                      "pytest_cov": "pytest-cov",
+                      "junitxml": "pytest",
+                  }.get(name)
+                  try:
+                      plugin_version = version(distribution) if distribution else None
+                  except PackageNotFoundError:
+                      plugin_version = None
                   plugins.append({
                       "name": name,
                       "module": module,
-                      "version": getattr(plugin, "__version__", None),
+                      "distribution": distribution,
+                      "version": plugin_version or getattr(plugin, "__version__", None),
                   })
               _write(f"{MODE}-pytest-config.json", {
                   "mode": MODE,
@@ -200,6 +212,39 @@ jobs:
           PY
           sha256sum "$capture_dir/baseline_capture_plugin.py" \
             > "$RUNNER_TEMP/ni-origin-main-unit-baseline/capture-plugin.sha256"
+
+      - name: Provide an empty hosted GPU kernel directory for import-only unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          production_root=/mnt/raid0/llm/kernels/production
+          gpu_store="$production_root/gpu"
+          empty_backend="$ORCHESTRATOR_PATHS_LLAMA_CPP_BIN"
+          mkdir -p "$empty_backend"
+          sudo mkdir -p "$production_root"
+          if [[ -e "$gpu_store" || -L "$gpu_store" ]]; then
+            printf 'Refusing unexpected pre-existing hosted kernel path: %s\n' "$gpu_store" >&2
+            exit 1
+          fi
+          sudo ln -s "$empty_backend" "$gpu_store"
+          test -d "$gpu_store"
+          test ! -e "$gpu_store/llama-server"
+          python - "$result_dir/kernel-store-test-fixture.json" "$gpu_store" "$empty_backend" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          output, gpu_store, empty_backend = sys.argv[1:]
+          Path(output).write_text(json.dumps({
+              "path_seen_by_source": gpu_store,
+              "symlink_target": empty_backend,
+              "target_is_empty_placeholder": True,
+              "llama_server_binary_present": False,
+              "purpose": "satisfy backend_dir('gpu') import-time directory resolution only",
+              "launch_or_version_probe_run": False,
+          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
 
       - name: Collect all unit tests and retain collection result
         shell: bash
@@ -314,7 +359,7 @@ jobs:
                   if plugin.get("name") != "junitxml"
               ]
               summary["config_matches_full_run"] = (
-                  execution_config.get("maxfail") == 0
+                  execution_config.get("maxfail") in {0, None}
                   and not execution_config.get("keyword_filter")
                   and not execution_config.get("mark_filter")
                   and execution_config.get("addopts") == collection_config.get("addopts")
