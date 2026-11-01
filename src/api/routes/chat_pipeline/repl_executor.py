@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from collections import Counter
@@ -453,6 +454,18 @@ async def _execute_repl_body(
             hybrid_router=state.hybrid_router,
             tool_context=_tool_context,
         )
+    # An explicitly enabled observer owns only a private registry copy.  Unsupported
+    # registry variants leave coverage unknown and preserve the original registry.
+    _tool_validation_observer = None
+    if os.environ.get("ORCHESTRATOR_TOOL_VALIDATION_OBSERVER", "").strip() == "1":
+        try:
+            from src.graph import tool_validation_observer, trajectory_artifact
+
+            if trajectory_artifact.enabled():
+                _tool_validation_observer = tool_validation_observer.attach(repl)
+        except Exception:
+            log.debug("tool validation observer unavailable", exc_info=True)
+
     # Include failed two-stage attempts that subsequently fall through to the graph.
     _episode_usage_baseline = None
     from src.features import features as _episode_features
@@ -807,6 +820,17 @@ async def _execute_repl_body(
                 task_state, episode_usage.finish(_episode_usage_baseline, primitives, repl, task_id),
                 graph_attempts=_attempt + 1,
             )
+
+    if os.environ.get("ORCHESTRATOR_TOOL_VALIDATION_OBSERVER", "").strip() == "1":
+        try:
+            from src.graph import trajectory_artifact
+
+            trajectory_artifact.note_tool_validation(
+                task_state,
+                _tool_validation_observer.snapshot() if _tool_validation_observer is not None else None,
+            )
+        except Exception:
+            log.debug("tool validation observer finalization failed", exc_info=True)
 
     answer = graph_result.answer
     turns = max(int(graph_result.turns or 0), _turns_all_attempts)

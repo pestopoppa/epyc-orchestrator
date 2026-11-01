@@ -93,6 +93,73 @@ class TestBasicREPLExecution:
     """Test basic REPL execution flow."""
 
     @pytest.mark.asyncio
+    async def test_registry_observer_reaches_native_finalize(
+        self, basic_request, basic_routing, mock_primitives, mock_state, monkeypatch, tmp_path,
+    ):
+        from src.features import Features, reset_features, set_features
+        from src.graph import trajectory_artifact as ta
+        from src.registry.tool_registry import Tool, ToolCategory, ToolPermissions, ToolRegistry
+        from scripts.benchmark.toc_ab_sidecar import write_sidecar
+
+        registry = ToolRegistry()
+        registry.register_tool(Tool(name="example", description="test", category=ToolCategory.FILE,
+                                    parameters={"value": {"type": "string", "required": True}},
+                                    handler=lambda value: value))
+        registry.set_role_permissions("worker", ToolPermissions(allowed_tools=["example"]))
+        monkeypatch.setenv(ta.DIR_ENV, str(tmp_path))
+        monkeypatch.setenv("ORCHESTRATOR_TOOL_VALIDATION_OBSERVER", "1")
+        set_features(Features(trajectory_artifact=True))
+
+        async def fake_run(task_state, task_deps, start_role=None):
+            local = task_deps.repl.tool_registry
+            with pytest.raises(ValueError):
+                local.invoke("example", "worker", value=3)
+            assert local.invoke("example", "worker", value="ok") == "ok"
+            ta.note_call(task_state, role="worker", prompt="p", meta={"prompt_tokens": 1, "tokens": 1})
+            ta.note_turn(task_state, role="worker", is_final=True)
+            ta.finalize(task_state, "ok", True)
+            return TaskResult(answer="ok", success=True, turns=1, role_history=["worker_general"])
+
+        try:
+            with patch("src.api.routes.chat_pipeline.repl_executor.REPLEnvironment") as factory:
+                repl = MagicMock()
+                repl.llm_primitives = mock_primitives
+                repl.tool_registry = registry
+                repl.artifacts = {}
+                repl._tool_invocations = 0
+                factory.return_value = repl
+                with (patch("src.api.routes.chat_pipeline.repl_executor.run_task", side_effect=fake_run),
+                      patch("src.api.routes.chat_pipeline.repl_executor._should_use_two_stage", return_value=False)):
+                    await _execute_repl(basic_request, basic_routing, mock_primitives, mock_state,
+                                        time.perf_counter(), Role.WORKER_GENERAL)
+            spec = {"arms": {"control": {"policy": {}, "window_denominator": "test",
+                    "summary_placement": "none", "is_control": True,
+                    "task_ids": [basic_routing.task_id]}}}
+            with pytest.raises(ValueError, match="boolean graded outcomes"):
+                write_sidecar(spec=spec, traj_dir=tmp_path, out_dir=tmp_path / "bad-grade", run_id="fixture",
+                              epyc_root="/workspace", outcomes={"control": {basic_routing.task_id: "false"}},
+                              tool_validation_report=True)
+            assert not (tmp_path / "bad-grade").exists()
+            with pytest.raises(ValueError, match="comparison"):
+                write_sidecar(spec={**spec, "tool_validation_comparisons": [["control", "control"]]},
+                              traj_dir=tmp_path, out_dir=tmp_path / "bad-pair", run_id="fixture",
+                              epyc_root="/workspace", outcomes={"control": {basic_routing.task_id: False}},
+                              tool_validation_report=True)
+            assert not (tmp_path / "bad-pair").exists()
+            write_sidecar(spec=spec, traj_dir=tmp_path, out_dir=tmp_path / "out", run_id="fixture",
+                          epyc_root="/workspace", outcomes={"control": {basic_routing.task_id: False}},
+                          tool_validation_report=True)
+            report = json.loads((tmp_path / "out/fixture.tool-validation.json").read_text())
+            assert [row["argument_validation"] for row in report["rows"][0]["registry_observation"]["calls"]] == [False, True]
+            assert report["first_registry_invocation"]["fraction_valid"] == 0
+            assert report["repair_recovery_percent"] is None
+            assert report["rows"][0]["graph_episode_tokens"] is None
+            assert registry.invoke("example", "worker", value="ok") == "ok"
+        finally:
+            reset_features()
+            ta._reset_for_tests()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize('two_stage_failure', [False, True])
     async def test_episode_usage_on_actual_repl_boundary(
         self, basic_request, basic_routing, mock_primitives, mock_state, monkeypatch, tmp_path, two_stage_failure,
@@ -1525,7 +1592,7 @@ class TestSessionLease:
 def _enable_final_schema_validation(monkeypatch):
     monkeypatch.setattr(
         "src.features.features",
-        lambda: SimpleNamespace(final_schema_validation=True),
+        lambda: SimpleNamespace(final_schema_validation=True, context_arm_ab=False),
     )
 
 

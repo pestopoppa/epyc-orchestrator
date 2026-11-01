@@ -139,16 +139,38 @@ def consolidate(files: list[tuple[Path, bytes]], out: Path) -> Path:
 
 
 def write_sidecar(*, spec: dict, traj_dir: Path, out_dir: Path, run_id: str, epyc_root: str,
-                  outcomes: dict | None = None, outcome_from_finish: bool = False) -> Path:
+                  outcomes: dict | None = None, outcome_from_finish: bool = False,
+                  tool_validation_report: bool = False) -> Path:
     arms, files = build_arms(spec, traj_dir, outcomes, outcome_from_finish)
+    report = None
+    if tool_validation_report:
+        from src.graph import tool_validation_report as validation_report
+
+        if not outcome_from_finish:
+            for label, arm in arms.items():
+                for task in arm["tasks"]:
+                    supplied = (outcomes.get(label, {}).get(task["task_id"])
+                                if isinstance(outcomes, dict) and isinstance(outcomes.get(label), dict)
+                                else None)
+                    if type(supplied) is not bool:
+                        raise ValueError("tool validation report requires boolean graded outcomes")
+        report = validation_report.build(arms, files, outcomes if not outcome_from_finish else None,
+                                         spec.get("tool_validation_comparisons"))
+        report_path = out_dir / f"{run_id}.tool-validation.json"
+        if report_path.exists() or report_path.is_symlink():
+            raise FileExistsError(report_path)
     out_dir.mkdir(parents=True, exist_ok=True)
     run_traj = consolidate(files, out_dir / f"{run_id}.trajectory.jsonl")
     sys.path.insert(0, str(Path(epyc_root) / "scripts" / "vidya"))
     from adapters.toc_ab import write_belief_measurements  # type: ignore
 
-    return write_belief_measurements(
+    sidecar = write_belief_measurements(
         out_dir, run_id=run_id, producer="epyc-orchestrator/scripts/benchmark/toc_ab_sidecar.py",
         trajectory_path=run_traj, arms=arms)
+    if tool_validation_report:
+        with report_path.open("x", encoding="utf-8") as output:
+            output.write(json.dumps(report, sort_keys=True, indent=2) + "\n")
+    return sidecar
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--spec", required=True)
     ap.add_argument("--outcomes")
     ap.add_argument("--outcome-from-finish", action="store_true")
+    ap.add_argument("--tool-validation-report", action="store_true")
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--epyc-root", default=default_epyc_root("scripts/vidya/adapters/toc_ab.py"))
@@ -167,7 +190,8 @@ def main(argv: list[str] | None = None) -> int:
         spec=json.loads(Path(a.spec).read_text()), traj_dir=Path(a.trajectory_dir),
         out_dir=Path(a.out_dir), run_id=a.run_id, epyc_root=a.epyc_root,
         outcomes=json.loads(Path(a.outcomes).read_text()) if a.outcomes else None,
-        outcome_from_finish=a.outcome_from_finish)
+        outcome_from_finish=a.outcome_from_finish,
+        tool_validation_report=a.tool_validation_report)
     print(f"wrote {out}")
     return 0
 

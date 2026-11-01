@@ -496,6 +496,30 @@ def note_episode_usage(state: Any, usage: Mapping[str, Any], *, graph_attempts: 
         log.debug('trajectory episode usage failed', exc_info=True)
 
 
+def note_tool_validation(state: Any, observation: Mapping[str, Any] | None) -> None:
+    """Append an opt-in registry-scoped observation after the graph is closed."""
+    try:
+        if not enabled():
+            return
+        task_id = str(getattr(state, "task_id", "") or "")
+        if not task_id:
+            return
+        t = _Task(task_id)
+        with _lock:
+            events = read_events(t.path)
+            if not events or any(event.get("task_id") != task_id for event in events):
+                return
+            seq = events[-1].get("seq")
+            if type(seq) is not int or seq < 1:
+                return
+            t.seq = seq
+            _emit(t, "tool_validation", {
+                "observation": dict(observation) if observation is not None else None,
+            })
+    except Exception:
+        log.debug("trajectory tool validation failed", exc_info=True)
+
+
 def _reset_for_tests() -> None:
     with _lock:
         _TASKS.clear()
