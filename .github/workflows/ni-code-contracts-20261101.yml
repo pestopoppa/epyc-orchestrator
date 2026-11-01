@@ -70,7 +70,7 @@ jobs:
           set -uo pipefail
           RESULT_DIR="$RUNNER_TEMP/ni-code-contracts"
           set +e
-          python -m pytest -q \
+          python -m pytest -p pytest_asyncio.plugin -q \
             --junitxml="$RESULT_DIR/junit.xml" \
             tests/unit/test_step_events.py \
             tests/integration/test_execute_turn.py \
