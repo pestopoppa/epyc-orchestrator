@@ -41,6 +41,7 @@ from .tool_contract import (
 
 JUDGES_DIR = Path(__file__).resolve().parent.parent / "judges"
 POLICY_VERSION = "injection-render-policy-v1"
+REUSE_PROVENANCE_SCHEMA = "dtap.native-reuse-provenance.v1"
 
 # arm -> canonical arm label for fixtures
 ARMS = ("done", "compliant", "compromised", "none")
@@ -88,6 +89,7 @@ class RunResult:
     endpoint_kind: Optional[str] = None
     endpoint_configuration: Optional[Dict[str, Any]] = None
     judge_origin: Optional[str] = None
+    evaluator_provenance: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -110,6 +112,7 @@ class RunResult:
             "endpoint_kind": self.endpoint_kind,
             "endpoint_configuration": self.endpoint_configuration,
             "judge_origin": self.judge_origin,
+            "evaluator_provenance": self.evaluator_provenance,
         }
 
 
@@ -311,6 +314,27 @@ def run_case(
             for key in ("model", "temperature", "max_tokens", "retries", "timeout")}
     try:
         case = registry.get(case_id)
+        if native_tool_contract is not None:
+            allowed = [entry["function"]["name"] for entry in native_tool_contract.for_case(case_id)]
+            result.evaluator_provenance = {
+                "schema": REUSE_PROVENANCE_SCHEMA,
+                "case_id": case_id,
+                "case_threat": case.get("threat"),
+                "contract_version": native_tool_contract.version,
+                "contract_sha256": native_tool_contract.sha256,
+                "allowed_capabilities": allowed,
+                "observed_capabilities": [],
+                "unauthorized_capabilities": [],
+                "validation_violations": [],
+                "status": "running",
+                "task_success": None,
+                "attack_success": None,
+                "failure": None,
+                "failure_chain": [],
+                "reuse_eligible": None,
+                "trace_path": str(trace_path),
+                "trace_id": None,
+            }
         if (native_tool_contract is not None
                 and endpoint_mode not in ("openai-compatible", "orchestrator-client")):
             raise HarnessFailure(f"unsupported explicit endpoint mode: {endpoint_mode!r}")
@@ -400,7 +424,29 @@ def run_case(
                 if case_tools is not None:
                     # Validate the whole response before recording any call as
                     # accepted or appending it to the judge trajectory.
-                    validate_tool_calls(chat.tool_calls, case_tools)
+                    provenance = result.evaluator_provenance
+                    if provenance is not None:
+                        allowed_names = set(provenance["allowed_capabilities"])
+                        observed = [call.get("name") if isinstance(call, dict) else None
+                                    for call in chat.tool_calls]
+                        provenance["observed_capabilities"] = list(dict.fromkeys(
+                            provenance["observed_capabilities"] +
+                            [name for name in observed if isinstance(name, str)]
+                        ))
+                        unauthorized = [name for name in observed
+                                        if isinstance(name, str) and name not in allowed_names]
+                        provenance["unauthorized_capabilities"] = list(dict.fromkeys(
+                            provenance["unauthorized_capabilities"] + unauthorized
+                        ))
+                    try:
+                        validate_tool_calls(chat.tool_calls, case_tools)
+                    except RunFailure as exc:
+                        if result.evaluator_provenance is not None:
+                            result.evaluator_provenance["validation_violations"].append(
+                                {"type": exc.type_.value, "message": exc.message,
+                                 "detail": exc.detail}
+                            )
+                        raise
                 for tc in chat.tool_calls:
                     env = tc.get("env", "")
                     rec.record(
@@ -499,10 +545,32 @@ def run_case(
             "terminal_timeout" if failure.get("type") == "endpoint" and
             (failure.get("detail") or {}).get("terminal_native_timeout") is True else "other_error"
         )
+        if result.evaluator_provenance is not None:
+            provenance = result.evaluator_provenance
+            provenance["status"] = result.status
+            provenance["task_success"] = result.task_success
+            provenance["attack_success"] = result.attack_success
+            provenance["failure"] = result.failure
+            provenance["failure_chain"] = (
+                [{"stage": "dtap_runner", **result.failure}] if result.failure else []
+            )
+            threat = provenance["case_threat"]
+            if result.status != "ok" or result.failure or provenance["unauthorized_capabilities"]:
+                provenance["reuse_eligible"] = False
+            elif threat == "benign":
+                provenance["reuse_eligible"] = (
+                    result.task_success is True and result.attack_success is not True
+                )
+            else:
+                provenance["reuse_eligible"] = (
+                    result.attack_success is False and result.task_success is not None
+                )
         rec.record("run_result", {"result": result.to_dict()})
         try:
             result.trace_id = rec.close()
             result.trace_path = str(trace_path)
+            if result.evaluator_provenance is not None:
+                result.evaluator_provenance["trace_id"] = result.trace_id
         except Exception:
             pass
     return result
