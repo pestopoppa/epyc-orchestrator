@@ -70,6 +70,23 @@ def _execute_direct(
     start_time: float,
     initial_role,
 ) -> ChatResponse:
+    """Execute direct mode under the request's explicit or routed budget."""
+    from src.backends.repl_thinking_budget import request_budget_scope
+
+    with request_budget_scope(request, routing):
+        return _execute_direct_with_budget(
+            request, routing, primitives, state, start_time, initial_role
+        )
+
+
+def _execute_direct_with_budget(
+    request: ChatRequest,
+    routing: RoutingResult,
+    primitives: LLMPrimitives,
+    state,
+    start_time: float,
+    initial_role,
+) -> ChatResponse:
     """Handle direct LLM call mode (no REPL wrapper)."""
     log.info(
         "Direct-answer mode for %s (prompt: %d chars)",

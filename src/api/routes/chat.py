@@ -1537,6 +1537,17 @@ async def chat_stream(
 
         # Escalation tracking (parity with main endpoint)
         current_role = request.role or Role.FRONTDOOR
+        from types import SimpleNamespace
+
+        from src.backends.repl_thinking_budget import assess_request_budgets
+
+        _legacy_reasoning_budget, _legacy_generation_cap = assess_request_budgets(
+            request, str(current_role), task_id, get_config().chat
+        )
+        _legacy_budget_routing = SimpleNamespace(
+            reasoning_budget=_legacy_reasoning_budget,
+            generation_max_tokens=_legacy_generation_cap,
+        )
         consecutive_failures = 0
         role_history = [current_role]
         escalation_prompt = ""
@@ -1581,9 +1592,9 @@ async def chat_stream(
 
             # Call Root LM with current role
             try:
-                from src.backends.repl_thinking_budget import budget_scope
+                from src.backends.repl_thinking_budget import request_budget_scope
 
-                with budget_scope(request.thinking_budget):
+                with request_budget_scope(request, _legacy_budget_routing):
                     code = primitives.llm_call(root_prompt, role=current_role, n_tokens=1024)
             except Exception as e:
                 # Log failure (MemRL)

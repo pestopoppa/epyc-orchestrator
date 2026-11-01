@@ -663,6 +663,9 @@ class InferenceMixin:
         Raises:
             RuntimeError: If no backend configured for this role.
         """
+        from src.backends.repl_thinking_budget import cap_generation_tokens
+
+        n_tokens = cap_generation_tokens(n_tokens)
         # Parked role (GPU lent to AutoKernel, src/runtime/gpu_window.py): refuse
         # FIRST — before the contention gate, role semaphore and region locks — so
         # the caller gets an explicit role_parked error in microseconds, not a

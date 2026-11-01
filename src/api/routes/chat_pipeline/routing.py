@@ -376,6 +376,28 @@ def _route_request(
             task_id,
         )
 
+    # The opt-in policy uses only existing classifier bands and operator-supplied
+    # budgets. No defaults are inferred from measurements or role identity.
+    from src.config import get_config
+
+    _chat_budget_cfg = get_config().chat
+    from src.backends.repl_thinking_budget import routing_budget_outputs
+
+    if features().repl_thinking_budget:
+        _reasoning_budget, _generation_max_tokens = routing_budget_outputs(
+            request, _difficulty_band, _chat_budget_cfg
+        )
+    else:
+        _reasoning_budget, _generation_max_tokens = None, None
+    if _reasoning_budget is not None or _generation_max_tokens is not None:
+        log.info(
+            "Difficulty budget policy: band=%s reasoning_budget=%s generation_max_tokens=%s",
+            _difficulty_band,
+            _reasoning_budget,
+            _generation_max_tokens,
+            extra=task_extra(task_id=task_id, stage="routing", strategy="budget_policy"),
+        )
+
     # Ingest-triviality guard (opt-in): keep trivially-easy short prompts off the
     # ingest_long_context 80B specialist. Reuses _difficulty_band; no-op when the
     # ingest_triviality_guard feature flag is off. Placed after the failure veto
@@ -466,6 +488,8 @@ def _route_request(
         factual_risk_mode=_factual_risk_mode,
         difficulty_score=_difficulty_score,
         difficulty_band=_difficulty_band,
+        reasoning_budget=_reasoning_budget,
+        generation_max_tokens=_generation_max_tokens,
         estimated_cost=_estimated_cost,
         assigned_role=_assigned_role,
         xmas_meta=xmas_meta,

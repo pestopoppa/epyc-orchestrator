@@ -88,6 +88,10 @@ class RoutingResult:
     # is enabled. Kept with the routing result so downstream execution gates can
     # respect an applied enforce decision without parsing strategy strings.
     xmas_meta: dict | None = None
+    # Set only by the opt-in routing budget policy; None preserves caller/default behavior.
+    reasoning_budget: int | None = None
+    # Optional policy output, clamped to the decode reserve already used for admission.
+    generation_max_tokens: int | None = None
 
     @property
     def role(self) -> str:

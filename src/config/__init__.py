@@ -287,6 +287,10 @@ if PYDANTIC_SETTINGS_AVAILABLE:
                 )
             )
         )
+        reasoning_budget_easy: int | None = PydanticField(default=None, ge=0, le=32000)
+        reasoning_budget_hard: int | None = PydanticField(default=None, ge=0, le=32000)
+        generation_max_tokens_easy: int | None = PydanticField(default=None, ge=1, le=32768)
+        generation_max_tokens_hard: int | None = PydanticField(default=None, ge=1, le=32768)
 
         model_config = SettingsConfigDict(
             env_prefix="ORCHESTRATOR_CHAT_",
@@ -866,6 +870,10 @@ def get_config() -> OrchestratorConfigData:
                 try_cheap_first_max_tokens=settings.chat.try_cheap_first_max_tokens,
                 try_cheap_first_quality_threshold=settings.chat.try_cheap_first_quality_threshold,
                 try_cheap_first_q_threshold=settings.chat.try_cheap_first_q_threshold,
+                reasoning_budget_easy=settings.chat.reasoning_budget_easy,
+                reasoning_budget_hard=settings.chat.reasoning_budget_hard,
+                generation_max_tokens_easy=settings.chat.generation_max_tokens_easy,
+                generation_max_tokens_hard=settings.chat.generation_max_tokens_hard,
             ),
             memrl_retrieval=MemRLRetrievalConfigData(
                 semantic_k=settings.memrl_retrieval.semantic_k,

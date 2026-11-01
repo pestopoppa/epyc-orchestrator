@@ -213,9 +213,9 @@ async def _stream_repl(
             )
 
         try:
-            from src.backends.repl_thinking_budget import budget_scope
+            from src.backends.repl_thinking_budget import request_budget_scope
 
-            with budget_scope(request.thinking_budget):
+            with request_budget_scope(request, routing):
                 code = primitives.llm_call(root_prompt, role=current_role, n_tokens=1024)
         except Exception as e:
             if state.progress_logger:

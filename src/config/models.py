@@ -1349,6 +1349,12 @@ class ChatPipelineConfig:
     """Minimum quality score to accept cheap answer."""
     try_cheap_first_q_threshold: float = 0.65
     """Min Q-value for cheap-first in Phase B/C (skip cheap if below)."""
+    # Optional, operator-supplied caps selected from the existing difficulty signal.
+    # Empty defaults preserve the legacy caller-controlled path.
+    reasoning_budget_easy: int | None = None
+    reasoning_budget_hard: int | None = None
+    generation_max_tokens_easy: int | None = None
+    generation_max_tokens_hard: int | None = None
 
 
 @dataclass
