@@ -1278,20 +1278,14 @@ def enumerate_n_way(
 # Each NON_QUARTERABLE role co-runs (if at all) only via its instance-0 footprint:
 #   - ingest_long_context: instance-0 is a HALF (0-47), so it co-runs as a half
 #     against the other half (e.g. ingest 0-47 + vision 48-95 = disjoint, fine).
-#   - architect_general: HISTORICAL. Instance-0 used to be the WHOLE machine
-#     (0-95) with no half/quarter alternative, which made the role strictly
-#     solo. That stopped being true in the 2026-08-01 W1 cutover: the role is
-#     now Qwen3.6-27B on MI210 with a GPU HOST LANE, so its instance-0 is 8
-#     host threads, its device is ROCm0, and it is one of the most
-#     co-residency-friendly roles on the box. Membership here is now inert for
-#     it (it has exactly one instance either way) and is kept only so the set
-#     keeps meaning "never gets quartered", which is still accurate.
-#     The whole-machine solo blocker did not disappear, it was RENAMED:
-#     `architect_critic` held the 0-95 interleave=all instance on :8074.
-#   - 2026-09-27 ARCHITECT SWAP (operator-decided): renamed BACK. architect_general
-#     is again the whole-machine 0-95 instance (Flash-Next, :8074), so its
-#     membership here is load-bearing again and accurate; architect_critic is now
-#     the MI210 27B GPU host lane (one instance, never quartered).
+#   - architect_general: currently has one full CPU instance (NUMA_FULL, :8074).
+#     Its membership is behaviorally inert for this topology: planning truncates
+#     secondary instances for NON_QUARTERABLE roles, but architect_general has
+#     only one; the same-role sweep also requires at least two instances. Keep
+#     the policy marker only to prevent future quartered replicas, and revisit it
+#     if its topology changes. The 2026-09-27 operator swap returned the full
+#     CPU process to architect_general and moved the MI210 host lane to
+#     architect_critic.
 # This is the per-role "quarterable" property the WP-5 placement policy needs:
 # small MoE-light models (gemma4-26B, frontdoor-35B-A3B, vision-30B-A3B) quarter
 # well; large models stay full/half; the GPU lanes do not quarter at all.
