@@ -1,0 +1,4 @@
+stack_topology.drafter_selection.architect_critic='dflash2' names a role that is not in the active launch set; the selection is inert.
+LEGACY drafter on 'architect_general': master hand-carries ['spec_type', 'draft_model', 'draft_max', 'draft_p_min'] for roles.qwen38_flash_next_ud_iq4xs_local, which declares no `drafters`. Migrate it (DRAFT-SEL-1).
+PASS: source -> lean compiler -> actual default command builder and sanitized env; no process launched
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 2.669206707039848, "sampled_peak_tree_rss_bytes": 73416704, "samples": 27, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 4070285, "leader_birth": 163007230, "child_rc": 0, "children_drained": true, "failure": null}

@@ -854,6 +854,61 @@ def check_server_url_fallbacks(sources: Sources, d: Derivation) -> list[Finding]
     return findings
 
 
+def check_recipe_process(sources: Sources, role: str, pid: int, proc_root: Path = Path("/proc")) -> list[Finding]:
+    """Compare a specified live process with the master recipe; unreadable is a finding."""
+    row = sources.server_mode.get(role, {})
+    recipe = row.get("recipe")
+    where = sources.master_lines.line("server_mode", role, "recipe")
+    def finding(found: str, expected: str) -> Finding:
+        return Finding("recipe process", role, str(sources.master_path), where, found,
+                       expected, f"{role!r} pid {pid}: served process differs from recipe")
+    if not isinstance(recipe, dict) or not recipe:
+        return [finding("no recipe", "declared recipe")]
+    proc = proc_root / str(pid)
+    def identity() -> tuple[int, str]:
+        # stat field 22 is starttime; comm may itself contain spaces and parentheses.
+        tail = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+        return proc.stat().st_uid, tail[19]
+    try:
+        before = identity()
+        env_bytes = (proc / "environ").read_bytes()
+        argv_bytes = (proc / "cmdline").read_bytes()
+        if (proc / "environ").read_bytes() != env_bytes or (proc / "cmdline").read_bytes() != argv_bytes:
+            return [finding("process data changed during read", "one stable live process")]
+        if identity() != before:
+            return [finding("process identity changed during read", "one stable live process")]
+        env = dict(item.decode().split("=", 1) for item in env_bytes.split(b"\0") if b"=" in item)
+        argv = [item.decode() for item in argv_bytes.split(b"\0") if item]
+    except (OSError, UnicodeError, ValueError, IndexError) as exc:
+        return [finding(f"unreadable process: {exc}", "readable live process")]
+    def option(*names: str) -> list[str]:
+        values = []
+        for i, arg in enumerate(argv):
+            if arg in names and i + 1 < len(argv):
+                values.append(argv[i + 1])
+            for name in names:
+                if arg.startswith(name + "="):
+                    values.append(arg[len(name) + 1:])
+        return values
+    port = row.get("port")
+    if not argv or "llama-server" not in Path(argv[0]).name or option("--port") != [str(port)]:
+        return [finding(f"argv={argv!r}", f"llama-server for port {port!r}")]
+    out = []
+    declared_env = recipe.get("env", {})
+    if not isinstance(declared_env, dict):
+        return [finding(repr(declared_env), "recipe.env mapping")]
+    from scripts.server.stack_env import _role_env_overrides
+    overrides = _role_env_overrides(role)
+    for key, declared in declared_env.items():
+        value = overrides.get(key, declared)
+        if env.get(key) != value:
+            out.append(finding(f"{key}={env.get(key)!r}", f"{key}={value!r}"))
+    actual = option("-t", "--threads")
+    if actual != [str(recipe.get("threads"))]:
+        out.append(finding(f"threads={actual!r}", f"threads={recipe.get('threads')!r}"))
+    return out
+
+
 CHECKS = (
     check_alias_of_coherence,
     check_port_map,
@@ -996,6 +1051,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="rewrite the derivable surfaces in launch_manifest.yaml / stack_topology.yaml",
     )
+    parser.add_argument("--recipe-process", action="append", default=[], metavar="ROLE=PID",
+                        help="also attest a specific live llama-server against its master recipe")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1022,6 +1079,11 @@ def _run(args: argparse.Namespace) -> int:
             args.master_registry, args.launch_manifest, args.stack_topology
         ).attach_models_py(args.models_py)
         findings = check_all(sources)
+        for item in getattr(args, "recipe_process", []):
+            role, separator, raw_pid = item.partition("=")
+            if not separator or not role or not raw_pid.isdecimal() or int(raw_pid) <= 0:
+                raise SourceError(f"invalid --recipe-process {item!r}; expected ROLE=PID")
+            findings.extend(check_recipe_process(sources, role, int(raw_pid)))
     except SourceError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -1033,6 +1095,9 @@ def _run(args: argparse.Namespace) -> int:
             args.master_registry, args.launch_manifest, args.stack_topology
         ).attach_models_py(args.models_py)
         findings = check_all(sources)
+        for item in getattr(args, "recipe_process", []):
+            role, _, raw_pid = item.partition("=")
+            findings.extend(check_recipe_process(sources, role, int(raw_pid)))
 
     if args.json:
         print(
@@ -1050,6 +1115,8 @@ def _run(args: argparse.Namespace) -> int:
     for line in applied:
         print(f"FIXED  {line}")
     if not findings:
+        for item in getattr(args, "recipe_process", []):
+            print(f"recipe process: {item} agrees with its declared recipe")
         print(
             "shared_with derivations: OK — port_map, role_launch_meta, numa_config, "
             "roles.<alias>.model and _LEGACY_SERVER_URL_FALLBACKS all agree with "

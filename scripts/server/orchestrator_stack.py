@@ -83,6 +83,8 @@ from scripts.server import stack_log_banner as _log_banner
 from scripts.server.stack_env import (
     _role_env_overrides,
     build_launch_env,
+    recipe_env_for,
+    recipe_for,
     build_service_env,
     compose_ld_library_path,
     strip_ambient_ggml,
@@ -152,6 +154,8 @@ from scripts.server.stack_numa_evict import (
 from scripts.server.stack_numa import (
     MLOCK_ROLES,
     NUMA_CONFIG,
+    NUMA_INSTANCE_SHAPES,
+    _CPU_SHAPES,
     _numa_prefix,
 )
 from scripts.server.bench_core_claim import (
@@ -1428,6 +1432,21 @@ def _resolve_thread_count(role_name: str, numa_instance: int = 0) -> str:
     and so on. Threading `numa_instance` through lets each instance get the
     thread count its NUMA_CONFIG entry actually specifies.
     """
+    recipe = recipe_for(role_name)
+    if recipe:
+        shape = recipe.get("cpu_shape")
+        if shape not in _CPU_SHAPES:
+            raise ValueError(f"{role_name}: undefined recipe cpu_shape {shape!r}")
+        cpus, threads = _CPU_SHAPES[shape]
+        if recipe.get("threads") != threads:
+            raise ValueError(f"{role_name}: recipe threads disagree with cpu_shape {shape!r}")
+        cfg = NUMA_CONFIG.get(role_name)
+        shapes = NUMA_INSTANCE_SHAPES.get(role_name, [])
+        if (not cfg or not 0 <= numa_instance < len(cfg["instances"])
+                or numa_instance >= len(shapes) or shapes[numa_instance] != shape
+                or cfg["instances"][numa_instance][0] != cpus):
+            raise ValueError(f"{role_name}: recipe cpu_shape disagrees with instance {numa_instance}")
+        return str(threads)
     numa_cfg = NUMA_CONFIG.get(role_name)
     if numa_cfg and numa_cfg["instances"]:
         # Defensive: out-of-range instance falls back to the first instance's
@@ -2045,7 +2064,7 @@ def start_server(
             env = build_launch_env(source_role, os.environ.copy())
             # No binary override on this branch either; strip ambient GGML_* like every
             # other branch (2026-09-26).
-            _strip_ambient_ggml(env, _role_env_overrides(source_role), label="eval_batch")
+            _strip_ambient_ggml(env, {**recipe_env_for(source_role), **_role_env_overrides(source_role)}, label="eval_batch")
             _apply_diag_env_override(env, diag_env_override)
             # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
             # to every CPU unless HSA_OVERRIDE_CPU_AFFINITY_DEBUG=0. See launch_affinity.py.
@@ -2124,7 +2143,7 @@ def start_server(
                 env,
                 binary_override=binary_override,
                 ld_paths=ld_paths,
-                preserve=_role_env_overrides(source_role),
+                preserve={**recipe_env_for(source_role), **_role_env_overrides(source_role)},
             )
             _apply_diag_env_override(env, diag_env_override)
             # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
@@ -2205,7 +2224,7 @@ def start_server(
                 env,
                 binary_override=binary_override,
                 ld_paths=ld_paths,
-                preserve=_role_env_overrides(roles[0]),
+                preserve={**recipe_env_for(roles[0]), **_role_env_overrides(roles[0])},
             )
             _apply_diag_env_override(env, diag_env_override)
             # Deterministic host-thread pinning (2026-10-22): ROCr widens its own threads
@@ -2273,7 +2292,7 @@ def start_server(
             env = build_launch_env(roles[0], os.environ.copy())
             # The embedding branch has no binary override, so it used to pass ambient GGML_*
             # straight through. Strip it like every other branch (2026-09-26).
-            _strip_ambient_ggml(env, _role_env_overrides(roles[0]), label="embedding")
+            _strip_ambient_ggml(env, {**recipe_env_for(roles[0]), **_role_env_overrides(roles[0])}, label="embedding")
             _apply_diag_env_override(env, None)  # strip only: embedders take no diagnostic override
             if env_override:
                 # One-shot experiment env (UFH-12 A3): applied last, recorded by the caller in
@@ -2357,7 +2376,7 @@ def start_server(
                 env,
                 binary_override=binary_override,
                 ld_paths=ld_paths,
-                preserve=_role_env_overrides("worker"),
+                preserve={**recipe_env_for("worker"), **_role_env_overrides("worker")},
             )
             _apply_diag_env_override(env, diag_env_override)
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
@@ -2472,7 +2491,7 @@ def start_server(
             env,
             binary_override=binary_override,
             ld_paths=ld_paths,
-            preserve=_role_env_overrides(primary_role),
+            preserve={**recipe_env_for(primary_role), **_role_env_overrides(primary_role)},
         )
         _apply_diag_env_override(env, diag_env_override)
         # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
