@@ -5,6 +5,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+  # GitHub Actions dependencies are read from /.github/workflows/*.yml.
+  # Keep at least one tracked workflow on the default branch; directory "/" is canonical.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
