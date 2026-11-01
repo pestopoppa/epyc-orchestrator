@@ -1,0 +1,92 @@
+name: NI programmatic feedback and DTAP contracts
+
+on:
+  push:
+    branches: [codex/ni-programmatic-feedback-tuadv-ci-20261101]
+    paths:
+      - 'src/trace/step_events.py'
+      - 'src/graph/helpers.py'
+      - 'tests/unit/test_step_events.py'
+      - 'tests/integration/test_execute_turn.py'
+      - 'orchestration/repl_memory/distillation/pipeline.py'
+      - 'scripts/autopilot/evals/dtap/harness/runner.py'
+      - 'scripts/autopilot/evals/dtap/tests/test_adversarial_contract_fixtures.py'
+      - 'scripts/skillbank/seed_skills.py'
+      - '.github/workflows/ni-code-contracts-20261101.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      ORCHESTRATOR_MOCK_MODE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      PYTHONPATH: tests
+      # Configuration-only placeholder: these tests use deterministic stubs and never launch a kernel.
+      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-empty-kernel-path
+      ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-empty-kernel-path/llama-mtmd-cli
+      ORCHESTRATOR_PATHS_LLAMA_SERVER: /tmp/ni-empty-kernel-path/llama-server
+      ORCHESTRATOR_PATHS_TMP_DIR: /tmp/ni-code-contracts-tmp
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Install declared project and test dependencies; record source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT_DIR="$RUNNER_TEMP/ni-code-contracts"
+          mkdir -p "$RESULT_DIR"
+          git rev-parse HEAD | tee "$RESULT_DIR/source-commit.txt"
+          sha256sum \
+            src/trace/step_events.py \
+            src/graph/helpers.py \
+            src/config/models.py \
+            src/repl_environment/session_artifacts.py \
+            tests/unit/test_step_events.py \
+            tests/integration/test_execute_turn.py \
+            orchestration/repl_memory/distillation/pipeline.py \
+            scripts/autopilot/evals/dtap/harness/runner.py \
+            scripts/autopilot/evals/dtap/tests/test_adversarial_contract_fixtures.py \
+            scripts/autopilot/evals/dtap/tests/test_dtap_harness.py \
+            scripts/autopilot/evals/dtap/tests/test_failure_ledger.py \
+            scripts/autopilot/evals/dtap/tests/test_judge_guard.py \
+            scripts/autopilot/evals/dtap/tests/test_tool_contract.py \
+            scripts/skillbank/seed_skills.py \
+            pyproject.toml uv.lock \
+            .github/workflows/ni-code-contracts-20261101.yml \
+            | tee "$RESULT_DIR/source-files.sha256"
+          python -m pip install -e '.[dev]' 2>&1 | tee "$RESULT_DIR/dependencies.stdout.txt"
+          python -m pip freeze | tee "$RESULT_DIR/pip-freeze.txt"
+      - name: Run focused feedback, distillation, and DTAP provenance controls
+        shell: bash
+        run: |
+          set -uo pipefail
+          RESULT_DIR="$RUNNER_TEMP/ni-code-contracts"
+          set +e
+          python -m pytest -p pytest_asyncio.plugin -q \
+            --junitxml="$RESULT_DIR/junit.xml" \
+            tests/unit/test_step_events.py \
+            tests/integration/test_execute_turn.py \
+            tests/unit/test_distillation.py \
+            scripts/autopilot/evals/dtap/tests/ \
+            2>&1 | tee "$RESULT_DIR/pytest.stdout.txt"
+          test_rc=${PIPESTATUS[0]}
+          printf '%s\n' "$test_rc" | tee "$RESULT_DIR/pytest.exit-code"
+          exit "$test_rc"
+      - name: Upload complete validation record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ni-code-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ni-code-contracts/
+          if-no-files-found: warn

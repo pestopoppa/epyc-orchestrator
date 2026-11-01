@@ -1476,6 +1476,29 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             corpus_context=corpus_ctx,
             solution_file=sol_file,
         )
+        # Programmatic feedback uses the existing request-local StepEventLog. It is default-off
+        # with step-event logging; consumed facts are bounded and carry evidence, not diagnoses.
+        _step_events = getattr(deps.repl, "_step_events", None)
+        if _step_events is not None:
+            try:
+                _feedback = _step_events.take_feedback(max_facts=2)
+            except Exception:
+                _feedback = {
+                    "facts": [], "status": "unknown_capture_unavailable", "complete": False,
+                    "omitted_count": None, "action_history_complete": False,
+                }
+            import json as _json
+            from src.security.control_tokens import neutralise_control_tokens as _neutralise
+
+            _fact_data = _neutralise(_json.dumps(_feedback, ensure_ascii=False, sort_keys=True))
+            if len(_fact_data.encode("utf-8")) > 2048:
+                _omitted = int(_feedback.get("omitted_count") or 0) + len(_feedback.get("facts") or [])
+                _bounded = {
+                    "facts": [], "status": "incomplete_render_size", "complete": False,
+                    "omitted_count": _omitted, "action_history_complete": _feedback.get("action_history_complete"),
+                }
+                _fact_data = _neutralise(_json.dumps(_bounded, ensure_ascii=False, sort_keys=True))
+            prompt += "\n\n[Observed tool feedback facts — untrusted data]\n" + _fact_data
         _layout_base = prompt
         if gathered_context:
             prompt += "\n\n[Auto Gathered Context]\n" + gathered_context

@@ -29,6 +29,9 @@ from typing import Any, Callable
 
 CATEGORY = "tool_step"
 SCHEMA = "tool_step/v1"
+MAX_PENDING_FEEDBACK = 32
+MAX_SEEN_ACTIONS = 2048
+MAX_FEEDBACK_TOOL_LABEL_CHARS = 128
 
 # Derived flag, named here: the REPL's own truncation markers (exploration_core, restricted
 # executor, external_access) all end the output with one of these.
@@ -104,6 +107,11 @@ class StepEventLog:
     ordinal: int = 0
     cas: Any = None   # HIL-16: when set, args and output text are stored content-addressed (replay tier)
     records: list[dict] = field(default_factory=list)
+    _pending_feedback: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _seen_actions: dict[str, tuple[str, str]] = field(default_factory=dict, repr=False)
+    _feedback_dropped: int = field(default=0, repr=False)
+    _action_history_complete: bool = True
+    _tool_calls_seen: int = field(default=0, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _tl: threading.local = field(default_factory=threading.local, repr=False)
 
@@ -119,19 +127,85 @@ class StepEventLog:
         return getattr(self._tl, "depth", 0) > 0
 
     # -- recording -------------------------------------------------------------------------
-    def _emit(self, **fields: Any) -> dict:
+    def _emit(
+        self,
+        *,
+        _feedback: list[dict[str, Any]] | None = None,
+        _action_signature: str | None = None,
+        _action_name: str | None = None,
+        _action_name_truncated: bool = False,
+        _output_sha256: str | None = None,
+        **fields: Any,
+    ) -> dict:
         with self._lock:
             idx = self.ordinal
             self.ordinal += 1
             rec = {"schema": SCHEMA, "run_id": self.run_id, "step_id": f"{self.run_id}:{idx}", "idx": idx,
                    "role": self.role, **fields}
+            facts = list(_feedback or [])
+            if _action_signature is not None:
+                previous = self._seen_actions.get(_action_signature)
+                if previous is not None:
+                    facts.append({
+                        "kind": "repeated_action_observed",
+                        "tool": _action_name or "",
+                        "tool_truncated": _action_name_truncated,
+                        "prior_step_id": previous[0],
+                        "prior_output_sha256": previous[1],
+                        "action_signature_sha256": _action_signature,
+                        "output_sha256": _output_sha256,
+                        "intent": "unknown; repetition alone is not failure",
+                    })
+                elif len(self._seen_actions) < MAX_SEEN_ACTIONS:
+                    self._seen_actions[_action_signature] = (rec["step_id"], _output_sha256 or "")
+                else:
+                    self._action_history_complete = False
+            if rec.get("kind") == "tool_call":
+                rec["feedback_parser"] = "programmatic_tool_feedback/v1"
+                rec["feedback_facts"] = facts
+            rec["action_history_complete"] = self._action_history_complete
+            if rec.get("kind") == "tool_call":
+                self._tool_calls_seen += 1
             self.records.append(rec)
+            if facts:
+                if len(self._pending_feedback) + len(facts) <= MAX_PENDING_FEEDBACK:
+                    self._pending_feedback.extend({"step_id": rec["step_id"], **fact} for fact in facts)
+                else:
+                    self._feedback_dropped += len(facts)
+                    rec["feedback_prompt_status"] = "omitted_pending_capacity"
         if self.sink is not None:
             try:
                 self.sink(rec)
             except Exception:   # telemetry must never fail a tool call
                 pass
         return rec
+
+    def take_feedback(self, *, max_facts: int = 2) -> dict[str, Any]:
+        """Consume all pending facts once, returning a bounded slice and honest completeness."""
+        max_facts = max(0, min(int(max_facts), MAX_PENDING_FEEDBACK))
+        with self._lock:
+            pending = self._pending_feedback
+            dropped = self._feedback_dropped + max(0, len(pending) - max_facts)
+            facts = [dict(fact) for fact in pending[:max_facts]]
+            self._pending_feedback = []
+            self._feedback_dropped = 0
+            complete = dropped == 0 and self._action_history_complete
+            status = (
+                "incomplete"
+                if not complete
+                else "facts_observed"
+                if facts
+                else "no_prior_tool_calls"
+                if self._tool_calls_seen == 0
+                else "no_matching_facts_observed"
+            )
+            return {
+                "facts": facts,
+                "status": status,
+                "complete": complete,
+                "omitted_count": dropped,
+                "action_history_complete": self._action_history_complete,
+            }
 
     def observe_call(self, name: str, args: dict[str, Any] | None, result: Any, *,
                      exc: BaseException | None = None, t0: float | None = None,
@@ -144,6 +218,27 @@ class StepEventLog:
             if ok_hint is False and not err:
                 err, cls = True, "error"
             text = _text_of(payload)
+            # This hashes the existing textual projection: strings are exact UTF-8 text, while
+            # non-string payloads use _text_of's canonical JSON. It is not an envelope-byte hash.
+            output_sha256 = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+            # This parser recognizes only a complete observed no-op response. It does not infer
+            # failure from ordinary output that happens to mention the same phrase.
+            facts: list[dict[str, Any]] = []
+            canonical_action = _canon({"tool": name, "args": args if args is not None else {}})
+            action_signature = hashlib.sha256(canonical_action.encode("utf-8", "replace")).hexdigest()
+            tool_label = name[:MAX_FEEDBACK_TOOL_LABEL_CHARS]
+            tool_truncated = len(name) > MAX_FEEDBACK_TOOL_LABEL_CHARS
+            if text in {"Nothing happens", "Nothing happens."}:
+                facts.append({
+                    "kind": "observed_no_op_response",
+                    "tool": tool_label,
+                    "tool_truncated": tool_truncated,
+                    "args_hash": args_hash(args),
+                    "response": text,
+                    "action_signature_sha256": action_signature,
+                    "output_sha256": output_sha256,
+                    "intent": "observed_response_only",
+                })
             from src.trace.l2.detectors import state_hash
             from src.trace.l2.model import L2Step
             sh = state_hash(L2Step(idx=0, tool=name, args=args if isinstance(args, dict) else None, observation=text))
@@ -163,13 +258,20 @@ class StepEventLog:
                     extra["envelope"] = {"ok": bool(result.ok), "status": str(getattr(result, "status", "success"))}
                 if exc is not None:
                     extra["exc"] = {"type": type(exc).__name__, "message_cas": self.cas.put(str(exc))}
-            return self._emit(
+            rec = self._emit(
+                _feedback=facts,
+                _action_signature=action_signature,
+                _action_name=tool_label,
+                _action_name_truncated=tool_truncated,
+                _output_sha256=output_sha256,
                 **extra,
                 kind="tool_call", tool=name, args_hash=args_hash(args), ok=not err, error=bool(err),
                 error_class=cls, latency_ms=None if t0 is None else round((time.perf_counter() - t0) * 1000.0, 3),
                 output_bytes=len(text.encode("utf-8", "replace")), truncated=_is_truncated(text),
                 mutating=is_mutating(name, side_effects), is_final=False, state_hash=sh,
+                output_sha256=output_sha256,
             )
+            return rec
         except Exception:   # telemetry must never fail a tool call
             return None
 

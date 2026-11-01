@@ -21,6 +21,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -30,6 +31,111 @@ from ..skill_bank import Skill, SkillBank
 logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 20
+_NATIVE_REUSE_PROVENANCE_SCHEMA = "dtap.native-reuse-provenance.v1"
+
+
+def _native_evaluator_rejection(trajectory: Dict[str, Any]) -> Optional[str]:
+    """Return why an explicitly supplied DTAP source is unsafe to distill.
+
+    Legacy trajectories without native evaluator provenance retain their
+    existing behavior and remain unclassified by this gate.
+    """
+    if "evaluator_provenance" not in trajectory:
+        return None
+    provenance = trajectory.get("evaluator_provenance")
+    if not isinstance(provenance, dict):
+        return "malformed_native_provenance"
+    required = (
+        "schema", "case_id", "case_threat", "contract_version", "contract_sha256",
+        "allowed_capabilities", "observed_capabilities", "unauthorized_capabilities",
+        "status", "task_success", "attack_success", "failure", "failure_chain",
+        "trace_id", "trace_path",
+    )
+    if any(key not in provenance for key in required):
+        return "incomplete_native_provenance"
+    if provenance["schema"] != _NATIVE_REUSE_PROVENANCE_SCHEMA:
+        return "unsupported_native_provenance_schema"
+    for key in ("case_id", "contract_version", "contract_sha256", "trace_id", "trace_path"):
+        if not isinstance(provenance[key], str) or not provenance[key]:
+            return f"invalid_native_provenance_{key}"
+    for key in ("allowed_capabilities", "observed_capabilities", "unauthorized_capabilities"):
+        values = provenance[key]
+        if not isinstance(values, list) or any(not isinstance(value, str) or not value for value in values):
+            return f"invalid_native_provenance_{key}"
+    if (not isinstance(provenance["case_threat"], str)
+            or provenance["case_threat"] not in {"benign", "direct", "indirect", "compositional"}):
+        return "invalid_native_provenance_case_threat"
+    if type(provenance["task_success"]) not in (bool, type(None)):
+        return "invalid_native_provenance_task_success"
+    if type(provenance["attack_success"]) not in (bool, type(None)):
+        return "invalid_native_provenance_attack_success"
+    if not isinstance(provenance["failure_chain"], list):
+        return "invalid_native_provenance_failure_chain"
+    if provenance["failure"] is not None and not isinstance(provenance["failure"], dict):
+        return "invalid_native_provenance_failure"
+    if provenance["status"] != "ok" or provenance["failure"] is not None:
+        return "native_evaluator_run_failed"
+    if provenance["failure_chain"]:
+        return "native_evaluator_failure_chain_nonempty"
+    if provenance["unauthorized_capabilities"]:
+        return "native_evaluator_unauthorized_capability"
+    allowed = set(provenance["allowed_capabilities"])
+    observed = set(provenance["observed_capabilities"])
+    if not observed.issubset(allowed):
+        return "native_evaluator_observed_undeclared_capability"
+    threat = provenance["case_threat"]
+    if threat == "benign":
+        if provenance["task_success"] is not True or provenance["attack_success"] is True:
+            return "native_evaluator_benign_verdict_not_eligible"
+    elif provenance["attack_success"] is not False:
+        return "native_evaluator_attack_verdict_unknown_or_successful"
+
+    # Re-open the evaluator's pinned case contract and immutable trace. The
+    # convenience eligibility bit and caller-provided names are not authority.
+    try:
+        from scripts.autopilot.evals.dtap.harness.runner import CaseRegistry
+        from scripts.autopilot.evals.dtap.harness.tool_contract import load_native_tool_contract
+        from scripts.autopilot.evals.dtap.harness.trace import verify_trace
+
+        dtap_dir = Path(__file__).resolve().parents[3] / "scripts/autopilot/evals/dtap"
+        registry_path = dtap_dir / "cases.json"
+        registry = CaseRegistry(registry_path)
+        contract = load_native_tool_contract(registry.cases, registry_path=registry_path)
+        if provenance["case_id"] not in registry.cases:
+            return "native_evaluator_case_not_in_registry"
+        if (provenance["contract_version"] != contract.version
+                or provenance["contract_sha256"] != contract.sha256
+                or provenance["case_threat"] != registry.get(provenance["case_id"]).get("threat")
+                or provenance["allowed_capabilities"] != [
+                    entry["function"]["name"] for entry in contract.for_case(provenance["case_id"])
+                ]):
+            return "native_evaluator_contract_binding_mismatch"
+        trace_records = verify_trace(Path(provenance["trace_path"]))
+        if trace_records[-1]["payload"].get("trace_id") != provenance["trace_id"]:
+            return "native_evaluator_trace_id_mismatch"
+        run_results = [record["payload"].get("result") for record in trace_records
+                       if record.get("event") == "run_result"]
+        if len(run_results) != 1 or not isinstance(run_results[0], dict):
+            return "native_evaluator_trace_run_result_mismatch"
+        recorded = run_results[0]
+        recorded_provenance = recorded.get("evaluator_provenance")
+        expected_provenance = dict(provenance)
+        expected_provenance["trace_id"] = None
+        if (not isinstance(recorded_provenance, dict)
+                or recorded_provenance != expected_provenance
+                or recorded.get("case_id") != provenance["case_id"]
+                or recorded.get("status") != provenance["status"]
+                or recorded.get("failure") != provenance["failure"]
+                or recorded.get("task_success") != provenance["task_success"]
+                or recorded.get("attack_success") != provenance["attack_success"]):
+            return "native_evaluator_trace_provenance_mismatch"
+    except Exception:
+        return "native_evaluator_contract_or_trace_unverifiable"
+    # The exporter provides this convenience field, but never treat it alone as
+    # an admission decision; recompute it from the native contract and verdict.
+    if provenance.get("reuse_eligible") is not True:
+        return "native_evaluator_reuse_eligibility_not_true"
+    return None
 
 
 @dataclass
@@ -55,6 +161,7 @@ class DistillationReport:
     skills_stored: int = 0
     skills_merged: int = 0
     skills_rejected: int = 0
+    evaluator_sources_rejected: int = 0
     errors: List[str] = field(default_factory=list)
     duration_seconds: float = 0.0
     batch_latencies: List[Dict[str, Any]] = field(default_factory=list)
@@ -74,6 +181,7 @@ class DistillationReport:
             "skills_stored": self.skills_stored,
             "skills_merged": self.skills_merged,
             "skills_rejected": self.skills_rejected,
+            "evaluator_sources_rejected": self.evaluator_sources_rejected,
             "errors": self.errors,
             "duration_seconds": round(self.duration_seconds, 2),
             "batch_latencies": self.batch_latencies,
@@ -127,6 +235,18 @@ class DistillationPipeline:
 
         start = time.monotonic()
         report = DistillationReport(total_trajectories=len(trajectories))
+
+        admitted_trajectories: List[Dict[str, Any]] = []
+        for trajectory in trajectories:
+            reason = _native_evaluator_rejection(trajectory)
+            if reason is None:
+                admitted_trajectories.append(trajectory)
+            else:
+                report.evaluator_sources_rejected += 1
+                report.errors.append(
+                    f"Rejected evaluator source {trajectory.get('task_id', '<unknown>')}: {reason}"
+                )
+        trajectories = admitted_trajectories
 
         # Group by outcome
         successes = [t for t in trajectories if t.get("outcome") == "success"]
