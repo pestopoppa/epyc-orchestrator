@@ -96,7 +96,20 @@ from pareto_archive import (
 )
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate, _atomic_write_text
 from safety_gate import PromotionGuardView, configure_promotion_guard_archive
-from eval_tower import EVAL_EXECUTION_INSTRUMENT_ID, EvalTower, eval_result_count_fields
+from eval_tower import (
+    EVAL_CORE_ROTATION_TRIALS,
+    EVAL_EXECUTION_INSTRUMENT_ID,
+    EvalTower,
+    eval_result_count_fields,
+)
+from core_rotation_observation import (
+    BOUNDARY_PIN_EVENT as _AP70_BOUNDARY_PIN_EVENT,
+    PAIR_EVENT as _AP70_PAIR_EVENT,
+    PLAN_EVENT as _AP70_PLAN_EVENT,
+    SUMMARY_EVENT as _AP70_SUMMARY_EVENT,
+    capture_at_rotation_boundary as _capture_core_rotation_observation,
+    summarize_pairs as _summarize_core_rotation_pairs,
+)
 from config_applicator import apply_params  # noqa: F401 - re-export for actions.py tests
 from config_applicator import health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
@@ -104,6 +117,7 @@ from progress_plots import PLOTS_DIR, generate_all_plots
 import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST, new_file_mutation_root_labels
+from species.structural_lab import CHECKPOINT_DIR as STRUCTURAL_CHECKPOINT_DIR
 import species.prompt_forge as _prompt_forge_module
 from eval_leakage_monitor import EvalLeakageMonitor
 from digest import generate_digest, should_generate_today
@@ -5519,6 +5533,157 @@ def _infra_fingerprint_for_trial() -> dict[str, Any]:
         return {"schema_version": 1, "status": "capture_error", "error": str(exc)[:200]}
 
 
+def _capture_core_rotation_observation_if_enabled(
+    *,
+    trial_id: int,
+    tower: Any,
+    archive: Any,
+    journal: Any,
+    infra_fingerprint: Mapping[str, Any] | None,
+    orchestrator_url: str,
+) -> None:
+    """Run AP-70 only on an explicitly enabled, predeclared rotation boundary.
+
+    The call is before candidate dispatch. Its failures become diagnostic ledger
+    evidence and never fail or alter the ordinary candidate trial.
+    """
+    if os.environ.get("AUTOPILOT_CORE_ROTATION_OBSERVE") != "1":
+        return
+    period = int(EVAL_CORE_ROTATION_TRIALS)
+    boundary_trial_id = int(trial_id)
+    if period < 1 or boundary_trial_id <= 0 or boundary_trial_id % period:
+        return
+    study_id = str(os.environ.get("AUTOPILOT_CORE_ROTATION_STUDY_ID") or "").strip()
+    planned_k: int | None = None
+    try:
+        planned_k = int(os.environ.get("AUTOPILOT_CORE_ROTATION_OBSERVE_K", ""))
+        if not study_id:
+            raise ValueError("AUTOPILOT_CORE_ROTATION_STUDY_ID is required when AP-70 is enabled")
+        _capture_core_rotation_observation(
+            journal=journal,
+            archive=archive,
+            tower=tower,
+            checkpoint_dir=STRUCTURAL_CHECKPOINT_DIR,
+            orchestrator_url=orchestrator_url,
+            study_id=study_id,
+            planned_k=planned_k,
+            boundary_trial_id=boundary_trial_id,
+            rotation_period_trials=period,
+            dispatch_fingerprint=infra_fingerprint,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic failure cannot block the task trial
+        log.warning(
+            "AP-70 rotation observation incomplete at boundary %d (%s: %s)",
+            boundary_trial_id,
+            type(exc).__name__,
+            exc,
+        )
+        # Preserve the refusal as data. Do not duplicate a pair already written by
+        # the observation helper if a post-evaluation ledger append itself failed.
+        try:
+            pairs = journal.ledger_events(_AP70_PAIR_EVENT)
+            if any(
+                row.get("study_id") == study_id
+                and int(row.get("boundary_trial_id", -1)) == boundary_trial_id
+                for row in pairs
+            ):
+                return
+            if study_id:
+                plans = journal.ledger_events(_AP70_PLAN_EVENT)
+                plan = next((row for row in plans if row.get("study_id") == study_id), None)
+                if plan is not None:
+                    boundary = next(
+                        (
+                            row for row in plan.get("planned_boundaries", [])
+                            if int(row.get("boundary_trial_id", -1)) == boundary_trial_id
+                        ),
+                        None,
+                    )
+                    if boundary is not None:
+                        journal.append_ledger_event(
+                            {
+                                "type": _AP70_PAIR_EVENT,
+                                "schema_version": 1,
+                                "study_id": study_id,
+                                "boundary_trial_id": boundary_trial_id,
+                                "outgoing_rotation_index": int(boundary["outgoing_rotation_index"]),
+                                "incoming_rotation_index": int(boundary["incoming_rotation_index"]),
+                                "status": "incomplete",
+                                "reason": f"{type(exc).__name__}: {exc}"[:500],
+                                "q_outgoing": None,
+                                "q_incoming": None,
+                                "drop": None,
+                                "timing_cost": None,
+                            }
+                        )
+                        journal.append_ledger_event(
+                            _summarize_core_rotation_pairs(
+                                study_id,
+                                int(plan["planned_k"]),
+                                [
+                                    row for row in pairs
+                                    if row.get("study_id") == study_id
+                                ]
+                                + [
+                                    {
+                                        "boundary_trial_id": boundary_trial_id,
+                                        "status": "incomplete",
+                                        "reason": f"{type(exc).__name__}: {exc}",
+                                    }
+                                ],
+                                list(plan.get("planned_boundaries") or []),
+                            )
+                        )
+                else:
+                    journal.append_ledger_event(
+                        {
+                            "type": _AP70_BOUNDARY_PIN_EVENT,
+                            "schema_version": 1,
+                            "study_id": study_id,
+                            "boundary_trial_id": boundary_trial_id,
+                            "outgoing_rotation_index": boundary_trial_id // period - 1,
+                            "incoming_rotation_index": boundary_trial_id // period,
+                            "planned_k": planned_k if planned_k is not None and planned_k > 0 else None,
+                            "boundary_identity_status": "unavailable",
+                            "reason": f"predeclaration refused: {type(exc).__name__}: {exc}"[:500],
+                            "infra_fingerprint": dict(infra_fingerprint or {}),
+                        }
+                    )
+                    journal.append_ledger_event(
+                        {
+                            "type": _AP70_SUMMARY_EVENT,
+                            "schema_version": 1,
+                            "study_id": study_id,
+                            "status": "incomplete",
+                            "planned_k": planned_k if planned_k is not None and planned_k > 0 else None,
+                            "pairs_recorded": 0,
+                            "pairs_complete": 0,
+                            "pairs_incomplete": 1,
+                            "failures": [{"boundary_trial_id": boundary_trial_id, "reason": str(exc)[:500]}],
+                            "mean_drop": None,
+                            "standard_error": None,
+                            "mean_drop_plus_minus_se": None,
+                        }
+                    )
+            else:
+                journal.append_ledger_event(
+                    {
+                        "type": _AP70_BOUNDARY_PIN_EVENT,
+                        "schema_version": 1,
+                        "study_id": None,
+                        "boundary_trial_id": boundary_trial_id,
+                        "outgoing_rotation_index": boundary_trial_id // period - 1,
+                        "incoming_rotation_index": boundary_trial_id // period,
+                        "planned_k": planned_k if planned_k is not None and planned_k > 0 else None,
+                        "boundary_identity_status": "unavailable",
+                        "reason": f"predeclaration refused: {type(exc).__name__}: {exc}"[:500],
+                        "infra_fingerprint": dict(infra_fingerprint or {}),
+                    }
+                )
+        except Exception:  # noqa: BLE001 - telemetry must never block a candidate trial
+            log.debug("AP-70 refusal could not be persisted", exc_info=True)
+
+
 def _infra_comparability_for_trial(
     state: Mapping[str, Any],
     tier: int,
@@ -10301,6 +10466,15 @@ def _run_loop_inner(
                 "host_started_at": state.get("autopilot_fleet_started_at"),
             }
             save_state(state)
+            if not dry_run:
+                _capture_core_rotation_observation_if_enabled(
+                    trial_id=trial_counter,
+                    tower=tower,
+                    archive=archive,
+                    journal=journal,
+                    infra_fingerprint=dispatch_infra_fingerprint,
+                    orchestrator_url=ORCHESTRATOR_URL,
+                )
 
         if pre_dispatch_skip is not None:
             phase.set(

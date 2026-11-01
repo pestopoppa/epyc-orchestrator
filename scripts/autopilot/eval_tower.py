@@ -3553,6 +3553,7 @@ def _stamp_eval_instrument(
     questions: Sequence[dict[str, Any]],
     core_id: str,
     test_profile: dict[str, Any],
+    register_identity: bool = True,
 ) -> EvalResult:
     """Attach machine-checkable dataset/profile identity to a tier result."""
     dataset_sha = dataset_content_sha256(questions)
@@ -3623,7 +3624,7 @@ def _stamp_eval_instrument(
         result.details["eval_quality_era_unresolved_reason"] = str(
             era_guard.get("status") or "empty_era_id"
         )
-    if core_id:
+    if core_id and register_identity:
         previous = _DATASET_SHA_BY_CORE_ID.get(core_id)
         if previous and previous != dataset_sha:
             warning = {
@@ -3666,6 +3667,7 @@ def _loader_error_eval_result(
     test_profile: dict[str, Any],
     loader_details: dict[str, Any] | None = None,
     extra_details: dict[str, Any] | None = None,
+    register_identity: bool = True,
 ) -> EvalResult:
     result = EvalResult(
         tier=tier,
@@ -3696,6 +3698,7 @@ def _loader_error_eval_result(
             **test_profile,
             "loader_error": error,
         },
+        register_identity=register_identity,
     )
 
 
@@ -4229,6 +4232,10 @@ class EvalTower:
         # EV-11c: when set (window-runner / verifier-mode path), _eval_batch writes
         # per-arm question rows into this directory instead of the trial-keyed root.
         self._question_artifact_dir: Path | None = None
+        # Paired AP-70 observations use explicit draw and request-scoped prompt context.
+        # Kept on the evaluator only for the duration of eval_t1_observation(); ordinary
+        # eval_t1 call signatures and behavior remain unchanged.
+        self._core_rotation_observation_context: dict[str, Any] | None = None
         self.on_question = on_question
         self.on_progress = on_progress
 
@@ -4256,6 +4263,45 @@ class EvalTower:
 
     def _resolve_trial_id(self, trial_id: int | None = None) -> int | None:
         return trial_id if trial_id is not None else self._trial_id_context
+
+    def eval_t1_observation(
+        self,
+        *,
+        n: int,
+        seed: int,
+        trial_id: int,
+        core_rotation_index: int,
+        prompt_root: str,
+    ) -> EvalResult:
+        """Run the ordinary T1 evaluator on one explicit draw and prompt snapshot.
+
+        This separate entry point keeps new keyword arguments out of the established
+        ``eval_t1`` public call shape. Diagnostic calls also write their question sidecar
+        under a caller-owned scratch directory, with no normal trial id assigned.
+        """
+        old_context = self._core_rotation_observation_context
+        old_trial_id = self._trial_id_context
+        old_trial_path = self._trial_path_context
+        old_artifact_dir = self._question_artifact_dir
+        old_on_question = self.on_question
+        old_on_progress = self.on_progress
+        self._core_rotation_observation_context = {
+            "rotation_index": int(core_rotation_index),
+            "prompt_root": str(prompt_root),
+        }
+        self._trial_id_context = None
+        self.on_question = None
+        self.on_progress = None
+        # The enclosing AP-70 helper sets both output paths to a unique scratch tree.
+        try:
+            return self.eval_t1(n=n, seed=seed, trial_id=trial_id)
+        finally:
+            self._core_rotation_observation_context = old_context
+            self._trial_id_context = old_trial_id
+            self._trial_path_context = old_trial_path
+            self._question_artifact_dir = old_artifact_dir
+            self.on_question = old_on_question
+            self.on_progress = old_on_progress
 
     # ── sentinel questions (T0) ──────────────────────────────────
 
@@ -6816,6 +6862,18 @@ class EvalTower:
         # Empty for a designed core, which carries its own declared composition.
         tier_mix_provenance: dict[str, Any] = {}
         resolved_trial_id = self._resolve_trial_id(trial_id)
+        observation = self._core_rotation_observation_context
+        if observation and (configured_core_id or configured_core_path):
+            return EvalResult(
+                tier=1,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                quality_measured=False,
+                quality_unmeasured_reason="rotation_observation_requires_tier_stratified_core",
+                details={"core_selection": "configured_core", "diagnostic": True},
+            )
         audit_policy: dict[str, Any] = {
             "enabled": os.environ.get("AUTOPILOT_W6_AUDIT_BLOCK") == "1",
             "requested_n": max(0, _env_int("AUTOPILOT_W6_AUDIT_N", 10)),
@@ -6916,6 +6974,7 @@ class EvalTower:
                         "requested_n": int(n),
                         "n_questions": 0,
                     },
+                    register_identity=not bool(observation),
                 )
             # Declared tier mix + epoch rotation (operator, 2026-08-04). The core_id
             # changes with the sampler because this IS a different instrument: same seed,
@@ -6926,7 +6985,11 @@ class EvalTower:
             # The rotation index is part of the core_id too, so each block is its own
             # instrument in the drift ledger — otherwise every rotation would be reported
             # as corruption of an unchanged core_id.
-            rotation = core_rotation_index(resolved_trial_id)
+            rotation = (
+                int(observation["rotation_index"])
+                if isinstance(observation, dict)
+                else core_rotation_index(resolved_trial_id)
+            )
             effective_seed = rotated_core_seed(seed, rotation)
             rng = random.Random(effective_seed)
             questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(pool, n, rng)
@@ -7018,6 +7081,11 @@ class EvalTower:
             + _annotate_partition(audit_questions, "audit")
             + _annotate_partition(tool_sentinel_questions, "tool_sentinel")
         )
+        if isinstance(observation, dict):
+            prompt_root = str(observation.get("prompt_root") or "").strip()
+            if not prompt_root:
+                raise ValueError("T1 diagnostic requires a request-scoped prompt root")
+            questions = [{**q, "_prompt_root": prompt_root} for q in questions]
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
@@ -7138,6 +7206,7 @@ class EvalTower:
                 # INTENDED composition from the one actually drawn.
                 "tier_mix_provenance": tier_mix_provenance,
             },
+            register_identity=not isinstance(observation, dict),
         )
 
     def eval_t2(

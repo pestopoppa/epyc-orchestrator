@@ -1,0 +1,78 @@
+name: AP-70 core rotation observation contracts
+
+on:
+  push:
+    branches:
+      - codex/usage-prov1-optional-declaration-20261031
+    paths:
+      - 'scripts/autopilot/autopilot.py'
+      - 'scripts/autopilot/eval_tower.py'
+      - 'scripts/autopilot/core_rotation_observation.py'
+      - 'tests/unit/test_core_rotation_observation.py'
+      - 'tests/unit/test_eval_tier_mix_equal_thirds.py'
+      - '.github/workflows/ap70-core-rotation-20261101.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  ap70-observation-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      ORCHESTRATOR_MOCK_MODE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      PYTHONPATH: tests
+      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-empty-kernel-path
+      ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-empty-kernel-path/llama-mtmd-cli
+      ORCHESTRATOR_PATHS_LLAMA_SERVER: /tmp/ni-empty-kernel-path/llama-server
+      ORCHESTRATOR_PATHS_TMP_DIR: /tmp/ap70-observation-tmp
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Install declared test dependencies and record source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ap70-observation"
+          mkdir -p "$result_dir"
+          git rev-parse HEAD | tee "$result_dir/source-commit.txt"
+          sha256sum \
+            scripts/autopilot/autopilot.py \
+            scripts/autopilot/eval_tower.py \
+            scripts/autopilot/core_rotation_observation.py \
+            tests/unit/test_core_rotation_observation.py \
+            tests/unit/test_eval_tier_mix_equal_thirds.py \
+            pyproject.toml uv.lock \
+            .github/workflows/ap70-core-rotation-20261101.yml \
+            | tee "$result_dir/source-files.sha256"
+          python -m pip install -e '.[dev]' 2>&1 | tee "$result_dir/dependencies.stdout.txt"
+          python -m pip freeze | tee "$result_dir/pip-freeze.txt"
+      - name: Run AP-70 source hook and EvalTower regression contracts
+        shell: bash
+        run: |
+          set -uo pipefail
+          result_dir="$RUNNER_TEMP/ap70-observation"
+          set +e
+          python -m pytest -p pytest_asyncio.plugin -q \
+            --junitxml="$result_dir/junit.xml" \
+            tests/unit/test_core_rotation_observation.py \
+            tests/unit/test_eval_tier_mix_equal_thirds.py \
+            2>&1 | tee "$result_dir/pytest.stdout.txt"
+          test_rc=${PIPESTATUS[0]}
+          printf '%s\n' "$test_rc" | tee "$result_dir/pytest.exit-code"
+          exit "$test_rc"
+      - name: Upload complete validation record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ap70-observation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ap70-observation/
+          if-no-files-found: warn

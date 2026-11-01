@@ -208,3 +208,86 @@ def test_untiered_rows_cannot_satisfy_a_tier_target(et):
     questions, prov = et._sample_tier_stratified_eval_questions(pool, 9, random.Random(5))
     assert questions == []
     assert set(prov["tier_mix_shortfalls"]) == {"1", "2", "3"}
+
+
+def test_ap70_eval_entry_preserves_public_eval_t1_call_shape_and_context(et, tmp_path):
+    seen = []
+    callback = lambda *_args, **_kwargs: None
+    tower = et.EvalTower(on_question=callback, on_progress=callback)
+    tower.set_trial_context(77, tmp_path / "ordinary-trial")
+    tower.set_question_artifact_dir(tmp_path / "ordinary-artifacts")
+
+    def fake_eval_t1(**kwargs):
+        seen.append((kwargs, tower._core_rotation_observation_context,
+                     tower._trial_id_context, tower.on_question, tower.on_progress))
+        return "result"
+
+    tower.eval_t1 = fake_eval_t1
+    result = tower.eval_t1_observation(
+        n=9,
+        seed=42,
+        trial_id=30,
+        core_rotation_index=2,
+        prompt_root=str(tmp_path / "read-only-prompts"),
+    )
+    assert result == "result"
+    assert seen == [(
+        {"n": 9, "seed": 42, "trial_id": 30},
+        {"rotation_index": 2, "prompt_root": str(tmp_path / "read-only-prompts")},
+        None,
+        None,
+        None,
+    )]
+    assert tower._trial_id_context == 77
+    assert tower._trial_path_context == tmp_path / "ordinary-trial"
+    assert tower._question_artifact_dir == tmp_path / "ordinary-artifacts"
+    assert tower.on_question is callback and tower.on_progress is callback
+    assert tower._core_rotation_observation_context is None
+
+
+def test_observation_stamp_does_not_register_core_identity(et, monkeypatch):
+    monkeypatch.setattr(et, "_record_instrument_identity", lambda *_args: pytest.fail(
+        "diagnostic observations must not write the normal instrument ledger"
+    ))
+    previous = dict(et._DATASET_SHA_BY_CORE_ID)
+    result = et.EvalResult(tier=1, quality=1, speed=0, cost=0, reliability=0)
+    et._stamp_eval_instrument(
+        result,
+        questions=[{"suite": "alpha", "id": "q1", "tier": 1}],
+        core_id="ap70-diagnostic-core",
+        test_profile={"tier": 1},
+        register_identity=False,
+    )
+    assert et._DATASET_SHA_BY_CORE_ID == previous
+    assert "ap70-diagnostic-core" not in et._DATASET_SHA_BY_CORE_ID
+
+
+def test_ap70_real_t1_path_uses_explicit_rotation_and_request_prompt_root(et, monkeypatch, tmp_path):
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_ID", raising=False)
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_PATH", raising=False)
+    monkeypatch.delenv("AUTOPILOT_W6_AUDIT_BLOCK", raising=False)
+    tower = et.EvalTower()
+    monkeypatch.setattr(tower, "_load_pool", lambda: _pool())
+    monkeypatch.setattr(tower, "_load_tool_sentinels", lambda: [])
+    captured = {}
+
+    def stop_before_model_call(questions, *_args, **_kwargs):
+        captured["questions"] = questions
+        raise RuntimeError("intentional no-model-call test seam")
+
+    monkeypatch.setattr(tower, "_eval_batch", stop_before_model_call)
+    prompt_root = tmp_path / "read-only-prompts"
+    with pytest.raises(RuntimeError, match="intentional"):
+        tower.eval_t1_observation(
+            n=9,
+            seed=42,
+            trial_id=30,
+            core_rotation_index=2,
+            prompt_root=str(prompt_root),
+        )
+    assert captured["questions"]
+    assert {q["_prompt_root"] for q in captured["questions"]} == {str(prompt_root)}
+    assert {
+        q["tier"] for q in captured["questions"] if q.get("eval_partition") == "core"
+    } == {1, 2, 3}
+    assert tower._core_rotation_observation_context is None
