@@ -36,6 +36,13 @@ context) with ``rolling_input_tokens_observed_turns``, ``prefix_cache_invalidati
 ``compressor_wall_s``, ``spill_pointer_follows``, retrieval/execution totals,
 ``shell_compaction_seen`` and ``evidence_span_tokens`` (null: a trajectory-only covariate
 computed after the fact by :func:`evidence_span_tokens_est`).
+
+``episode_usage`` is emitted after graph and final-answer repair for opt-in context A/Bs.
+It counts native backend tokens from the request ledger between REPL construction and that
+boundary, including a failed two-stage attempt but excluding prior routing calls, with
+per-axis observed-call denominators. Incomplete, missing, or mismatched
+ledger evidence stays unknown; content-cache replays are counted separately and do not
+represent newly decoded tokens. The event names the number of graph attempts.
 """
 
 from __future__ import annotations
@@ -463,6 +470,30 @@ def finalize(state: Any, answer: str, success: bool) -> None:
             _TASKS.pop(t.task_id, None)
     except Exception:
         log.debug("trajectory finalize failed", exc_info=True)
+
+
+def note_episode_usage(state: Any, usage: Mapping[str, Any], *, graph_attempts: int = 1) -> None:
+    """Append the post-repair episode measurement after existing graph events."""
+    try:
+        if not enabled():
+            return
+        task_id = str(getattr(state, 'task_id', '') or '')
+        if not task_id:
+            return
+        t = _Task(task_id)
+        with _lock:
+            events = read_events(t.path)
+            if not events or any(event.get('task_id') != task_id for event in events):
+                return
+            seq = events[-1].get('seq')
+            if type(seq) is not int or seq < 1:
+                return
+            t.seq = seq
+            if type(graph_attempts) is not int or graph_attempts < 1:
+                return
+            _emit(t, 'episode_usage', {'usage': dict(usage), 'graph_attempts': graph_attempts})
+    except Exception:
+        log.debug('trajectory episode usage failed', exc_info=True)
 
 
 def _reset_for_tests() -> None:

@@ -8,6 +8,11 @@ as ``scripts/trace/l2_scan.py --belief-sidecar``: the carrier lives in epyc-root
 tokens were not observed on every turn, or an arm without graded outcomes is a refusal,
 not a guess.
 
+The per-task ``episode_usage`` field is selected only from one validated post-graph
+event. Absent, duplicate or malformed events become explicitly unknown. It is separate
+from the legacy per-turn ``rolling_input_tokens`` and excludes content-cache replays
+from actual backend generation totals.
+
 Spec JSON (``--spec``)::
 
     {"arms": {"<label>": {"policy": {...}            # or "policy_digest": "<64 hex>"
@@ -45,16 +50,51 @@ def policy_digest(policy: object) -> str:
 
 
 def build_arms(spec: dict, traj_dir: Path, outcomes: dict | None, outcome_from_finish: bool,
-               ) -> tuple[dict, list[Path]]:
+               ) -> tuple[dict, list[tuple[Path, bytes]]]:
     arms: dict = {}
-    files: list[Path] = []
+    files: list[tuple[Path, bytes]] = []
+    offset = 0
     for label, a in spec["arms"].items():
         tasks = []
         for tid in a["task_ids"]:
             path = Path(a.get("trajectory_dir") or traj_dir) / (__import__("re").sub(r"[^A-Za-z0-9._-]", "_", tid) + ".trajectory.jsonl")
             if not path.is_file():
                 raise SystemExit(f"arm {label!r}: no trajectory artifact for task {tid!r} ({path})")
-            fin = ta.final_event(ta.read_events(path))
+            raw = path.read_bytes()
+            if not raw or not raw.endswith(b'\n'):
+                raise SystemExit(f"arm {label!r} task {tid!r}: empty or incomplete trajectory")
+            try:
+                events = [json.loads(line) for line in raw.decode('utf-8').splitlines() if line.strip()]
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise SystemExit(f"arm {label!r} task {tid!r}: invalid trajectory JSON") from exc
+            usage_events = [event for event in events if event.get('event') == 'episode_usage']
+            finals = [event for event in events if event.get('event') == 'final']
+            fin = ta.final_event(events)
+            usage = (usage_events[0].get('usage') if len(usage_events) == 1
+                     and usage_events[0].get('task_id') == tid
+                     and usage_events[0].get('graph_attempts') == len(finals)
+                     and events.index(usage_events[0]) > events.index(finals[-1]) else None)
+            keys = ('backend_attempts', 'cached_replays', 'observed_input_calls', 'observed_output_calls')
+            valid = (isinstance(usage, dict) and usage.get('status') in {'complete', 'partial'}
+                     and all(type(usage.get(k)) is int and usage[k] >= 0 for k in keys)
+                     and usage['observed_input_calls'] <= usage['backend_attempts']
+                     and usage['observed_output_calls'] <= usage['backend_attempts'])
+            if valid:
+                for kind, observed in (('input', 'observed_input_calls'), ('output', 'observed_output_calls')):
+                    value = usage.get(f'total_{kind}_tokens')
+                    complete = usage[observed] == usage['backend_attempts'] and (
+                        usage['backend_attempts'] + usage['cached_replays'] > 0)
+                    valid = valid and ((type(value) is int and value >= 0) if complete else value is None)
+                expected = (usage['total_input_tokens'] + usage['total_output_tokens']
+                            if type(usage.get('total_input_tokens')) is int
+                            and type(usage.get('total_output_tokens')) is int else None)
+                valid = valid and usage.get('total_tokens') == expected
+                valid = valid and (usage['status'] == ('complete' if expected is not None else 'partial'))
+            if not valid:
+                usage = {'status': 'unknown', 'total_input_tokens': None,
+                         'total_output_tokens': None, 'total_tokens': None,
+                         'backend_attempts': None, 'cached_replays': None,
+                         'observed_input_calls': None, 'observed_output_calls': None}
             if fin["rolling_input_tokens_observed_turns"] != fin["turns"]:
                 raise SystemExit(
                     f"arm {label!r} task {tid!r}: prompt tokens observed on "
@@ -72,8 +112,12 @@ def build_arms(spec: dict, traj_dir: Path, outcomes: dict | None, outcome_from_f
                 "turns": fin["turns"], "rolling_input_tokens": fin["rolling_input_tokens"],
                 "prefix_cache_invalidations": fin["prefix_cache_invalidations"],
                 "compressor_wall_s": fin["compressor_wall_s"],
+                "episode_usage": usage,
+                "trajectory_segment": {"offset": offset, "length": len(raw),
+                                       "sha256": hashlib.sha256(raw).hexdigest()},
             })
-            files.append(path)
+            files.append((path, raw))
+            offset += len(raw)
         arms[label] = {
             "policy_digest": a.get("policy_digest") or policy_digest(a["policy"]),
             "trigger_fraction": a.get("trigger_fraction"),
@@ -84,10 +128,13 @@ def build_arms(spec: dict, traj_dir: Path, outcomes: dict | None, outcome_from_f
     return arms, files
 
 
-def consolidate(files: list[Path], out: Path) -> Path:
+def consolidate(files: list[tuple[Path, bytes]], out: Path) -> Path:
     """One chronological file per run (per-task files concatenated in arm/task order);
     the carrier re-hashes this file on read."""
-    out.write_text("".join(f.read_text(encoding="utf-8") for f in files), encoding="utf-8")
+    for path, raw in files:
+        if path.resolve() == out.resolve() or path.read_bytes() != raw:
+            raise ValueError(f"trajectory source changed or overlaps output: {path}")
+    out.write_bytes(b''.join(raw for _, raw in files))
     return out
 
 

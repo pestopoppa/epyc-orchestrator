@@ -170,6 +170,74 @@ def test_sidecar_refuses_partial_and_ungraded(monkeypatch, dirs):
         sc.build_arms({"arms": {"ctl": dict(spec["arms"]["ctl"], task_ids=["p1"])}}, dirs / "traj", {}, True)
 
 
+def test_sidecar_requires_exactly_one_valid_episode_usage(monkeypatch, dirs):
+    _on(monkeypatch, dirs)
+    _run_task('a1')
+    sidecar = _load_sidecar()
+    spec = {'arms': {'ctl': {'policy': {}, 'window_denominator': 'test',
+                             'summary_placement': 'none', 'is_control': True, 'task_ids': ['a1']}}}
+    def usage():
+        return sidecar.build_arms(spec, dirs / 'traj', None, True)[0]['ctl']['tasks'][0]['episode_usage']
+    assert usage()['status'] == 'unknown'
+    valid = {'status': 'complete', 'backend_attempts': 3, 'cached_replays': 0,
+             'observed_input_calls': 3, 'observed_output_calls': 3,
+             'total_input_tokens': 60, 'total_output_tokens': 6, 'total_tokens': 66}
+    ta.note_episode_usage(_State('a1'), valid)
+    assert usage() == valid
+    ta.note_episode_usage(_State('a1'), valid)
+    assert usage()['status'] == 'unknown'
+
+
+def test_sidecar_refuses_multiple_graph_finals(monkeypatch, dirs):
+    _on(monkeypatch, dirs)
+    _run_task('retry', tokens=(10, 20))
+    _run_task('retry', tokens=(30, 40))
+    sidecar = _load_sidecar()
+    spec = {'arms': {'ctl': {'policy': {}, 'window_denominator': 'test',
+                             'summary_placement': 'none', 'is_control': True, 'task_ids': ['retry']}}}
+    with pytest.raises(ValueError, match='exactly one final'):
+        sidecar.build_arms(spec, dirs / 'traj', None, True)
+    valid = {'status': 'complete', 'backend_attempts': 4, 'cached_replays': 0,
+             'observed_input_calls': 4, 'observed_output_calls': 4,
+             'total_input_tokens': 100, 'total_output_tokens': 8, 'total_tokens': 108}
+    ta.note_episode_usage(_State('retry'), valid, graph_attempts=2)
+    with pytest.raises(ValueError, match='exactly one final'):
+        sidecar.build_arms(spec, dirs / 'traj', None, True)
+
+
+def test_sidecar_binds_same_task_across_arms_and_rejects_changed_source(monkeypatch, dirs):
+    import hashlib
+
+    _on(monkeypatch, dirs)
+    first, second = dirs / 'arm-a', dirs / 'arm-b'
+    for directory, count in ((first, 11), (second, 22)):
+        monkeypatch.setenv(ta.DIR_ENV, str(directory))
+        _run_task('same', tokens=(count, count))
+        ta.note_episode_usage(_State('same'), {
+            'status': 'complete', 'backend_attempts': 1, 'cached_replays': 0,
+            'observed_input_calls': 1, 'observed_output_calls': 1,
+            'total_input_tokens': count, 'total_output_tokens': 1, 'total_tokens': count + 1,
+        })
+    sidecar = _load_sidecar()
+    spec = {'arms': {label: {'policy': {}, 'trajectory_dir': str(directory),
+                             'window_denominator': 'test', 'summary_placement': 'none',
+                             'is_control': label == 'a', 'task_ids': ['same']}
+                     for label, directory in (('a', first), ('b', second))}}
+    arms, sources = sidecar.build_arms(spec, dirs, None, True)
+    output = sidecar.consolidate(sources, dirs / 'combined.jsonl').read_bytes()
+    segments = [arms[label]['tasks'][0]['trajectory_segment'] for label in ('a', 'b')]
+    assert segments[0]['offset'] == 0
+    assert segments[1]['offset'] == segments[0]['length']
+    for segment, source in zip(segments, (first, second)):
+        raw = output[segment['offset']:segment['offset'] + segment['length']]
+        assert raw == (source / 'same.trajectory.jsonl').read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == segment['sha256']
+    assert segments[0]['sha256'] != segments[1]['sha256']
+    (first / 'same.trajectory.jsonl').write_bytes(b'changed\n')
+    with pytest.raises(ValueError, match='source changed'):
+        sidecar.consolidate(sources, dirs / 'rejected.jsonl')
+
+
 def _epyc_root() -> str | None:
     for cand in (os.environ.get("EPYC_ROOT"), "/workspace"):
         if cand and (Path(cand) / "scripts/vidya/adapters/toc_ab.py").is_file():

@@ -93,6 +93,102 @@ class TestBasicREPLExecution:
     """Test basic REPL execution flow."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize('two_stage_failure', [False, True])
+    async def test_episode_usage_on_actual_repl_boundary(
+        self, basic_request, basic_routing, mock_primitives, mock_state, monkeypatch, tmp_path, two_stage_failure,
+    ):
+        import asyncio
+        from contextvars import ContextVar
+        from src.features import Features, reset_features, set_features
+        from src.graph import trajectory_artifact as ta
+        from src.llm_primitives.usage import UsageLedger
+
+        ledger = UsageLedger(request_id='request')
+        mock_primitives._request_task_id_ctx = ContextVar('episode_task', default=basic_routing.task_id)
+        mock_primitives._usage_ledger_ctx = ContextVar('episode_ledger', default=ledger)
+        monkeypatch.setenv(ta.DIR_ENV, str(tmp_path))
+        monkeypatch.setenv('ORCHESTRATOR_CONTEXT_ARM', 'full_history')
+        set_features(Features(context_arm_ab=True, trajectory_artifact=True, session_log=True,
+                              session_log_verbatim=True, output_spill_to_file=True))
+        source = 'llama_server:/completion.tokens_predicted'
+
+        def record(prompt, completion):
+            current = mock_primitives._usage_ledger_ctx.get()
+            call = current.begin('worker')
+            current.finish(call, prompt_tokens=prompt, completion_tokens=completion,
+                           provenance='server_reported', source=source, censored=False)
+
+        # This pre-graph work belongs to the request, but not the episode.
+        record(1000, 1000)
+
+        async def fake_run(task_state, task_deps, start_role=None):
+            assert task_deps.repl.llm_primitives is mock_primitives
+            await asyncio.to_thread(record, 10, 1)  # graph call across copied context
+            await asyncio.to_thread(record, 20, 2)  # compressor call
+            record(30, 3)  # query call
+            ta.note_call(task_state, role='worker', prompt='p', meta={'prompt_tokens': 10, 'tokens': 1})
+            ta.note_turn(task_state, role='worker', is_final=True)
+            ta.finalize(task_state, 'ok', True)
+            return TaskResult(answer='ok', success=True, turns=1, role_history=['worker_general'])
+
+        async def failed_two_stage(**kwargs):
+            await asyncio.to_thread(record, 7, 1)
+            raise RuntimeError('controlled two-stage failure')
+
+        try:
+            with patch('src.api.routes.chat_pipeline.repl_executor.REPLEnvironment') as factory:
+                repl = MagicMock()
+                repl.llm_primitives = mock_primitives
+                repl.artifacts = {}
+                repl._tool_invocations = 0
+                repl.tool_registry = None
+                factory.return_value = repl
+                with (patch('src.api.routes.chat_pipeline.repl_executor.run_task', side_effect=fake_run),
+                      patch('src.api.routes.chat_pipeline.repl_executor._should_use_two_stage', return_value=two_stage_failure),
+                      patch('src.api.routes.chat_pipeline.repl_executor._run_two_stage_summarization', side_effect=failed_two_stage)):
+                    response = await _execute_repl(basic_request, basic_routing, mock_primitives,
+                                                   mock_state, time.perf_counter(), Role.WORKER_GENERAL)
+            assert response.answer == 'ok'
+            events = ta.read_events(tmp_path / f'{basic_routing.task_id}.trajectory.jsonl')
+            usage = [event['usage'] for event in events if event['event'] == 'episode_usage']
+            assert len(usage) == 1
+            assert usage[0]['total_input_tokens'] == (67 if two_stage_failure else 60)
+            assert usage[0]['total_output_tokens'] == (7 if two_stage_failure else 6)
+            assert usage[0]['total_tokens'] == (74 if two_stage_failure else 66)
+            assert usage[0]['backend_attempts'] == (4 if two_stage_failure else 3)
+            # Optional cross-repository canary uses a caller-supplied reviewed ROOT snapshot.
+            import os
+            import sys
+            from pathlib import Path
+            root = os.environ.get('EPYC_TOC_CANARY_ROOT')
+            if root:
+                from datetime import datetime, timezone
+                from scripts.benchmark.toc_ab_sidecar import write_sidecar
+
+                spec = {'arms': {'control': {'policy': {}, 'window_denominator': 'test',
+                          'summary_placement': 'none', 'is_control': True,
+                          'task_ids': [basic_routing.task_id]}}}
+                sidecar = write_sidecar(spec=spec, traj_dir=tmp_path, out_dir=tmp_path / 'out',
+                                        run_id='api-canary', epyc_root=root,
+                                        outcome_from_finish=True)
+                sys.path.insert(0, str(Path(root) / 'scripts' / 'vidya'))
+                from adapters import toc_ab
+                from ledger import Ledger
+
+                natives = toc_ab.native_rows(sidecar)
+                assert natives and all(toc_ab.project(row) is not None for row in natives)
+                fields = {row.get('episode_field') for row in natives}
+                assert 'total_input_tokens' in fields and 'total_output_tokens' in fields
+                frames = toc_ab.frames_for_sidecar(sidecar, as_of=datetime.now(timezone.utc).isoformat())
+                ledger_file = Ledger(tmp_path / 'canary-ledger.jsonl')
+                for frame in frames:
+                    ledger_file.append(frame)
+                assert len(ledger_file.read_all()) == len(frames) and not ledger_file.verify()
+        finally:
+            reset_features()
+            ta._reset_for_tests()
+
+    @pytest.mark.asyncio
     async def test_simple_final_answer(
         self, basic_request, basic_routing, mock_primitives, mock_state
     ):

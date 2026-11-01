@@ -453,6 +453,15 @@ async def _execute_repl_body(
             hybrid_router=state.hybrid_router,
             tool_context=_tool_context,
         )
+    # Include failed two-stage attempts that subsequently fall through to the graph.
+    _episode_usage_baseline = None
+    from src.features import features as _episode_features
+
+    if _episode_features().context_arm_ab:
+        from src.graph import episode_usage, trajectory_artifact
+
+        if trajectory_artifact.enabled():
+            _episode_usage_baseline = episode_usage.begin(primitives, repl, task_id)
     if context_bundle is not None:
         repl.attach_context_bundle(context_bundle)
         log.info(
@@ -789,6 +798,15 @@ async def _execute_repl_body(
             task_state.turns = 0
             task_state.current_role = initial_role
             task_state.role_history = [str(initial_role)]
+
+    if _get_features().context_arm_ab:
+        from src.graph import episode_usage, trajectory_artifact
+
+        if trajectory_artifact.enabled():
+            trajectory_artifact.note_episode_usage(
+                task_state, episode_usage.finish(_episode_usage_baseline, primitives, repl, task_id),
+                graph_attempts=_attempt + 1,
+            )
 
     answer = graph_result.answer
     turns = max(int(graph_result.turns or 0), _turns_all_attempts)
