@@ -244,6 +244,10 @@ async def test_compaction_quality_monitor_survives_durable_checkpoint_restart(tm
         "segments_compacted": 4,
         "post_compaction_references": 1,
         "quality_checks": 0,
+        "task_outcomes": 0,
+        "give_up_outcomes": 0,
+        "repl_task_outcomes": 0,
+        "repl_max_turns_outcomes": 0,
     }
     restored = TaskState(task_id=tid)
     lg_to_task_state(snapshot.values, restored)
