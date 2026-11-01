@@ -1,0 +1,30 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 196 items / 124 deselected / 72 selected
+
+tests/unit/test_autopilot_seq_rate_era_fence.py ..................       [ 25%]
+tests/unit/test_autopilot_eval_quality_era_fence.py ............         [ 41%]
+tests/unit/test_seq_rate_axis_paired_measurement.py .................    [ 65%]
+tests/unit/test_autopilot_actions.py ...F.....................           [100%]
+
+=================================== FAILURES ===================================
+___ test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it ___
+tests/unit/test_autopilot_actions.py:993: in test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it
+    assert swarm.failed is not None, "the Optuna trial must be closed out, not stranded"
+E   AssertionError: the Optuna trial must be closed out, not stranded
+E   assert None is not None
+E    +  where None = <tests.unit.test_autopilot_actions.test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it.<locals>.FakeSwarm object at 0x78c599173950>.failed
+=============================== warnings summary ===============================
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_autopilot_actions.py::test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it
+=========== 1 failed, 71 passed, 124 deselected, 1 warning in 2.32s ============
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 6.643413645913824, "sampled_peak_tree_rss_bytes": 201723904, "samples": 66, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 2693809, "leader_birth": 163656748, "child_rc": 1, "children_drained": true, "failure": null}
