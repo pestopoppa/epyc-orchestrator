@@ -46,7 +46,7 @@ dependencies = [
     "tokenizers>=0.22.2",
 
     # Vision pipeline (src/vision/, image handling)
-    "Pillow>=10.0.0",
+    "Pillow>=10.0.0,<13",  # Gradio 6 requires Pillow <13
 
     # MCP server scaffold (src/mcp_server.py) — standalone FastMCP v3 (superset of the
     # FastMCP 1.0 fork vendored inside the official `mcp` SDK).
@@ -54,7 +54,7 @@ dependencies = [
     # Official MCP SDK — used directly by src/mcp_client.py (ClientSession,
     # StdioServerParameters, stdio_client, mcp.types.*). fastmcp depends on it
     # transitively, but pin it explicitly so a future fastmcp release can't drop us.
-    "mcp>=1.0.0",
+    "mcp>=1.0.0,<2",  # FastMCP 3 requires the MCP 1.x SDK
 
     # Orchestration graph (escalation flow)
     "pydantic-graph>=1.80.0,<2",
@@ -71,7 +71,7 @@ dependencies = [
     "rich>=13.7.0",
 
     # DSPy (AP-18: routing prompt optimization via GEPA)
-    "dspy>=2.5.0",
+    "dspy>=2.5.0,<3.4.1",  # DSPy 3.4.1 requires GEPA 0.1.4; retain ratified 0.0.26
     # GEPA — imported directly by scripts/autopilot/species/gepa_optimizer.py:247
     # (`import gepa`) but was used-but-undeclared before 2026-08-23, arriving only
     # transitively via dspy. Pinned, not floated: the VERSION choice (0.0.26 vs 0.1.4
@@ -122,19 +122,20 @@ graph = [
     "kuzu==0.11.3",
 ]
 gradio-ui = [
-    "gradio>=6.5.1,<7",
+    "gradio>=6.5.1,<6.31",  # 6.31 requires hub>=1; ColBERT Transformers 4 requires hub<1
 ]
 lightonocr = [
     "pypdfium2>=5.3.0",
     "python-multipart>=0.0.21",
-    "torch>=2.2.0",
+    "torch>=2.2.0,<2.10",  # torchvision 0.24 requires torch 2.9.x
     "torchvision>=0.24.0,<0.25",  # Pixtral image processor; paired with locked torch 2.9
     "transformers>=5.3.0",
 ]
 colbert-export = [
     # One-off ColBERT/LateOn ONNX export + parity validation (NIB2-47).
     # Not needed at runtime — onnxruntime + tokenizers alone handle inference.
-    "transformers>=4.45.0",
+    "transformers>=4.45.0,<4.58",  # optimum-onnx export requires Transformers <4.58
+    "tokenizers<=0.23.0",  # This export stack cannot use newer tokenizers; OCR can
     "torch>=2.2.0",
     "optimum[onnxruntime]>=1.21.0",
     "pylate>=1.2.0",

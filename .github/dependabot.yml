@@ -5,6 +5,23 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    # Keep version updates inside the compatibility bounds in pyproject.toml.
+    # Dependabot's default strategy can otherwise widen those bounds.
+    ignore:
+      - dependency-name: "gradio"
+        versions: [">=6.31"]  # hub>=1 conflicts with the ColBERT export stack
+      - dependency-name: "pillow"
+        versions: [">=13"]  # Gradio 6 requires Pillow <13
+      - dependency-name: "dspy"
+        versions: [">=3.4.1"]  # Requires GEPA 0.1.4; AP-19b/AP-29c retain 0.0.26
+      - dependency-name: "tokenizers"
+        versions: [">0.23.0"]  # ColBERT's Transformers dependency caps tokenizers
+      - dependency-name: "transformers"
+        versions: [">=4.58"]  # Shared-name updates must preserve the Transformers 4 export extra
+      - dependency-name: "mcp"
+        versions: [">=2"]  # FastMCP 3 requires MCP 1.x
+      - dependency-name: "torch"
+        versions: [">=2.10"]  # OCR's torchvision 0.24 requires torch 2.9.x
   # GitHub Actions dependencies are read from /.github/workflows/*.yml.
   # Keep at least one tracked workflow on the default branch; directory "/" is canonical.
   - package-ecosystem: "github-actions"
