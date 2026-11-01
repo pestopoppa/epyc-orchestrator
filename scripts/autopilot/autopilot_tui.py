@@ -148,11 +148,11 @@ class AutoPilotTUI:
     def set_prompt(self, prompt: str) -> None:
         with self._lock:
             self._current_prompt = prompt
-        # Write to tap file so standalone TUI can read it
-        try:
-            Path(PROMPT_TAP_PATH).write_text(prompt)
-        except OSError:
-            pass
+            # Serialize worker callbacks so their tap writes cannot interleave.
+            try:
+                Path(PROMPT_TAP_PATH).write_text(prompt)
+            except OSError:
+                pass
 
     def set_trial(self, trial_id: int, species: str = "") -> None:
         with self._lock:
