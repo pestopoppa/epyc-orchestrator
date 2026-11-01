@@ -339,6 +339,7 @@ class VoiceTurnSseClient:
         response_mode: str = "normal",
         must_preserve: tuple[str, ...] = (),
         response_goal: str = "spoken",
+        include_display: bool = False,
         language: str | None = None,
         conversation_context: str | None = None,
     ) -> Iterator[VoiceEvent]:
@@ -350,6 +351,10 @@ class VoiceTurnSseClient:
             raise ValueError("transcript must be non-empty")
         if response_goal not in {"spoken", "display"}:
             raise ValueError("response_goal must be spoken or display")
+        if not isinstance(include_display, bool):
+            raise TypeError("include_display must be a bool")
+        if include_display and response_goal != "spoken":
+            raise ValueError("include_display requires response_goal=spoken")
         if response_mode not in {"normal", "verbatim"}:
             raise ValueError("response_mode must be normal or verbatim")
         if conversation_context is not None and not isinstance(conversation_context, str):
@@ -362,6 +367,7 @@ class VoiceTurnSseClient:
             "session_id": session_id,
             "user_request": transcript,
             "response_goal": response_goal,
+            "include_display": include_display,
             "response_mode": response_mode,
             "must_preserve": list(must_preserve),
             "cancel_token": turn_id,

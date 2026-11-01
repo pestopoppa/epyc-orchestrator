@@ -35,6 +35,7 @@ class VoiceTurn:
     metadata: dict[str, Any] = field(default_factory=dict)
     response_mode: Literal["normal", "verbatim"] = "normal"
     must_preserve: tuple[str, ...] = ()
+    include_display: bool = False
 
 
 @dataclass(frozen=True)

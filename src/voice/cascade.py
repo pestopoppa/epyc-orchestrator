@@ -21,7 +21,7 @@ class Transcriber(Protocol):
 class VoiceTurnService(Protocol):
     def stream_turn(
         self, transcript: str, *, session_id: str, turn_id: str,
-        response_mode: str, must_preserve: tuple[str, ...],
+        response_mode: str, must_preserve: tuple[str, ...], include_display: bool = False,
     ) -> Iterable[VoiceEvent]: ...
     def inject(self, text: str) -> None: ...
     def cancel_generation(self) -> None: ...
@@ -95,13 +95,20 @@ class CascadeBackend:
             else self._transcriber.transcribe(turn.audio_chunk, language=turn.language)
         )
         answer_parts: list[str] = []
+        buffered_events: list[VoiceEvent] = []
+        validate_before_emit = turn.response_mode == "verbatim" or bool(turn.must_preserve)
         answer_size = 0
         terminal_seen = False
         route_failed = False
-        for index, event in enumerate(self._voice_turn.stream_turn(
-            transcript, session_id=turn.session_id, turn_id=turn.turn_id,
-            response_mode=turn.response_mode, must_preserve=turn.must_preserve,
-        )):
+        route_kwargs = {
+            "session_id": turn.session_id,
+            "turn_id": turn.turn_id,
+            "response_mode": turn.response_mode,
+            "must_preserve": turn.must_preserve,
+        }
+        if turn.include_display:
+            route_kwargs["include_display"] = True
+        for index, event in enumerate(self._voice_turn.stream_turn(transcript, **route_kwargs)):
             if index >= MAX_ROUTE_EVENTS:
                 yield VoiceEvent("error", "voice-turn stream exceeded event limit")
                 return
@@ -120,7 +127,10 @@ class CascadeBackend:
                     yield VoiceEvent("error", "voice-turn answer exceeded size limit")
                     return
                 answer_parts.append(event.payload)
-                yield event
+                if validate_before_emit:
+                    buffered_events.append(event)
+                else:
+                    yield event
             elif event.kind == "text_delta":
                 yield VoiceEvent("error", "voice-turn emitted malformed text event")
                 return
@@ -137,7 +147,10 @@ class CascadeBackend:
                 if event.kind == "tool_call" and not isinstance(event.payload, dict):
                     yield VoiceEvent("error", "voice-turn emitted malformed tool event")
                     return
-                yield event
+                if validate_before_emit:
+                    buffered_events.append(event)
+                else:
+                    yield event
             elif event.kind == "error":
                 if event.payload is not None and not isinstance(event.payload, str):
                     yield VoiceEvent("error", "voice-turn emitted malformed error event")
@@ -169,13 +182,20 @@ class CascadeBackend:
         # must_preserve is checked on the route's own text above; normalization only changes
         # how the synthesizer is asked to say it.
         speech_text = answer
-        if self._tts_text_normalization or self._tts_respell:
-            speech_text = normalize_for_tts(
-                answer,
-                turn.language if turn.language is not None else self._tts_language,
-                normalize=self._tts_text_normalization,
-                respell=self._tts_respell,
-            )
+        if turn.response_mode != "verbatim" and (self._tts_text_normalization or self._tts_respell):
+            try:
+                speech_text = normalize_for_tts(
+                    answer,
+                    turn.language if turn.language is not None else self._tts_language,
+                    normalize=self._tts_text_normalization,
+                    respell=self._tts_respell,
+                    must_preserve=turn.must_preserve,
+                )
+            except (TypeError, ValueError):
+                yield VoiceEvent("error", "speech text could not preserve exact protected values")
+                return
+        if validate_before_emit:
+            yield from buffered_events
         for index, chunk in enumerate(self._synthesizer.stream_pcm(speech_text, language=turn.language)):
             if index >= MAX_ROUTE_EVENTS:
                 yield VoiceEvent("error", "speech backend exceeded chunk limit")

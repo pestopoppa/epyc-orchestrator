@@ -5,12 +5,15 @@ check (2026-10-22): the year 1963, the number 150, the 802.11n / 2.4Ghz / 5.0Ghz
 pH (twice). All strings are short test strings written for this file.
 """
 
+import json
+import httpx
 import pytest
 
 from src.features import get_features
 
 from src.voice.cascade import CascadeBackend
 from src.voice.contracts import VoiceEvent, VoiceTurn
+from src.voice.http_clients import VoiceTurnSseClient
 from src.voice.tts_text_normalize import (
     ACRONYMS_IT,
     canonical_language,
@@ -219,8 +222,12 @@ class _VoiceTurn:
     def __init__(self, text):
         self.text = text
 
-    def stream_turn(self, transcript, *, session_id, turn_id, response_mode, must_preserve):
-        yield VoiceEvent("text_delta", self.text)
+    def stream_turn(self, transcript, *, session_id, turn_id, response_mode, must_preserve,
+                    include_display=False):
+        if isinstance(self.text, list):
+            yield from self.text
+        else:
+            yield VoiceEvent("text_delta", self.text)
         yield VoiceEvent("end")
 
     def inject(self, text):
@@ -254,9 +261,9 @@ class _Synth:
 _ANSWER = "Il pH era 7 nel 1963."
 
 
-def _run(backend, *, language=None, must_preserve=()):
+def _run(backend, *, language=None, must_preserve=(), response_mode="normal"):
     turn = VoiceTurn("t1", "s1", b"", language=language, transcript="q",
-                     must_preserve=must_preserve)
+                     must_preserve=must_preserve, response_mode=response_mode)
     return list(backend.respond(turn))
 
 
@@ -274,9 +281,96 @@ def test_cascade_on_normalizes_only_the_synthesizer_text():
     backend = CascadeBackend(_Transcriber(), _VoiceTurn(_ANSWER), synth,
                              tts_text_normalization=True)
     events = _run(backend, language="it", must_preserve=("1963",))
-    # the displayed text stays the route's own; must_preserve is checked on it
+    # Protected values stay literal through the speech plane transforms.
     assert [e.payload for e in events if e.kind == "text_delta"] == [_ANSWER]
-    assert synth.texts == ["Il pi acca era sette nel millenovecento sessantatré."]
+    assert synth.texts == ["Il pi acca era sette nel 1963."]
+
+
+def test_cascade_preserves_repeated_overlapping_values_and_transforms_unprotected_text():
+    answer = "L'anno 1963, riferimento 1963, pH test."
+    synth = _Synth()
+    backend = CascadeBackend(_Transcriber(), _VoiceTurn(answer), synth,
+                             tts_text_normalization=True)
+    _run(backend, language="it", must_preserve=("196", "1963", "pH"))
+    assert synth.texts == ["L'anno 1963, riferimento 1963, pH test."]
+
+
+def test_cascade_preserves_crossing_overlaps_instead_of_normalizing_the_uncovered_tail():
+    answer = "Nel 1963 150."
+    synth = _Synth()
+    backend = CascadeBackend(_Transcriber(), _VoiceTurn(answer), synth,
+                             tts_text_normalization=True)
+    _run(backend, language="it", must_preserve=("1963", "63 150"))
+    assert synth.texts == [answer]
+
+
+def test_legacy_voice_turn_provider_keeps_its_original_call_signature():
+    class LegacyProvider:
+        def stream_turn(self, transcript, *, session_id, turn_id, response_mode, must_preserve):
+            yield VoiceEvent("text_delta", "Ciao.")
+            yield VoiceEvent("end")
+
+        def inject(self, text):
+            pass
+
+        def cancel_generation(self):
+            pass
+
+        def cancel_orchestrator(self):
+            pass
+
+        def health(self):
+            return True
+
+    synth = _Synth()
+    events = list(CascadeBackend(_Transcriber(), LegacyProvider(), synth).respond(
+        VoiceTurn("t1", "s1", b"", language="it", transcript="q")
+    ))
+    assert events[-1] == VoiceEvent("end")
+    assert synth.texts == ["Ciao."]
+
+
+def test_verbatim_mode_bypasses_all_tts_rewrites_even_with_protected_values():
+    synth = _Synth()
+    backend = CascadeBackend(_Transcriber(), _VoiceTurn(_ANSWER), synth,
+                             tts_text_normalization=True, tts_respell=True)
+    _run(backend, language="it", must_preserve=("1963", "pH"), response_mode="verbatim")
+    assert synth.texts == [_ANSWER]
+
+
+def test_protected_numbers_names_and_caveats_are_literal_but_other_words_can_be_respelled():
+    text = "analoga 150 nel 1963, Giza; caveat: verify manually."
+    protected = ("150", "1963", "Giza", "caveat: verify manually.")
+    assert normalize_for_tts(text, "it", must_preserve=protected) == (
+        "anàloga 150 nel 1963, Giza; caveat: verify manually."
+    )
+
+
+def test_display_event_from_http_route_is_forwarded_but_never_sent_to_tts():
+    command = "curl https://example.test/v10 --data 'Exact!'"
+    turn_id = "turn-1"
+    body = (
+        f"event: answer.delta\ndata: {json.dumps({'turn_id': turn_id, 'sequence': 1, 'text': 'Run it.'})}\n\n"
+        f"event: display\ndata: {json.dumps({'turn_id': turn_id, 'sequence': 2, 'payload': {'kind': 'command', 'text': command}})}\n\n"
+        f"event: done\ndata: {json.dumps({'turn_id': turn_id, 'sequence': 3, 'cancel_token': turn_id})}\n\n"
+    )
+    observed = []
+
+    def handler(request):
+        observed.append(request)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    route = VoiceTurnSseClient(client)
+    synth = _Synth()
+    backend = CascadeBackend(_Transcriber(), route, synth)
+    turn = VoiceTurn("turn-1", "session", b"", transcript="q", include_display=True)
+    events = list(backend.respond(turn))
+    client.close()
+
+    assert VoiceEvent("display", {"kind": "command", "text": command}) in events
+    assert synth.texts == ["Run it."]
+    assert json.loads(observed[0].content)["include_display"] is True
 
 
 def test_cascade_on_uses_server_language_when_turn_has_none():

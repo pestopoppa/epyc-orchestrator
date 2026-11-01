@@ -244,6 +244,8 @@ class VoiceController:
                 or any(not isinstance(item, str) or not item.strip()
                        for item in turn.must_preserve)):
             raise TypeError("turn.must_preserve must be a tuple of non-empty strings")
+        if not isinstance(turn.include_display, bool):
+            raise TypeError("turn.include_display must be a bool")
 
     @staticmethod
     def _valid_event(event: VoiceEvent) -> bool:
@@ -273,7 +275,7 @@ class VoiceController:
 
     def _can_use_interlocutor(self, turn: VoiceTurn) -> bool:
         backend = self._interlocutor
-        if turn.response_mode == "verbatim" or turn.must_preserve:
+        if turn.response_mode == "verbatim" or turn.must_preserve or turn.include_display:
             return False
         if backend is None or not backend.health():
             return False

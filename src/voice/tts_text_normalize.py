@@ -32,7 +32,7 @@ Coverage (Italian):
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 
 __all__ = [
     "ACRONYMS_IT",
@@ -93,7 +93,8 @@ def respell_italian(text: str) -> str:
 
 
 def normalize_for_tts(
-    text: str, language: str | None, *, normalize: bool = True, respell: bool = True
+    text: str, language: str | None, *, normalize: bool = True, respell: bool = True,
+    must_preserve: Sequence[str] = (),
 ) -> str:
     """Return ``text`` prepared for TTS in ``language``; non-Italian input is returned as is.
 
@@ -103,11 +104,54 @@ def normalize_for_tts(
         raise TypeError("text must be a string")
     if canonical_language(language) != "it":
         return text
+    if not must_preserve:
+        if normalize:
+            text = normalize_italian(text)
+        if respell:
+            text = respell_italian(text)
+        return text
+    if any(not isinstance(value, str) or not value for value in must_preserve):
+        raise ValueError("must_preserve values must be non-empty strings")
+
+    # Preserve the union of every occurrence, including repeated, nested, and
+    # crossing-overlap matches. Protecting only a non-overlapping regex selection
+    # can leave part of a second exact value exposed to normalization.
+    values = sorted(set(must_preserve), key=lambda value: (-len(value), value))
+    spans: list[tuple[int, int]] = []
+    for value in values:
+        offset = 0
+        while (start := text.find(value, offset)) >= 0:
+            spans.append((start, start + len(value)))
+            offset = start + 1
+    if any(value not in text for value in values):
+        raise ValueError("must_preserve value is absent from TTS input")
+    spans.sort()
+    union: list[tuple[int, int]] = []
+    for start, end in spans:
+        if union and start <= union[-1][1]:
+            union[-1] = (union[-1][0], max(union[-1][1], end))
+        else:
+            union.append((start, end))
+    result: list[str] = []
+    cursor = 0
+    for start, end in union:
+        segment = text[cursor:start]
+        if normalize:
+            segment = normalize_italian(segment)
+        if respell:
+            segment = respell_italian(segment)
+        result.extend((segment, text[start:end]))
+        cursor = end
+    segment = text[cursor:]
     if normalize:
-        text = normalize_italian(text)
+        segment = normalize_italian(segment)
     if respell:
-        text = respell_italian(text)
-    return text
+        segment = respell_italian(segment)
+    result.append(segment)
+    preserved = "".join(result)
+    if any(value not in preserved for value in values):
+        raise ValueError("speech normalization altered a protected value")
+    return preserved
 
 
 # --------------------------------------------------------------------------- Italian numbers

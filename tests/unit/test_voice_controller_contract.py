@@ -57,7 +57,8 @@ class _VoiceTurn:
         self.calls = []
 
     def stream_turn(self, transcript, *, session_id, turn_id, response_mode="normal",
-                    must_preserve=()):
+                    must_preserve=(), include_display=False):
+        self.include_display = include_display
         self.calls.append((transcript, session_id, turn_id, response_mode, must_preserve))
         yield from self.events
 
@@ -278,6 +279,32 @@ def test_strict_turn_bypasses_healthy_interlocutor_without_preservation_contract
     assert events[-1] == VoiceEvent("end")
 
 
+def test_display_request_routes_through_cascade_and_never_synthesizes_payload():
+    command = "run --exact"
+    route = _VoiceTurn([
+        VoiceEvent("display", {"kind": "command", "text": command}),
+        VoiceEvent("text_delta", "Run the command."),
+        VoiceEvent("end"),
+    ])
+    synth = _Synthesizer()
+    interlocutor = _Interlocutor()
+    controller = VoiceController(
+        CascadeBackend(_Transcriber(), route, synth), _AudioQueue([]), interlocutor,
+        interlocutor_languages=frozenset({"en"}),
+    )
+    turn = VoiceTurn(
+        "display-turn", "session-1", b"synthetic-wav", language="en",
+        transcript="show command", include_display=True,
+    )
+
+    events = list(controller.respond(turn))
+
+    assert interlocutor.calls == []
+    assert route.include_display is True
+    assert VoiceEvent("display", {"kind": "command", "text": command}) in events
+    assert synth.calls == [("Run the command.", "en")]
+
+
 def test_cascade_refuses_to_synthesize_when_a_protected_value_is_missing():
     synth = _Synthesizer()
     turn = VoiceTurn(
@@ -290,6 +317,7 @@ def test_cascade_refuses_to_synthesize_when_a_protected_value_is_missing():
     ).respond(turn))
 
     assert synth.calls == []
+    assert not any(event.kind == "text_delta" for event in events)
     assert events[-1] == VoiceEvent("error", "voice-turn stream omitted a protected value")
 
 

@@ -16,6 +16,7 @@ router, or inference policy.
 | `user_request` | Required non-empty user text for this turn. |
 | `conversation_context` | Optional caller-supplied context text; absent means no additional context. |
 | `response_goal` | `spoken` or `display`; defaults to `spoken`. |
+| `include_display` | Optional boolean; for a spoken response, request a parallel structured payload for exact code, commands, URLs, or tables. Defaults to `false`. |
 | `language` | Optional BCP-47 language hint; absent leaves language selection to the existing direct-answer prompt. |
 | `max_spoken_seconds` | Optional positive finite cap used by the spoken-answer profile; it never extends the request deadline. |
 | `cancel_token` | Optional opaque per-turn correlation value, returned unchanged in terminal events. It is not an authorization credential or a persistent server-side cancellation handle. |
@@ -33,7 +34,7 @@ with `turn_id` and a monotonically increasing `sequence`:
 | Event | Data |
 | --- | --- |
 | `answer.delta` | `text`: the next answer fragment. |
-| `display` | `payload`: a structured display object for code, commands, URLs, or tables; it is shown without being spoken. |
+| `display` | `payload`: a structured display object for code, commands, URLs, or tables; it is shown without being spoken. With `include_display`, this can accompany a spoken answer. |
 | `preserve` | `values`: exact strings the speech plane must retain, such as numbers, proper nouns, and caveats. |
 | `done` | Terminal completion metadata and the optional `cancel_token`. Emitted once, after persistence succeeds. |
 | `error` | Terminal `{code, message, retryable, cancel_token}` envelope. Emitted once if a failure occurs after SSE headers are sent. |
@@ -92,8 +93,11 @@ transaction. Unleased sessions keep the existing no-token call shape.
 - CS-13 defines this route contract; CS-14 implements chunk propagation;
   CS-15 implements the store; CS-16 supplies speech/display/preserve formatting;
   CS-18 wires controller cancellation; CS-19 tests the integrated path.
-- Until CS-16 is integrated, `spoken_text` may equal the complete assistant
-  answer and `display` may be absent. The store does not derive either field.
+- Normal spoken formatting asks for short plain text without Markdown; an optional
+  `include_display` response uses a JSON envelope and emits its display object separately.
+  `max_spoken_seconds` is a prompt budget, not a measured duration guarantee.
+- `must_preserve` is checked exactly before emission and persistence. Italian TTS transforms
+  leave protected spans byte-for-byte unchanged; verbatim mode bypasses those transforms.
 - Speech measurements remain under the existing prospective
   `VB-SPEECH-CONV-1` write-side task and human-ratified Annex S protocol. This
   API contract adds no measurement or grading rule.

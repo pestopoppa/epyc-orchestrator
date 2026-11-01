@@ -206,6 +206,47 @@ def test_display_goal_emits_a_nonspoken_payload_and_persists_it_separately(monke
     assert store.rows[-1][2]["display"] == {"text": "```sh\nrun --flag\n```\n"}
 
 
+def test_spoken_profile_can_emit_exact_parallel_display_payload(monkeypatch):
+    command = "curl -X POST https://example.test/a --data '{\"n\": 7}'"
+    structured_answer = json.dumps({
+        "spoken_text": "Run the requested command.",
+        "display_payload": {"kind": "command", "text": command},
+    })
+
+    class StructuredPrimitives(_Primitives):
+        prompt = ""
+
+        def llm_call(self, prompt, *, role, n_tokens, skip_suffix, on_chunk):
+            type(self).prompt = prompt
+            on_chunk(structured_answer)
+            return structured_answer
+
+    store = _Store()
+    response = _client(monkeypatch, store, inference=StructuredPrimitives).post(
+        "/v1/voice/turn", json={
+            "session_id": "session-a", "user_request": "Show the command",
+            "include_display": True, "max_spoken_seconds": 4,
+        }
+    )
+
+    assert response.status_code == 200
+    lines = response.text.splitlines()
+    events = [
+        (lines[index].removeprefix("event: "), json.loads(lines[index + 1].removeprefix("data: ")))
+        for index, line in enumerate(lines[:-1]) if line.startswith("event: ")
+    ]
+    answer_events = [event for kind, event in events if kind == "answer.delta"]
+    display_events = [event for kind, event in events if kind == "display"]
+    assert "".join(event["text"] for event in answer_events) == "Run the requested command."
+    assert display_events[0]["payload"] == {"kind": "command", "text": command}
+    assert all(command not in event["text"] for event in answer_events)
+    assert store.rows[-1][1] == "Run the requested command."
+    assert store.rows[-1][2]["spoken_text"] == "Run the requested command."
+    assert store.rows[-1][2]["display"] == {"kind": "command", "text": command}
+    assert "Do not use Markdown" in StructuredPrimitives.prompt
+    assert "advisory spoken-length budget" in StructuredPrimitives.prompt
+
+
 def test_missing_protected_value_fails_closed_without_emitting_or_persisting_answer(monkeypatch):
     class OmittingPrimitives(_Primitives):
         def llm_call(self, prompt, *, role, n_tokens, skip_suffix, on_chunk):

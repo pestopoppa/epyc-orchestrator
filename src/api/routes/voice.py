@@ -35,6 +35,7 @@ class VoiceTurnRequest(BaseModel):
     user_request: str = Field(min_length=1)
     conversation_context: str | None = None
     response_goal: Literal["spoken", "display"] = "spoken"
+    include_display: bool = False
     response_mode: Literal["normal", "verbatim"] = "normal"
     must_preserve: list[str] = Field(default_factory=list)
     language: str | None = None
@@ -162,6 +163,8 @@ async def voice_turn(
         raise HTTPException(status_code=422, detail="user_request must not be blank")
     if body.response_goal not in {"spoken", "display"}:
         raise HTTPException(status_code=422, detail="response_goal must be spoken or display")
+    if body.include_display and body.response_goal != "spoken":
+        raise HTTPException(status_code=422, detail="include_display requires response_goal=spoken")
     if body.max_spoken_seconds is not None and (
         not math.isfinite(body.max_spoken_seconds) or body.max_spoken_seconds <= 0
     ):
@@ -228,10 +231,25 @@ async def voice_turn(
         if body.language:
             context_lines.append(f"Answer language: {body.language}")
         if body.response_goal == "spoken":
-            context_lines.append("Give a concise answer in natural language suitable for speaking aloud.")
+            if body.response_mode == "normal":
+                context_lines.append(
+                    "Voice response profile: give a short, speakable answer in plain natural language. "
+                    "Do not use Markdown."
+                )
+                if body.include_display:
+                    context_lines.append(
+                        "Put exact code, commands, URLs, or tables in the separate display payload; "
+                        "do not speak those artifacts."
+                    )
+            else:
+                context_lines.append(
+                    "Voice response profile: keep the answer speakable while preserving the requested "
+                    "verbatim wording and formatting exactly. Do not paraphrase or shorten it."
+                )
             if body.max_spoken_seconds is not None:
                 context_lines.append(
-                    f"Keep the spoken answer within {body.max_spoken_seconds:g} seconds."
+                    f"Treat {body.max_spoken_seconds:g} seconds as an advisory spoken-length budget; "
+                    "be concise, but do not omit required facts to meet it."
                 )
         else:
             context_lines.append("Give a concise display-oriented answer; do not assume it will be spoken.")
@@ -249,6 +267,14 @@ async def voice_turn(
                 "Protected values must appear exactly, character for character, in the response: "
                 + json.dumps(body.must_preserve, ensure_ascii=False)
             )
+        if body.include_display:
+            context_lines.append(
+                "Return exactly one JSON object with keys spoken_text and display_payload. "
+                "spoken_text is the short plain-text answer. display_payload is null when no "
+                "exact artifact is needed; otherwise it is an object containing exact code, "
+                "commands, URLs, or tables for display. Never put display_payload content in "
+                "spoken_text unless it is independently needed to preserve a protected value."
+            )
         # CT-12.3c: caller context, protected values and the spoken request are
         # untrusted; neutralise BEFORE _direct_call_prompt adds our template markers.
         context = neutralise_control_tokens("\n\n".join(context_lines))
@@ -261,7 +287,7 @@ async def voice_turn(
         raise
     cancel_event = threading.Event()
     lease_released = False
-    buffer_response = (body.response_goal == "display" or body.response_mode == "verbatim"
+    buffer_response = (body.response_goal == "display" or body.include_display or body.response_mode == "verbatim"
                        or bool(body.must_preserve))
 
     async def release_lease() -> None:
@@ -328,16 +354,35 @@ async def voice_turn(
             complete = "".join(answer)
             if not complete.strip():
                 raise RuntimeError("inference completed without a non-empty answer")
+            display = None
+            if body.include_display:
+                try:
+                    structured = json.loads(complete)
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("structured voice response was not valid JSON") from exc
+                if (not isinstance(structured, dict)
+                        or not isinstance(structured.get("spoken_text"), str)
+                        or not structured["spoken_text"].strip()
+                        or set(structured) != {"spoken_text", "display_payload"}
+                        or (structured["display_payload"] is not None
+                            and not isinstance(structured["display_payload"], dict))):
+                    raise RuntimeError("structured voice response had an invalid shape")
+                complete = structured["spoken_text"]
+                display = structured["display_payload"]
             missing = [value for value in body.must_preserve if value not in complete]
             if missing:
                 raise RuntimeError("response omitted a protected value")
-            display = {"text": complete} if body.response_goal == "display" else None
+            if body.response_goal == "display":
+                display = {"text": complete}
             if buffer_response and body.response_goal == "display":
                 sequence += 1
                 yield _event(turn_id, sequence, "display", payload=display)
             elif buffer_response:
                 sequence += 1
                 yield _event(turn_id, sequence, "answer.delta", text=complete)
+            if body.include_display and display is not None:
+                sequence += 1
+                yield _event(turn_id, sequence, "display", payload=display)
             if body.must_preserve:
                 sequence += 1
                 yield _event(turn_id, sequence, "preserve", values=body.must_preserve)
