@@ -11,12 +11,12 @@ import pytest
 from src.backends import repl_thinking_budget as budget
 from src.features import get_features, reset_features, set_features
 from src.model_server import InferenceRequest
-from test_thinking_roles_chat_lane import (
+from tests.unit.test_thinking_roles_chat_lane import (
     REGISTRY_CTK, _FakeBackend, _FakeStream, _backend, _chat_response,
     _completion_response, _infer, _primitives, _sse,
 )
 
-pytest_plugins = ("test_thinking_roles_chat_lane",)
+pytest_plugins = ("tests.unit.test_thinking_roles_chat_lane",)
 
 
 @pytest.fixture(autouse=True)
