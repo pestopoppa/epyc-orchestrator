@@ -58,6 +58,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -449,9 +450,16 @@ class PoolOccupancy:
 
     @property
     def unique_cell_capacity(self) -> int | None:
-        if self.unique_cells is None:
+        """Native capacity, None if absent, or 0 to refuse capacity drift.
+
+        Both valid snapshots remain evidence when their capacities disagree;
+        they must not enable the legacy missing-telemetry admission exception.
+        """
+        snapshots = [p for p in (self.kv_pool, self.kv_metrics) if _valid_cell_pool(p)]
+        if not snapshots:
             return None
-        return next(p["size"] for p in (self.kv_pool, self.kv_metrics) if _valid_cell_pool(p))
+        sizes = {p["size"] for p in snapshots}
+        return sizes.pop() if len(sizes) == 1 else 0
 
     @property
     def processing(self) -> int:
@@ -622,10 +630,10 @@ def parse_kv_cell_metrics(body: Any) -> dict[str, int] | None:
         if parts[0] != name or len(parts) != 2 or key in pool:
             return None
         try:
-            value = float(parts[1])
-        except ValueError:
+            value = Decimal(parts[1])
+        except InvalidOperation:
             return None
-        if not math.isfinite(value) or value < 0 or not value.is_integer():
+        if not value.is_finite() or value < 0 or value != value.to_integral_value():
             return None
         pool[key] = int(value)
     return pool if _valid_cell_pool(pool) else None
@@ -828,7 +836,8 @@ class ContextLimitResolver:
             if prefix_index.enabled():
                 try:
                     metrics = parse_kv_cell_metrics(self._fetch_metrics(url, self._props_timeout_s))
-                    occ = replace(occ, kv_metrics=metrics)
+                    occ = replace(occ, kv_metrics=metrics,
+                                  source="live_slots+metrics" if metrics is not None else occ.source)
                 except Exception as exc:
                     log.debug("context limits: GET %s/metrics failed: %s", url, exc)
         with self._lock:

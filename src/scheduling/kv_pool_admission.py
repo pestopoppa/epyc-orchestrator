@@ -118,7 +118,7 @@ logger = logging.getLogger(__name__)
 # applies (< 0 disables both sources). When /slots does carry text (a debug
 # window) both sources are computed and the larger credit wins; the decision is
 # recorded per ticket (``admission_record``) with ``cache_credit_source``
-# (``fp_history`` | ``slots_text`` | None), the credited tokens, and — when no
+# (``fp_history`` | ``slots_text`` | ``fork`` | None), the credited tokens, and — when no
 # credit applied — ``cache_credit_unavailable`` naming why for each source (e.g.
 # ``slots_no_prompt``), so an inert credit never looks like zero hits (KVU-15b).
 #
@@ -549,6 +549,11 @@ class SharedKVPoolAdmission:
         )
 
     def reservation_tokens(self, url: str, prompt_tokens: int, max_new_tokens: int) -> int:
+        """Whole prompt plus ratio-weighted decode, before verified fork credit.
+
+        acquire subtracts only prompt credit once a live fork source is known;
+        cached history/text changes prefill sizing, never this reservation.
+        """
         ratio = self.new_token_ratio(url)
         return int(prompt_tokens) + int(math.ceil(max(0, int(max_new_tokens)) * ratio))
 
@@ -611,7 +616,7 @@ class SharedKVPoolAdmission:
             slots_reason = "slots_no_prompt"
         projected = int(occ.projected_tokens(ratio))
         native_capacity = None
-        if getattr(occ, "unique_cells", None) is not None:
+        if getattr(occ, "unique_cell_capacity", None) is not None:
             # KPF-27e: the server reports its unique cells (fork on); count
             # forked cells once. Only with the prefix index flag on.
             from src.inference import prefix_index as pi

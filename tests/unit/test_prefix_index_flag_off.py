@@ -43,6 +43,11 @@ LEGACY_RECORD_KEYS = {
 }
 # Present when the KVU-15c history credited the call (legacy behaviour).
 LEGACY_HISTORY_KEYS = {"cache_credit_history_age_s", "cache_credit_history_tokens_since"}
+# Lease observation landed independently of prefix-index features (7ecfbe3f).
+# Real admissions carry these; synthetic legacy serving records need not.
+LEASE_OBSERVATION_KEYS = {
+    "admission_ticket", "lease_held_at_admission", "lease_holder_ticket", "lease_wait_observed_ms",
+}
 LEGACY_STATUS_KEYS = {
     "reserved_tokens", "in_flight", "queued", "new_token_ratio", "long_prefill_threshold",
     "long_prefill_lease_held", "long_prefill_lease_held_here",
@@ -111,8 +116,14 @@ def test_admission_record_and_status_are_the_legacy_shape():
     # Even a caller that passes a key cannot switch the index on.
     a = pool.acquire(URL, 1000, 393216, prefix_key="k" * 9000, timeout_s=0)
     b = pool.acquire(URL, 1000, 393216, timeout_s=0)
-    assert set(pool.admission_record(a)) == LEGACY_RECORD_KEYS
-    assert set(pool.admission_record(b)) == LEGACY_RECORD_KEYS
+    assert set(pool.admission_record(a)) == LEGACY_RECORD_KEYS | LEASE_OBSERVATION_KEYS
+    assert set(pool.admission_record(b)) == LEGACY_RECORD_KEYS | LEASE_OBSERVATION_KEYS
+    for ticket in (a, b):
+        record = pool.admission_record(ticket)
+        assert record["admission_ticket"] == ticket
+        assert record["lease_held_at_admission"] is False
+        assert record["lease_holder_ticket"] is None
+        assert record["lease_wait_observed_ms"] == 0
     pool.prefill_done(URL, a)
     status = pool.get_status()[URL]
     assert set(status) == LEGACY_STATUS_KEYS
@@ -222,7 +233,7 @@ def test_primitives_lane_payload_is_unchanged(monkeypatch, tmp_path):
     for rec in records:
         if "kv_admission" in rec:
             assert LEGACY_RECORD_KEYS <= set(rec["kv_admission"]) <= (
-                LEGACY_RECORD_KEYS | LEGACY_HISTORY_KEYS)
+            LEGACY_RECORD_KEYS | LEGACY_HISTORY_KEYS | LEASE_OBSERVATION_KEYS)
 
 
 def test_passthrough_forwards_raw_bytes_and_records_no_index(monkeypatch, tmp_path):
@@ -255,7 +266,7 @@ def test_passthrough_forwards_raw_bytes_and_records_no_index(monkeypatch, tmp_pa
         records = [json.loads(x) for x in log.read_text().splitlines() if x.strip()]
         assert len(records) == 2 and "prefix_index" not in json.dumps(records)
         assert all(LEGACY_RECORD_KEYS <= set(r["kv_admission"])
-                   <= LEGACY_RECORD_KEYS | LEGACY_HISTORY_KEYS for r in records)
+                   <= LEGACY_RECORD_KEYS | LEGACY_HISTORY_KEYS | LEASE_OBSERVATION_KEYS for r in records)
     finally:
         srv.close()
 

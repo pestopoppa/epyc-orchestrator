@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13.15'
@@ -40,11 +41,29 @@ jobs:
           git rev-parse 'HEAD^{tree}' > "$result_dir/source-tree.txt"
           sha256sum src/backends/context_limits.py src/scheduling/kv_pool_admission.py \
             tests/unit/test_kv_prefix_history.py tests/unit/test_kv_pool_unique_cells.py \
+            tests/unit/test_prefix_index_flag_off.py \
             .github/workflows/ni-kpf24-unique-cells-20261101.yml pyproject.toml uv.lock \
             > "$result_dir/source-files.sha256"
           python -VV > "$result_dir/python-version.txt" 2>&1
           python -m pip install -e '.[dev]' 2>&1 | tee "$result_dir/dependencies.stdout.txt"
           python -m pip freeze > "$result_dir/pip-freeze.txt"
+      - name: Retain immutable-main flag-off comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ni-kpf24"
+          candidate_sha=$(git rev-parse HEAD)
+          git checkout --detach 29fdfc5a7cc229f1dcafee327f193b1623de0d32
+          git rev-parse HEAD > "$result_dir/baseline-source-commit.txt"
+          set +e
+          python -m pytest -p pytest_asyncio.plugin -q \
+            --junitxml="$result_dir/baseline-flag-off.junit.xml" \
+            tests/unit/test_prefix_index_flag_off.py \
+            2>&1 | tee "$result_dir/baseline-flag-off.stdout.txt"
+          baseline_rc=${PIPESTATUS[0]}
+          set -e
+          printf '%s\n' "$baseline_rc" > "$result_dir/baseline-flag-off.exit-code"
+          git checkout --detach "$candidate_sha"
       - name: Focused admission and caller regressions
         shell: bash
         run: |
@@ -69,6 +88,7 @@ jobs:
           result_dir="$RUNNER_TEMP/ni-kpf24"
           ruff check src/backends/context_limits.py src/scheduling/kv_pool_admission.py \
             tests/unit/test_kv_prefix_history.py tests/unit/test_kv_pool_unique_cells.py \
+            tests/unit/test_prefix_index_flag_off.py \
             2>&1 | tee "$result_dir/ruff.stdout.txt"
           lint_rc=${PIPESTATUS[0]}
           printf '%s\n' "$lint_rc" > "$result_dir/ruff.exit-code"
@@ -79,9 +99,22 @@ jobs:
         run: |
           set -uo pipefail
           result_dir="$RUNNER_TEMP/ni-kpf24"
+          {
+            sudo apt-get update && sudo apt-get install -y shfmt && \
+              npm install -g markdownlint-cli@0.44.0
+            shfmt --version
+            shellcheck --version
+            markdownlint --version
+          } 2>&1 | tee "$result_dir/gate-tools.stdout.txt"
           make gates 2>&1 | tee "$result_dir/make-gates.stdout.txt"
           gates_rc=${PIPESTATUS[0]}
           printf '%s\n' "$gates_rc" > "$result_dir/make-gates.exit-code"
+          candidate_sha=$(git rev-parse HEAD)
+          git checkout --detach 29fdfc5a7cc229f1dcafee327f193b1623de0d32 || exit 1
+          make gates 2>&1 | tee "$result_dir/baseline-make-gates.stdout.txt"
+          baseline_rc=${PIPESTATUS[0]}
+          printf '%s\n' "$baseline_rc" > "$result_dir/baseline-make-gates.exit-code"
+          git checkout --detach "$candidate_sha" || exit 1
           exit "$gates_rc"
       - name: Preserve original validation records
         if: always()

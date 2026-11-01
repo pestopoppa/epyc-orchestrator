@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 
+import httpx
 import pytest
 
 from src.backends.context_limits import (
@@ -31,6 +32,11 @@ def isolated(monkeypatch):
 @pytest.mark.parametrize("used", [0, 60, 100])
 def test_native_counter_is_integer_unique_cells_including_measured_zero(used):
     assert parse_kv_cell_metrics(metrics(used)) == {"size": 100, "used": used}
+
+
+def test_integer_cells_do_not_round_through_float():
+    used = 9007199254740993
+    assert parse_kv_cell_metrics(metrics(used, used + 1)) == {"size": used + 1, "used": used}
 
 
 @pytest.mark.parametrize("body", [
@@ -64,6 +70,14 @@ def test_consecutive_native_snapshots_keep_higher_usage_and_reject_capacity_drif
                              kv_metrics={"size": 200, "used": 60})
     assert mismatch.unique_cells is None
     assert mismatch.projected_unique_tokens() == 80
+    assert mismatch.unique_cell_capacity == 0
+    pool = SharedKVPoolAdmission(occupancy=lambda u: mismatch, cross_process=False)
+    assert pool.acquire(URL, 1, 200, timeout_s=0) is None
+    # Even zero processing slots cannot fall into the legacy lone-request rule.
+    idle_drift = PoolOccupancy(URL, (), kv_pool=occ.kv_pool,
+                              kv_metrics={"size": 200, "used": 0})
+    pool = SharedKVPoolAdmission(occupancy=lambda u: idle_drift, cross_process=False)
+    assert pool.acquire(URL, 1, 200, timeout_s=0) is None
 
 
 def test_resolver_binds_metrics_to_same_endpoint_refresh_and_drops_stale_success():
@@ -98,6 +112,41 @@ def test_metrics_failure_and_flag_off_preserve_slots_fallback(monkeypatch):
     resolver = ContextLimitResolver(live=True, fetch_slots=lambda u, t: [],
                                     fetch_metrics=lambda *a: pytest.fail("flag off read metrics"))
     assert resolver.pool_occupancy(URL).unique_cells is None
+
+
+def test_capacity_drift_refuses_until_a_consistent_refresh():
+    clock = [0.0]
+    body = [metrics(0, 200)]
+    resolver = ContextLimitResolver(live=True, clock=lambda: clock[0],
+                                    fetch_slots=lambda u, t: [{
+                                        "id": 0, "is_processing": False,
+                                        "kv_pool": {"size": 100, "used": 0}}],
+                                    fetch_metrics=lambda u, t: body[0])
+    pool = SharedKVPoolAdmission(occupancy=resolver.pool_occupancy, cross_process=False)
+    assert pool.acquire(URL, 1, 200, timeout_s=0) is None
+    body[0] = metrics(0, 100)
+    assert pool.acquire(URL, 1, 200, timeout_s=0) is None  # drift snapshot still cached
+    clock[0] = 1.6
+    assert pool.acquire(URL, 1, 200, timeout_s=0) is not None
+
+
+def test_default_readers_use_native_metrics_on_the_selected_server_only(monkeypatch):
+    calls = []
+
+    def get(endpoint, *, timeout):
+        calls.append(endpoint)
+        request = httpx.Request("GET", endpoint)
+        if endpoint.endswith("/slots"):
+            return httpx.Response(200, json=[], request=request)
+        assert endpoint == URL + "/metrics"
+        return httpx.Response(200, text=metrics(), request=request)
+
+    monkeypatch.setattr(httpx, "get", get)
+    resolver = ContextLimitResolver(live=True)
+    assert resolver.pool_occupancy(URL).unique_cells == 60
+    assert calls == [URL + "/slots", URL + "/metrics"]
+    assert ContextLimitResolver(live=False).pool_occupancy(URL) is None
+    assert calls == [URL + "/slots", URL + "/metrics"]
 
 
 def test_unique_native_snapshot_plus_pending_tickets_does_not_hide_external_load():
