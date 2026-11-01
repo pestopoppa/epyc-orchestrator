@@ -266,3 +266,16 @@ def test_thin_new_rate_era_cannot_confirm_cached_old_verdict(tmp_path):
     assert verdict.seq["rate_axis_available"] is False
     assert verdict.seq["confirmed"] is False
     assert "rate_era_witness" not in verdict.seq
+
+
+def test_oversized_integer_witness_and_cutoff_fail_closed():
+    row = entry(1, "2026-08-10T00:00:00Z")
+    row.seq["rate_era_witness"]["speed_exclude_before_ts"] = 10 ** 1000
+    result = inputs([row], rate_exclude_before_ts=BOUNDARY)
+    assert result["prior_rate_obs"] == []
+    assert len(result["prior_quality_obs"]) == 1
+    with pytest.raises(ValueError, match="invalid sequential era cutoff"):
+        inputs([], rate_exclude_before_ts=10 ** 1000)
+    with pytest.raises(ValueError, match="invalid sequential era cutoff"):
+        autopilot._seq_speed_cutoff_from_state({"active_instrument_eras": {"autopilot_speed": "x"},
+            "pareto_epoch_ts": 1, "pareto_exclude_before_ts": 10 ** 1000})

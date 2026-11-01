@@ -3832,7 +3832,7 @@ def _seq_validated_cutoff(value: Any) -> float | None:
         raise ValueError("invalid sequential era cutoff")
     try:
         result = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("invalid sequential era cutoff") from exc
     if not math.isfinite(result) or result <= 0:
         raise ValueError("invalid sequential era cutoff")
@@ -3840,6 +3840,8 @@ def _seq_validated_cutoff(value: Any) -> float | None:
 
 
 def _seq_speed_cutoff_from_state(state: dict[str, Any]) -> float | None:
+    if _numeric_swarm_epoch_label_from_state(state) is not None:
+        _seq_validated_cutoff(state.get("pareto_exclude_before_ts"))
     cutoff = _archive_epoch_params_from_state(state)[2]
     if cutoff is not None or _numeric_swarm_epoch_label_from_state(state) is not None:
         _seq_validated_cutoff(state.get("pareto_exclude_before_ts"))
@@ -3863,8 +3865,8 @@ def _seq_rate_witness_matches(witness: Any, expected: dict[str, Any]) -> bool:
         and type(witness.get("version")) is int and witness["version"] == 1
         and all(
             (witness[key] is None and expected[key] is None)
-            or (type(witness[key]) in (int, float) and math.isfinite(witness[key])
-                and witness[key] == expected[key])
+            or (type(witness[key]) in (int, float) and witness[key] == expected[key]
+                and math.isfinite(witness[key]))
             for key in ("speed_exclude_before_ts", "quality_exclude_before_ts")
         )
     )
@@ -8757,8 +8759,8 @@ def _run_loop_inner(
     eval_quality_era, quality_exclude_before_ts = _quality_epoch_params_from_state(state)
     journal = ExperimentJournal()
     _sync_segment_snapshot_scope(journal, state)  # W3: scope rollover snapshots from the start
-    _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
     _seq_speed_cutoff_from_state(state)  # Validate raw cutoff types before using the canonical value.
+    _deinfl_ts, _deinfl_factor, _exclude_ts = _archive_epoch_params_from_state(state)
     archive_payload = _journal_archive_payload_for_authority(
         journal,
         deinflate_before_ts=_deinfl_ts,
