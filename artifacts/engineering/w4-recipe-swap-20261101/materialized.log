@@ -1,0 +1,98 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.17, pytest-9.0.3, pluggy-1.6.0
+rootdir: /mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, timeout-2.4.0, langsmith-0.7.30, cov-7.1.0, xdist-3.8.0, hypothesis-6.151.13, anyio-4.13.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 17 items
+
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py .FFF.FFFFFFF [ 70%]
+F                                                                        [ 76%]
+tests/unit/test_ssuf11_recipe_launch.py ....                             [100%]
+
+=================================== FAILURES ===================================
+___________ test_simulated_check_runs_promotion_gate_when_requested ____________
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:862: in test_simulated_check_runs_promotion_gate_when_requested
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_check_ru... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+_____________ test_simulated_check_fails_when_promotion_gate_fails _____________
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:902: in test_simulated_check_fails_when_promotion_gate_fails
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_check_fa... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+__________ test_simulated_update_does_not_write_real_operator_summary __________
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:936: in test_simulated_update_does_not_write_real_operator_summary
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_update_d... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+___ test_simulated_frontdoor_swap_updates_generated_consumers_with_approval ____
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1059: in test_simulated_frontdoor_swap_updates_generated_consumers_with_approval
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_frontdoo... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+_____ test_simulated_worker_swap_updates_generated_consumers_with_approval _____
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1178: in test_simulated_worker_swap_updates_generated_consumers_with_approval
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_worker_s... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+_____ test_simulated_vision_swap_updates_generated_consumers_with_approval _____
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1293: in test_simulated_vision_swap_updates_generated_consumers_with_approval
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_vision_s... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+_____ test_simulated_ingest_swap_updates_generated_consumers_with_approval _____
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1428: in test_simulated_ingest_swap_updates_generated_consumers_with_approval
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_ingest_s... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+___ test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor ____
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1556: in test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor
+    assert report.ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+____________ test_simulated_retired_role_enum_is_removed_by_update _____________
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1609: in test_simulated_retired_role_enum_is_removed_by_update
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_retired_... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+_______ test_simulated_runtime_requirement_drift_fails_until_regenerated _______
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1635: in test_simulated_runtime_requirement_drift_fails_until_regenerated
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_runtime_... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+________ test_simulated_context_kv_and_acceleration_drift_are_rejected _________
+tests/unit/test_stack_change_pipeline_simulated_fixtures.py:1784: in test_simulated_context_kv_and_acceleration_drift_are_rejected
+    assert run_stack_change_pipeline(config).ok
+E   AssertionError: assert False
+E    +  where False = PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]).ok
+E    +    where PipelineReport(steps=[PipelineStep(name='numa_mode', status='ok', errors=[], warnings=[], details=['evaluated numa_mod.../mnt/raid0/llm/tmp/codex3-reward-provenance-1740/fixture/tests/unit/test_seed_specialist_routing_main_and_retry.py'])]) = run_stack_change_pipeline(StackChangePipelineConfig(mode='update', repo_root=PosixPath('/tmp/pytest-of-node/pytest-11685/test_simulated_context_... allow_descriptor_model_removal=False, run_promotion_gate=False, numa_mode='full', allow_stale_research_registry=False))
+=============================== warnings summary ===============================
+../../../epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32
+  /mnt/raid0/llm/epyc-orchestrator/.venv/lib/python3.11/site-packages/opentelemetry/util/_importlib_metadata.py:32: DeprecationWarning: SelectableGroups dict interface is deprecated. Use select.
+    return EntryPoints(ep for group_eps in eps.values() for ep in group_eps)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_check_runs_promotion_gate_when_requested
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_check_fails_when_promotion_gate_fails
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_update_does_not_write_real_operator_summary
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_frontdoor_swap_updates_generated_consumers_with_approval
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_worker_swap_updates_generated_consumers_with_approval
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_vision_swap_updates_generated_consumers_with_approval
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_ingest_swap_updates_generated_consumers_with_approval
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_retired_role_enum_is_removed_by_update
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_runtime_requirement_drift_fails_until_regenerated
+FAILED tests/unit/test_stack_change_pipeline_simulated_fixtures.py::test_simulated_context_kv_and_acceleration_drift_are_rejected
+=================== 11 failed, 6 passed, 1 warning in 18.76s ===================
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 21.494676294038072, "sampled_peak_tree_rss_bytes": 183873536, "samples": 214, "verified_exited_processes": 0, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 813798, "leader_birth": 163299699, "child_rc": 1, "children_drained": true, "failure": null}

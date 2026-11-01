@@ -940,6 +940,115 @@ def test_simulated_update_does_not_write_real_operator_summary(tmp_path: Path) -
     assert real_summary.read_text(encoding="utf-8") == before
 
 
+def test_simulated_recipe_swap_tracks_compiled_registry_in_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An isolated master edit reaches the actual recipe launch consumers."""
+    from types import SimpleNamespace
+    import builtins
+    import socket
+
+    import src.config
+    from scripts.server import orchestrator_stack as launcher, stack_env
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("fixture must not launch a process or open a socket")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    original_open = builtins.open
+    original_path_open = Path.open
+
+    def refuse_model(path: Any) -> None:
+        if isinstance(path, (str, Path)) and str(path).startswith("/models/"):
+            raise AssertionError("fixture must not open a model path")
+
+    def guarded_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        refuse_model(path)
+        return original_open(path, *args, **kwargs)
+
+    def guarded_path_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        refuse_model(path)
+        return original_path_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_open)
+    monkeypatch.setattr(Path, "open", guarded_path_open)
+    with pytest.raises(AssertionError, match="must not launch"):
+        subprocess.Popen(["llama-server"])
+    with pytest.raises(AssertionError, match="must not launch"):
+        socket.socket()
+    with pytest.raises(AssertionError, match="must not open a model"):
+        Path("/models/forbidden.gguf").open("rb")
+    roles = {"frontdoor", "worker_summarize"}
+    config = _config(tmp_path, mode="update", roles=roles)
+    master = tmp_path / "master" / "model_registry.yaml"
+    _base_frontdoor_registry(master)
+    source = yaml.safe_load(master.read_text(encoding="utf-8"))
+    recipe_a = {"cpu_shape": "NUMA_FULL", "threads": 96,
+                "env": {"GGML_FA_SPLIT_KV": "0"}}
+    source["server_mode"]["frontdoor"]["recipe"] = recipe_a
+    _write_yaml(master, source)
+    config = StackChangePipelineConfig(**{
+        **config.__dict__, "research_registry": master,
+        "allow_stale_research_registry": True,  # disposable offline source only
+    })
+    assert all(path.resolve().is_relative_to(tmp_path.resolve()) for path in (
+        master, config.lean_registry, config.descriptors, config.stack_priors,
+        config.operator_summary, config.procedure, config.schema,
+    ))
+    generated = pipeline._lean_registry_step(config, check=False)
+    assert generated.status == "ok", generated.errors
+
+    def observe(expected: dict[str, Any]) -> None:
+        # Redirect the configuration path only; the real loader opens the generated file.
+        with monkeypatch.context() as patch:
+            patch.setattr(src.config, "get_config", lambda: SimpleNamespace(
+                paths=SimpleNamespace(registry_path=config.lean_registry)))
+            assert stack_env.recipe_for("frontdoor") == expected
+            assert stack_env.recipe_env_for("frontdoor") == expected["env"]
+            env = stack_env.build_launch_env("frontdoor", {"GGML_AMBIENT_TEST": "1"})
+            overrides = stack_env._role_env_overrides("frontdoor")
+            for key, value in expected["env"].items():
+                assert env[key] == overrides.get(key, value)
+            stack_env.strip_ambient_ggml(env, {**expected["env"], **overrides})
+            assert "GGML_AMBIENT_TEST" not in env
+            assert "GGML_NOHUGEPAGE_PROCESS" not in env
+            assert launcher._resolve_thread_count("frontdoor") == "96"
+
+    observe(recipe_a)
+    lean_a = config.lean_registry.read_bytes()
+    # B is a synthetic control, not a proposed or measured production recipe.
+    recipe_b = {"cpu_shape": "NUMA_FULL", "threads": 96,
+                "env": {"GGML_FA_SPLIT_KV": "1", "GGML_W4_CONTROL": "b"}}
+    source["server_mode"]["frontdoor"]["recipe"] = recipe_b
+    _write_yaml(master, source)
+    check = StackChangePipelineConfig(**{**config.__dict__, "mode": "check"})
+    stale = pipeline._lean_registry_step(check, check=True)
+    assert stale.status == "stale"
+    assert config.lean_registry.read_bytes() == lean_a
+    observe(recipe_a)
+    assert pipeline._lean_registry_step(config, check=False).status == "ok"
+    assert config.lean_registry.read_bytes() != lean_a
+    observe(recipe_b)
+    # Exercise the real documented precedence with a temporary role override.
+    with monkeypatch.context() as patch:
+        patch.setattr(src.config, "get_config", lambda: SimpleNamespace(
+            paths=SimpleNamespace(registry_path=config.lean_registry)))
+        patch.setitem(stack_env._ROLE_ENV_BLOCKS, "frontdoor", {"GGML_W4_CONTROL": "role"})
+        assert stack_env.recipe_env_for("frontdoor")["GGML_W4_CONTROL"] == "b"
+        assert stack_env.build_launch_env("frontdoor", {})["GGML_W4_CONTROL"] == "role"
+
+    source["server_mode"]["frontdoor"]["recipe"] = {
+        **recipe_b, "cpu_shape": "W4_UNDEFINED"}
+    _write_yaml(master, source)
+    assert pipeline._lean_registry_step(config, check=False).status == "ok"
+    with monkeypatch.context() as patch:
+        patch.setattr(src.config, "get_config", lambda: SimpleNamespace(
+            paths=SimpleNamespace(registry_path=config.lean_registry)))
+        with pytest.raises(ValueError, match="undefined recipe cpu_shape"):
+            launcher._resolve_thread_count("frontdoor")
+
+
 def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
