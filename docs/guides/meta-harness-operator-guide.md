@@ -69,15 +69,15 @@ Per the arXiv:2603.28052 ablation (Table 3), full execution traces provide +15 a
 
 ### Allowlist enforcement
 
-`CODE_MUTATION_ALLOWLIST` (prompt_forge.py, line 29) is the hard boundary. `propose_code_mutation()` (line 448) raises `ValueError` if the target file is not on the list. Eval, scoring, and safety-gate code are excluded.
+`CODE_MUTATION_ALLOWLIST` (defined in `src/autopilot_core/mutation_guards.py` and re-exported by `prompt_forge.py`) is the hard boundary. `PromptForge.propose_code_mutation()` raises `ValueError` if the target file is not on the list. Eval, scoring, and safety-gate code are excluded.
 
 ### The 4-layer validation
 
 `_screen_code_mutation()` (prompt_forge.py; `_validate_code_mutation()` is the `(valid, reason)` wrapper kept for callers) runs all four checks before a mutation is accepted. Since RTG-55 it is **static only** — it never writes into the source tree and never imports or execs the candidate:
 
-1. **Syntax** (line 587): `ast.parse(mutated)` -- rejects anything that is not valid Python.
-2. **Catastrophic shrinkage** (line 594): If the original has >10 lines and the mutation removes >60% of lines, it is rejected. The threshold is `new_lines < orig_lines * 0.4`.
-3. **Public name preservation** (line 603): Extracts all module-level `FunctionDef`, `AsyncFunctionDef`, and `ClassDef` names from both original and mutated ASTs. Any name present in the original but missing from the mutation triggers rejection.
+1. **Syntax** (`PromptForge._screen_code_mutation()`): `ast.parse(mutated)` rejects anything that is not valid Python.
+2. **Catastrophic shrinkage** (`PromptForge._screen_code_mutation()`): If the original has >10 lines and the mutation removes >60% of lines, it is rejected. The threshold is `new_lines < orig_lines * 0.4`.
+3. **Public name preservation** (`PromptForge._screen_code_mutation()`): Extracts all module-level `FunctionDef`, `AsyncFunctionDef`, and `ClassDef` names from both original and mutated ASTs. Any name present in the original but missing from the mutation triggers rejection.
 4. **Static safety screen** (RTG-55 MHS-2, `screen_static_safety()`): an AST denylist over the candidate — module-level statements that do work at import time, imports outside `SAFETY_IMPORT_ALLOWLIST` (first-party roots and capabilities the original file already used are grandfathered), banned calls (`exec`/`eval`/`compile`/`__import__`/`os.system`/`subprocess.*`/…), and dunder attribute access. `new_file` proposals additionally get the strict inertness profile (`SAFETY_STRICT_NODE_DENYLIST`), so MH-9's "default-inert" requirement is compile-time rather than prompt text. The screen also assigns the candidate's `MutationEffect` (MHS-1).
 
    The AutoMem `schema_evolution` lane prompt asks for exactly the shape that strict profile admits — module constants (a `SCHEMA` dict, `SCHEMA_VERSION`, `ACTIONS`, `CHANNELS`) plus pure public `def`s returning `(ok, reason)`, with no imports, no classes, no underscore-prefixed names and no `raise`/`with`/`while`/`lambda`. `MEMORY_SCHEMA_SHAPE_EXAMPLE` is shipped verbatim inside that prompt and is itself screened by a test, so the prompt and the denylist cannot drift apart silently.
@@ -90,7 +90,7 @@ Per the arXiv:2603.28052 ablation (Table 3), full execution traces provide +15 a
 
 **ANTI-OVERRIDE risk prior (RTG-55 MHS-4).** `MUTATION_EFFECT_RISK` weights each effect: inert 0.05 < constrain 0.25 < expand 0.50 < replace 0.90 < unknown 1.0 < unsafe ∞. Prompt mutations are classified too (`classify_prompt_effect`: add-only is constrain, any removed/rewritten line is replace). `CodeMutation.effect_risk` / `PromptMutation.effect_risk` carry the weight, `rank_mutations_by_risk()` orders candidates safest-first, and the gate refuses any mutation whose weight reaches `AUTOPILOT_MUTATION_RISK_GATE` (default 1.0, so only unclassified effects are refused; 0.9 is constrain/expand-only; values above 1.0 are ignored). The weights are an ordinal prior, not a calibrated probability. MHS-5 (`scripts/autopilot/species/heldout_effect_corpus.py` → `orchestration/datasets/harness_r1_heldout_effect_corpus.json`, derived labels only, from Harness-R1 @ `411bb548`, Apache-2.0) backs the ordering: all 4 override patches regressed held-out tasks (mean −8.4 pp) while 19 constrain patches averaged +3.9 pp. It also shows constrain is not regression-free: the single worst patch, at −16.9 pp, is a hint-only constrain patch.
 
-If any layer fails, `mutation.syntax_valid` is set to `False` and the mutation content is replaced with the original (line 497). The dispatcher in autopilot.py checks `syntax_valid` (line 553) and skips the trial entirely if validation failed.
+If static validation fails, `PromptForge.propose_code_mutation()` sets `mutation.syntax_valid` to `False` and replaces the proposed content with the original. The `_action_code_mutation()` dispatcher in `scripts/autopilot/actions.py` checks that flag and skips the trial. Transfer-safety and mutation-risk rejections are enforced by their separate gates.
 
 ### Mutation lifecycle
 
@@ -133,15 +133,15 @@ During AR-3 run 2, trial ~25 proposed a code mutation on `src/escalation.py` tha
 
 | # | Gap | Fix | Location |
 |---|-----|-----|----------|
-| 1 | Syntax-only validation | Deep 4-layer validation (syntax + shrinkage + names + import) | `_validate_code_mutation()`, prompt_forge.py line 575 |
-| 2 | No size guard | Catastrophic shrinkage guard: reject if >60% of lines removed | prompt_forge.py line 594; also >50% at dispatch level (autopilot.py line 584) |
-| 3 | No revert commits | `revert_code_mutation()` now auto-commits the revert so HEAD is never corrupted | prompt_forge.py line 552 |
+| 1 | Syntax-only validation | Deep 4-layer validation (syntax + shrinkage + names + static safety screen) | `PromptForge._screen_code_mutation()`; `_validate_code_mutation()` remains a compatibility wrapper |
+| 2 | No size guard | Catastrophic shrinkage guard: reject if >60% of lines removed | `PromptForge._screen_code_mutation()`; also >50% at dispatch level (`_action_code_mutation()` in `scripts/autopilot/actions.py`) |
+| 3 | No revert commits | `PromptForge.revert_code_mutation()` now auto-commits the revert so HEAD is never corrupted |
 | 4 | No isolation | Worktree isolation available via `WorktreeManager` | worktree_manager.py (implemented, not yet wired into dispatch) |
-| 5 | No per-trial scope | `apply_code_mutation()` creates a pre-mutation checkpoint commit before writing | prompt_forge.py line 509 |
+| 5 | No per-trial scope | `PromptForge.apply_code_mutation()` creates a pre-mutation checkpoint commit before writing |
 
 ### Worktree isolation (available, not yet active)
 
-`WorktreeManager` (worktree_manager.py) creates a temporary git worktree per trial. The mutated file is committed in the worktree, then copied to the main repo for live eval. On rejection, the original is restored from the worktree's clean snapshot. The `PromptForge` class exposes `apply_code_mutation_in_context()` (line 418) and `apply_mutation_isolated()` (line 372) for worktree-backed mutations. These are not yet wired into the autopilot dispatch loop but are ready for integration.
+`WorktreeManager` (`worktree_manager.py`) creates a temporary git worktree per trial. The mutated file is committed in the worktree, then copied to the main repo for live eval. On rejection, the original is restored from the worktree's clean snapshot. `PromptForge` exposes `apply_code_mutation_in_context()` and `apply_mutation_isolated()` for worktree-backed mutations. These are not yet wired into the autopilot dispatch loop but are ready for integration.
 
 Usage pattern:
 ```
@@ -185,11 +185,11 @@ Auto-rejects if neither `accept()` nor `reject()` is called (safe default, line 
                          |
                          v
                    Claude CLI invocation
-                   [prompt_forge.py:179]
+                   [PromptForge.propose_code_mutation()]
                          |
                          v
                   _validate_code_mutation()   (Tier 2 only)
-                  [prompt_forge.py:575]
+                  [PromptForge._screen_code_mutation()]
                          |
                          v
                apply_mutation / apply_code_mutation

@@ -1,0 +1,5 @@
+$ rg -n ... docs/guides/meta-harness-operator-guide.md
+PASS: no prompt_forge.py line-number citations
+$ python AST symbol verification
+PASS: cited method and moved-symbol names exist
+markdownlint docs/guides/meta-harness-operator-guide.md: PASS
