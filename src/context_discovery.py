@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 from src.context_assembly import (
     Candidate,
+    BundleEntry,
     ContextBundle,
     BudgetBands,
     LineRange,
@@ -174,6 +175,106 @@ def build_python_codemap(source: str, *, max_doc_chars: int = 80) -> str | None:
     return "\n".join(out) if out else None
 
 
+def _python_edit_segments(source: str, hit_ranges: list[LineRange]):
+    """Return hit AST segments, imports, and enclosing class headers with source locations.
+
+    The returned rendered text is made only from verbatim source lines. ``None`` means that
+    Python parsing or range resolution failed, so callers must not present a line fragment as
+    AST-backed evidence.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError, TypeError):
+        return None
+
+    lines = source.splitlines()
+    if not lines or not hit_ranges:
+        return None
+
+    def span(node):
+        decorators = getattr(node, "decorator_list", ())
+        start = min([node.lineno, *(d.lineno for d in decorators)])
+        return start, getattr(node, "end_lineno", None) or node.lineno
+
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+
+    # Module imports are shared setup context. Local imports in unrelated functions are not.
+    imports = [span(node) for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+    selected: list[tuple[int, int]] = []
+    enclosing_classes: set[ast.ClassDef] = set()
+    statements = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.stmt) and not isinstance(node, ast.ClassDef)
+    ]
+    functions = [
+        node for node in statements
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    for hit in hit_ranges:
+        if hit.start < 1 or hit.end > len(lines) or hit.start > hit.end:
+            return None
+        for line_no in range(hit.start, hit.end + 1):
+            function_hits = [node for node in functions if span(node)[0] <= line_no <= span(node)[1]]
+            if function_hits:
+                # Keep the innermost enclosing function/method, including decorators and body.
+                node = min(function_hits, key=lambda item: span(item)[1] - span(item)[0])
+            else:
+                # Module/class-level edits retain the smallest complete Python statement.
+                hit_nodes = [node for node in statements if span(node)[0] <= line_no <= span(node)[1]]
+                if not hit_nodes:
+                    return None
+                node = min(hit_nodes, key=lambda item: span(item)[1] - span(item)[0])
+            selected.append(span(node))
+            parent = parents.get(node)
+            while parent is not None:
+                if isinstance(parent, ast.ClassDef):
+                    enclosing_classes.add(parent)
+                parent = parents.get(parent)
+
+    class_headers = []
+    for node in enclosing_classes:
+        body_start = min(
+            (span(child)[0] for child in node.body),
+            default=node.end_lineno or node.lineno,
+        )
+        header_start, _ = span(node)
+        class_headers.append((header_start, max(header_start, body_start - 1)))
+    segments = merge_line_ranges(
+        [LineRange(a, b) for a, b in (*selected, *imports, *class_headers) if a >= 1 and b >= a]
+    )
+    if not segments:
+        return None
+
+    return _render_planned_ranges(source, segments), segments
+
+
+def _render_planned_ranges(source: str, ranges: list[LineRange]) -> str:
+    """Render finalized source ranges without treating them as fresh AST hit locations."""
+    lines = source.splitlines(keepends=True)
+    marker_newline = "\r\n" if "\r\n" in source else "\n"
+    pieces: list[str] = []
+    cursor = 1
+    for segment in ranges:
+        if segment.start > cursor:
+            pieces.append(f"# ... {segment.start - cursor} lines omitted{marker_newline}")
+        pieces.append(f"# Lines {segment.start}-{segment.end}{marker_newline}")
+        source_text = "".join(lines[segment.start - 1:segment.end])
+        pieces.append(source_text)
+        if source_text and not source_text.endswith(("\n", "\r")):
+            pieces.append(marker_newline)
+        cursor = segment.end + 1
+    if cursor <= len(lines):
+        pieces.append(f"# ... {len(lines) - cursor + 1} lines omitted{marker_newline}")
+    return "".join(pieces)
+
+
+def _rendered_block(path: str, mode: str, text: str) -> str:
+    return f"### {path} ({mode})\n{text}"
+
+
 # ─── DCP-2 pass 2: cost survivors → Candidates ───────────────────────────────────
 
 
@@ -186,10 +287,11 @@ def cost_candidates(
 ) -> list[Candidate]:
     """DCP-2 pass 2: read each survivor and compute per-mode token costs → Candidates.
 
-    cost_full = whole file; cost_slices = the discovered line ranges (+ a little headroom);
-    cost_codemap = the ast signature skeleton (or, for non-Python / parse failure, falls back to
-    the slices cost). desired_mode is SLICES when ranges exist, else FULL. `priority` = hit score.
-    Files the reader can't read are skipped (logged by the caller via reader behavior).
+    cost_full is the whole file; Python hit slices cost the exact AST-expanded rendering,
+    including imports, class headers, line labels, and omission markers. Non-Python or
+    unparseable hit files are FULL-only and use the whole-file cost. `priority` = hit score.
+    Files the reader can't read are omitted here so assemble_delegation_bundle can record them
+    as missing evidence in the returned bundle manifest.
     """
     out: list[Candidate] = []
     for h in hits:
@@ -200,19 +302,41 @@ def cost_candidates(
         if body is None:
             continue
         content_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
-        lines = body.splitlines()
-        cost_full = token_estimator(body)
+        cost_full = token_estimator(
+            _rendered_block(h.path, InclusionMode.FULL, body) + "\n\n"
+        )
+        render_ranges_verbatim = False
 
         if h.line_ranges:
-            sliced = "\n".join("\n".join(lines[r.start - 1 : r.end]) for r in h.line_ranges)
-            cost_slices = token_estimator(sliced)
-            desired = InclusionMode.SLICES
+            edit_segments = (
+                _python_edit_segments(body, h.line_ranges) if h.path.endswith(".py") else None
+            )
+            if edit_segments is not None:
+                sliced, planned_ranges = edit_segments
+                cost_slices = token_estimator(
+                    _rendered_block(h.path, InclusionMode.SLICES, sliced) + "\n\n"
+                )
+                ranges = planned_ranges
+                render_ranges_verbatim = True
+                desired = InclusionMode.SLICES
+            else:
+                # Non-Python and unparseable files may enter only as a complete file.
+                cost_slices = cost_full
+                ranges = list(h.line_ranges)
+                desired = InclusionMode.FULL
         else:
             cost_slices = cost_full
+            ranges = []
             desired = InclusionMode.FULL
 
         codemap = codemap_fn(body) if h.path.endswith(".py") else None
-        cost_codemap = token_estimator(codemap) if codemap else min(cost_slices, cost_full)
+        cost_codemap = (
+            token_estimator(
+                _rendered_block(h.path, InclusionMode.CODEMAP_ONLY, codemap) + "\n\n"
+            )
+            if codemap
+            else cost_full
+        )
 
         out.append(
             Candidate(
@@ -222,9 +346,10 @@ def cost_candidates(
                 cost_slices=cost_slices,
                 cost_codemap=cost_codemap,
                 desired_mode=desired,
-                line_ranges=list(h.line_ranges),
+                line_ranges=ranges,
                 content_sha256=content_sha256,
                 source=SourceKind.COLGREP,
+                render_ranges_verbatim=render_ranges_verbatim,
             )
         )
     return out
@@ -252,7 +377,22 @@ def assemble_delegation_bundle(
         query, code_search_fn=code_search_fn, limit=limit, max_files=max_files
     )
     candidates = cost_candidates(hits, file_reader_fn=file_reader_fn)
-    return pack_to_budget(candidates, budget, bands=bands, bundle_id=bundle_id, repo_sha=repo_sha)
+    bundle = pack_to_budget(candidates, budget, bands=bands, bundle_id=bundle_id, repo_sha=repo_sha)
+    represented = {candidate.path for candidate in candidates}
+    present = {entry.path for entry in bundle.entries}
+    for hit in hits:
+        if hit.path not in represented and hit.path not in present:
+            bundle.entries.append(
+                BundleEntry(
+                    path=hit.path,
+                    mode=InclusionMode.EXCLUDED,
+                    source=SourceKind.COLGREP,
+                    line_ranges=list(hit.line_ranges),
+                    reason_downgraded_or_excluded="missing evidence: source file could not be read",
+                )
+            )
+            present.add(hit.path)
+    return bundle
 
 
 # ─── DCP-4: render a packed bundle to prompt text ────────────────────────────────
@@ -268,8 +408,10 @@ def render_bundle(
 
     The bundle is a budget-bounded *plan* (which file at which inclusion mode); this reads
     each included entry's body via `file_reader_fn` and materializes it per mode: FULL = whole
-    file, SLICES = the selected line ranges, CODEMAP_ONLY = the ast signature skeleton. Entries
-    whose body can't be read (or render empty) are skipped. Pure given the injected reader.
+    file, SLICES = AST edit segments and source context for ColGREP entries (ordinary source
+    entries retain line-slice behavior), CODEMAP_ONLY = the ast signature skeleton. Entries
+    whose body can't be read or rendered are marked EXCLUDED with a missing-evidence reason.
+    Pure given the injected reader.
     """
     blocks: list[str] = []
     for e in bundle.included():
@@ -278,6 +420,10 @@ def render_bundle(
         except Exception:
             body = None
         if body is None:
+            e.mode = InclusionMode.EXCLUDED
+            e.reason_downgraded_or_excluded = (
+                "missing evidence: source file could not be read during rendering"
+            )
             continue
         if e.content_sha256 is not None:
             rendered_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -287,16 +433,49 @@ def render_bundle(
                     f"expected {e.content_sha256}, got {rendered_sha256}"
                 )
         if not body:
+            e.mode = InclusionMode.EXCLUDED
+            e.reason_downgraded_or_excluded = (
+                "missing evidence: source file is empty during rendering"
+            )
             continue
         if e.mode == InclusionMode.FULL:
             text = body
-        elif e.mode == InclusionMode.SLICES and e.line_ranges:
-            lines = body.splitlines()
-            text = "\n".join("\n".join(lines[r.start - 1 : r.end]) for r in e.line_ranges)
+        elif e.mode == InclusionMode.SLICES:
+            if e.source == SourceKind.COLGREP:
+                lines = body.splitlines(keepends=True)
+                canonical_ranges = merge_line_ranges(e.line_ranges)
+                if (
+                    not e.render_ranges_verbatim
+                    or e.content_sha256 is None
+                    or not e.line_ranges
+                    or e.line_ranges != canonical_ranges
+                    or any(
+                        item.start < 1 or item.end < item.start or item.end > len(lines)
+                        for item in e.line_ranges
+                    )
+                ):
+                    e.mode = InclusionMode.EXCLUDED
+                    e.reason_downgraded_or_excluded = (
+                        "missing evidence: ColGREP slices lack a valid pinned AST range plan"
+                    )
+                    continue
+                text = _render_planned_ranges(body, e.line_ranges)
+            elif e.line_ranges:
+                lines = body.splitlines()
+                text = "\n".join(
+                    "\n".join(lines[r.start - 1:r.end]) for r in e.line_ranges
+                )
+            else:
+                text = ""
         elif e.mode == InclusionMode.CODEMAP_ONLY:
             text = (codemap_fn(body) if e.path.endswith(".py") else None) or ""
         else:
             text = ""
-        if text.strip():
-            blocks.append(f"### {e.path} ({e.mode})\n{text}")
+        if not text.strip():
+            e.mode = InclusionMode.EXCLUDED
+            e.reason_downgraded_or_excluded = (
+                "missing evidence: selected render mode produced no content"
+            )
+            continue
+        blocks.append(f"### {e.path} ({e.mode})\n{text}")
     return "\n\n".join(blocks)

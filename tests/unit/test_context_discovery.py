@@ -7,7 +7,10 @@ import textwrap
 
 import pytest
 
-from src.context_assembly import BundleEntry, ContextBundle, InclusionMode, LineRange
+from src.context_assembly import (
+    BundleEntry, ContextBundle, InclusionMode, LineRange, SourceKind,
+    conservative_char_estimator,
+)
 from src.context_discovery import (
     DiscoveredHit,
     parse_colgrep_json,
@@ -16,6 +19,7 @@ from src.context_discovery import (
     cost_candidates,
     assemble_delegation_bundle,
     render_bundle,
+    _python_edit_segments,
 )
 
 
@@ -180,6 +184,178 @@ def test_cost_candidates_computes_modes() -> None:
     assert b.priority == 0.5
 
 
+def test_ast_slice_preserves_decorated_async_method_and_source_context() -> None:
+    body = '''import os
+from pathlib import Path
+
+class Outer(
+    object,
+):
+    @classmethod
+    @unrelated_decorator(
+        "earlier",
+    )
+    def earlier(cls):
+        import local_only
+        return local_only
+
+    @classmethod
+    @decorate(
+        "value",
+    )
+    async def target(
+        cls,
+        value: str,
+    ) -> str:
+        return value
+
+def unrelated():
+    return os.getcwd()
+'''
+    files = {"pkg.py": body}
+    hit_line = body.splitlines().index("        value: str,") + 1
+    candidate = cost_candidates(
+        [DiscoveredHit("pkg.py", [LineRange(hit_line, hit_line)], .9)],
+        file_reader_fn=lambda path: files[path],
+    )[0]
+    bundle = assemble_delegation_bundle(
+        "edit target",
+        budget=candidate.cost_slices,
+        code_search_fn=lambda _query, _limit: [
+            DiscoveredHit("pkg.py", [LineRange(hit_line, hit_line)], .9)
+        ],
+        file_reader_fn=lambda path: files[path],
+    )
+    entry = next(item for item in bundle.entries if item.path == "pkg.py")
+
+    assert entry.mode == InclusionMode.SLICES
+    rendered = render_bundle(bundle, file_reader_fn=lambda path: files[path])
+    assert "import os" in rendered and "from pathlib import Path" in rendered
+    assert "class Outer(" in rendered and "    object," in rendered
+    assert "@classmethod" in rendered and "@decorate(" in rendered
+    assert "    async def target(" in rendered
+    assert "        return value" in rendered
+    assert "def unrelated" not in rendered
+    assert "def earlier" not in rendered
+    assert "unrelated_decorator" not in rendered
+    assert "local_only" not in rendered
+    assert "# Lines 1-" in rendered
+    assert "# ..." in rendered
+    planned_text = _python_edit_segments(body, [LineRange(hit_line, hit_line)])[0]
+    expected_block = f"### pkg.py (slices)\n{planned_text}\n\n"
+    assert candidate.cost_slices == conservative_char_estimator(expected_block)
+    assert candidate.line_ranges == entry.line_ranges
+    assert entry.render_ranges_verbatim is True
+    assert bundle.manifest()["entries"][0]["render_ranges_verbatim"] is True
+    assert conservative_char_estimator(rendered) <= bundle.total_tokens()
+
+
+def test_multi_function_hit_keeps_each_complete_segment() -> None:
+    body = "def first():\n    return 1\n\ndef second():\n    return 2\n"
+    ranges = [LineRange(2, 2), LineRange(5, 5)]
+    result = _python_edit_segments(body, ranges)
+    assert result is not None
+    rendered, planned_ranges = result
+    assert "def first():\n    return 1" in rendered
+    assert "def second():\n    return 2" in rendered
+    assert planned_ranges == [LineRange(1, 2), LineRange(4, 5)]
+
+
+def test_colgrep_slices_without_verified_plan_or_pin_fail_closed() -> None:
+    body = "def target():\n    return 1\n"
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    for verified, pinned, ranges in (
+        (False, True, [LineRange(1, 2)]),
+        (True, False, [LineRange(1, 2)]),
+        (True, True, [LineRange(1, 3)]),
+        (True, True, [LineRange(2, 2), LineRange(1, 1)]),
+    ):
+        bundle = ContextBundle(budget=100)
+        bundle.add_entry(
+            BundleEntry(
+                path="target.py",
+                mode=InclusionMode.SLICES,
+                line_ranges=ranges,
+                source=SourceKind.COLGREP,
+                content_sha256=digest if pinned else None,
+                render_ranges_verbatim=verified,
+            ),
+            body_text=body,
+        )
+        assert render_bundle(bundle, file_reader_fn=lambda _path: body) == ""
+        entry = bundle.manifest()["entries"][0]
+        assert entry["mode"] == InclusionMode.EXCLUDED
+        assert "missing evidence" in entry["reason_downgraded_or_excluded"]
+
+
+def test_ast_planned_slice_preserves_crlf_source_lines() -> None:
+    body = "import os\r\n\r\ndef target():\r\n    return os.getcwd()\r\n"
+    result = _python_edit_segments(body, [LineRange(4, 4)])
+    assert result is not None
+    rendered, _ = result
+    assert "import os\r\n" in rendered
+    assert "def target():\r\n    return os.getcwd()\r\n" in rendered
+
+
+def test_unranged_colgrep_and_non_colgrep_slices_keep_existing_rendering() -> None:
+    body = "def untouched():\n    return 1\n"
+    full_bundle = assemble_delegation_bundle(
+        "read file",
+        budget=100,
+        code_search_fn=lambda _query, _limit: [DiscoveredHit("plain.py", [], .9)],
+        file_reader_fn=lambda _path: body,
+    )
+    assert render_bundle(full_bundle, file_reader_fn=lambda _path: body) == (
+        "### plain.py (full)\n" + body
+    )
+
+    slices = ContextBundle(budget=100)
+    slices.add_entry(
+        BundleEntry(
+            path="direct.py",
+            mode=InclusionMode.SLICES,
+            line_ranges=[LineRange(1, 1)],
+            source=SourceKind.DIRECT_READ,
+        ),
+        body_text=body,
+    )
+    assert "render_ranges_verbatim" not in slices.manifest()["entries"][0]
+    assert render_bundle(slices, file_reader_fn=lambda _path: body) == (
+        "### direct.py (slices)\ndef untouched():"
+    )
+
+
+def test_unparseable_hit_is_full_or_missing_evidence_never_line_slice() -> None:
+    body = "def broken(:\n" + ("# padding\n" * 20)
+    hit = DiscoveredHit("broken.py", [LineRange(1, 1)], .9)
+    candidate = cost_candidates([hit], file_reader_fn=lambda _path: body)[0]
+    assert candidate.desired_mode == InclusionMode.FULL
+    assert candidate.cost_slices == candidate.cost_full
+
+    excluded = assemble_delegation_bundle(
+        "edit broken",
+        budget=1,
+        code_search_fn=lambda _query, _limit: [hit],
+        file_reader_fn=lambda _path: body,
+    )
+    entry = next(item for item in excluded.entries if item.path == "broken.py")
+    assert entry.mode == InclusionMode.EXCLUDED
+    assert "missing evidence" in entry.reason_downgraded_or_excluded
+
+
+def test_assemble_records_unreadable_hit_as_missing_evidence() -> None:
+    bundle = assemble_delegation_bundle(
+        "edit gone",
+        budget=100,
+        code_search_fn=lambda _query, _limit: [DiscoveredHit("gone.py", [LineRange(4, 5)], .9)],
+        file_reader_fn=lambda _path: None,
+    )
+    entry = next(item for item in bundle.manifest()["entries"] if item["path"] == "gone.py")
+    assert entry["mode"] == InclusionMode.EXCLUDED
+    assert entry["line_ranges"] == [[4, 5]]
+    assert "missing evidence" in entry["reason_downgraded_or_excluded"]
+
+
 def test_cost_candidates_skips_unreadable() -> None:
     def reader(p):
         raise FileNotFoundError(p)
@@ -292,3 +468,6 @@ def test_render_keeps_unreadable_bound_entries_as_skips(unreadable) -> None:
         return None
 
     assert render_bundle(bundle, file_reader_fn=reader) == ""
+    entry = bundle.manifest()["entries"][0]
+    assert entry["mode"] == InclusionMode.EXCLUDED
+    assert "missing evidence" in entry["reason_downgraded_or_excluded"]
