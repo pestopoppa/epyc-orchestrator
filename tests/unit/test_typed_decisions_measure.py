@@ -1441,3 +1441,67 @@ class TestLastInferenceMetaRealPrimitives:
             pass
 
         assert _last_inference_meta(_Bare()) is None
+
+
+
+def test_calibration_receipt_includes_observed_decision_backend(tmp_path):
+    import socket
+    import struct
+    import subprocess
+    import time
+    model = tmp_path / 'decision.gguf'
+    def string(value):
+        raw = value.encode()
+        return struct.pack('<Q', len(raw)) + raw
+    model.write_bytes(b'GGUF' + struct.pack('<IQQ', 3, 0, 2) + string('general.architecture') + struct.pack('<I', 8) + string('lfm3') + string('lfm3.decision.temperature.choice') + struct.pack('<If', 6, 2.0))
+    executable = tmp_path / 'fake-server'
+    subprocess.run(['cc', str(Path(__file__).parent / 'fake_decision_server.c'), '-o', str(executable)], check=True)
+    with socket.socket() as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        port = reservation.getsockname()[1]
+    child = subprocess.Popen([str(executable), '-m', str(model), '--port', str(port), '--parallel=1', '--batch-size', '32', '--ubatch-size=16'])
+    url = f'http://127.0.0.1:{port}'
+    try:
+        from src.typed_decisions.decision_backend_pin import listener_inode
+        for _ in range(100):
+            try:
+                listener_inode(child.pid, url)
+                break
+            except ValueError:
+                time.sleep(.01)
+        result = run_calibration_study(None, state=STATE, questions=CALIBRATION_QUESTIONS[:1], labels={'cal-0': 'a'}, role=ROLE, receipt_path=tmp_path / 'receipt.json', decision_backend={'pid': child.pid, 'model_path': model, 'base_url': url})
+        pin = result['decision_backend_pin']
+        assert pin['gguf_sha256'] == hashlib.sha256(model.read_bytes()).hexdigest()
+        assert pin['decision_temperatures'] == {'lfm3.decision.temperature.choice': 2.0}
+        assert pin['server_argv_flags'] == {'np': 1, 'batch': 32, 'ubatch': 16}
+        assert pin['server_build_commit'] == 'abcdef123'
+        assert pin['endpoint_kind'] == 'llama_completion_json'
+        assert pin['decision_temperature_scaling'] == 'not_asserted_for_json'
+        assert pin['request_count'] == 1
+        assert pin['transport_method'] == 'direct_local_completion_v1'
+        assert pin['requests'][0]['temperature'] == 0.0
+        assert pin['requests'][0]['seed'] == 0
+        assert pin['requests'][0]['n_predict'] > 0
+        from src.typed_decisions.decision_backend_pin import capture_running_backend_pin, PinnedCompletionClient
+        other = tmp_path / 'wrong.gguf'
+        other.write_bytes(model.read_bytes())
+        with pytest.raises(ValueError, match='differs'):
+            capture_running_backend_pin(child.pid, other, url)
+        state_file, questions_file, labels_file = (tmp_path / x for x in ('state.json', 'questions.json', 'labels.json'))
+        state_file.write_text(json.dumps(STATE))
+        questions_file.write_text(json.dumps([{'id': 'cal-0', 'kind': 'choice', 'text': 'Pick.', 'options': ['a', 'b']}]))
+        labels_file.write_text(json.dumps({'cal-0': 'a'}))
+        cli_receipt = tmp_path / 'cli-receipt.json'
+        assert main(['calibration', '--live', '--role', ROLE, '--state-file', str(state_file), '--questions-file', str(questions_file), '--labels-file', str(labels_file), '--receipt', str(cli_receipt), '--decision-backend-pid', str(child.pid), '--decision-backend-url', url, '--decision-model-path', str(model)]) == 0
+        assert json.loads(cli_receipt.read_text())['decision_backend_pin']['server_build_commit'] == 'abcdef123'
+        checked = PinnedCompletionClient(child.pid, url, pin)
+        model.write_bytes(model.read_bytes() + b'drift')
+        with pytest.raises(ValueError, match='model changed'):
+            checked._check()
+        assert json.loads((tmp_path / 'receipt.json').read_text())['decision_backend_pin'] == pin
+        with pytest.raises(ValueError, match='listener'):
+            listener_inode(child.pid, f'http://127.0.0.1:{port + 1}')
+    finally:
+        child.terminate()
+        child.wait(timeout=5)
+        assert child.poll() is not None

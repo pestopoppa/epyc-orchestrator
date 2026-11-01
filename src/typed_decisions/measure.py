@@ -488,6 +488,7 @@ def run_calibration_study(
     artifacts_dir: str | Path | None = None,
     dry_run: bool = False,
     input_binding: Mapping[str, Any] | None = None,
+    decision_backend: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Calibrate the local confidence statistic against labeled outcomes.
 
@@ -509,7 +510,10 @@ def run_calibration_study(
 
     ``input_binding`` is optional caller-supplied source metadata. Its digest
     values are stamped ``caller_asserted``; only the CLI can stamp identities
-    derived from its original one-read byte buffers.
+    derived from its original one-read byte buffers. ``decision_backend`` opts
+    into direct localhost /completion with listener and GGUF custody; it bypasses
+    the normal LLMPrimitives routing, cache and prompt shaping and is a distinct
+    measurement path. It is not a /v1/systemone calibration.
     """
     validated_binding = _validate_calibration_input_binding(
         input_binding,
@@ -525,6 +529,7 @@ def run_calibration_study(
         artifacts_dir=artifacts_dir,
         dry_run=dry_run,
         input_binding=validated_binding,
+        decision_backend=decision_backend,
     )
 
 
@@ -539,6 +544,7 @@ def _run_calibration_study(
     artifacts_dir: str | Path | None,
     dry_run: bool,
     input_binding: Mapping[str, Any] | None,
+    decision_backend: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Internal calibration runner; CLI passes binding from its one-read buffers."""
     questions = list(questions)
@@ -564,13 +570,28 @@ def _run_calibration_study(
             },
         }
 
-    _require_primitives(primitives, "calibration")
+    decision_backend_pin = None
+    if decision_backend is not None:
+        from src.typed_decisions.decision_backend_pin import capture_running_backend_pin, PinnedCompletionClient
+
+        if set(decision_backend) != {"model_path", "pid", "base_url"}:
+            raise ValueError("decision backend requires model_path, pid and base_url")
+        decision_backend_pin = capture_running_backend_pin(**decision_backend)
+        primitives = PinnedCompletionClient(decision_backend["pid"], decision_backend["base_url"], decision_backend_pin)
+    else:
+        _require_primitives(primitives, "calibration")
     result = run_typed_decisions(
         primitives,
         state=state,
         questions=questions,
         role=role,
     )
+    if decision_backend_pin is not None:
+        primitives._check()
+        if primitives.calls == 0:
+            raise MeasurementError("pinned calibration produced no server calls")
+        decision_backend_pin["request_count"] = primitives.calls
+        decision_backend_pin["requests"] = primitives.requests
     decisions: dict[str, Decision] = {
         decision.question_id: decision for decision in result.decisions
     }
@@ -653,6 +674,8 @@ def _run_calibration_study(
         "prompt_sha256": _prompt_hashes([result]),
         "input_binding": dict(input_binding) if input_binding is not None else None,
     }
+    if decision_backend_pin is not None:
+        receipt["decision_backend_pin"] = decision_backend_pin
     _write_receipt(receipt, receipt_path=receipt_path, artifacts_dir=artifacts_dir)
     return receipt
 
@@ -1404,6 +1427,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="confidence calibration study (TD-2)",
     )
     _add_common_options(calibration)
+    calibration.add_argument("--decision-backend-pid", type=int, help="PID of direct localhost llama-server")
+    calibration.add_argument("--decision-backend-url", help="direct localhost HTTP origin")
+    calibration.add_argument("--decision-model-path", help="GGUF path served by that process")
     calibration.add_argument("--state-file", required=True, help="JSON file with the state string")
     calibration.add_argument("--questions-file", required=True, help="JSON catalogue file")
     calibration.add_argument(
@@ -1475,6 +1501,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.study == "fanout" and args.questions_file is None and args.questions_per_state is None:
         parser.error("fanout requires --questions-per-state or --questions-file")
 
+    if args.study == "calibration":
+        backend_values = (args.decision_backend_pid, args.decision_backend_url, args.decision_model_path)
+        if any(v is not None for v in backend_values) and not all(v is not None for v in backend_values):
+            parser.error("all three --decision-backend-pid, --decision-backend-url and --decision-model-path are required")
+
     if not args.live and not args.dry_run:
         print(
             "refusing to run: pass --live for real model calls or --dry-run to print the plan",
@@ -1509,7 +1540,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _parse_labels_bytes(source_bytes["labels_file"], source_paths["labels_file"]),
             )
 
-        primitives = _live_primitives() if (args.live and not args.dry_run) else None
+        pinned = args.study == "calibration" and args.decision_backend_pid is not None
+        primitives = _live_primitives() if (args.live and not args.dry_run and not pinned) else None
         if args.study == "contamination":
             receipt = run_contamination_study(
                 primitives,
@@ -1535,6 +1567,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 artifacts_dir=args.artifacts_dir,
                 dry_run=args.dry_run,
                 input_binding=calibration_binding,
+                decision_backend=({"pid": args.decision_backend_pid, "base_url": args.decision_backend_url, "model_path": args.decision_model_path} if pinned else None),
             )
         elif args.study == "parallel":
             receipt = run_parallel_fanout_study(
