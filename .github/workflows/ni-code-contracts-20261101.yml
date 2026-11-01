@@ -32,6 +32,7 @@ jobs:
       ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-empty-kernel-path
       ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-empty-kernel-path/llama-mtmd-cli
       ORCHESTRATOR_PATHS_LLAMA_SERVER: /tmp/ni-empty-kernel-path/llama-server
+      ORCHESTRATOR_PATHS_TMP_DIR: /tmp/ni-code-contracts-tmp
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -49,6 +50,8 @@ jobs:
           sha256sum \
             src/trace/step_events.py \
             src/graph/helpers.py \
+            src/config/models.py \
+            src/repl_environment/session_artifacts.py \
             tests/unit/test_step_events.py \
             tests/integration/test_execute_turn.py \
             orchestration/repl_memory/distillation/pipeline.py \
