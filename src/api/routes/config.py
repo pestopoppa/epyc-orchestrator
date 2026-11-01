@@ -15,6 +15,7 @@ from src.features import (
 from src.api.dependencies import dep_features
 from src.runtime.config_attestation import (
     attestation_payload,
+    collect_served_runtime_identity,
     publish_config_attestation,
 )
 
@@ -77,7 +78,13 @@ async def update_config(
 
 
 @router.get("/config/attest")
-async def attest_config(current: Features = Depends(dep_features)):
-    """Return this worker's feature-flag state and value sources."""
+async def attest_config(
+    include_served_identity: bool = False,
+    current: Features = Depends(dep_features),
+):
+    """Return this worker's flags; optionally observe loaded serving identity for AP-70."""
     publish_config_attestation(current)
-    return attestation_payload(current)
+    payload = attestation_payload(current)
+    if include_served_identity:
+        payload["served_identity"] = await collect_served_runtime_identity(current)
+    return payload

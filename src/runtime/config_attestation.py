@@ -3,12 +3,222 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import hashlib
 import os
 import uuid
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from src.features import Features, feature_sources
+
+
+_IDENTITY_TIMEOUT_S = 2.5
+_IDENTITY_MAX_CONCURRENCY = 8
+
+
+def _canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _process_start_id(pid: int) -> str:
+    """Linux process start ticks, used to distinguish a reused PID."""
+    try:
+        fields = Path(f"/proc/{int(pid)}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[19]
+    except (OSError, ValueError, IndexError):
+        return ""
+
+
+def _nonsecret_config_identity() -> dict[str, Any]:
+    """Return the loaded request-routing config fields needed for AP-70 comparison."""
+    from src.config import get_config
+
+    config = get_config()
+    fields = (
+        "llm",
+        "server",
+        "server_urls",
+        "timeouts",
+        "vision",
+        "chat",
+        "delegation",
+        "think_harder",
+    )
+    selected: dict[str, Any] = {}
+    for name in fields:
+        value = getattr(config, name, None)
+        if value is None:
+            continue
+        if name == "server_urls" and hasattr(value, "as_dict"):
+            selected[name] = value.as_dict()
+        elif is_dataclass(value):
+            selected[name] = asdict(value)
+        else:
+            selected[name] = value
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(key): scrub(item)
+                for key, item in value.items()
+                if not any(
+                    part in str(key).lower()
+                    for part in ("secret", "token", "password", "api_key", "authorization")
+                )
+            }
+        if isinstance(value, (list, tuple)):
+            return [scrub(item) for item in value]
+        if isinstance(value, (set, frozenset)):
+            return sorted(scrub(item) for item in value)
+        return value
+
+    return scrub(selected)
+
+
+def _role_endpoints(config_identity: dict[str, Any]) -> dict[str, list[str]]:
+    roles = config_identity.get("server_urls")
+    if not isinstance(roles, dict):
+        raise ValueError("loaded role URL map is unavailable")
+    result: dict[str, list[str]] = {}
+    for role, raw in sorted(roles.items()):
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError(f"loaded endpoint is unavailable for role {role}")
+        urls = [part.strip() for part in raw.split(",") if part.strip()]
+        if urls and urls[0].startswith("full:"):
+            urls[0] = urls[0][len("full:") :].strip()
+        if not urls:
+            raise ValueError(f"loaded endpoint is unavailable for role {role}")
+        result[str(role)] = urls
+    return result
+
+
+async def _observe_backend(url: str, client: Any, semaphore: asyncio.Semaphore) -> dict[str, Any]:
+    """Read a local llama-server's properties and bind them to its listener PID."""
+    from scripts.server.stack_processes import pids_on_port, process_cmdline
+
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        raise ValueError("backend endpoint is not a directly observable local listener")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("backend endpoint contains unsupported credential or query fields")
+    port = parsed.port
+    if port is None:
+        raise ValueError("backend endpoint has no explicit port")
+    listeners = await asyncio.to_thread(pids_on_port, port, 2)
+    if len(set(listeners)) != 1:
+        raise ValueError(f"backend listener PID is missing or ambiguous for {url}")
+    pid = int(listeners[0])
+    start_id = await asyncio.to_thread(_process_start_id, pid)
+    argv = await asyncio.to_thread(process_cmdline, pid)
+    if not start_id or not argv or not any("llama-server" in part for part in argv):
+        raise ValueError(f"backend process identity is unavailable for {url}")
+    response = await client.get(f"{url.rstrip('/')}/props")
+    response.raise_for_status()
+    props = response.json()
+    if not isinstance(props, dict):
+        raise ValueError(f"backend properties are unavailable for {url}")
+    model_path = props.get("model_path")
+    build_info = props.get("build_info")
+    settings = props.get("default_generation_settings")
+    slots = props.get("total_slots")
+    if (
+        not isinstance(model_path, str)
+        or not model_path
+        or not isinstance(build_info, str)
+        or not build_info
+    ):
+        raise ValueError(f"backend model/build identity is incomplete for {url}")
+    if not isinstance(settings, dict) or isinstance(slots, bool) or not isinstance(slots, int):
+        raise ValueError(f"backend recipe identity is incomplete for {url}")
+    listeners_after = await asyncio.to_thread(pids_on_port, port, 2)
+    start_after = await asyncio.to_thread(_process_start_id, pid)
+    if set(listeners_after) != {pid} or start_after != start_id:
+        raise ValueError(f"backend process changed during identity observation for {url}")
+    return {
+        "endpoint": url,
+        "listener_pid": pid,
+        "listener_start_ticks": start_id,
+        "argv_sha256": _canonical_sha256(argv),
+        "model_path": model_path,
+        "model_content_identity": "observed_path_only_not_cryptographic",
+        "build_info": build_info,
+        "default_generation_settings": settings,
+        "total_slots": slots,
+    }
+
+
+async def collect_served_runtime_identity(current: Features) -> dict[str, Any]:
+    """Observe loaded API and local backend identities; never call a model or mutate config."""
+    api_pid = os.getpid()
+    api_start = _process_start_id(api_pid)
+    if not api_start:
+        return {
+            "schema_version": 1,
+            "status": "unavailable",
+            "reason": "API process birth identity is unavailable",
+        }
+    try:
+        config_identity = _nonsecret_config_identity()
+        role_urls = _role_endpoints(config_identity)
+    except Exception as exc:  # noqa: BLE001 - identity failure is a refusal, not a route failure
+        return {
+            "schema_version": 1,
+            "status": "unavailable",
+            "reason": f"loaded config unavailable: {type(exc).__name__}: {exc}"[:300],
+        }
+
+    endpoints = sorted({url for urls in role_urls.values() for url in urls})
+    semaphore = asyncio.Semaphore(_IDENTITY_MAX_CONCURRENCY)
+    try:
+        import httpx
+
+        timeout = httpx.Timeout(_IDENTITY_TIMEOUT_S, connect=_IDENTITY_TIMEOUT_S)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+
+            async def observe_bounded(url: str) -> dict[str, Any]:
+                async with semaphore:
+                    return await _observe_backend(url, client, semaphore)
+
+            observed = await asyncio.gather(
+                *(observe_bounded(url) for url in endpoints),
+                return_exceptions=True,
+            )
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "schema_version": 1,
+            "status": "unavailable",
+            "reason": f"backend observation failed: {type(exc).__name__}: {exc}"[:300],
+        }
+    failures = [str(value) for value in observed if isinstance(value, BaseException)]
+    if failures:
+        return {"schema_version": 1, "status": "unavailable", "reason": "; ".join(failures)[:500]}
+    by_url = {item["endpoint"]: item for item in observed if isinstance(item, dict)}
+    roles = {role: [by_url[url] for url in urls] for role, urls in role_urls.items()}
+    identity = {
+        "schema_version": 1,
+        "status": "observed",
+        "identity_basis": [
+            "request-worker-pid-and-proc-start-ticks",
+            "loaded-nonsecret-routing-config-sha256",
+            "configured-role-to-endpoint-map",
+            "local-listener-pid-and-proc-start-ticks",
+            "llama-server-props-model-path-build-and-default-generation-settings",
+        ],
+        "api_worker": {"pid": api_pid, "start_ticks": api_start},
+        "feature_flags": current.summary(),
+        "loaded_config_sha256": _canonical_sha256(config_identity),
+        "role_endpoints": roles,
+    }
+    identity["identity_sha256"] = _canonical_sha256(identity)
+    return identity
 
 
 def attestation_dir() -> Path:

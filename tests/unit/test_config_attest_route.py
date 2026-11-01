@@ -102,6 +102,25 @@ class TestAttestConfig:
         # feature_sources() reports a source for every known flag.
         assert set(injected.summary()).issubset(set(sources))
 
+    def test_served_identity_is_opt_in_only(self, app, client, monkeypatch):
+        _override_features(app, Features(memrl=True))
+        calls = []
+
+        async def identity(current):
+            calls.append(current)
+            return {"schema_version": 1, "status": "unavailable", "reason": "test"}
+
+        monkeypatch.setattr("src.api.routes.config.collect_served_runtime_identity", identity)
+        ordinary = client.get("/config/attest")
+        assert ordinary.status_code == 200
+        assert set(ordinary.json()) == {"pid", "flags", "sources"}
+        assert calls == []
+
+        opted_in = client.get("/config/attest?include_served_identity=1")
+        assert opted_in.status_code == 200
+        assert opted_in.json()["served_identity"]["status"] == "unavailable"
+        assert calls == [app.dependency_overrides[dep_features]()]
+
     def test_post_to_attest_is_method_not_allowed(self, app, client):
         _override_features(app, Features())
 

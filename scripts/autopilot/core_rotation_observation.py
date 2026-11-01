@@ -104,7 +104,11 @@ def summarize_pairs(
     drops: list[float] = []
     for pair in complete:
         value = pair.get("drop")
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
             failures.append(
                 {
                     "boundary_trial_id": pair.get("boundary_trial_id"),
@@ -114,9 +118,7 @@ def summarize_pairs(
             continue
         drops.append(float(value))
     complete_ids = [
-        int(p["boundary_trial_id"])
-        for p in complete
-        if p.get("boundary_trial_id") is not None
+        int(p["boundary_trial_id"]) for p in complete if p.get("boundary_trial_id") is not None
     ]
     missing_ids = sorted(set(planned_ids) - set(complete_ids))
     if (
@@ -191,8 +193,12 @@ def _tree_sha256(root: Path) -> tuple[str, int]:
 
 
 def _archive_incumbent(
-    archive: Any, journal: Any, checkpoint_dir: Path, current_infra: Mapping[str, Any],
+    archive: Any,
+    journal: Any,
+    checkpoint_dir: Path,
+    current_infra: Mapping[str, Any],
     current_flags: Mapping[str, Any],
+    current_served_identity: Mapping[str, Any],
 ) -> tuple[dict[str, Any], Path]:
     member = archive.production_best()
     if member is None:
@@ -202,9 +208,13 @@ def _archive_incumbent(
     if row is None:
         raise ValueError("production incumbent trial is absent from the journal")
     baseline_infra = row.infra_fingerprint if isinstance(row.infra_fingerprint, Mapping) else {}
-    comparison = compare_infra_fingerprints(current_infra, baseline_infra, reference_label="incumbent_trial")
+    comparison = compare_infra_fingerprints(
+        current_infra, baseline_infra, reference_label="incumbent_trial"
+    )
     if comparison.get("status") != COMPARABLE:
-        raise ValueError("current serving/source regime does not match incumbent: " + str(comparison))
+        raise ValueError(
+            "current serving/source regime does not match incumbent: " + str(comparison)
+        )
 
     checkpoint_root = Path(checkpoint_dir).resolve(strict=True)
     checkpoint_link = checkpoint_root / "production_best"
@@ -230,7 +240,9 @@ def _archive_incumbent(
     cfg = member.config_snapshot if isinstance(member.config_snapshot, Mapping) else {}
     action_type = str(cfg.get("type") or "")
     if action_type not in {"prompt_mutation", "gepa_optimize"}:
-        raise ValueError(f"incumbent action is not a prompt-only artifact: {action_type or 'unknown'}")
+        raise ValueError(
+            f"incumbent action is not a prompt-only artifact: {action_type or 'unknown'}"
+        )
     prompt_action_fields = {
         "prompt_mutation": {"type", "file", "mutation", "description"},
         "gepa_optimize": {"type", "file", "max_evals", "description"},
@@ -238,16 +250,49 @@ def _archive_incumbent(
     if set(cfg) - prompt_action_fields:
         raise ValueError("incumbent snapshot contains nonprompt or unknown mutation knobs")
     target_file = Path(str(cfg.get("file") or ""))
-    if not str(cfg.get("file") or "").strip() or target_file.is_absolute() or ".." in target_file.parts:
+    if (
+        not str(cfg.get("file") or "").strip()
+        or target_file.is_absolute()
+        or ".." in target_file.parts
+    ):
         raise ValueError("incumbent snapshot lacks a safe prompt-file target")
     details = row.eval_details if isinstance(row.eval_details, Mapping) else {}
+    incumbent_served_identity = details.get("ap70_served_runtime_identity")
+    if (
+        not isinstance(incumbent_served_identity, Mapping)
+        or incumbent_served_identity.get("status") != "observed"
+    ):
+        raise ValueError("incumbent journal row has no prospective served-runtime identity witness")
+    stored_digest = incumbent_served_identity.get("identity_sha256")
+    stored_body = {
+        key: value for key, value in incumbent_served_identity.items() if key != "identity_sha256"
+    }
+    recomputed_stored_digest = hashlib.sha256(
+        json.dumps(stored_body, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    if stored_digest != recomputed_stored_digest:
+        raise ValueError("incumbent journal served-runtime identity digest is invalid")
+    if dict(incumbent_served_identity.get("feature_flags") or {}) != dict(current_flags):
+        raise ValueError("incumbent write-side runtime flags do not match the current API flags")
+    if dict(current_served_identity.get("feature_flags") or {}) != dict(current_flags):
+        raise ValueError("attested API worker flags do not match the current API flags")
+    if incumbent_served_identity.get("identity_sha256") != current_served_identity.get(
+        "identity_sha256"
+    ):
+        raise ValueError(
+            "current served runtime does not match the incumbent's write-side identity"
+        )
     served = details.get("served_content")
     files = served.get("files") if isinstance(served, Mapping) else None
     if not isinstance(files, Mapping) or not files:
         raise ValueError("incumbent has no complete served-prompt file identity")
     for rel, expected in files.items():
         rel_path = Path(str(rel))
-        if rel_path.is_absolute() or ".." in rel_path.parts or not str(rel).startswith("orchestration/prompts/"):
+        if (
+            rel_path.is_absolute()
+            or ".." in rel_path.parts
+            or not str(rel).startswith("orchestration/prompts/")
+        ):
             raise ValueError("incumbent includes a non-prompt served artifact")
         prompt_file = checkpoint / "prompts" / rel_path.relative_to("orchestration/prompts")
         if prompt_file.is_symlink() or not prompt_file.is_file():
@@ -266,6 +311,7 @@ def _archive_incumbent(
             "prompt_tree_sha256": prompt_sha,
             "prompt_file_count": prompt_files,
             "feature_flags": dict(current_flags),
+            "served_runtime_identity": dict(incumbent_served_identity),
             "infra_fingerprint": dict(current_infra),
             "infra_digest": fingerprint_digest(current_infra),
             "incumbent_trial_infra_digest": fingerprint_digest(baseline_infra),
@@ -303,6 +349,31 @@ def _current_flags(url: str) -> dict[str, Any]:
     return dict(flags)
 
 
+def _current_served_identity(url: str) -> dict[str, Any]:
+    """Request the opt-in API-loaded and backend-serving identity witness."""
+    import httpx
+
+    response = httpx.get(f"{url.rstrip('/')}/config/attest?include_served_identity=1", timeout=8)
+    response.raise_for_status()
+    payload = response.json()
+    identity = payload.get("served_identity") if isinstance(payload, Mapping) else None
+    if not isinstance(identity, Mapping) or identity.get("status") != "observed":
+        reason = (
+            identity.get("reason") if isinstance(identity, Mapping) else "missing identity payload"
+        )
+        raise ValueError(f"live served identity is unavailable: {reason}")
+    digest = identity.get("identity_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        raise ValueError("live served identity digest is unavailable")
+    digest_body = {key: value for key, value in identity.items() if key != "identity_sha256"}
+    observed_digest = hashlib.sha256(
+        json.dumps(digest_body, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    if observed_digest != digest:
+        raise ValueError("live served identity digest does not match its fields")
+    return dict(identity)
+
+
 def _override_base() -> Path:
     configured = os.environ.get("ORCHESTRATOR_PROMPT_ROOT_OVERRIDE_BASE")
     root = Path(configured).expanduser() if configured else _PROMPT_ROOT_DEFAULT
@@ -312,13 +383,11 @@ def _override_base() -> Path:
 def _evaluation_environment_identity() -> dict[str, str]:
     """Bind evaluator/server knobs without disclosing their literal values."""
     names = sorted(
-        key for key in os.environ
+        key
+        for key in os.environ
         if key.startswith(("AUTOPILOT_", "ORCHESTRATOR_")) or key == "LLM_JUDGE_ROLE"
     )
-    return {
-        key: hashlib.sha256(os.environ[key].encode("utf-8")).hexdigest()
-        for key in names
-    }
+    return {key: hashlib.sha256(os.environ[key].encode("utf-8")).hexdigest() for key in names}
 
 
 def _pair_identity_unchanged(
@@ -330,6 +399,7 @@ def _pair_identity_unchanged(
     url: str,
     expected_infra_digest: str,
     expected_environment_identity: Mapping[str, str],
+    expected_served_identity_sha256: str,
 ) -> None:
     source_sha, _ = _tree_sha256(prompt_source)
     mirror_sha, _ = _tree_sha256(mirror)
@@ -337,6 +407,10 @@ def _pair_identity_unchanged(
         raise ValueError("incumbent prompt bytes changed during paired observation")
     if _current_flags(url) != dict(flags):
         raise ValueError("runtime feature flags changed during paired observation")
+    if _current_served_identity(url).get("identity_sha256") != expected_served_identity_sha256:
+        raise ValueError(
+            "API/backend process or loaded serving identity changed during paired observation"
+        )
     if _evaluation_environment_identity() != dict(expected_environment_identity):
         raise ValueError("evaluator/server environment knobs changed during paired observation")
     current = collect_infra_fingerprint()
@@ -357,7 +431,11 @@ def _quality_result(result: Any, expected_rotation: int, expected_core_n: int) -
     if not bool(getattr(result, "quality_measured", False)):
         raise ValueError("quality was not measured")
     quality = getattr(result, "quality", None)
-    if isinstance(quality, bool) or not isinstance(quality, (int, float)) or not math.isfinite(quality):
+    if (
+        isinstance(quality, bool)
+        or not isinstance(quality, (int, float))
+        or not math.isfinite(quality)
+    ):
         raise ValueError("quality is nonnumeric or nonfinite")
     n_questions = int(getattr(result, "n_questions", 0) or 0)
     n_completed = getattr(result, "n_questions_completed", None)
@@ -367,7 +445,11 @@ def _quality_result(result: Any, expected_rotation: int, expected_core_n: int) -
         raise ValueError("evaluator did not draw the full predeclared T1 core size")
     if n_questions <= 0 or n_completed != n_questions or n_requested != n_questions:
         raise ValueError("paired T1 evaluation is partial")
-    if isinstance(denominator, bool) or not isinstance(denominator, int) or denominator != n_questions:
+    if (
+        isinstance(denominator, bool)
+        or not isinstance(denominator, int)
+        or denominator != n_questions
+    ):
         raise ValueError("paired T1 quality denominator excludes failed or partial rows")
     question_rows = getattr(result, "question_results", None)
     if not isinstance(question_rows, list) or len(question_rows) != n_questions:
@@ -407,11 +489,17 @@ def _pair_events(journal: Any, study_id: str) -> list[dict[str, Any]]:
 
 
 def _boundary_pins(journal: Any, study_id: str) -> list[dict[str, Any]]:
-    return [dict(e) for e in journal.ledger_events(BOUNDARY_PIN_EVENT) if e.get("study_id") == study_id]
+    return [
+        dict(e) for e in journal.ledger_events(BOUNDARY_PIN_EVENT) if e.get("study_id") == study_id
+    ]
 
 
 def _append_incomplete_pair(
-    journal: Any, *, study_id: str, boundary: Mapping[str, Any], reason: str,
+    journal: Any,
+    *,
+    study_id: str,
+    boundary: Mapping[str, Any],
+    reason: str,
     incumbent: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     event = {
@@ -470,9 +558,10 @@ def capture_at_rotation_boundary(
         # checkpoint state. A failed identity check remains an explicit refusal
         # under this same preregistered plan.
         journal.append_ledger_event(plan)
-    elif int(plan.get("planned_k", -1)) != int(planned_k) or int(
-        plan.get("rotation_period_trials", -1)
-    ) != period:
+    elif (
+        int(plan.get("planned_k", -1)) != int(planned_k)
+        or int(plan.get("rotation_period_trials", -1)) != period
+    ):
         raise ValueError("environment plan differs from the existing study predeclaration")
     boundary = next(
         (b for b in plan["planned_boundaries"] if int(b["boundary_trial_id"]) == trial_id),
@@ -480,10 +569,16 @@ def capture_at_rotation_boundary(
     )
     if boundary is None:
         return None
-    if any(int(e.get("boundary_trial_id", -1)) == trial_id for e in _pair_events(journal, study_id)):
+    if any(
+        int(e.get("boundary_trial_id", -1)) == trial_id for e in _pair_events(journal, study_id)
+    ):
         return None
     prior_pin = next(
-        (e for e in _boundary_pins(journal, study_id) if int(e.get("boundary_trial_id", -1)) == trial_id),
+        (
+            e
+            for e in _boundary_pins(journal, study_id)
+            if int(e.get("boundary_trial_id", -1)) == trial_id
+        ),
         None,
     )
     if prior_pin is not None:
@@ -492,10 +587,14 @@ def capture_at_rotation_boundary(
             study_id=study_id,
             boundary=boundary,
             reason="previous process ended after pinning identities but before recording the pair; not rerun",
-            incumbent=prior_pin.get("identity") if isinstance(prior_pin.get("identity"), Mapping) else None,
+            incumbent=prior_pin.get("identity")
+            if isinstance(prior_pin.get("identity"), Mapping)
+            else None,
         )
         summary = summarize_pairs(
-            study_id, int(planned_k), _pair_events(journal, study_id),
+            study_id,
+            int(planned_k),
+            _pair_events(journal, study_id),
             list(plan.get("planned_boundaries") or []),
         )
         journal.append_ledger_event(summary)
@@ -512,8 +611,9 @@ def capture_at_rotation_boundary(
         if identity_changed_before_pin:
             raise ValueError("serving/source/recipe identity changed before AP-70 predeclaration")
         flags = _current_flags(orchestrator_url)
+        served_identity = _current_served_identity(orchestrator_url)
         incumbent, prompt_source = _archive_incumbent(
-            archive, journal, checkpoint_dir, current_infra, flags
+            archive, journal, checkpoint_dir, current_infra, flags, served_identity
         )
         prompt_sha = str(incumbent["prompt_tree_sha256"])
         base = _override_base()
@@ -535,6 +635,7 @@ def capture_at_rotation_boundary(
             "request_prompt_root": str(mirror),
             "request_prompt_tree_sha256": mirror_sha,
             "evaluation_environment_identity": _evaluation_environment_identity(),
+            "served_runtime_identity": dict(served_identity),
         }
     except Exception as exc:  # noqa: BLE001 - observation cannot break an ordinary trial
         journal.append_ledger_event(
@@ -553,9 +654,13 @@ def capture_at_rotation_boundary(
                 "identity": {"infra_fingerprint": dict(current_infra)},
             }
         )
-        pair = _append_incomplete_pair(journal, study_id=study_id, boundary=boundary, reason=str(exc))
+        pair = _append_incomplete_pair(
+            journal, study_id=study_id, boundary=boundary, reason=str(exc)
+        )
         summary = summarize_pairs(
-            study_id, int(planned_k), _pair_events(journal, study_id),
+            study_id,
+            int(planned_k),
+            _pair_events(journal, study_id),
             list(plan.get("planned_boundaries") or []),
         )
         journal.append_ledger_event(summary)
@@ -599,6 +704,9 @@ def capture_at_rotation_boundary(
                 url=orchestrator_url,
                 expected_infra_digest=str(incumbent["infra_digest"]),
                 expected_environment_identity=identity["evaluation_environment_identity"],
+                expected_served_identity_sha256=str(
+                    identity["served_runtime_identity"]["identity_sha256"]
+                ),
             )
             artifact_dir = pair_root / f"question-results-{name}"
             tower._trial_id_context = None
@@ -620,6 +728,9 @@ def capture_at_rotation_boundary(
                 url=orchestrator_url,
                 expected_infra_digest=str(incumbent["infra_digest"]),
                 expected_environment_identity=identity["evaluation_environment_identity"],
+                expected_served_identity_sha256=str(
+                    identity["served_runtime_identity"]["identity_sha256"]
+                ),
             )
         drop = float(results["outgoing"]["quality"] - results["incoming"]["quality"])
         pair_result = {
@@ -651,7 +762,8 @@ def capture_at_rotation_boundary(
                     results["outgoing"]["sum_request_elapsed_s"]
                     + results["incoming"]["sum_request_elapsed_s"]
                 ),
-                "n_questions": results["outgoing"]["n_questions"] + results["incoming"]["n_questions"],
+                "n_questions": results["outgoing"]["n_questions"]
+                + results["incoming"]["n_questions"],
             },
         }
     except Exception as exc:  # noqa: BLE001 - no diagnostic failure may fail a trial
@@ -688,7 +800,9 @@ def capture_at_rotation_boundary(
     pair = journal.append_ledger_event(pair_result)
     all_pairs = _pair_events(journal, study_id)
     summary = summarize_pairs(
-        study_id, int(planned_k), all_pairs,
+        study_id,
+        int(planned_k),
+        all_pairs,
         list(plan.get("planned_boundaries") or []),
     )
     journal.append_ledger_event(summary)

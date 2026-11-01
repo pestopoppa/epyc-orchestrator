@@ -107,6 +107,7 @@ from core_rotation_observation import (
     PAIR_EVENT as _AP70_PAIR_EVENT,
     PLAN_EVENT as _AP70_PLAN_EVENT,
     SUMMARY_EVENT as _AP70_SUMMARY_EVENT,
+    _current_served_identity as _ap70_current_served_identity,
     capture_at_rotation_boundary as _capture_core_rotation_observation,
     summarize_pairs as _summarize_core_rotation_pairs,
 )
@@ -5684,6 +5685,20 @@ def _capture_core_rotation_observation_if_enabled(
             log.debug("AP-70 refusal could not be persisted", exc_info=True)
 
 
+def _capture_ap70_write_side_identity_if_enabled(orchestrator_url: str) -> dict[str, Any] | None:
+    """Capture a prospective journal witness only during explicit AP-70 opt-in."""
+    if os.environ.get("AUTOPILOT_CORE_ROTATION_OBSERVE") != "1":
+        return None
+    try:
+        return _ap70_current_served_identity(orchestrator_url)
+    except Exception as exc:  # noqa: BLE001 - missing identity is durable incomplete evidence
+        return {
+            "schema_version": 1,
+            "status": "unavailable",
+            "reason": f"{type(exc).__name__}: {exc}"[:300],
+        }
+
+
 def _infra_comparability_for_trial(
     state: Mapping[str, Any],
     tier: int,
@@ -10449,6 +10464,7 @@ def _run_loop_inner(
         #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
         # Both cases prevent silent corruption of the planner's view.
         dispatch_infra_fingerprint: dict[str, Any] | None = None
+        trial_ap70_served_identity: dict[str, Any] | None = None
         trial_served_content: dict[str, Any] | None = None  # set by mutation handlers
         trial_prompt_lint: list[str] | None = None  # MHS-15 warn-only lint findings
         if pre_dispatch_skip is None:
@@ -10467,6 +10483,9 @@ def _run_loop_inner(
             }
             save_state(state)
             if not dry_run:
+                trial_ap70_served_identity = _capture_ap70_write_side_identity_if_enabled(
+                    ORCHESTRATOR_URL
+                )
                 _capture_core_rotation_observation_if_enabled(
                     trial_id=trial_counter,
                     tower=tower,
@@ -11637,6 +11656,8 @@ def _run_loop_inner(
         eval_details_dict["infra_fingerprint_digest"] = fingerprint_digest(trial_infra_fingerprint)
         eval_details_dict["infra_comparability"] = trial_comparability.get("status", "")
         eval_details_dict[INFRA_REGIME_DIGEST_KEY] = trial_regime_digest
+        if trial_ap70_served_identity is not None:
+            eval_details_dict["ap70_served_runtime_identity"] = trial_ap70_served_identity
         if trial_served:
             eval_details_dict[SERVED_CONTENT_KEY] = trial_served
         if trial_prompt_lint:
