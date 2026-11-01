@@ -83,7 +83,7 @@ def test_served_runtime_identity_is_unavailable_if_any_role_cannot_be_observed(m
     assert "no /props response" in identity["reason"]
 
 
-def test_full_config_identity_includes_behavior_knobs_but_omits_provider_secrets(monkeypatch):
+def _full_config_fixture():
     @dataclass
     class LLM:
         qwen_stop_token: str = "<|im_end|>"
@@ -115,12 +115,17 @@ def test_full_config_identity_includes_behavior_knobs_but_omits_provider_secrets
         external_backends: Providers
 
     config = Config(LLM(), REPL(), Chat(), Providers(Provider(), Provider("openai-secret")))
+
+    return config
+
+
+def test_full_config_identity_includes_behavior_knobs(monkeypatch):
+    config = _full_config_fixture()
     monkeypatch.setattr("src.config.get_config", lambda: config)
 
-    baseline = config_attestation._nonsecret_config_identity()
-    baseline_digest = config_attestation._canonical_sha256(baseline)
-    assert "first-secret" not in repr(baseline)
-    assert "openai-secret" not in repr(baseline)
+    baseline_digest = config_attestation._canonical_sha256(
+        config_attestation._nonsecret_config_identity()
+    )
 
     config.llm.qwen_stop_token = "<|stop|>"
     assert (
@@ -142,7 +147,15 @@ def test_full_config_identity_includes_behavior_knobs_but_omits_provider_secrets
         != baseline_digest
     )
 
-    config.repl.timeout_seconds = 30
+
+def test_provider_credential_rotation_is_identity_neutral_and_never_exposed(monkeypatch):
+    config = _full_config_fixture()
+    monkeypatch.setattr("src.config.get_config", lambda: config)
+    baseline = config_attestation._nonsecret_config_identity()
+    baseline_digest = config_attestation._canonical_sha256(baseline)
+    assert "first-secret" not in repr(baseline)
+    assert "openai-secret" not in repr(baseline)
+
     config.external_backends.anthropic.api_key = "rotated-secret"
     config.external_backends.openai.api_key = "rotated-openai-secret"
     rotated = config_attestation._nonsecret_config_identity()
