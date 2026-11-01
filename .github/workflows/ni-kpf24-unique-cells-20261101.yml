@@ -68,6 +68,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           result_dir="$RUNNER_TEMP/ni-kpf24"
           python -m pytest -p pytest_asyncio.plugin -q \
             --junitxml="$result_dir/junit.xml" \
@@ -85,6 +86,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           result_dir="$RUNNER_TEMP/ni-kpf24"
           ruff check src/backends/context_limits.py src/scheduling/kv_pool_admission.py \
             tests/unit/test_kv_prefix_history.py tests/unit/test_kv_pool_unique_cells.py \
@@ -98,6 +100,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           result_dir="$RUNNER_TEMP/ni-kpf24"
           {
             sudo apt-get update && sudo apt-get install -y shfmt && \
