@@ -1,0 +1,36 @@
+F401 [*] `datetime.datetime` imported but unused
+  --> src/graph/session_log.py:17:22
+   |
+15 | import threading
+16 | from dataclasses import dataclass, field
+17 | from datetime import datetime, timezone
+   |                      ^^^^^^^^
+18 | from typing import Any
+   |
+help: Remove unused import
+
+F401 [*] `datetime.timezone` imported but unused
+  --> src/graph/session_log.py:17:32
+   |
+15 | import threading
+16 | from dataclasses import dataclass, field
+17 | from datetime import datetime, timezone
+   |                                ^^^^^^^^
+18 | from typing import Any
+   |
+help: Remove unused import
+
+F401 [*] `time` imported but unused
+   --> src/graph/session_log.py:698:12
+    |
+696 |     Falls back to concatenated granular blocks if LLM call fails.
+697 |     """
+698 |     import time
+    |            ^^^^
+699 |
+700 |     prompt = build_consolidation_prompt(granular_blocks)
+    |
+help: Remove unused import: `time`
+
+Found 3 errors.
+[*] 3 fixable with the `--fix` option.

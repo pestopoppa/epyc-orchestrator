@@ -1,0 +1,42 @@
+[region-lock] acquiring regions ['q1'] as role='build' (timeout_s=10.0) …
+[region-lock] held ['q1'] after 0.0s wait; running: /bin/bash -c set -o pipefail; set +e; .venv/bin/ruff check src/graph/session_log.py src/graph/decision_gates.py tests/unit/test_session_log.py tests/unit/test_langgraph_phase2.py tests/test_langgraph_durable_resume.py tests/integration/test_observability.py > artifacts/validation/cf-terminal-outcomes-20261101/ruff-strict.log 2>&1; strict_rc=$?; cat artifacts/validation/cf-terminal-outcomes-20261101/ruff-strict.log; printf "STRICT_RUFF_RC=%s\n" "$strict_rc"; .venv/bin/ruff check --ignore F401 src/graph/session_log.py src/graph/decision_gates.py tests/unit/test_session_log.py tests/unit/test_langgraph_phase2.py tests/test_langgraph_durable_resume.py tests/integration/test_observability.py > artifacts/validation/cf-terminal-outcomes-20261101/ruff-ignore-f401.log 2>&1; filtered_rc=$?; cat artifacts/validation/cf-terminal-outcomes-20261101/ruff-ignore-f401.log; printf "RUFF_IGNORE_F401_RC=%s\n" "$filtered_rc"; git diff --check origin/main...HEAD > artifacts/validation/cf-terminal-outcomes-20261101/diff-check.log 2>&1; diff_rc=$?; cat artifacts/validation/cf-terminal-outcomes-20261101/diff-check.log; printf "DIFF_CHECK_RC=%s\n" "$diff_rc"; test "$filtered_rc" -eq 0 && test "$diff_rc" -eq 0
+F401 [*] `datetime.datetime` imported but unused
+  --> src/graph/session_log.py:17:22
+   |
+15 | import threading
+16 | from dataclasses import dataclass, field
+17 | from datetime import datetime, timezone
+   |                      ^^^^^^^^
+18 | from typing import Any
+   |
+help: Remove unused import
+
+F401 [*] `datetime.timezone` imported but unused
+  --> src/graph/session_log.py:17:32
+   |
+15 | import threading
+16 | from dataclasses import dataclass, field
+17 | from datetime import datetime, timezone
+   |                                ^^^^^^^^
+18 | from typing import Any
+   |
+help: Remove unused import
+
+F401 [*] `time` imported but unused
+   --> src/graph/session_log.py:698:12
+    |
+696 |     Falls back to concatenated granular blocks if LLM call fails.
+697 |     """
+698 |     import time
+    |            ^^^^
+699 |
+700 |     prompt = build_consolidation_prompt(granular_blocks)
+    |
+help: Remove unused import: `time`
+
+Found 3 errors.
+[*] 3 fixable with the `--fix` option.
+STRICT_RUFF_RC=1
+All checks passed!
+RUFF_IGNORE_F401_RC=0
+DIFF_CHECK_RC=0
