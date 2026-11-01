@@ -214,7 +214,18 @@ The retry loop is bounded by the existing `ORCHESTRATOR_WORKER_CALL_BUDGET_CAP` 
 
 ## Exploration Logging
 
-The `ExplorationLog` classifies agent strategies (scan, search, delegated, mixed) and computes token efficiency. These logs feed into MemRL's episodic memory so the system can learn which exploration approaches work best for different task types.
+The `ExplorationLog` classifies agent strategies (scan, search, delegated, mixed) and computes
+token efficiency. It records exploration activity for the current session; the current REPL
+completion path does not persist those logs as episodic `exploration` memories. `recall()` reads
+pre-existing seeded exploration memories, so its retrieval is a static seed lookup rather than a
+live history or learning loop. No claim about adaptation from completed live REPL sessions follows
+from this lookup.
+
+Until a durable exploration-memory writer and the smoke/probe/health traffic filter are
+implemented, evaluation of `recall()` and `route_advice()` is limited to invocation, retrieved
+seed rows, and whether the answer used those rows. It does not evaluate live exploration write-back,
+learned memory quality, or adaptation from REPL outcomes. This is the current persistence boundary
+tracked by the EPYC Root episodic-memory-integrity handoff (M-21/M-22).
 
 <details>
 <summary>Strategy classification and MemRL integration</summary>
@@ -239,9 +250,9 @@ strategy_types = {
 
 **Token Efficiency**: Calculated as `result_tokens / exploration_tokens`. Higher is better—indicates effective exploration with minimal LLM calls.
 
-### MemRL Integration
+### Intended MemRL Integration (not a live persistence path)
 
-Exploration logs feed into episodic memory for Q-learning:
+The design for a future live persistence path is:
 - **Phase 1**: Log exploration strategy (scan/search/delegated)
 - **Phase 2**: Compute token efficiency
 - **Phase 3**: Update Q-values based on final outcome
