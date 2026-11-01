@@ -1,0 +1,226 @@
+name: NI fresh origin-main unit baseline
+
+on:
+  push:
+    branches:
+      - codex/ni-origin-main-unit-baseline-20261101
+    paths:
+      - '.github/workflows/ni-origin-main-unit-baseline-20261101.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ni-origin-main-unit-baseline-20261101
+  cancel-in-progress: false
+
+jobs:
+  unit-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CI: 'true'
+      ORCHESTRATOR_MOCK_MODE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      PYTHONPATH: tests
+      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: ${{ runner.temp }}/ni-origin-main-unit-baseline/empty-kernel-path
+      ORCHESTRATOR_PATHS_LLAMA_MTMD: ${{ runner.temp }}/ni-origin-main-unit-baseline/empty-kernel-path/llama-mtmd-cli
+      ORCHESTRATOR_PATHS_LLAMA_SERVER: ${{ runner.temp }}/ni-origin-main-unit-baseline/empty-kernel-path/llama-server
+      ORCHESTRATOR_PATHS_TMP_DIR: ${{ runner.temp }}/ni-origin-main-unit-baseline/app-tmp
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin the baseline tree and record runner identity
+        shell: bash
+        env:
+          BASELINE_SHA: 29fdfc5a7cc229f1dcafee327f193b1623de0d32
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          mkdir -p "$result_dir" "$ORCHESTRATOR_PATHS_TMP_DIR"
+          printf '%s\n' "$BASELINE_SHA" > "$result_dir/expected-baseline-commit.txt"
+          printf '%s\n' "$WORKFLOW_SHA" > "$result_dir/workflow-commit.txt"
+          git show "$WORKFLOW_SHA:.github/workflows/ni-origin-main-unit-baseline-20261101.yml" \
+            | sha256sum | awk '{print $1}' > "$result_dir/workflow-file.sha256"
+          git checkout --detach "$BASELINE_SHA"
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          git status --porcelain=v1 > "$result_dir/baseline-worktree-status.txt"
+          test ! -s "$result_dir/baseline-worktree-status.txt"
+          git rev-parse HEAD > "$result_dir/source-commit.txt"
+          git show -s --format=fuller HEAD > "$result_dir/source-commit-details.txt"
+          git ls-files -z | sort -z | xargs -0 sha256sum > "$result_dir/source-files.sha256"
+          sha256sum pyproject.toml uv.lock > "$result_dir/project-lock.sha256"
+          python -VV > "$result_dir/python-version.txt" 2>&1
+          python -m pip --version > "$result_dir/pip-version.txt" 2>&1
+          uname -a > "$result_dir/runner-uname.txt"
+          cat /etc/os-release > "$result_dir/runner-os-release.txt"
+          printf 'CI=%s\nORCHESTRATOR_MOCK_MODE=%s\nPYTHONDONTWRITEBYTECODE=%s\nPYTHONHASHSEED=%s\nPYTHONPATH=%s\n' \
+            "$CI" "$ORCHESTRATOR_MOCK_MODE" "$PYTHONDONTWRITEBYTECODE" "$PYTHONHASHSEED" "$PYTHONPATH" \
+            > "$result_dir/test-environment.txt"
+          env | awk -F= '/^ORCHESTRATOR_PATHS_/ {print $1 "=" $2}' | sort \
+            >> "$result_dir/test-environment.txt"
+          printf 'workflow_sha=%s\nbaseline_sha=%s\n' "$WORKFLOW_SHA" "$BASELINE_SHA" \
+            > "$result_dir/identity.txt"
+
+      - name: Install project test dependencies and record the resolved closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          python -m pip install --disable-pip-version-check -e '.[dev]' \
+            --report "$result_dir/dependency-install-report.json" \
+            2>&1 | tee "$result_dir/dependencies.stdout.txt"
+          python -m pip freeze --all | tee "$result_dir/pip-freeze.txt"
+          python -m pip list --format=json > "$result_dir/pip-list.json"
+          python -m pip check > "$result_dir/pip-check.txt" 2>&1
+          python -m pytest --version > "$result_dir/pytest-version.txt" 2>&1
+
+      - name: Collect all unit tests and retain collection result
+        shell: bash
+        run: |
+          set -uo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          set +e
+          timeout --signal=TERM --kill-after=60s 20m \
+            python -m pytest --trace-config --collect-only -q tests/unit \
+            2>&1 | tee "$result_dir/pytest-collection.stdout.txt"
+          collect_rc=${PIPESTATUS[0]}
+          printf '%s\n' "$collect_rc" > "$result_dir/pytest-collection.exit-code"
+          exit 0
+
+      - name: Run the complete unit suite and retain original receipts
+        shell: bash
+        run: |
+          set -uo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          set +e
+          timeout --signal=TERM --kill-after=60s 150m \
+            python -m pytest tests/unit --junitxml="$result_dir/junit.xml" \
+            2>&1 | tee "$result_dir/pytest.stdout.txt"
+          test_rc=${PIPESTATUS[0]}
+          printf '%s\n' "$test_rc" > "$result_dir/pytest.exit-code"
+          exit 0
+
+      - name: Summarize original collection and test results
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          python - "$result_dir" <<'PY'
+          import json
+          import sys
+          import xml.etree.ElementTree as ET
+          from collections import Counter
+          from pathlib import Path
+
+          result_dir = Path(sys.argv[1])
+          summary = {
+              "baseline_commit": (result_dir / "source-commit.txt").read_text().strip()
+              if (result_dir / "source-commit.txt").exists() else None,
+              "workflow_commit": (result_dir / "workflow-commit.txt").read_text().strip()
+              if (result_dir / "workflow-commit.txt").exists() else None,
+              "collection_exit_code": (result_dir / "pytest-collection.exit-code").read_text().strip()
+              if (result_dir / "pytest-collection.exit-code").exists() else None,
+              "test_exit_code": (result_dir / "pytest.exit-code").read_text().strip()
+              if (result_dir / "pytest.exit-code").exists() else None,
+              "baseline_complete": False,
+              "all_green": False,
+              "tests": {},
+              "failures": [],
+              "errors": [],
+              "skips": [],
+              "failure_categories": {},
+              "failure_modules": {},
+          }
+          junit_path = result_dir / "junit.xml"
+          if junit_path.exists():
+              root = ET.parse(junit_path).getroot()
+              cases = list(root.iter("testcase"))
+              summary["tests"] = {
+                  "collected_cases_in_junit": len(cases),
+                  "failures": sum(case.find("failure") is not None for case in cases),
+                  "errors": sum(case.find("error") is not None for case in cases),
+                  "skipped": sum(case.find("skipped") is not None for case in cases),
+                  "passed": sum(
+                      case.find("failure") is None and case.find("error") is None
+                      and case.find("skipped") is None for case in cases
+                  ),
+              }
+              categories = Counter()
+              modules = Counter()
+              for case in cases:
+                  nodeid = f"{case.get('classname', '')}::{case.get('name', '')}"
+                  for tag, bucket in (("failure", "failures"), ("error", "errors"), ("skipped", "skips")):
+                      element = case.find(tag)
+                      if element is None:
+                          continue
+                      item = {
+                          "nodeid": nodeid,
+                          "type": element.get("type"),
+                          "message": element.get("message"),
+                          "detail": (element.text or "").strip(),
+                      }
+                      summary[bucket].append(item)
+                      if tag in {"failure", "error"}:
+                          category = element.get("type") or element.get("message") or tag
+                          categories[f"{tag}: {category}"] += 1
+                          modules[f"{tag}: {case.get('classname', '<unknown>')}"] += 1
+              summary["failure_categories"] = dict(sorted(categories.items()))
+              summary["failure_modules"] = dict(sorted(modules.items()))
+          collect_rc = summary["collection_exit_code"]
+          test_rc = summary["test_exit_code"]
+          summary["baseline_complete"] = (
+              collect_rc == "0"
+              and test_rc in {"0", "1"}
+              and summary["tests"].get("collected_cases_in_junit", 0) > 0
+          )
+          summary["all_green"] = (
+              summary["baseline_complete"]
+              and test_rc == "0"
+              and summary["tests"].get("failures", 0) == 0
+              and summary["tests"].get("errors", 0) == 0
+          )
+          (result_dir / "pytest-summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(summary["tests"], sort_keys=True))
+          print(f"baseline_complete={summary['baseline_complete']}")
+          PY
+
+      - name: Enforce complete collection and test-run receipt
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
+          collect_rc="$(cat "$result_dir/pytest-collection.exit-code" 2>/dev/null || printf 125)"
+          test_rc="$(cat "$result_dir/pytest.exit-code" 2>/dev/null || printf 125)"
+          if [[ "$collect_rc" != 0 || ( "$test_rc" != 0 && "$test_rc" != 1 ) ]]; then
+            printf 'Full baseline is incomplete: collection_rc=%s test_rc=%s\n' "$collect_rc" "$test_rc"
+            exit 1
+          fi
+          python - "$result_dir/pytest-summary.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if not summary.get("baseline_complete"):
+              raise SystemExit("full baseline summary does not prove complete collection and execution")
+          PY
+
+      - name: Upload complete source and test record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ni-origin-main-unit-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ni-origin-main-unit-baseline/
+          if-no-files-found: error
+          retention-days: 90
