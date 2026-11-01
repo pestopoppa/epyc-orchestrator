@@ -221,11 +221,11 @@ pre-existing seeded exploration memories, so its retrieval is a static seed look
 live history or learning loop. No claim about adaptation from completed live REPL sessions follows
 from this lookup.
 
-Until a durable exploration-memory writer and the smoke/probe/health traffic filter are
-implemented, evaluation of `recall()` and `route_advice()` is limited to invocation, retrieved
-seed rows, and whether the answer used those rows. It does not evaluate live exploration write-back,
-learned memory quality, or adaptation from REPL outcomes. This is the current persistence boundary
-tracked by the EPYC Root episodic-memory-integrity handoff (M-21/M-22).
+The smoke/probe/health traffic filter is implemented, but no durable live exploration-memory writer
+persists completed REPL outcomes. Evaluation of `recall()` and `route_advice()` is therefore limited
+to invocation, retrieved seed rows, and whether the answer used those rows. It does not evaluate
+live exploration write-back, learned memory quality, or adaptation from REPL outcomes. This is the
+current persistence boundary tracked by the EPYC Root episodic-memory-integrity handoff (M-21/M-22).
 
 <details>
 <summary>Strategy classification and MemRL integration</summary>
