@@ -1,0 +1,35 @@
+{
+  "implements_sha": "a68318e39581e7f4a0730da264657eab726b4d4e",
+  "base": "99791dd82732a6ffccad1c79c67e9b019143ba66",
+  "implementation": {
+    "commit": "a68318e39581e7f4a0730da264657eab726b4d4e",
+    "parent": "99791dd82732a6ffccad1c79c67e9b019143ba66",
+    "tree": "a8f97431ba6925d529528d3497ce920e96525595",
+    "native_pii_receipt_sha256": "28cb24fe698566dc310dddce3c6b9f1005d99a2a8ddb4dd494480c6189d5f1e0",
+    "native_pii_record_seal": "ce55b442975a670506fdbd3d5d2d1873c94385dc15e9e9119ba7e5a9b8a2cfbe",
+    "native_pii_counts": {
+      "blocked": 0,
+      "excluded": 0,
+      "scanned": 5,
+      "selected": 5
+    },
+    "native_pii_checks": {
+      "frozen_index_unchanged": true,
+      "head_unchanged": true,
+      "live_index_unchanged": true,
+      "logs_complete": true,
+      "policy_unchanged": true,
+      "proofs_valid": true
+    },
+    "native_pii_value": true,
+    "supported_index": true,
+    "hook_log_sha256": "caf58e8eb77b89cd8e6592821907cd390824a08020dbdd86da428dffd96ad390"
+  },
+  "tests": {
+    "passed": 76,
+    "junit_sha256": "b42e4cc71624d3c4d1708154fe1f3cac8c16e398cf842480cda14ae7b9ca581b",
+    "stdout_sha256": "888c5497271bfc66eadd995caf71c100ae003af386577238e355ff1d5322b8a4",
+    "readset_sha256": "501ef8bbd9af6d6c957566c39a3a1e8e45563163279cd3e7b8de3b2b3f8df459"
+  },
+  "scope": "fixture and source evidence only; no live model quality, SystemOne calibration or kernel promotion"
+}

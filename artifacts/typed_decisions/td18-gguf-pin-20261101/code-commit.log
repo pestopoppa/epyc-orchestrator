@@ -1,0 +1,5 @@
+[main a68318e3] Bind GGUF backend identity to calibration receipts
+ 5 files changed, 696 insertions(+), 3 deletions(-)
+ create mode 100644 src/typed_decisions/decision_backend_pin.py
+ create mode 100644 tests/unit/fake_decision_server.c
+ create mode 100644 tests/unit/test_decision_backend_pin.py
