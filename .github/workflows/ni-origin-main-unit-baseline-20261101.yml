@@ -17,23 +17,27 @@ concurrency:
 jobs:
   unit-baseline:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       CI: 'true'
       ORCHESTRATOR_MOCK_MODE: 'true'
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONHASHSEED: '0'
       PYTHONPATH: tests
-      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: ${{ runner.temp }}/ni-origin-main-unit-baseline/empty-kernel-path
-      ORCHESTRATOR_PATHS_LLAMA_MTMD: ${{ runner.temp }}/ni-origin-main-unit-baseline/empty-kernel-path/llama-mtmd-cli
-      ORCHESTRATOR_PATHS_LLAMA_SERVER: ${{ runner.temp }}/ni-origin-main-unit-baseline/empty-kernel-path/llama-server
-      ORCHESTRATOR_PATHS_TMP_DIR: ${{ runner.temp }}/ni-origin-main-unit-baseline/app-tmp
+      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-origin-main-unit-baseline/empty-kernel-path
+      ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-origin-main-unit-baseline/empty-kernel-path/llama-mtmd-cli
+      ORCHESTRATOR_PATHS_LLAMA_SERVER: /tmp/ni-origin-main-unit-baseline/empty-kernel-path/llama-server
+      ORCHESTRATOR_PATHS_TMP_DIR: /tmp/ni-origin-main-unit-baseline/app-tmp
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
 
       - name: Pin the baseline tree and record runner identity
         shell: bash
@@ -54,7 +58,51 @@ jobs:
           test ! -s "$result_dir/baseline-worktree-status.txt"
           git rev-parse HEAD > "$result_dir/source-commit.txt"
           git show -s --format=fuller HEAD > "$result_dir/source-commit-details.txt"
-          git ls-files -z | sort -z | xargs -0 sha256sum > "$result_dir/source-files.sha256"
+          git rev-parse 'HEAD^{tree}' > "$result_dir/source-tree-oid.txt"
+          python - "$result_dir" <<'PY'
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          result_dir = Path(sys.argv[1])
+          entries = subprocess.check_output(
+              ["git", "ls-tree", "-rz", "--full-tree", "HEAD"]
+          ).split(b"\0")
+          manifest = []
+          links = []
+          for entry in entries:
+              if not entry:
+                  continue
+              metadata, raw_path = entry.split(b"\t", 1)
+              mode, object_type, object_id = metadata.decode("ascii").split(" ", 2)
+              if object_type != "blob":
+                  continue
+              content = subprocess.check_output(["git", "cat-file", "blob", object_id])
+              path = os.fsdecode(raw_path)
+              item = {
+                  "path": path,
+                  "mode": mode,
+                  "git_blob": object_id,
+                  "sha256": hashlib.sha256(content).hexdigest(),
+              }
+              if mode == "120000":
+                  item["kind"] = "symlink"
+                  item["target_bytes_hex"] = content.hex()
+                  links.append({"path": path, "target_bytes_hex": content.hex()})
+              else:
+                  item["kind"] = "file"
+              manifest.append(item)
+          (result_dir / "source-files.jsonl").write_text(
+              "".join(json.dumps(item, sort_keys=True) + "\n" for item in manifest),
+              encoding="utf-8",
+          )
+          (result_dir / "tracked-symlinks.json").write_text(
+              json.dumps(links, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          PY
           sha256sum pyproject.toml uv.lock > "$result_dir/project-lock.sha256"
           python -VV > "$result_dir/python-version.txt" 2>&1
           python -m pip --version > "$result_dir/pip-version.txt" 2>&1
@@ -81,6 +129,78 @@ jobs:
           python -m pip check > "$result_dir/pip-check.txt" 2>&1
           python -m pytest --version > "$result_dir/pytest-version.txt" 2>&1
 
+      - name: Prepare passive pytest selection and outcome capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          capture_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline/capture"
+          mkdir -p "$capture_dir"
+          cat > "$capture_dir/baseline_capture_plugin.py" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          CAPTURE_DIR = Path(os.environ["NI_PYTEST_CAPTURE_DIR"])
+          MODE = os.environ["NI_PYTEST_CAPTURE_MODE"]
+
+          def _write(name, value):
+              (CAPTURE_DIR / name).write_text(
+                  json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+              )
+
+          def _append(name, value):
+              with (CAPTURE_DIR / name).open("a", encoding="utf-8") as stream:
+                  stream.write(json.dumps(value, sort_keys=True) + "\n")
+
+          def pytest_configure(config):
+              plugins = []
+              for name, plugin in config.pluginmanager.list_name_plugin():
+                  if plugin is None:
+                      continue
+                  module = getattr(plugin, "__name__", None) or getattr(
+                      plugin, "__module__", plugin.__class__.__module__
+                  )
+                  plugins.append({
+                      "name": name,
+                      "module": module,
+                      "version": getattr(plugin, "__version__", None),
+                  })
+              _write(f"{MODE}-pytest-config.json", {
+                  "mode": MODE,
+                  "args": list(config.invocation_params.args),
+                  "addopts": config.getini("addopts"),
+                  "rootdir": str(config.rootpath),
+                  "inifile": str(config.inipath) if config.inipath else None,
+                  "maxfail": config.option.maxfail,
+                  "keyword_filter": config.option.keyword,
+                  "mark_filter": config.option.markexpr,
+                  "collect_only": bool(config.option.collectonly),
+                  "plugins": sorted(plugins, key=lambda item: (item["name"], item["module"])),
+              })
+
+          def pytest_deselected(items):
+              _append(f"{MODE}-deselected-nodeids.jsonl", [item.nodeid for item in items])
+
+          def pytest_collection_finish(session):
+              _write(f"{MODE}-selected-nodeids.json", [item.nodeid for item in session.items])
+
+          def pytest_runtest_logreport(report):
+              _append(f"{MODE}-outcomes.jsonl", {
+                  "nodeid": report.nodeid,
+                  "phase": report.when,
+                  "outcome": report.outcome,
+                  "wasxfail": getattr(report, "wasxfail", None),
+              })
+
+          def pytest_sessionfinish(session, exitstatus):
+              _write(f"{MODE}-session-finish.json", {
+                  "exitstatus": int(exitstatus),
+                  "collected_items": len(session.items),
+              })
+          PY
+          sha256sum "$capture_dir/baseline_capture_plugin.py" \
+            > "$RUNNER_TEMP/ni-origin-main-unit-baseline/capture-plugin.sha256"
+
       - name: Collect all unit tests and retain collection result
         shell: bash
         run: |
@@ -88,7 +208,9 @@ jobs:
           result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
           set +e
           timeout --signal=TERM --kill-after=60s 20m \
-            python -m pytest --trace-config --collect-only -q tests/unit \
+            env NI_PYTEST_CAPTURE_DIR="$result_dir" NI_PYTEST_CAPTURE_MODE=collection \
+              PYTHONPATH="$result_dir/capture:$PYTHONPATH" \
+              python -m pytest --trace-config --collect-only -q -p baseline_capture_plugin tests/unit \
             2>&1 | tee "$result_dir/pytest-collection.stdout.txt"
           collect_rc=${PIPESTATUS[0]}
           printf '%s\n' "$collect_rc" > "$result_dir/pytest-collection.exit-code"
@@ -100,8 +222,11 @@ jobs:
           set -uo pipefail
           result_dir="$RUNNER_TEMP/ni-origin-main-unit-baseline"
           set +e
-          timeout --signal=TERM --kill-after=60s 150m \
-            python -m pytest tests/unit --junitxml="$result_dir/junit.xml" \
+          timeout --signal=TERM --kill-after=60s 180m \
+            env NI_PYTEST_CAPTURE_DIR="$result_dir" NI_PYTEST_CAPTURE_MODE=execution \
+              PYTHONPATH="$result_dir/capture:$PYTHONPATH" \
+              python -m pytest -p baseline_capture_plugin tests/unit \
+                --junitxml="$result_dir/junit.xml" \
             2>&1 | tee "$result_dir/pytest.stdout.txt"
           test_rc=${PIPESTATUS[0]}
           printf '%s\n' "$test_rc" > "$result_dir/pytest.exit-code"
@@ -138,7 +263,67 @@ jobs:
               "skips": [],
               "failure_categories": {},
               "failure_modules": {},
+              "selected_count": 0,
+              "execution_outcome_count": 0,
+              "missing_nodeids": [],
+              "unexpected_nodeids": [],
+              "deselected_count": 0,
+              "junit_matches_selection": False,
+              "config_matches_full_run": False,
           }
+          capture_dir = result_dir
+          collection_ids_path = capture_dir / "collection-selected-nodeids.json"
+          execution_ids_path = capture_dir / "execution-selected-nodeids.json"
+          collection_ids = json.loads(collection_ids_path.read_text()) if collection_ids_path.exists() else []
+          execution_ids = json.loads(execution_ids_path.read_text()) if execution_ids_path.exists() else []
+          summary["selected_count"] = len(collection_ids)
+          outcomes_path = capture_dir / "execution-outcomes.jsonl"
+          outcome_ids = set()
+          completed_ids = set()
+          if outcomes_path.exists():
+              for line in outcomes_path.read_text().splitlines():
+                  if line.strip():
+                      report = json.loads(line)
+                      nodeid = report["nodeid"]
+                      outcome_ids.add(nodeid)
+                      if report["phase"] == "call" or (
+                          report["phase"] == "setup" and report["outcome"] in {"failed", "skipped"}
+                      ):
+                          completed_ids.add(nodeid)
+          summary["execution_outcome_count"] = len(outcome_ids)
+          collection_deselected = capture_dir / "collection-deselected-nodeids.jsonl"
+          execution_deselected = capture_dir / "execution-deselected-nodeids.jsonl"
+          deselected = []
+          for path in (collection_deselected, execution_deselected):
+              if path.exists():
+                  deselected.extend(json.loads(line) for line in path.read_text().splitlines() if line.strip())
+          summary["deselected_count"] = len(deselected)
+          summary["missing_nodeids"] = sorted(set(collection_ids) - completed_ids)
+          summary["unexpected_nodeids"] = sorted(outcome_ids - set(collection_ids))
+          config_path = capture_dir / "execution-pytest-config.json"
+          collection_config_path = capture_dir / "collection-pytest-config.json"
+          if config_path.exists() and collection_config_path.exists():
+              execution_config = json.loads(config_path.read_text())
+              collection_config = json.loads(collection_config_path.read_text())
+              execution_plugins = [
+                  plugin for plugin in execution_config.get("plugins", [])
+                  if plugin.get("name") != "junitxml"
+              ]
+              collection_plugins = [
+                  plugin for plugin in collection_config.get("plugins", [])
+                  if plugin.get("name") != "junitxml"
+              ]
+              summary["config_matches_full_run"] = (
+                  execution_config.get("maxfail") == 0
+                  and not execution_config.get("keyword_filter")
+                  and not execution_config.get("mark_filter")
+                  and execution_config.get("addopts") == collection_config.get("addopts")
+                  and execution_plugins == collection_plugins
+                  and not any(
+                      arg in {"-x", "--exitfirst", "--maxfail", "-k", "-m", "--ignore", "--deselect"}
+                      for arg in execution_config.get("args", [])
+                  )
+              )
           junit_path = result_dir / "junit.xml"
           if junit_path.exists():
               root = ET.parse(junit_path).getroot()
@@ -176,16 +361,25 @@ jobs:
               summary["failure_modules"] = dict(sorted(modules.items()))
           collect_rc = summary["collection_exit_code"]
           test_rc = summary["test_exit_code"]
+          junit_count = summary["tests"].get("collected_cases_in_junit", 0)
+          summary["junit_matches_selection"] = junit_count >= len(collection_ids) > 0
           summary["baseline_complete"] = (
               collect_rc == "0"
               and test_rc in {"0", "1"}
-              and summary["tests"].get("collected_cases_in_junit", 0) > 0
+              and bool(collection_ids)
+              and collection_ids == execution_ids
+              and not deselected
+              and not summary["missing_nodeids"]
+              and not summary["unexpected_nodeids"]
+              and summary["junit_matches_selection"]
+              and summary["config_matches_full_run"]
           )
           summary["all_green"] = (
               summary["baseline_complete"]
               and test_rc == "0"
               and summary["tests"].get("failures", 0) == 0
               and summary["tests"].get("errors", 0) == 0
+              and summary["tests"].get("skipped", 0) == 0
           )
           (result_dir / "pytest-summary.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
