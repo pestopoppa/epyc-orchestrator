@@ -44,6 +44,9 @@ class RetrievalResult:
     routing_preference_active: bool = False
     prior_term: float = 0.0  # Heuristic-prior contribution to posterior score
     posterior_score: float = 0.0  # selection_score + prior_term
+    # Ranking estimate; empirical q_value remains confidence evidence.
+    selection_q_value: Optional[float] = None
+    selection_source: str = "q"
 
     # Graph-enhanced fields (optional)
     failure_penalty: float = 0.0  # Risk score from failure graph (0-1)

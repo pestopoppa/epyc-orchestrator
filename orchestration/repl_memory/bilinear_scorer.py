@@ -24,6 +24,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
+from zipfile import BadZipFile
 
 import numpy as np
 
@@ -47,6 +48,7 @@ MODEL_FEATURE_DIM = 8
 
 # Prompt feature dimension (extracted from task IR)
 PROMPT_FEATURE_DIM = 8
+SCORER_FORMAT_VERSION = 1
 
 DEFAULT_STACK_PRIORS_PATH = _REPO_ROOT / "orchestration/derived/stack_priors.yaml"
 DEFAULT_REGISTRY_PATH = _REPO_ROOT / "orchestration/model_registry.yaml"
@@ -384,6 +386,25 @@ class BilinearScorer:
         logit = float(v_m @ self.W @ v_p + self.b)
         return _sigmoid(logit)
 
+    @property
+    def selection_ready(self) -> bool:
+        """Whether persisted/trained state is structurally safe for selection.
+
+        Random initialization is useful for scorer unit tests and training, but
+        must never be mistaken for trained routing evidence.
+        """
+        if self.updates <= 0 or self.W.shape != (MODEL_FEATURE_DIM, PROMPT_FEATURE_DIM):
+            return False
+        if not np.isfinite(self.W).all() or not np.isfinite(float(self.b)):
+            return False
+        if not self.model_features:
+            return False
+        return all(
+            feature.to_vector().shape == (MODEL_FEATURE_DIM,)
+            and np.isfinite(feature.to_vector()).all()
+            for feature in self.model_features.values()
+        )
+
     def predict_all(self, prompt_features: np.ndarray) -> Dict[str, float]:
         """Predict Q-values for all known models.
 
@@ -463,6 +484,9 @@ class BilinearScorer:
             W=self.W,
             b=np.array([float(self.b)]),
             updates=np.array([self.updates]),
+            format_version=np.array([SCORER_FORMAT_VERSION]),
+            model_feature_dim=np.array([MODEL_FEATURE_DIM]),
+            prompt_feature_dim=np.array([PROMPT_FEATURE_DIM]),
         )
         logger.info("BilinearScorer saved to %s (%d updates)", path, self.updates)
 
@@ -472,14 +496,59 @@ class BilinearScorer:
         Returns:
             True if loaded successfully.
         """
+        def integer_metadata(data, key: str) -> int:
+            values = np.asarray(data[key])
+            if (
+                values.shape != (1,)
+                or not np.issubdtype(values.dtype, np.integer)
+                or np.issubdtype(values.dtype, np.bool_)
+            ):
+                raise ValueError(f"{key} must be a one-element integer field")
+            return int(values[0])
+
         try:
-            data = np.load(path)
-            self.W = data["W"]
-            self.b = np.float32(data["b"][0])
-            self.updates = int(data["updates"][0])
+            with np.load(path, allow_pickle=False) as data:
+                # Old files lack attestable format/dimension metadata. Keep
+                # those available only for offline inspection; selection fails closed.
+                version = integer_metadata(data, "format_version")
+                model_dim = integer_metadata(data, "model_feature_dim")
+                prompt_dim = integer_metadata(data, "prompt_feature_dim")
+                updates = integer_metadata(data, "updates")
+                weights = np.asarray(data["W"], dtype=np.float32)
+                bias_values = np.asarray(data["b"], dtype=np.float32).reshape(-1)
+            if (
+                version != SCORER_FORMAT_VERSION
+                or model_dim != MODEL_FEATURE_DIM
+                or prompt_dim != PROMPT_FEATURE_DIM
+                or weights.shape != (MODEL_FEATURE_DIM, PROMPT_FEATURE_DIM)
+                or bias_values.size != 1
+                or updates <= 0
+                or not np.isfinite(weights).all()
+                or not np.isfinite(bias_values).all()
+                or not self.model_features
+                or not all(
+                    feature.to_vector().shape == (MODEL_FEATURE_DIM,)
+                    and np.isfinite(feature.to_vector()).all()
+                    for feature in self.model_features.values()
+                )
+            ):
+                logger.warning("BilinearScorer weights lack valid trained selection provenance")
+                return False
+            self.W = weights
+            self.b = np.float32(bias_values[0])
+            self.updates = updates
             logger.info("BilinearScorer loaded from %s (%d updates)", path, self.updates)
             return True
-        except (FileNotFoundError, KeyError) as e:
+        except (
+            FileNotFoundError,
+            KeyError,
+            ValueError,
+            IndexError,
+            TypeError,
+            OSError,
+            EOFError,
+            BadZipFile,
+        ) as e:
             logger.debug("BilinearScorer load failed: %s", e)
             return False
 

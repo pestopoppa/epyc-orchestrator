@@ -54,6 +54,8 @@ class HybridRouter:
         frontdoor_verifier_threshold: float = 0.5,
         action_outcome_scorer: Optional[Any] = None,
         admissible_roles_provider: Optional[Any] = None,
+        bilinear_scorer: Optional[Any] = None,
+        bilinear_selection_enabled: bool = False,
     ):
         self.action_outcome_scorer = action_outcome_scorer
         self.admissible_roles_provider = admissible_roles_provider
@@ -109,8 +111,14 @@ class HybridRouter:
 
         # DAR-4: Bilinear scorer for zero cold-start model routing.
         # Initialized lazily on first use when BILINEAR_SCORER_ENABLED=1.
-        self._bilinear_scorer = None
-        if os.environ.get("BILINEAR_SCORER_ENABLED", "0") == "1":
+        self._bilinear_scorer = bilinear_scorer
+        # Selection is a separate explicit opt-in; the legacy telemetry flag
+        # alone can never change a routing decision.
+        self.bilinear_selection_enabled = bool(bilinear_selection_enabled)
+        if (
+            self._bilinear_scorer is None
+            and os.environ.get("BILINEAR_SCORER_ENABLED", "0") == "1"
+        ):
             try:
                 from orchestration.repl_memory.bilinear_scorer import (
                     BilinearScorer,
@@ -183,6 +191,18 @@ class HybridRouter:
             "prior_term_topk": [round(r.prior_term, 4) for r in top],
             "posterior_score_topk": [round(r.posterior_score, 4) for r in top],
             "learned_evidence_topk": [round(r.q_value, 4) for r in top],
+            "selection_q_topk": [
+                round(
+                    r.selection_q_value
+                    if r.selection_q_value is not None
+                    else r.q_value,
+                    4,
+                )
+                for r in top
+            ],
+            "selection_source_topk": [
+                getattr(r, "selection_source", "q") for r in top
+            ],
             "cost_term_topk": [
                 round(self._routing_cost_term(r), 4) for r in top
             ],
@@ -354,6 +374,37 @@ class HybridRouter:
                 "Rejected %d non-serving episodic routing candidate(s)", rejected
             )
         return filtered
+
+    def _build_bilinear_candidate_value(self, task_ir: Dict[str, Any]):
+        """Build the optional ranking callback, or fail closed to empirical Q."""
+        scorer = self._bilinear_scorer
+        try:
+            if (
+                not self.bilinear_selection_enabled
+                or scorer is None
+                or not bool(getattr(scorer, "selection_ready", False))
+            ):
+                return None
+            from orchestration.repl_memory.bilinear_scorer import (
+                _canonical_role_name,
+                extract_prompt_features,
+            )
+
+            prompt_features = extract_prompt_features(task_ir)
+
+            def candidate_value(memory):
+                role = self.retriever._extract_role_from_memory(memory)
+                role = _canonical_role_name(role)
+                # Do not let predict()'s neutral unknown-role value (0.5)
+                # masquerade as a supported model feature.
+                if role not in scorer.model_features:
+                    return None
+                return scorer.predict(prompt_features, role)
+
+            return candidate_value
+        except Exception as exc:
+            logger.warning("DAR-4 selection setup failed; using empirical Q: %s", exc)
+            return None
 
     # Task types matching extract_training_data.py (order must be stable)
     _CLASSIFIER_TASK_TYPES = ["code", "chat", "architecture", "ingest", "general"]
@@ -636,8 +687,8 @@ class HybridRouter:
                             }
                             return (routing, "classifier")
 
-        # DAR-4: Bilinear scorer provides a prior from model features.
-        # Log scores for telemetry; blending into retrieval is future work.
+        # DAR-4 telemetry remains available under its existing flag. Scores
+        # are not confidence estimates and cannot affect fast paths or gates.
         if self._bilinear_scorer is not None:
             try:
                 from orchestration.repl_memory.bilinear_scorer import extract_prompt_features
@@ -649,8 +700,19 @@ class HybridRouter:
             except Exception:
                 pass
 
-        # Try learned routing first
-        results = self.retriever.retrieve_for_routing(task_ir)
+        # Optional DAR-4 selection hook. It is active only when explicitly
+        # requested and the loaded/injected scorer proves trained, finite,
+        # dimension-matched state. Unsupported roles fall back per candidate.
+        candidate_value = self._build_bilinear_candidate_value(task_ir)
+
+        # Try learned routing first. The callback is omitted on the default
+        # path to preserve the established retriever call contract exactly.
+        if candidate_value is None:
+            results = self.retriever.retrieve_for_routing(task_ir)
+        else:
+            results = self.retriever.retrieve_for_routing(
+                task_ir, candidate_value=candidate_value
+            )
         results = self._filter_routable_results(results)
         results = self._apply_priors(results, priors)
 

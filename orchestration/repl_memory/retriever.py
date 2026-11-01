@@ -12,7 +12,8 @@ Enhanced with failure anti-memory and hypothesis tracking from Graphiti-inspired
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from numbers import Real
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -160,6 +161,8 @@ class TwoPhaseRetriever:
     def retrieve_for_routing(
         self,
         task_ir: Dict[str, Any],
+        *,
+        candidate_value: Optional[Callable[[MemoryEntry], Optional[float]]] = None,
     ) -> List[RetrievalResult]:
         """
         Retrieve memories for task routing decision.
@@ -175,6 +178,7 @@ class TwoPhaseRetriever:
             embedding,
             action_type="routing",
             routing_preferences=task_ir.get("routing_preferences"),
+            candidate_value=candidate_value,
         )
 
     def retrieve_for_escalation(
@@ -239,6 +243,7 @@ class TwoPhaseRetriever:
         embedding: np.ndarray,
         action_type: Optional[str] = None,
         routing_preferences: Optional[Dict[str, Any]] = None,
+        candidate_value: Optional[Callable[[MemoryEntry], Optional[float]]] = None,
     ) -> List[RetrievalResult]:
         """
         Execute two-phase retrieval.
@@ -280,9 +285,28 @@ class TwoPhaseRetriever:
             if similarity < self.config.min_similarity:
                 continue
 
+            # An optional experimental scorer may replace Q only in the ranking
+            # term. Empirical memory Q remains the confidence/risk evidence.
+            # Invalid, unsupported, or failed predictions retain the incumbent.
+            selection_q = memory.q_value
+            selection_source = "q"
+            if candidate_value is not None:
+                try:
+                    proposed_q = candidate_value(memory)
+                    if (
+                        isinstance(proposed_q, Real)
+                        and not isinstance(proposed_q, (bool, np.bool_))
+                        and np.isfinite(proposed_q)
+                        and 0.0 <= float(proposed_q) <= 1.0
+                    ):
+                        selection_q = float(proposed_q)
+                        selection_source = "candidate"
+                except Exception:
+                    logger.debug("Candidate scorer failed; using empirical Q", exc_info=True)
+
             # Phase 2: Legacy combined score retained for compatibility.
             combined = (
-                self.config.q_weight * memory.q_value
+                self.config.q_weight * selection_q
                 + (1 - self.config.q_weight) * similarity
             )
             p_warm, warm_cost, cold_cost = self._estimate_cost_components(memory)
@@ -290,7 +314,7 @@ class TwoPhaseRetriever:
             # Selection score is quality-cost objective.
             cost_ratio = expected_cost / max(cold_cost, 1e-6)
             selection, perf_term, cost_term = _scalarized_selection_score(
-                q_value=memory.q_value,
+                q_value=selection_q,
                 normalized_cost=cost_ratio,
                 cost_lambda=float(self.config.cost_lambda),
                 cost_tau=cost_tau,
@@ -306,6 +330,8 @@ class TwoPhaseRetriever:
                     combined_score=combined,
                     selection_score=selection,
                     posterior_score=selection,
+                    selection_q_value=selection_q,
+                    selection_source=selection_source,
                     p_warm=p_warm,
                     warm_cost_s=warm_cost,
                     cold_cost_s=cold_cost,
