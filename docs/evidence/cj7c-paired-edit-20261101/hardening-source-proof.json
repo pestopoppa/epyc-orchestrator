@@ -1,0 +1,20 @@
+{
+  "source_commit": "a3ef66d9777b5301b99d1228652a5e62dcb1bda6",
+  "parent": "398794e8c3c6b26ccc956c3f174259f6ad57ccba",
+  "native_pii_receipt_sha256": "591431982cc03a2393ec9ed87d197a711b34fcbc633d19b0de24bf8ced9b1db0",
+  "native_pii_checks": {
+    "frozen_index_unchanged": true,
+    "head_unchanged": true,
+    "live_index_unchanged": true,
+    "logs_complete": true,
+    "policy_unchanged": true,
+    "proofs_valid": true
+  },
+  "native_pii_policy_passed": true,
+  "native_pii_counts": {
+    "blocked": 0,
+    "excluded": 0,
+    "scanned": 6,
+    "selected": 6
+  }
+}
