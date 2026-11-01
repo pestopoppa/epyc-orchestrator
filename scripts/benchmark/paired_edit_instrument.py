@@ -103,6 +103,7 @@ def evaluate(fixture: Fixture, attempt: str, timeout: float = 5.0) -> str:
         env = exec_containment.child_env(extra)
         with tempfile.TemporaryDirectory(prefix='paired-edit-') as scratch:
             for args, expected in fixture.cases:
+                payload = json.dumps({'code': attempt, 'entry': fixture.entry, 'args': args})
                 with tempfile.TemporaryFile(mode='w+') as out, tempfile.TemporaryFile(mode='w+') as err:
                     process = subprocess.Popen(argv, stdin=subprocess.PIPE, text=True, stdout=out, stderr=err,
                                                cwd=scratch, env=env, start_new_session=True)
@@ -132,14 +133,31 @@ def evaluate(fixture: Fixture, attempt: str, timeout: float = 5.0) -> str:
                         return 'unavailable'
                     try:
                         try:
-                            process.communicate(json.dumps({'code': attempt, 'entry': fixture.entry,
-                                                            'args': args}), timeout=timeout)
+                            process.communicate(payload, timeout=timeout)
                         except subprocess.TimeoutExpired:
-                            signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                            try:
+                                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass  # Exited between timeout and signal; still reap it.
                             process.communicate()
                             return 'timeout'
                     finally:
-                        os.close(pidfd)
+                        try:
+                            if process.poll() is None:
+                                try:
+                                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                                except ProcessLookupError:
+                                    pass
+                                except OSError:
+                                    current_uid = os.stat(proc_dir).st_uid
+                                    with open(f'{proc_dir}/stat') as stat_file:
+                                        current_birth = stat_file.read().rsplit(') ', 1)[1].split()[19]
+                                    if current_uid != uid or current_birth != birth or uid != os.getuid():
+                                        raise RuntimeError('child identity changed during cleanup')
+                                    os.kill(process.pid, signal.SIGKILL)
+                                process.wait(timeout=5)
+                        finally:
+                            os.close(pidfd)
                     err.seek(0)
                     note = err.read(4096)
                     if (exec_sandbox.shim_failure_note(process.returncode, note)

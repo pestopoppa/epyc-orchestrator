@@ -83,3 +83,35 @@ def test_pidfd_setup_failure_closes_stdin_and_reaps_child(monkeypatch):
     monkeypatch.setattr(instrument.os, 'pidfd_open', unavailable)
     assert instrument.evaluate(instrument.FIXTURES[0], instrument.FIXTURES[0].gold) == 'unavailable'
     assert len(children) == 1 and children[0].poll() is not None
+
+
+def test_timeout_exit_race_still_reaps_child(monkeypatch):
+    children = []
+    popen = instrument.subprocess.Popen
+    send = instrument.signal.pidfd_send_signal
+    def capture(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        children.append(child)
+        return child
+    def exit_race(fd, sig):
+        send(fd, sig)
+        raise ProcessLookupError('injected exit race')
+    monkeypatch.setattr(instrument.subprocess, 'Popen', capture)
+    monkeypatch.setattr(instrument.signal, 'pidfd_send_signal', exit_race)
+    assert instrument.evaluate(instrument.FIXTURES[0], 'while True: pass', timeout=.3) == 'timeout'
+    assert len(children) == 1 and children[0].poll() is not None
+
+
+def test_communication_error_reaps_child(monkeypatch):
+    children = []
+    popen = instrument.subprocess.Popen
+    def capture(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        children.append(child)
+        def fail(*args, **kwargs):
+            raise OSError('injected communication error')
+        child.communicate = fail
+        return child
+    monkeypatch.setattr(instrument.subprocess, 'Popen', capture)
+    assert instrument.evaluate(instrument.FIXTURES[0], instrument.FIXTURES[0].gold) == 'unavailable'
+    assert len(children) == 1 and children[0].poll() is not None
