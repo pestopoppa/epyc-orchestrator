@@ -68,3 +68,18 @@ def test_extra_output_is_not_a_result():
 def test_output_size_limit_stops_runaway_output():
     fixture = instrument.FIXTURES[0]
     assert instrument.evaluate(fixture, "while True: print('x' * 4096, flush=True)") == 'fail'
+
+
+def test_pidfd_setup_failure_closes_stdin_and_reaps_child(monkeypatch):
+    children = []
+    popen = instrument.subprocess.Popen
+    def capture(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        children.append(child)
+        return child
+    def unavailable(_pid):
+        raise OSError('injected pidfd failure')
+    monkeypatch.setattr(instrument.subprocess, 'Popen', capture)
+    monkeypatch.setattr(instrument.os, 'pidfd_open', unavailable)
+    assert instrument.evaluate(instrument.FIXTURES[0], instrument.FIXTURES[0].gold) == 'unavailable'
+    assert len(children) == 1 and children[0].poll() is not None

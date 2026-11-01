@@ -106,12 +106,29 @@ def evaluate(fixture: Fixture, attempt: str, timeout: float = 5.0) -> str:
                 with tempfile.TemporaryFile(mode='w+') as out, tempfile.TemporaryFile(mode='w+') as err:
                     process = subprocess.Popen(argv, stdin=subprocess.PIPE, text=True, stdout=out, stderr=err,
                                                cwd=scratch, env=env, start_new_session=True)
+                    # The harness blocks on stdin until custody is established.
+                    # Keep its exact UID and birth ticks for the exceptional fallback.
+                    proc_dir = f'/proc/{process.pid}'
+                    uid, birth = None, None
                     try:
+                        uid = os.stat(proc_dir).st_uid
+                        with open(f'{proc_dir}/stat') as stat_file:
+                            birth = stat_file.read().rsplit(') ', 1)[1].split()[19]
+                        if uid != os.getuid():
+                            raise OSError('unexpected child UID')
                         pidfd = os.pidfd_open(process.pid)
                     except OSError:
-                        # Popen still owns this unreaped child PID; do not leave it running.
-                        process.kill()
-                        process.communicate()
+                        process.stdin.close()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            current_uid = os.stat(proc_dir).st_uid
+                            with open(f'{proc_dir}/stat') as stat_file:
+                                current_birth = stat_file.read().rsplit(') ', 1)[1].split()[19]
+                            if current_uid != uid or current_birth != birth or uid != os.getuid():
+                                raise RuntimeError('child identity changed during cleanup')
+                            os.kill(process.pid, signal.SIGKILL)
+                            process.wait(timeout=5)
                         return 'unavailable'
                     try:
                         try:
