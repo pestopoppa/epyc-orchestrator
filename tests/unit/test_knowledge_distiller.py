@@ -338,3 +338,54 @@ class TestKnowledgeDistiller:
         assert d["conventions_created"] == 1
         assert d["raw_entries_consolidated"] == 0
         assert d["notes"] == []
+
+
+def test_ap29_paired_episodic_control_against_real_distiller():
+    from orchestration.repl_memory.episodic_control import run_paired_arms
+    from orchestration.repl_memory.knowledge_distiller import KnowledgeDistiller
+
+    episodes = [
+        {"id": str(i), "description": f"alpha detailed strategy number {i} long text",
+         "insight": f"alpha detailed insight number {i} long text",
+         "source_trial_id": i, "species": "prompt_forge", "entry_type": "raw"}
+        for i in range(5)
+    ]
+    seen = []
+
+    def abstract(candidate):
+        seen.append(candidate.path)
+        assert candidate._conn.execute("SELECT COUNT(*) FROM strategies").fetchone()[0] == 4
+        return KnowledgeDistiller(candidate).distill(trial_id=20)
+
+    result = run_paired_arms(
+        episodes, delete_ids={"4"}, embedder=ClusterableEmbedder(), embedding_dim=32,
+        query_text="alpha", abstract=abstract, retrieve_options={"k": 10},
+    )
+    assert {e.id for e in result.control} == {"0", "1", "2", "3"}
+    assert {e.description for e in result.control} == {e["description"] for e in episodes[:4]}
+    assert all(e.entry_type == "raw" for e in result.control)
+    assert [e.entry_type for e in result.candidate] == ["pattern"]
+    assert result.candidate_result.patterns_created == 1
+    assert result.candidate_result.raw_entries_consolidated == 4
+    assert result.deleted_ids == {"4"}
+    assert result.adoption == "pending_comparison_rule"
+    assert len(seen) == 1 and not seen[0].exists()
+
+
+def test_ap29_no_abstraction_returns_same_native_rows():
+    from orchestration.repl_memory.episodic_control import run_paired_arms
+
+    episodes = [
+        {"id": str(i), "description": f"alpha episode {i}", "insight": f"alpha insight {i}",
+         "source_trial_id": i, "species": "prompt_forge"}
+        for i in range(3)
+    ]
+    result = run_paired_arms(
+        episodes, delete_ids={"1"}, embedder=ClusterableEmbedder(), embedding_dim=32,
+        query_text="alpha", abstract=lambda _: None, retrieve_options={"k": 10},
+    )
+    def rows(entries):
+        return {(e.id, e.description, e.insight, e.entry_type) for e in entries}
+    assert rows(result.control) == rows(result.candidate) == {
+        (e["id"], e["description"], e["insight"], "raw") for e in (episodes[0], episodes[2])
+    }

@@ -1,0 +1,2 @@
+HEAD:orchestration/repl_memory/knowledge_distiller.py:84:class KnowledgeDistiller:
+HEAD:scripts/autopilot/context_budget.py:115:    ``entry_type`` values produced by ``StrategyStore`` + ``KnowledgeDistiller``:
