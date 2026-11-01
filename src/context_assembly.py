@@ -144,13 +144,15 @@ class BundleEntry:
     reason_included: str | None = None
     reason_downgraded_or_excluded: str | None = None
     estimated_tokens: int = 0
+    render_ranges_verbatim: bool = False
 
     def __post_init__(self) -> None:
         if self.mode not in InclusionMode.ALL:
             raise ValueError(f"invalid mode: {self.mode!r}")
         if self.source not in SourceKind.ALL:
             raise ValueError(f"invalid source: {self.source!r}")
-        self.normalize()
+        if not self.render_ranges_verbatim:
+            self.normalize()
 
     def normalize(self) -> None:
         """Merge line ranges (slices mode only)."""
@@ -271,6 +273,7 @@ class ContextBundle:
                     "reason_included": e.reason_included,
                     "reason_downgraded_or_excluded": e.reason_downgraded_or_excluded,
                     "estimated_tokens": e.estimated_tokens,
+                    **({"render_ranges_verbatim": True} if e.render_ranges_verbatim else {}),
                 }
                 for e in self.entries
             ],
@@ -301,6 +304,7 @@ class Candidate:
     symbol_ids: list[str] = field(default_factory=list)
     content_sha256: str | None = None
     source: str = SourceKind.COLGREP
+    render_ranges_verbatim: bool = False
 
     def cost_for(self, mode: str) -> int:
         return {
@@ -376,6 +380,9 @@ def pack_to_budget(
                     symbol_ids=list(cand.symbol_ids),
                     content_sha256=cand.content_sha256,
                     source=cand.source,
+                    render_ranges_verbatim=(
+                        cand.render_ranges_verbatim and mode == InclusionMode.SLICES
+                    ),
                     estimated_tokens=cost,
                     reason_included=f"priority={cand.priority:g}",
                     reason_downgraded_or_excluded=(

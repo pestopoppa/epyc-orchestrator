@@ -2,11 +2,17 @@ name: NI programmatic feedback and DTAP contracts
 
 on:
   push:
-    branches: [codex/ni-programmatic-feedback-tuadv-ci-20261101]
+    branches: [codex/ni-dcp11-ast-render-ci-20261101]
     paths:
       - 'src/trace/step_events.py'
       - 'src/graph/helpers.py'
+      - 'src/context_assembly.py'
+      - 'src/context_discovery.py'
       - 'tests/unit/test_step_events.py'
+      - 'tests/unit/test_context_assembly.py'
+      - 'tests/unit/test_context_discovery.py'
+      - 'tests/unit/test_dcp4_wiring.py'
+      - 'tests/unit/test_contextbench_score.py'
       - 'tests/integration/test_execute_turn.py'
       - 'orchestration/repl_memory/distillation/pipeline.py'
       - 'scripts/autopilot/evals/dtap/harness/runner.py'
@@ -50,9 +56,15 @@ jobs:
           sha256sum \
             src/trace/step_events.py \
             src/graph/helpers.py \
+            src/context_assembly.py \
+            src/context_discovery.py \
             src/config/models.py \
             src/repl_environment/session_artifacts.py \
             tests/unit/test_step_events.py \
+            tests/unit/test_context_assembly.py \
+            tests/unit/test_context_discovery.py \
+            tests/unit/test_dcp4_wiring.py \
+            tests/unit/test_contextbench_score.py \
             tests/integration/test_execute_turn.py \
             orchestration/repl_memory/distillation/pipeline.py \
             scripts/autopilot/evals/dtap/harness/runner.py \
@@ -77,6 +89,10 @@ jobs:
             --junitxml="$RESULT_DIR/junit.xml" \
             tests/unit/test_step_events.py \
             tests/integration/test_execute_turn.py \
+            tests/unit/test_context_assembly.py \
+            tests/unit/test_context_discovery.py \
+            tests/unit/test_dcp4_wiring.py \
+            tests/unit/test_contextbench_score.py \
             tests/unit/test_distillation.py \
             scripts/autopilot/evals/dtap/tests/ \
             2>&1 | tee "$RESULT_DIR/pytest.stdout.txt"
