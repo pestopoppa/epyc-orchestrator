@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 def _mem_to_trajectory(mem) -> dict:
     """Convert a MemoryEntry to a trajectory dict for distillation."""
     ctx = mem.context if isinstance(mem.context, dict) else {}
-    return {
+    trajectory = {
         "task_id": mem.id,
         "task_type": ctx.get("task_type", "general"),
         # contract key first, legacy key second — contract rows carry "objective"
@@ -43,11 +43,14 @@ def _mem_to_trajectory(mem) -> dict:
         "escalations": [],
         "cost_metrics": {},
     }
+    if "evaluator_provenance" in ctx:
+        trajectory["evaluator_provenance"] = ctx["evaluator_provenance"]
+    return trajectory
 
 
 def _traj_to_dict(traj) -> dict:
     """Convert a Trajectory dataclass to a trajectory dict for distillation."""
-    return {
+    trajectory = {
         "task_id": traj.task_id,
         "task_type": traj.task_type,
         "objective": traj.objective,
@@ -56,6 +59,10 @@ def _traj_to_dict(traj) -> dict:
         "escalations": traj.escalations,
         "cost_metrics": traj.cost_metrics,
     }
+    outcome_data = getattr(getattr(traj, "outcome_entry", None), "data", None)
+    if isinstance(outcome_data, dict) and "evaluator_provenance" in outcome_data:
+        trajectory["evaluator_provenance"] = outcome_data["evaluator_provenance"]
+    return trajectory
 
 
 def _build_teacher(teacher_name: str):

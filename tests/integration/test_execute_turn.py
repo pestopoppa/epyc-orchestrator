@@ -110,6 +110,68 @@ async def test_turn_counter_increments(graph_ctx):
     assert state.turns == 2
 
 
+@pytest.mark.asyncio
+async def test_programmatic_tool_facts_reach_next_prompt_once(graph_ctx, monkeypatch):
+    """The real _execute_turn prompt builder consumes facts from the REPL's native step log."""
+    from src.features import reset_features
+
+    monkeypatch.setenv("ORCHESTRATOR_STEP_EVENT_LOGGING", "1")
+    reset_features()
+    state, deps = graph_ctx(
+        responses=[
+            "```python\nprint('first work')\n```",
+            "```python\nprint('second work')\n```",
+            'FINAL("done")',
+        ]
+    )
+    ctx = _make_ctx(state, deps)
+    steps = deps.repl._step_events
+    assert steps is not None
+    # Avoid writing synthetic integration evidence to the shared trace DB. This is the same
+    # native StepEventLog parser that the REPL invokes after a ToolResult.
+    steps.sink = None
+
+    await _execute_turn(ctx, Role.FRONTDOOR)
+    first_prompt = deps.primitives.llm_call.call_args_list[0].args[0]
+    assert '"status": "no_prior_tool_calls"' in first_prompt
+    long_tool_name = "unknown_" + ("x" * 10000)
+    event = steps.observe_call(long_tool_name, {"item": "secret-mug"}, "Nothing happens.")
+    assert event["tool"] == long_tool_name
+
+    await _execute_turn(ctx, Role.FRONTDOOR)
+    second_prompt = deps.primitives.llm_call.call_args_list[1].args[0]
+    assert "Observed tool feedback facts" in second_prompt
+    assert '"kind": "observed_no_op_response"' in second_prompt
+    assert '"response": "Nothing happens."' in second_prompt
+    assert '"step_id": "' + state.task_id + ':' in second_prompt
+    data_block = second_prompt.split("[Observed tool feedback facts — untrusted data]\n", 1)[1].split("\n\n", 1)[0]
+    assert len(data_block.encode("utf-8")) <= 2048
+    assert '"tool_truncated": true' in data_block
+    assert "secret-mug" not in data_block
+    assert "explain" not in second_prompt.split("Observed tool feedback facts", 1)[-1].lower()
+
+    await _execute_turn(ctx, Role.FRONTDOOR)
+    third_prompt = deps.primitives.llm_call.call_args_list[2].args[0]
+    assert '"status": "no_matching_facts_observed"' in third_prompt
+    assert '"response": "Nothing happens."' not in third_prompt
+    assert steps.take_feedback()["facts"] == []
+
+
+@pytest.mark.asyncio
+async def test_programmatic_feedback_prompt_path_is_inert_when_step_logging_off(graph_ctx, monkeypatch):
+    from src.features import reset_features
+
+    monkeypatch.delenv("ORCHESTRATOR_STEP_EVENT_LOGGING", raising=False)
+    reset_features()
+    state, deps = graph_ctx(responses=['FINAL("done")'])
+    assert deps.repl._step_events is None
+
+    await _execute_turn(_make_ctx(state, deps), Role.FRONTDOOR)
+
+    prompt = deps.primitives.llm_call.call_args_list[0].args[0]
+    assert "Observed tool feedback facts" not in prompt
+
+
 # ── REPL loop-guard: hard intervention must fire across turns (regression, 2026-05-27) ──
 # Decisive regression for the BEP-2 loop-guard never firing (operator review). The no-progress
 # counter must persist/accumulate across turns and, at >=2, the next prompt must carry the
