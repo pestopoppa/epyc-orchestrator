@@ -3852,10 +3852,33 @@ def _seq_speed_cutoff_from_state(state: dict[str, Any]) -> float | None:
 
 def _seq_attach_rate_era_witness(verdict: Any, seq_inputs: dict[str, Any]) -> None:
     seq = getattr(verdict, "seq", None)
+    if isinstance(seq, dict) and _seq_finite_number(seq.get("z")):
+        seq["quality_era_witness"] = dict(seq_inputs["quality_era_witness"])
     z_rate = seq.get("z_rate") if isinstance(seq, dict) else None
     if (isinstance(seq, dict) and seq.get("rate_axis_available") is True
-            and type(z_rate) in (int, float) and math.isfinite(z_rate)):
+            and _seq_finite_number(z_rate)):
         seq["rate_era_witness"] = dict(seq_inputs["rate_era_witness"])
+
+
+def _seq_finite_number(value: Any) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _seq_quality_witness_matches(witness: Any, expected: dict[str, Any]) -> bool:
+    if not isinstance(witness, dict) or set(witness) != set(expected):
+        return False
+    if type(witness.get("version")) is not int or witness["version"] != 1:
+        return False
+    value = witness["quality_exclude_before_ts"]
+    target = expected["quality_exclude_before_ts"]
+    return (value is None and target is None) or (
+        _seq_finite_number(value) and value == target
+    )
 
 
 def _seq_rate_witness_matches(witness: Any, expected: dict[str, Any]) -> bool:
@@ -3878,10 +3901,15 @@ def _seq_prepare_cached_verdict(result: Any, seq_inputs: dict[str, Any]) -> bool
     seq = getattr(cached, "seq", None)
     if seq is None:
         return True
-    witness = seq_inputs["rate_era_witness"]
-    if (seq is not None and witness["speed_exclude_before_ts"] is not None
-            and (not isinstance(seq, dict)
-                 or not _seq_rate_witness_matches(seq.get("rate_era_witness"), witness))):
+    rate_witness = seq_inputs["rate_era_witness"]
+    quality_witness = seq_inputs["quality_era_witness"]
+    rate_mismatch = rate_witness["speed_exclude_before_ts"] is not None and (
+        not isinstance(seq, dict)
+        or not _seq_rate_witness_matches(seq.get("rate_era_witness"), rate_witness))
+    quality_mismatch = quality_witness["quality_exclude_before_ts"] is not None and (
+        not isinstance(seq, dict)
+        or not _seq_quality_witness_matches(seq.get("quality_era_witness"), quality_witness))
+    if rate_mismatch or quality_mismatch:
         result.gate_verdict = dataclasses.replace(cached, seq=None)
         return True
     return seq is None
@@ -3904,13 +3932,16 @@ def _seq_inputs_for_trial(
     (baseline) profile, prior quality/rate observations, and the seq/alpha-wealth candidate
     sets — so pre-boundary PRIORS never pool with post-boundary evidence in the anytime-valid
     e-process wealth. When ``None`` (default) the fence is inert and all rows fold, so the
-    unit contract is unchanged. The independently ratified speed boundary additionally
-    fences the rate comparator and rate observations, without changing quality or alpha.
+    unit contract is unchanged. Post-boundary quality z values also need native proof
+    that their comparator used this quality boundary; timestamps alone cannot prove it.
+    The independently ratified speed boundary additionally fences the rate comparator
+    and rate observations, without changing quality or alpha.
     """
     quality_exclude_before_ts = _seq_validated_cutoff(quality_exclude_before_ts)
     rate_exclude_before_ts = _seq_validated_cutoff(rate_exclude_before_ts)
     rate_witness = {"version": 1, "speed_exclude_before_ts": rate_exclude_before_ts,
                     "quality_exclude_before_ts": quality_exclude_before_ts}
+    quality_witness = {"version": 1, "quality_exclude_before_ts": quality_exclude_before_ts}
     candidate = candidate_override or _config_fingerprint(action)
     prior_quality_obs: list[tuple[int | None, float]] = []
     prior_rate_obs: list[tuple[int | None, float]] = []
@@ -3986,7 +4017,11 @@ def _seq_inputs_for_trial(
                 seq_confirmed_candidates.add(seq_candidate)
         if seq_candidate != candidate:
             continue
-        if len(prior_quality_obs) < SEQ_PRIOR_OBS_LIMIT and "z" in seq:
+        quality_proven = (quality_exclude_before_ts is None or
+                          (_seq_quality_witness_matches(seq.get("quality_era_witness"),
+                                                        quality_witness)
+                           and _seq_finite_number(seq.get("z"))))
+        if quality_proven and len(prior_quality_obs) < SEQ_PRIOR_OBS_LIMIT and "z" in seq:
             try:
                 prior_quality_obs.append((entry.trial_id, float(seq["z"])))
             except (TypeError, ValueError):
@@ -4032,6 +4067,7 @@ def _seq_inputs_for_trial(
         "prior_quality_obs": list(reversed(prior_quality_obs)),
         "prior_rate_obs": list(reversed(prior_rate_obs)),
         "rate_era_witness": rate_witness,
+        "quality_era_witness": quality_witness,
         "baseline_reference": _seq_baseline_reference_state(journal, tier=tier),
         "alpha_wealth": _seq_alpha_wealth_state(
             seq_candidates,

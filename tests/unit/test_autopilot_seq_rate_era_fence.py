@@ -63,6 +63,7 @@ def test_speed_fence_independent_of_quality_and_includes_boundary():
     assert fenced["alpha_wealth"] == old["alpha_wealth"]
     for row in rows:
         row.seq["rate_era_witness"]["quality_exclude_before_ts"] = BOUNDARY - 86400
+        row.seq["quality_era_witness"] = {"version": 1, "quality_exclude_before_ts": BOUNDARY - 86400}
     speed_later = inputs(rows, quality_exclude_before_ts=BOUNDARY - 86400,
                          rate_exclude_before_ts=BOUNDARY)
     assert [x[0] for x in speed_later["prior_rate_obs"]] == [5, 6, 7, 8]
@@ -70,6 +71,7 @@ def test_speed_fence_independent_of_quality_and_includes_boundary():
     assert len(speed_later["prior_quality_obs"]) == 5
     for row in rows:
         row.seq["rate_era_witness"]["quality_exclude_before_ts"] = BOUNDARY + 86400
+        row.seq["quality_era_witness"]["quality_exclude_before_ts"] = BOUNDARY + 86400
     quality_later = inputs(rows, quality_exclude_before_ts=BOUNDARY + 86400,
                            rate_exclude_before_ts=BOUNDARY)
     assert [x[0] for x in quality_later["prior_rate_obs"]] == [6, 7, 8]
