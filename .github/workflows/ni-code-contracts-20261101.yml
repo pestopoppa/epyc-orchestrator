@@ -30,6 +30,7 @@ jobs:
       PYTHONPATH: tests
       # Configuration-only placeholder: these tests use deterministic stubs and never launch a kernel.
       ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-empty-kernel-path
+      ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-empty-kernel-path/llama-mtmd-cli
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
