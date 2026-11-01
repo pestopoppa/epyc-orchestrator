@@ -28,6 +28,8 @@ jobs:
       PYTHONHASHSEED: '0'
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
       PYTHONPATH: tests
+      # Configuration-only placeholder: these tests use deterministic stubs and never launch a kernel.
+      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-empty-kernel-path
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
