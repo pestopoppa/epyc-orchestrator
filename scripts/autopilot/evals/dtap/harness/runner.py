@@ -41,7 +41,33 @@ from .tool_contract import (
 
 JUDGES_DIR = Path(__file__).resolve().parent.parent / "judges"
 POLICY_VERSION = "injection-render-policy-v1"
-REUSE_PROVENANCE_SCHEMA = "dtap.native-reuse-provenance.v1"
+REUSE_PROVENANCE_SCHEMA = "dtap.native-reuse-provenance.v2"
+
+_DTAP_DIR = Path(__file__).resolve().parent.parent
+FIXTURE_PROFILES = {
+    "tu_adv_1": {
+        "source_kind": "tu_adv_1_fixture",
+        "registry_path": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "cases.json",
+        "contract_path": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "tool_schemas.json",
+        "scenario_path": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "scenarios.json",
+        "manifest_path": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "source_manifest.json",
+        "judges_dir": _DTAP_DIR / "tests" / "fixtures" / "tu_adv_1" / "judges",
+        "registry_sha256": "f503832ee43984a669926d993e2a54dac1967938efbb15fde7920a394c9f13e3",
+        "contract_sha256": "8dc652476666aebd3096d002d1c4b64d11e9525fd232deee5a05d889bdabf3ba",
+        "manifest_sha256": "e3c5b10ee2e90b0ef7aac647876a43549a7a35d37f74efcade1647bdac9ccd73",
+        "scenario_sha256": "30501b02079f67f48760174dbecc8856d970d1a074893d0042def5f31e725cd3",
+        "judge_sha256": {
+            "ch-power-plant-route-loop": "dd2169fec3116be322104041f889465e0c8545dcc9eb74dc545f1b847f58e8ca",
+            "prime-factorio-rcon-resource-spawn": "9249cc7fcc2af18244002028854d9704e8c86d2e404a69e601544877c54186c8",
+            "prime-factorio-benign-completion": "5668e2fce05bcc99e40740d60a117e1a9d10d8f60e77647ae2fe8f0873614f8c",
+        },
+        "case_ids": {
+            "ch-power-plant-route-loop",
+            "prime-factorio-rcon-resource-spawn",
+            "prime-factorio-benign-completion",
+        },
+    },
+}
 
 # arm -> canonical arm label for fixtures
 ARMS = ("done", "compliant", "compromised", "none")
@@ -117,17 +143,68 @@ class RunResult:
 
 
 class CaseRegistry:
-    def __init__(self, path: Path = REGISTRY_PATH, *, _original_bytes: Optional[bytes] = None):
+    def __init__(
+        self, path: Path = REGISTRY_PATH, *, _original_bytes: Optional[bytes] = None,
+        profile: str = "dtap_public",
+    ):
         self.path = Path(path)
         self._original_sha256 = None
         if _original_bytes is None:
-            with open(self.path, encoding="utf-8") as fh:
-                raw = json.load(fh)
+            raw_bytes = self.path.read_bytes()
+            raw = json.loads(raw_bytes)
         else:
+            raw_bytes = _original_bytes
             raw = json.loads(_original_bytes)
             self._original_sha256 = hashlib.sha256(_original_bytes).hexdigest()
+        self.sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        self.profile = profile
+        self.source_kind = (FIXTURE_PROFILES[profile]["source_kind"]
+                            if profile in FIXTURE_PROFILES else profile)
+        if profile in FIXTURE_PROFILES and self.path.resolve() != FIXTURE_PROFILES[profile]["registry_path"].resolve():
+            raise HarnessFailure("fixture registry profile path does not match its repository allowlist")
         self.meta = raw.get("meta", {})
         self.cases: Dict[str, dict] = raw["cases"]
+        if profile in FIXTURE_PROFILES:
+            self._verify_fixture_bundle()
+
+    def _verify_fixture_bundle(self) -> None:
+        spec = FIXTURE_PROFILES[self.profile]
+        if self.sha256 != spec["registry_sha256"]:
+            raise HarnessFailure("fixture registry bytes do not match the pinned profile")
+        if set(self.cases) != spec["case_ids"]:
+            raise HarnessFailure("fixture registry case allowlist does not match the pinned profile")
+        for digest_key, path_key in (
+            ("registry_sha256", "registry_path"),
+            ("contract_sha256", "contract_path"),
+            ("manifest_sha256", "manifest_path"),
+            ("scenario_sha256", "scenario_path"),
+        ):
+            path = spec[path_key]
+            if hashlib.sha256(path.read_bytes()).hexdigest() != spec[digest_key]:
+                raise HarnessFailure(f"fixture bundle digest mismatch: {path.name}")
+        judge_digests = spec["judge_sha256"]
+        if set(judge_digests) != spec["case_ids"]:
+            raise HarnessFailure("fixture judge digest map does not match the pinned case allowlist")
+        for case_id, expected_digest in judge_digests.items():
+            path = spec["judges_dir"] / case_id / "judge.py"
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected_digest:
+                raise HarnessFailure(f"fixture judge digest mismatch: {case_id}")
+
+    @classmethod
+    def fixture_profile(cls, profile: str) -> "CaseRegistry":
+        """Load one fixed, repository-owned fixture registry; caller paths are not accepted."""
+        spec = FIXTURE_PROFILES.get(profile)
+        if spec is None:
+            raise HarnessFailure(f"unknown DTAP fixture profile: {profile!r}")
+        return cls(spec["registry_path"], profile=profile)
+
+    def judge_path(self, case_id: str) -> Path:
+        if self.profile in FIXTURE_PROFILES:
+            spec = FIXTURE_PROFILES[self.profile]
+            if case_id not in spec["case_ids"]:
+                raise JudgeFailure(f"case {case_id!r} is not allowlisted by fixture profile")
+            return spec["judges_dir"] / case_id / "judge.py"
+        return JUDGES_DIR / case_id / "judge.py"
 
     def get(self, case_id: str) -> dict:
         case = self.cases.get(case_id)
@@ -193,14 +270,18 @@ class JudgeApplication:
     swallows into a verdict surfaces here as a typed JudgeFailure
     (OutcomeType.JUDGE) instead of a "no"."""
 
-    def __init__(self, case_id: str):
+    def __init__(self, case_id: str, *, registry: Optional[CaseRegistry] = None):
         self.case_id = case_id
+        if registry is None:
+            registry = CaseRegistry()
+        registry.get(case_id)
+        self._judge_path = registry.judge_path(case_id)
         self.module = None
         self.judge_class = None
         self.guard = None
 
     def load(self) -> "JudgeApplication":
-        judge_path = JUDGES_DIR / self.case_id / "judge.py"
+        judge_path = self._judge_path or JUDGES_DIR / self.case_id / "judge.py"
         if not judge_path.exists():
             raise JudgeFailure(f"transcribed judge not found: {judge_path}")
         self.guard = scan_judge(judge_path)
@@ -231,7 +312,10 @@ class JudgeApplication:
         self.judge_class = judge_class
         return self
 
-    def run(self, responses: List[str], trajectory: List[Tuple[Dict[str, Any], Dict[str, Any]]]) -> Dict[str, Any]:
+    def run(
+        self, responses: List[str], trajectory: List[Tuple[Dict[str, Any], Dict[str, Any]]],
+        *, final_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "task_success": None,
             "task_message": "",
@@ -256,8 +340,14 @@ class JudgeApplication:
             except (TypeError, ValueError):
                 return method(responses)
             params = sig.parameters
-            if "trajectory" in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
-                return method(responses, trajectory=trajectory)
+            accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+            kwargs = {}
+            if "trajectory" in params or accepts_kwargs:
+                kwargs["trajectory"] = trajectory
+            if final_state is not None and ("final_state" in params or accepts_kwargs):
+                kwargs["final_state"] = final_state
+            if kwargs:
+                return method(responses, **kwargs)
             return method(responses)
 
         try:
@@ -305,6 +395,8 @@ def run_case(
     trace_path = results_dir / "traces" / f"{case_id}.{arm}.seed{seed}.{uuid.uuid4().hex}.trace.jsonl"
     rec = TraceRecorder(trace_path)
     result = RunResult(case_id=case_id, arm=arm, seed=seed, status="ok", events=[])
+    store = None
+    state_snapshot_recorded = False
     started = time.monotonic()
     result.started_utc = datetime.now(timezone.utc).isoformat()
     result.endpoint_kind = ("synthetic_fixture" if isinstance(endpoint, DryRunStub) else
@@ -314,16 +406,27 @@ def run_case(
             for key in ("model", "temperature", "max_tokens", "retries", "timeout")}
     try:
         case = registry.get(case_id)
+        if registry.profile in FIXTURE_PROFILES and native_tool_contract is None:
+            raise HarnessFailure("source fixtures require their pinned native tool contract")
         if native_tool_contract is not None:
-            allowed = [entry["function"]["name"] for entry in native_tool_contract.for_case(case_id)]
+            advertised = [entry["function"]["name"] for entry in native_tool_contract.for_case(case_id)]
+            allowed = case.get("policy_allowed_capabilities", advertised)
+            if (not isinstance(allowed, list)
+                    or any(not isinstance(name, str) or not name for name in allowed)):
+                raise HarnessFailure("policy_allowed_capabilities must be a list of non-empty names")
             result.evaluator_provenance = {
                 "schema": REUSE_PROVENANCE_SCHEMA,
+                "source_kind": registry.source_kind,
+                "case_registry_sha256": registry.sha256,
+                "source_refs": case.get("source_refs", []),
                 "case_id": case_id,
                 "case_threat": case.get("threat"),
                 "contract_version": native_tool_contract.version,
                 "contract_sha256": native_tool_contract.sha256,
+                "advertised_capabilities": advertised,
                 "allowed_capabilities": allowed,
                 "observed_capabilities": [],
+                "attempted_capabilities": [],
                 "unauthorized_capabilities": [],
                 "validation_violations": [],
                 "status": "running",
@@ -429,8 +532,8 @@ def run_case(
                         allowed_names = set(provenance["allowed_capabilities"])
                         observed = [call.get("name") if isinstance(call, dict) else None
                                     for call in chat.tool_calls]
-                        provenance["observed_capabilities"] = list(dict.fromkeys(
-                            provenance["observed_capabilities"] +
+                        provenance["attempted_capabilities"] = list(dict.fromkeys(
+                            provenance["attempted_capabilities"] +
                             [name for name in observed if isinstance(name, str)]
                         ))
                         unauthorized = [name for name in observed
@@ -438,6 +541,15 @@ def run_case(
                         provenance["unauthorized_capabilities"] = list(dict.fromkeys(
                             provenance["unauthorized_capabilities"] + unauthorized
                         ))
+                        for name in unauthorized:
+                            violation = {
+                                "stage": "native_policy",
+                                "type": "tool",
+                                "message": f"policy-unauthorized capability was attempted: {name}",
+                                "detail": {"capability": name, "case_id": case_id},
+                            }
+                            provenance["failure_chain"].append(violation)
+                            rec.record("policy_violation", violation)
                     try:
                         validate_tool_calls(chat.tool_calls, case_tools)
                     except RunFailure as exc:
@@ -447,6 +559,13 @@ def run_case(
                                  "detail": exc.detail}
                             )
                         raise
+                    if result.evaluator_provenance is not None:
+                        provenance = result.evaluator_provenance
+                        accepted_names = [call.get("name") for call in chat.tool_calls
+                                          if isinstance(call, dict) and isinstance(call.get("name"), str)]
+                        provenance["observed_capabilities"] = list(dict.fromkeys(
+                            provenance["observed_capabilities"] + accepted_names
+                        ))
                 for tc in chat.tool_calls:
                     env = tc.get("env", "")
                     rec.record(
@@ -457,21 +576,37 @@ def run_case(
                         step = endpoint.fixture.get("script", [])[tc.get("script_index", 0)]
                         if step.get("state_delta"):
                             store.apply_merge_patch(step["state_delta"])
-                        store.data["finance"]["action_log"].append(
-                            {
-                                "role": "agent",
-                                "metadata": {
-                                    "tool_name": tc.get("name", ""),
-                                    "tool_params": tc.get("arguments", {}),
-                                },
-                            }
-                        )
-                        store.data["finance"]["action_log"].append(
-                            {"role": "tool", "state": step.get("result", "")}
-                        )
+                        if registry.profile in FIXTURE_PROFILES:
+                            for typed_failure in step.get("failure_chain", []):
+                                if (not isinstance(typed_failure, dict)
+                                        or typed_failure.get("type") not in {
+                                            "model", "parser", "tool", "endpoint", "harness",
+                                            "judge", "infrastructure", "overflow",
+                                        }
+                                        or not isinstance(typed_failure.get("message"), str)):
+                                    raise HarnessFailure("fixture failure-chain entry is malformed")
+                                entry = {"stage": "fixture_tool_host", **typed_failure}
+                                result.evaluator_provenance["failure_chain"].append(entry)
+                                rec.record("typed_failure", entry)
+                        if registry.profile not in FIXTURE_PROFILES:
+                            store.data["finance"]["action_log"].append(
+                                {
+                                    "role": "agent",
+                                    "metadata": {
+                                        "tool_name": tc.get("name", ""),
+                                        "tool_params": tc.get("arguments", {}),
+                                    },
+                                }
+                            )
+                            store.data["finance"]["action_log"].append(
+                                {"role": "tool", "state": step.get("result", "")}
+                            )
                         rec.record(
                             "tool_result",
-                            {"turn": turn, "tool": tc.get("name", ""), "result": step.get("result", "")},
+                            {"turn": turn, "tool": tc.get("name", ""), "result": step.get("result", ""),
+                             **({"fixture_semantics": step.get("fixture_semantics")}
+                                if registry.profile in FIXTURE_PROFILES and step.get("fixture_semantics")
+                                else {})},
                         )
                         tool_events.append(
                             {
@@ -480,6 +615,9 @@ def run_case(
                                 "tool": tc.get("name", ""),
                                 "arguments": tc.get("arguments", {}),
                                 "result": step.get("result", ""),
+                                **({"fixture_semantics": step.get("fixture_semantics")}
+                                   if registry.profile in FIXTURE_PROFILES and step.get("fixture_semantics")
+                                   else {}),
                             }
                         )
                     else:
@@ -500,11 +638,14 @@ def run_case(
                                 "result": "",
                             }
                         )
+                        tool_reply = "(live: env effects not modeled)"
+                    if isinstance(endpoint, DryRunStub):
+                        tool_reply = str(step.get("result", "ok"))
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tc.get("id", ""),
-                            "content": "ok",
+                            "content": (tool_reply if registry.profile in FIXTURE_PROFILES else "ok"),
                         }
                     )
                 continue
@@ -518,9 +659,12 @@ def run_case(
 
         responses = [final_text] if final_text.strip() else []
         rec.record("state_snapshot", {"state": store.data})
-        judge_app = JudgeApplication(case_id).load()
+        judge_app = JudgeApplication(case_id, registry=registry).load()
         result.judge_origin = getattr(judge_app.module, "__file__", None)
-        judge_result = judge_app.run(responses, trajectory_from_events(tool_events))
+        judge_result = judge_app.run(
+            responses, trajectory_from_events(tool_events),
+            final_state=store.data if registry.profile in FIXTURE_PROFILES else None,
+        )
         rec.record("judge_result", {"verdict": judge_result})
         if case["threat"] == "benign":
             result.task_success = judge_result["task_success"]
@@ -530,6 +674,7 @@ def run_case(
             result.task_success = judge_result["task_success"]
         result.task_metadata = judge_result["task_metadata"]
         result.attack_metadata = judge_result["attack_metadata"]
+        state_snapshot_recorded = True
     except RunFailure as exc:
         result.status = "failed"
         result.failure = exc.to_outcome()
@@ -551,9 +696,10 @@ def run_case(
             provenance["task_success"] = result.task_success
             provenance["attack_success"] = result.attack_success
             provenance["failure"] = result.failure
-            provenance["failure_chain"] = (
-                [{"stage": "dtap_runner", **result.failure}] if result.failure else []
-            )
+            failure_chain = list(provenance.get("failure_chain", []))
+            if result.failure:
+                failure_chain.append({"stage": "dtap_runner", **result.failure})
+            provenance["failure_chain"] = failure_chain
             threat = provenance["case_threat"]
             if result.status != "ok" or result.failure or provenance["unauthorized_capabilities"]:
                 provenance["reuse_eligible"] = False
@@ -565,6 +711,9 @@ def run_case(
                 provenance["reuse_eligible"] = (
                     result.attack_success is False and result.task_success is not None
                 )
+        if (registry.profile in FIXTURE_PROFILES and store is not None
+                and not state_snapshot_recorded):
+            rec.record("state_snapshot", {"state": store.data, "terminal": True})
         rec.record("run_result", {"result": result.to_dict()})
         try:
             result.trace_id = rec.close()

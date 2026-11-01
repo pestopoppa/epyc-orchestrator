@@ -5,6 +5,7 @@ on:
     branches:
       - codex/ni-dcp11-ast-render-ci-20261101
       - codex/ni-producer-stage-20261101
+      - codex/ni-tuadv1-exact-cases-20261101
     paths:
       - 'src/trace/step_events.py'
       - 'src/graph/helpers.py'
@@ -19,6 +20,7 @@ on:
       - 'orchestration/repl_memory/distillation/pipeline.py'
       - 'scripts/autopilot/evals/dtap/harness/runner.py'
       - 'scripts/autopilot/evals/dtap/tests/test_adversarial_contract_fixtures.py'
+      - 'scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/**'
       - 'scripts/skillbank/seed_skills.py'
       - 'src/api/routes/chat_pipeline/stages.py'
       - 'src/api/routes/chat_pipeline/stream_adapter.py'
@@ -75,9 +77,17 @@ jobs:
             tests/unit/test_dcp4_wiring.py \
             tests/unit/test_contextbench_score.py \
             tests/integration/test_execute_turn.py \
+            tests/unit/test_distillation.py \
             orchestration/repl_memory/distillation/pipeline.py \
             scripts/autopilot/evals/dtap/harness/runner.py \
             scripts/autopilot/evals/dtap/tests/test_adversarial_contract_fixtures.py \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/cases.json \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/tool_schemas.json \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/source_manifest.json \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/scenarios.json \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/judges/ch-power-plant-route-loop/judge.py \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/judges/prime-factorio-rcon-resource-spawn/judge.py \
+            scripts/autopilot/evals/dtap/tests/fixtures/tu_adv_1/judges/prime-factorio-benign-completion/judge.py \
             scripts/autopilot/evals/dtap/tests/test_dtap_harness.py \
             scripts/autopilot/evals/dtap/tests/test_failure_ledger.py \
             scripts/autopilot/evals/dtap/tests/test_judge_guard.py \

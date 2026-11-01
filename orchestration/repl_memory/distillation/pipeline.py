@@ -17,6 +17,7 @@ Based on: SkillRL §3.1 (Experience-based Skill Distillation)
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -31,10 +32,13 @@ from ..skill_bank import Skill, SkillBank
 logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 20
-_NATIVE_REUSE_PROVENANCE_SCHEMA = "dtap.native-reuse-provenance.v1"
+_NATIVE_REUSE_PROVENANCE_SCHEMA_V1 = "dtap.native-reuse-provenance.v1"
+_NATIVE_REUSE_PROVENANCE_SCHEMA = "dtap.native-reuse-provenance.v2"
 
 
-def _native_evaluator_rejection(trajectory: Dict[str, Any]) -> Optional[str]:
+def _native_evaluator_rejection(
+    trajectory: Dict[str, Any], *, allow_fixture_sources: bool = False,
+) -> Optional[str]:
     """Return why an explicitly supplied DTAP source is unsafe to distill.
 
     Legacy trajectories without native evaluator provenance retain their
@@ -45,15 +49,23 @@ def _native_evaluator_rejection(trajectory: Dict[str, Any]) -> Optional[str]:
     provenance = trajectory.get("evaluator_provenance")
     if not isinstance(provenance, dict):
         return "malformed_native_provenance"
+    schema = provenance.get("schema")
+    if not isinstance(schema, str):
+        return "unsupported_native_provenance_schema"
     required = (
         "schema", "case_id", "case_threat", "contract_version", "contract_sha256",
         "allowed_capabilities", "observed_capabilities", "unauthorized_capabilities",
         "status", "task_success", "attack_success", "failure", "failure_chain",
         "trace_id", "trace_path",
     )
+    if schema == _NATIVE_REUSE_PROVENANCE_SCHEMA:
+        required += (
+            "source_kind", "case_registry_sha256", "source_refs", "advertised_capabilities",
+        )
+        required += ("attempted_capabilities",)
     if any(key not in provenance for key in required):
         return "incomplete_native_provenance"
-    if provenance["schema"] != _NATIVE_REUSE_PROVENANCE_SCHEMA:
+    if schema not in {_NATIVE_REUSE_PROVENANCE_SCHEMA, _NATIVE_REUSE_PROVENANCE_SCHEMA_V1}:
         return "unsupported_native_provenance_schema"
     for key in ("case_id", "contract_version", "contract_sha256", "trace_id", "trace_path"):
         if not isinstance(provenance[key], str) or not provenance[key]:
@@ -71,8 +83,149 @@ def _native_evaluator_rejection(trajectory: Dict[str, Any]) -> Optional[str]:
         return "invalid_native_provenance_attack_success"
     if not isinstance(provenance["failure_chain"], list):
         return "invalid_native_provenance_failure_chain"
+    for item in provenance["failure_chain"]:
+        if (not isinstance(item, dict) or not isinstance(item.get("stage"), str)
+                or not isinstance(item.get("type"), str)
+                or item.get("type") not in {
+                    "model", "parser", "tool", "endpoint", "harness", "judge",
+                    "infrastructure", "overflow",
+                }
+                or not isinstance(item.get("message"), str)
+                or "detail" not in item
+                or (item["detail"] is not None and not isinstance(item["detail"], dict))):
+            return "invalid_native_provenance_failure_chain_entry"
     if provenance["failure"] is not None and not isinstance(provenance["failure"], dict):
         return "invalid_native_provenance_failure"
+
+    # Re-open the evaluator's pinned case contract and immutable trace. The
+    # convenience eligibility bit and caller-provided names are not authority.
+    try:
+        from scripts.autopilot.evals.dtap.harness.runner import CaseRegistry, FIXTURE_PROFILES
+        from scripts.autopilot.evals.dtap.harness.tool_contract import load_native_tool_contract
+        from scripts.autopilot.evals.dtap.harness.trace import verify_trace
+
+        dtap_dir = Path(__file__).resolve().parents[3] / "scripts/autopilot/evals/dtap"
+        source_kind = provenance.get("source_kind", "dtap_public")
+        if source_kind == "dtap_public":
+            registry_path = dtap_dir / "cases.json"
+            contract_path = dtap_dir / "harness" / "tool_schemas.json"
+            registry = CaseRegistry(registry_path)
+            fixture_spec = None
+        elif source_kind == "tu_adv_1_fixture":
+            if type(allow_fixture_sources) is not bool or not allow_fixture_sources:
+                return "native_evaluator_fixture_source_disabled"
+            fixture_spec = FIXTURE_PROFILES["tu_adv_1"]
+            registry = CaseRegistry.fixture_profile("tu_adv_1")
+            registry_path = fixture_spec["registry_path"]
+            contract_path = fixture_spec["contract_path"]
+            for key, file_key in (
+                ("registry_sha256", "registry_path"),
+                ("contract_sha256", "contract_path"),
+                ("manifest_sha256", "manifest_path"),
+                ("scenario_sha256", "scenario_path"),
+            ):
+                expected_sha = fixture_spec.get(key)
+                path = fixture_spec.get(file_key)
+                if (not expected_sha or not isinstance(path, Path)
+                        or hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha):
+                    return "native_evaluator_fixture_bundle_digest_mismatch"
+            for case_id, expected_sha in fixture_spec.get("judge_sha256", {}).items():
+                judge_path = fixture_spec["judges_dir"] / case_id / "judge.py"
+                if (case_id not in fixture_spec["case_ids"] or not expected_sha
+                        or hashlib.sha256(judge_path.read_bytes()).hexdigest() != expected_sha):
+                    return "native_evaluator_fixture_judge_digest_mismatch"
+            if set(fixture_spec.get("judge_sha256", {})) != fixture_spec["case_ids"]:
+                return "native_evaluator_fixture_judge_allowlist_mismatch"
+        else:
+            return "native_evaluator_source_kind_not_allowlisted"
+        contract = load_native_tool_contract(
+            registry.cases, path=contract_path, registry_path=registry_path,
+        )
+        if provenance["case_id"] not in registry.cases:
+            return "native_evaluator_case_not_in_registry"
+        if fixture_spec is not None and provenance["case_id"] not in fixture_spec["case_ids"]:
+            return "native_evaluator_case_not_in_fixture_allowlist"
+        if schema == _NATIVE_REUSE_PROVENANCE_SCHEMA:
+            if provenance["source_kind"] != source_kind:
+                return "native_evaluator_source_kind_mismatch"
+            if provenance["case_registry_sha256"] != registry.sha256:
+                return "native_evaluator_registry_binding_mismatch"
+            case = registry.get(provenance["case_id"])
+            expected_refs = case.get("source_refs", [])
+            if provenance["source_refs"] != expected_refs:
+                return "native_evaluator_source_refs_mismatch"
+            advertised = [
+                entry["function"]["name"] for entry in contract.for_case(provenance["case_id"])
+            ]
+            expected_allowed = case.get("policy_allowed_capabilities", advertised)
+            if provenance["advertised_capabilities"] != advertised:
+                return "native_evaluator_advertised_capabilities_mismatch"
+            if provenance["allowed_capabilities"] != expected_allowed:
+                return "native_evaluator_policy_capabilities_mismatch"
+        else:
+            advertised = [
+                entry["function"]["name"] for entry in contract.for_case(provenance["case_id"])
+            ]
+            expected_allowed = advertised
+        if (provenance["contract_version"] != contract.version
+                or provenance["contract_sha256"] != contract.sha256
+                or provenance["case_threat"] != registry.get(provenance["case_id"]).get("threat")
+                or provenance["allowed_capabilities"] != expected_allowed):
+            return "native_evaluator_contract_binding_mismatch"
+        trace_records = verify_trace(Path(provenance["trace_path"]))
+        if trace_records[-1]["payload"].get("trace_id") != provenance["trace_id"]:
+            return "native_evaluator_trace_id_mismatch"
+        run_results = [record["payload"].get("result") for record in trace_records
+                       if record.get("event") == "run_result"]
+        if len(run_results) != 1 or not isinstance(run_results[0], dict):
+            return "native_evaluator_trace_run_result_mismatch"
+        recorded = run_results[0]
+        recorded_provenance = recorded.get("evaluator_provenance")
+        expected_provenance = dict(provenance)
+        expected_provenance["trace_id"] = None
+        trace_observed = list(dict.fromkeys(
+            event.get("payload", {}).get("tool")
+            for event in trace_records if event.get("event") == "tool_call"
+            and isinstance(event.get("payload", {}).get("tool"), str)
+        ))
+        trace_attempted = list(dict.fromkeys(
+            call.get("name")
+            for event in trace_records if event.get("event") == "endpoint_response"
+            for call in (event.get("payload", {}).get("tool_calls") or [])
+            if isinstance(call, dict) and isinstance(call.get("name"), str)
+        ))
+        trace_violations = [
+            event.get("payload") for event in trace_records
+            if event.get("event") in {"policy_violation", "typed_failure"}
+        ]
+        if recorded.get("failure"):
+            trace_violations.append({"stage": "dtap_runner", **recorded["failure"]})
+        observation_mismatch = provenance["observed_capabilities"] != trace_observed
+        if schema == _NATIVE_REUSE_PROVENANCE_SCHEMA:
+            observation_mismatch = observation_mismatch or (
+                provenance["attempted_capabilities"] != trace_attempted
+            )
+        else:
+            # v1 wrote attempted names into observed_capabilities before
+            # contract validation; retain that historical trace interpretation.
+            observation_mismatch = provenance["observed_capabilities"] != trace_attempted
+        unauthorized_basis = trace_attempted
+        if (observation_mismatch
+                or provenance["unauthorized_capabilities"] != [
+                    name for name in unauthorized_basis if name not in set(expected_allowed)
+                ]
+                or provenance["failure_chain"] != trace_violations):
+            return "native_evaluator_trace_observation_mismatch"
+        if (not isinstance(recorded_provenance, dict)
+                or recorded_provenance != expected_provenance
+                or recorded.get("case_id") != provenance["case_id"]
+                or recorded.get("status") != provenance["status"]
+                or recorded.get("failure") != provenance["failure"]
+                or recorded.get("task_success") != provenance["task_success"]
+                or recorded.get("attack_success") != provenance["attack_success"]):
+            return "native_evaluator_trace_provenance_mismatch"
+    except Exception:
+        return "native_evaluator_contract_or_trace_unverifiable"
     if provenance["status"] != "ok" or provenance["failure"] is not None:
         return "native_evaluator_run_failed"
     if provenance["failure_chain"]:
@@ -89,48 +242,6 @@ def _native_evaluator_rejection(trajectory: Dict[str, Any]) -> Optional[str]:
             return "native_evaluator_benign_verdict_not_eligible"
     elif provenance["attack_success"] is not False:
         return "native_evaluator_attack_verdict_unknown_or_successful"
-
-    # Re-open the evaluator's pinned case contract and immutable trace. The
-    # convenience eligibility bit and caller-provided names are not authority.
-    try:
-        from scripts.autopilot.evals.dtap.harness.runner import CaseRegistry
-        from scripts.autopilot.evals.dtap.harness.tool_contract import load_native_tool_contract
-        from scripts.autopilot.evals.dtap.harness.trace import verify_trace
-
-        dtap_dir = Path(__file__).resolve().parents[3] / "scripts/autopilot/evals/dtap"
-        registry_path = dtap_dir / "cases.json"
-        registry = CaseRegistry(registry_path)
-        contract = load_native_tool_contract(registry.cases, registry_path=registry_path)
-        if provenance["case_id"] not in registry.cases:
-            return "native_evaluator_case_not_in_registry"
-        if (provenance["contract_version"] != contract.version
-                or provenance["contract_sha256"] != contract.sha256
-                or provenance["case_threat"] != registry.get(provenance["case_id"]).get("threat")
-                or provenance["allowed_capabilities"] != [
-                    entry["function"]["name"] for entry in contract.for_case(provenance["case_id"])
-                ]):
-            return "native_evaluator_contract_binding_mismatch"
-        trace_records = verify_trace(Path(provenance["trace_path"]))
-        if trace_records[-1]["payload"].get("trace_id") != provenance["trace_id"]:
-            return "native_evaluator_trace_id_mismatch"
-        run_results = [record["payload"].get("result") for record in trace_records
-                       if record.get("event") == "run_result"]
-        if len(run_results) != 1 or not isinstance(run_results[0], dict):
-            return "native_evaluator_trace_run_result_mismatch"
-        recorded = run_results[0]
-        recorded_provenance = recorded.get("evaluator_provenance")
-        expected_provenance = dict(provenance)
-        expected_provenance["trace_id"] = None
-        if (not isinstance(recorded_provenance, dict)
-                or recorded_provenance != expected_provenance
-                or recorded.get("case_id") != provenance["case_id"]
-                or recorded.get("status") != provenance["status"]
-                or recorded.get("failure") != provenance["failure"]
-                or recorded.get("task_success") != provenance["task_success"]
-                or recorded.get("attack_success") != provenance["attack_success"]):
-            return "native_evaluator_trace_provenance_mismatch"
-    except Exception:
-        return "native_evaluator_contract_or_trace_unverifiable"
     # The exporter provides this convenience field, but never treat it alone as
     # an admission decision; recompute it from the native contract and verdict.
     if provenance.get("reuse_eligible") is not True:
@@ -208,11 +319,14 @@ class DistillationPipeline:
         skill_bank: SkillBank,
         embedder=None,  # Optional TaskEmbedder — None = skip FAISS indexing
         batch_size: int = DEFAULT_BATCH_SIZE,
+        *,
+        allow_fixture_sources: bool = False,
     ):
         self.teacher = teacher
         self.skill_bank = skill_bank
         self.embedder = embedder
         self.batch_size = batch_size
+        self.allow_fixture_sources = allow_fixture_sources
 
     async def run(
         self,
@@ -238,7 +352,9 @@ class DistillationPipeline:
 
         admitted_trajectories: List[Dict[str, Any]] = []
         for trajectory in trajectories:
-            reason = _native_evaluator_rejection(trajectory)
+            reason = _native_evaluator_rejection(
+                trajectory, allow_fixture_sources=self.allow_fixture_sources,
+            )
             if reason is None:
                 admitted_trajectories.append(trajectory)
             else:
