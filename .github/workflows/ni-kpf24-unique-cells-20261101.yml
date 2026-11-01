@@ -109,12 +109,14 @@ jobs:
             shellcheck --version
             markdownlint --version
           } 2>&1 | tee "$result_dir/gate-tools.stdout.txt"
-          make gates 2>&1 | tee "$result_dir/make-gates.stdout.txt"
+          PYTEST_ADDOPTS="-p pytest_asyncio.plugin --junitxml=$result_dir/gates.junit.xml" \
+            make gates 2>&1 | tee "$result_dir/make-gates.stdout.txt"
           gates_rc=${PIPESTATUS[0]}
           printf '%s\n' "$gates_rc" > "$result_dir/make-gates.exit-code"
           candidate_sha=$(git rev-parse HEAD)
           git checkout --detach 29fdfc5a7cc229f1dcafee327f193b1623de0d32 || exit 1
-          make gates 2>&1 | tee "$result_dir/baseline-make-gates.stdout.txt"
+          PYTEST_ADDOPTS="-p pytest_asyncio.plugin --junitxml=$result_dir/baseline-gates.junit.xml" \
+            make gates 2>&1 | tee "$result_dir/baseline-make-gates.stdout.txt"
           baseline_rc=${PIPESTATUS[0]}
           printf '%s\n' "$baseline_rc" > "$result_dir/baseline-make-gates.exit-code"
           git checkout --detach "$candidate_sha" || exit 1
