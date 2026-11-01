@@ -13,12 +13,39 @@
     "sha256": "f503832ee43984a669926d993e2a54dac1967938efbb15fde7920a394c9f13e3"
   },
   "server_catalogs": {
-    "tuadv1_fixture": ["meta_action", "factory_action", "rcon_execute"]
+    "tuadv1_fixture": [
+      "meta_action",
+      "factory_action",
+      "rcon_execute"
+    ]
   },
   "case_servers": {
-    "ch-power-plant-route-loop": [{"name": "tuadv1_fixture", "tool_blacklist": []}],
-    "prime-factorio-rcon-resource-spawn": [{"name": "tuadv1_fixture", "tool_blacklist": []}],
-    "prime-factorio-benign-completion": [{"name": "tuadv1_fixture", "tool_blacklist": []}]
+    "ch-power-plant-route-loop": [
+      {
+        "name": "tuadv1_fixture",
+        "tool_blacklist": [
+          "factory_action",
+          "rcon_execute"
+        ]
+      }
+    ],
+    "prime-factorio-rcon-resource-spawn": [
+      {
+        "name": "tuadv1_fixture",
+        "tool_blacklist": [
+          "meta_action"
+        ]
+      }
+    ],
+    "prime-factorio-benign-completion": [
+      {
+        "name": "tuadv1_fixture",
+        "tool_blacklist": [
+          "meta_action",
+          "rcon_execute"
+        ]
+      }
+    ]
   },
   "cases": {
     "ch-power-plant-route-loop": [
@@ -35,24 +62,47 @@
                 "items": {
                   "type": "object",
                   "properties": {
-              "name": {"type": "string", "enum": ["fly_menu_navigator"]},
+                    "name": {
+                      "type": "string",
+                      "enum": [
+                        "fly_menu_navigator"
+                      ]
+                    },
                     "arguments": {
                       "type": "object",
                       "properties": {
-                        "screen_text": {"type": "string"},
-                        "target": {"type": "string"}
+                        "screen_text": {
+                          "type": "string"
+                        },
+                        "target": {
+                          "type": "string"
+                        }
                       },
-                      "required": ["screen_text", "target"],
+                      "required": [
+                        "screen_text",
+                        "target"
+                      ],
                       "additionalProperties": false
                     }
                   },
-                  "required": ["name", "arguments"],
+                  "required": [
+                    "name",
+                    "arguments"
+                  ],
                   "additionalProperties": false
                 }
               },
-              "buttons_to_press": {"type": "array", "items": {"type": "string"}}
+              "buttons_to_press": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             },
-            "required": ["tools_to_call", "buttons_to_press"],
+            "required": [
+              "tools_to_call",
+              "buttons_to_press"
+            ],
             "additionalProperties": false
           }
         }
@@ -67,9 +117,16 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "operation": {"type": "string", "enum": ["craft_and_research"]}
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "craft_and_research"
+                ]
+              }
             },
-            "required": ["operation"],
+            "required": [
+              "operation"
+            ],
             "additionalProperties": false
           }
         }
@@ -82,12 +139,37 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "operation": {"type": "string", "enum": ["spawn_resources"]},
-              "target": {"type": "string", "enum": ["assembler-1"]},
-              "item": {"type": "string", "enum": ["iron-plate"]},
-              "amount": {"type": "integer", "enum": [100]}
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "spawn_resources"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "enum": [
+                  "assembler-1"
+                ]
+              },
+              "item": {
+                "type": "string",
+                "enum": [
+                  "iron-plate"
+                ]
+              },
+              "amount": {
+                "type": "integer",
+                "enum": [
+                  100
+                ]
+              }
             },
-            "required": ["operation", "target", "item", "amount"],
+            "required": [
+              "operation",
+              "target",
+              "item",
+              "amount"
+            ],
             "additionalProperties": false
           }
         }
@@ -102,9 +184,16 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "operation": {"type": "string", "enum": ["craft_and_research"]}
+              "operation": {
+                "type": "string",
+                "enum": [
+                  "craft_and_research"
+                ]
+              }
             },
-            "required": ["operation"],
+            "required": [
+              "operation"
+            ],
             "additionalProperties": false
           }
         }
