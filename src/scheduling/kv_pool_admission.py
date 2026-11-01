@@ -118,7 +118,7 @@ logger = logging.getLogger(__name__)
 # applies (< 0 disables both sources). When /slots does carry text (a debug
 # window) both sources are computed and the larger credit wins; the decision is
 # recorded per ticket (``admission_record``) with ``cache_credit_source``
-# (``fp_history`` | ``slots_text`` | None), the credited tokens, and — when no
+# (``fp_history`` | ``slots_text`` | ``fork`` | None), the credited tokens, and — when no
 # credit applied — ``cache_credit_unavailable`` naming why for each source (e.g.
 # ``slots_no_prompt``), so an inert credit never looks like zero hits (KVU-15b).
 #
@@ -549,6 +549,11 @@ class SharedKVPoolAdmission:
         )
 
     def reservation_tokens(self, url: str, prompt_tokens: int, max_new_tokens: int) -> int:
+        """Whole prompt plus ratio-weighted decode, before verified fork credit.
+
+        acquire subtracts only prompt credit once a live fork source is known;
+        cached history/text changes prefill sizing, never this reservation.
+        """
         ratio = self.new_token_ratio(url)
         return int(prompt_tokens) + int(math.ceil(max(0, int(max_new_tokens)) * ratio))
 
@@ -569,10 +574,10 @@ class SharedKVPoolAdmission:
         return min(observe, threshold)
 
     def _observed(self, url: str, prompt_text: str | None = None
-                  ) -> tuple[int, int, int, int, str | None] | None:
+                  ) -> tuple[int, int, int, int, str | None, int | None] | None:
         """(projected in-flight tokens, processing slots, long prefills in flight,
         chars of ``prompt_text`` an idle slot has cached, why that is 0 or None)
-        from /slots, or None."""
+        from /slots, plus native unique-cell capacity when available, or None."""
         try:
             occ = self._occupancy_fn(url)
         except Exception:
@@ -610,7 +615,8 @@ class SharedKVPoolAdmission:
         else:
             slots_reason = "slots_no_prompt"
         projected = int(occ.projected_tokens(ratio))
-        if getattr(occ, "kv_pool", None):
+        native_capacity = None
+        if getattr(occ, "unique_cell_capacity", None) is not None:
             # KPF-27e: the server reports its unique cells (fork on); count
             # forked cells once. Only with the prefix index flag on.
             from src.inference import prefix_index as pi
@@ -618,9 +624,11 @@ class SharedKVPoolAdmission:
             if pi.enabled():
                 try:
                     projected = int(occ.projected_unique_tokens(ratio))
+                    native_capacity = occ.unique_cell_capacity
                 except Exception:
                     pass
-        return (projected, int(occ.processing), long_prefills, cached_chars, slots_reason)
+        return (projected, int(occ.processing), long_prefills, cached_chars, slots_reason,
+                native_capacity)
 
     def _queue_full(self, queue: list[int], max_queued: int) -> bool:
         """The queue bound. Trunk-held waiters (RTG-58 P2, flag on) do not count
@@ -646,6 +654,15 @@ class SharedKVPoolAdmission:
         reserved = self._inflight.get(url, {})
         own = sum(reserved.values())
         seen, processing = (observed[0], observed[1]) if observed is not None else (0, 0)
+        native_capacity = observed[5] if observed is not None and len(observed) > 5 else None
+        if native_capacity is not None:
+            # KPF-24: native used cells include other clients and idle slots.
+            # Tickets are admitted BEFORE dispatch and carry no exact server
+            # task binding, so none can safely be subtracted from this snapshot.
+            # This is a conservative upper bound: overlapping own cells can be
+            # reserved twice, but external cells plus pending tickets never
+            # disappear behind max(own, seen). The candidate is added once.
+            return seen + own + tokens <= min(pool_tokens, native_capacity)
         if not reserved and processing == 0:
             return True  # a lone request is always admitted; the server decides
         return max(own, seen) + tokens <= pool_tokens
@@ -796,6 +813,14 @@ class SharedKVPoolAdmission:
                         cache_credited = not is_long and self.is_long_prefill(tokens)
                         if cache_credited:
                             stat["cache_credited"] += 1
+                        if pview is not None and int(pview.get("fork_credit_tokens") or 0) > 0:
+                            # Label only the effective reservation credit, after
+                            # the source-liveness check under this mutex. Keep
+                            # prefill sizing provenance separate from sharing.
+                            credit = dict(credit,
+                                          cache_credit_prefill_source=credit.get("cache_credit_source"),
+                                          cache_credit_source="fork",
+                                          reservation_fork_credit_tokens=int(pview["fork_credit_tokens"]))
                         source = credit.get("cache_credit_source")
                         if source:
                             # .get: ``prefix_index`` (RTG-58 P2, flag on) is not a
@@ -1044,7 +1069,8 @@ class SharedKVPoolAdmission:
                     task = getattr(s, "id_task", None)
                     busy_slot = (int(m.slot_id), task if isinstance(task, int) else None)
             if forkable and (src_ticket is not None or busy_slot is not None):
-                view["fork_credit_tokens"] = min(int(m.tokens_est), max(0, want - 1))
+                view["fork_credit_tokens"] = min(int(m.tokens_est), max(0, int(tokens) - 1),
+                                                  max(0, want - 1))
                 view["want"] = max(1, want - view["fork_credit_tokens"])
                 view["fork_source_ticket"] = src_ticket
                 view["fork_busy_slot"] = busy_slot

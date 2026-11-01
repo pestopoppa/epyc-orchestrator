@@ -1,0 +1,97 @@
+{
+  "artifact_sha256": "1ac896cbc6d99a5439e88970809d50bd11cf3f385639922a2ba3514798a6aa8a",
+  "exit_codes": {
+    "baseline-flag-off.exit-code": "1",
+    "baseline-make-gates.exit-code": "2",
+    "make-gates.exit-code": "2",
+    "pytest.exit-code": "0",
+    "ruff.exit-code": "0"
+  },
+  "github_conclusion": "failure",
+  "junit": {
+    "baseline-flag-off.junit.xml": {
+      "counts": {
+        "failure": 3,
+        "passed": 3
+      },
+      "failures": [
+        "tests.unit.test_prefix_index_flag_off::test_admission_record_and_status_are_the_legacy_shape",
+        "tests.unit.test_prefix_index_flag_off::test_primitives_lane_payload_is_unchanged",
+        "tests.unit.test_prefix_index_flag_off::test_passthrough_forwards_raw_bytes_and_records_no_index"
+      ],
+      "skipped": [],
+      "total": 6
+    },
+    "junit.xml": {
+      "counts": {
+        "passed": 281,
+        "skipped": 6
+      },
+      "failures": [],
+      "skipped": [
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestFrozenServerPayloadShape::test_fixture_strings_match_frozen_source"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestFrozenServerPayloadShape::test_payloads_rendered_from_source_are_classified"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestSlotsOccupancy::test_frozen_source_exposes_the_fields_we_read"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestSpecSubBatchAndTruncation::test_string_matches_frozen_source_and_the_measured_log"
+        },
+        {
+          "reason": "study artifacts not present",
+          "test": "tests.unit.test_context_overflow_handling.TestSpecSubBatchAndTruncation::test_measured_split_run_shape"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_limits_model_cap.TestFrozenServerCapsSlotsAtTrainingContext::test_server_clamps_slot_context_to_n_ctx_train"
+        }
+      ],
+      "total": 287
+    }
+  },
+  "run_id": 41298363381,
+  "software_verification_only": true,
+  "source_commit": "2293e16ec4428996bcf8ae04329e6786d70527fa",
+  "verified_source_files": [
+    {
+      "path": "src/backends/context_limits.py",
+      "sha256": "26315e7700577d95d3cf2ebe6d77baaacfe68c41de298a7ed6e7c547a923166f"
+    },
+    {
+      "path": "src/scheduling/kv_pool_admission.py",
+      "sha256": "b27051a18c0a29352ff97916e315990b8ee3f1ab51379ff2bfa2d17ad9a8821a"
+    },
+    {
+      "path": "tests/unit/test_kv_prefix_history.py",
+      "sha256": "69a22c274ae9f99cec81ccd9c2247817f5bfd757798acf8bd4b2d865b6321bc8"
+    },
+    {
+      "path": "tests/unit/test_kv_pool_unique_cells.py",
+      "sha256": "11f0aff94d16878c056ac8f5266e32260a011066caa50ca50a535b2ed0b3769b"
+    },
+    {
+      "path": "tests/unit/test_prefix_index_flag_off.py",
+      "sha256": "0e9244d14eaae0cf6f1c3ef97852a6f0a224bea0bd4edcfba6244db63e6c935d"
+    },
+    {
+      "path": ".github/workflows/ni-kpf24-unique-cells-20261101.yml",
+      "sha256": "4e0f19881dcd5c0a5d777fdbce3b2e9a3c03860bfd74b29c53a7c26281db5abc"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "a37982f40ecef2acd195fb4f488633692005c5ebcba148387293f4f38e78acc4"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "5ed42a204e72e0d1370e6b7225e731f8c2998249aae7539d38b8af941e9514ce"
+    }
+  ]
+}

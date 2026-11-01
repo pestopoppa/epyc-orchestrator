@@ -1,0 +1,81 @@
+{
+  "artifact_sha256": "93f2cfbcc800f59d11cefe8e825170af8899fc56688a50bdc84fa0799a8b860b",
+  "exit_codes": {
+    "ruff.exit-code": "0"
+  },
+  "github_conclusion": "failure",
+  "junit": {
+    "junit.xml": {
+      "counts": {
+        "failure": 3,
+        "passed": 275,
+        "skipped": 6
+      },
+      "failures": [
+        "tests.unit.test_prefix_index_flag_off::test_admission_record_and_status_are_the_legacy_shape",
+        "tests.unit.test_prefix_index_flag_off::test_primitives_lane_payload_is_unchanged",
+        "tests.unit.test_prefix_index_flag_off::test_passthrough_forwards_raw_bytes_and_records_no_index"
+      ],
+      "skipped": [
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestFrozenServerPayloadShape::test_fixture_strings_match_frozen_source"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestFrozenServerPayloadShape::test_payloads_rendered_from_source_are_classified"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestSlotsOccupancy::test_frozen_source_exposes_the_fields_we_read"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_overflow_handling.TestSpecSubBatchAndTruncation::test_string_matches_frozen_source_and_the_measured_log"
+        },
+        {
+          "reason": "study artifacts not present",
+          "test": "tests.unit.test_context_overflow_handling.TestSpecSubBatchAndTruncation::test_measured_split_run_shape"
+        },
+        {
+          "reason": "frozen llama.cpp tree not present on this host",
+          "test": "tests.unit.test_context_limits_model_cap.TestFrozenServerCapsSlotsAtTrainingContext::test_server_clamps_slot_context_to_n_ctx_train"
+        }
+      ],
+      "total": 284
+    }
+  },
+  "run_id": 41297457980,
+  "software_verification_only": true,
+  "source_commit": "e45a6ac156731c5018fcf4280a6e3502fc9011fe",
+  "verified_source_files": [
+    {
+      "path": "src/backends/context_limits.py",
+      "sha256": "7d19219a968deef874a7b829747613940a10f5b917cfa29e0625fdd8f5a94465"
+    },
+    {
+      "path": "src/scheduling/kv_pool_admission.py",
+      "sha256": "efb329616ebfaad99bd18cec4664fd392f4e350048c62523be6950aa49700def"
+    },
+    {
+      "path": "tests/unit/test_kv_prefix_history.py",
+      "sha256": "69a22c274ae9f99cec81ccd9c2247817f5bfd757798acf8bd4b2d865b6321bc8"
+    },
+    {
+      "path": "tests/unit/test_kv_pool_unique_cells.py",
+      "sha256": "a65ee84764449ebb49b4676c15fbcdffbf44982652c052af88be8ae05ae33663"
+    },
+    {
+      "path": ".github/workflows/ni-kpf24-unique-cells-20261101.yml",
+      "sha256": "6fd93bd039ca865be71e7aac01fcaca09814956ffa79080b7b6e2a383c8f3d6a"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "a37982f40ecef2acd195fb4f488633692005c5ebcba148387293f4f38e78acc4"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "5ed42a204e72e0d1370e6b7225e731f8c2998249aae7539d38b8af941e9514ce"
+    }
+  ]
+}

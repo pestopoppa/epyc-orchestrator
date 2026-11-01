@@ -145,6 +145,62 @@ class TestHistoryCredit:
         no_slots.release(URL, ticket)
         assert no_slots.admission_record(ticket) is None
 
+    def test_fork_reservation_credit_is_labeled_and_cannot_spend_generation(self, monkeypatch, tmp_path):
+        from src.inference import prefix_index as pi
+
+        monkeypatch.setenv(pi.FLAG_ENV, "1")
+        monkeypatch.setenv(pi.FORK_ENV, "auto")
+        monkeypatch.setenv(pi.TRUNK_MIN_TOKENS_ENV, "1")
+        monkeypatch.setenv(kpa.KV_POOL_LONG_PREFILL_ENV, "0")
+        index = pi.PrefixIndex(URL, clock=Clock(), wall=Clock(), launch_id=lambda u: "fixture",
+                               directory=lambda: tmp_path, block=64)
+        monkeypatch.setattr(pi, "get_index", lambda u: index)
+        monkeypatch.setattr(pi, "peek_index", lambda u: index)
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None, cross_process=False,
+                                     history=_history(), fork_caps=lambda u: {
+                                         "mode": "kv", "min_tokens": 0})
+        trunk = "shared fixture trunk " * 400
+        source = pool.acquire(URL, 100, 1000, prefix_key=trunk + "A", timeout_s=0)
+        pool.prefill_done(URL, source)
+        child = pool.acquire(URL, 10, 1000, max_new_tokens=40,
+                             prefix_key=trunk + "B", timeout_s=0)
+        assert child is not None
+        info = pool.admission_record(child)
+        credit = info["prefix_index"]["fork_credit_tokens"]
+        assert credit == 9  # at least one prompt token must still be processed
+        assert info["cache_credit_source"] == "fork"
+        assert info["reservation_fork_credit_tokens"] == credit
+        assert pool._inflight[URL][child] == 10 - credit + 40
+        assert pool.get_status()[URL]["admission_stats"]["cache_credit_fork"] == 1
+        # A source release restores the shared reservation to the child.
+        pool.release(URL, source, success=False)
+        assert pool._inflight[URL][child] == 50
+        pool.release(URL, child, success=False)
+        assert pool.in_flight_tokens(URL) == 0
+
+    def test_fork_label_requires_live_fork_capability(self, monkeypatch, tmp_path):
+        from src.inference import prefix_index as pi
+
+        monkeypatch.setenv(pi.FLAG_ENV, "1")
+        monkeypatch.setenv(pi.FORK_ENV, "auto")
+        monkeypatch.setenv(kpa.KV_POOL_LONG_PREFILL_ENV, "0")
+        index = pi.PrefixIndex(URL, clock=Clock(), wall=Clock(), launch_id=lambda u: "fixture",
+                               directory=lambda: tmp_path, block=64)
+        monkeypatch.setattr(pi, "get_index", lambda u: index)
+        monkeypatch.setattr(pi, "peek_index", lambda u: index)
+        pool = SharedKVPoolAdmission(occupancy=lambda u: None, cross_process=False,
+                                     history=_history(), fork_caps=lambda u: None)
+        trunk = "shared fixture trunk " * 400
+        source = pool.acquire(URL, 100, 1000, prefix_key=trunk + "A", timeout_s=0)
+        pool.prefill_done(URL, source)
+        child = pool.acquire(URL, 100, 1000, max_new_tokens=40,
+                             prefix_key=trunk + "B", timeout_s=0)
+        assert child is not None
+        assert pool.admission_record(child)["cache_credit_source"] != "fork"
+        assert pool._inflight[URL][child] == 140
+        pool.release(URL, child, success=False)
+        pool.release(URL, source, success=False)
+
     def test_no_credit_across_ports(self):
         hist = _history()
         hist.remember(OTHER_URL, _ladder(HISTORY), prompt_tokens=40_000)

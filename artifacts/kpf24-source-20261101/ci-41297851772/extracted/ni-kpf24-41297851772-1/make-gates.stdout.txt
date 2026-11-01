@@ -1,0 +1,2053 @@
+==> schema
+  (no orchestration/last_task_ir.json to validate)
+  (no architecture/architecture_ir.json to validate)
+==> shellcheck
+  ✓ shellcheck passed
+==> shfmt (check shell formatting)
+==> mdlint
+  ✓ markdownlint passed
+==> integration-sanity
+============================= test session starts ==============================
+platform linux -- Python 3.13.15, pytest-9.2.0, pluggy-1.7.0
+rootdir: /home/runner/work/epyc-orchestrator/epyc-orchestrator
+configfile: pyproject.toml
+collected 383 items / 3 skipped
+
+tests/integration/test_api_endpoints.py ............                     [  3%]
+tests/integration/test_cache_hits.py ...sssss                            [  5%]
+tests/integration/test_cache_integration.py ...........sss..             [  9%]
+tests/integration/test_chat_pipeline.py ...............FFFFFF.......     [ 16%]
+tests/integration/test_dashboard_restart_recovery.py ..                  [ 17%]
+tests/integration/test_di_overrides.py ............                      [ 20%]
+tests/integration/test_dispatch_execute.py .........                     [ 22%]
+tests/integration/test_document_formalizer.py .s..s......                [ 25%]
+tests/integration/test_document_pipeline.py .............FFFFF.......FFF [ 32%]
+FF..............FFFFFF...FF                                              [ 39%]
+tests/integration/test_execute_turn.py FFFFFFFFFFFFFFFFFFFFFFFFFFFF      [ 47%]
+tests/integration/test_execute_turn_replay.py FF                         [ 47%]
+tests/integration/test_frontend_integration.py ......................... [ 54%]
+                                                                         [ 54%]
+tests/integration/test_graph_harness_production_repl.py FFFFFF..         [ 56%]
+tests/integration/test_graph_harness_replay.py FFFFF.                    [ 57%]
+tests/integration/test_model_tool_compliance.py ...........E............ [ 64%]
+.....ssss.                                                               [ 66%]
+tests/integration/test_node_execution.py FFFFFFFFFFFFFFF                 [ 70%]
+tests/integration/test_observability.py ...............FFFFFF            [ 76%]
+tests/integration/test_openai_compat.py ......................           [ 81%]
+tests/integration/test_real_pipeline.py ................................ [ 90%]
+.................                                                        [ 94%]
+tests/integration/test_reasoning_runaway_retry.py FFFFFFFFF..            [ 97%]
+tests/integration/test_ufh14_b1_graph.py FFFF..FF.                       [100%]
+
+==================================== ERRORS ====================================
+_ ERROR at setup of TestREPLToolExecution.test_list_dir_executes_successfully __
+  + Exception Group Traceback (most recent call last):
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/runner.py", line 361, in from_call
+  |     result: TResult | None = func()
+  |                              ~~~~^^
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/runner.py", line 250, in <lambda>
+  |     lambda: runtest_hook(item=item, **kwds),
+  |             ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/pluggy/_caller.py", line 197, in __call__
+  |     return self._hookexec(
+  |            ~~~~~~~~~~~~~~^
+  |         self.name, self._hookimpls.copy(), call_kwargs, firstresult
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     )
+  |     ^
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/pluggy/_manager.py", line 183, in _hookexec
+  |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  |            ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/logging.py", line 871, in pytest_runtest_setup
+  |     yield
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/capture.py", line 901, in pytest_runtest_setup
+  |     return (yield)
+  |             ^^^^^
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/unraisableexception.py", line 174, in pytest_runtest_setup
+  |     collect_unraisable(item.config)
+  |     ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/unraisableexception.py", line 77, in collect_unraisable
+  |     raise ExceptionGroup("multiple unraisable exception warnings", errors)
+  | ExceptionGroup: multiple unraisable exception warnings (3 sub-exceptions)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/yaml/scanner.py", line 286, in stale_possible_simple_keys
+    |     for level in list(self.possible_simple_keys):
+    |                  ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | ResourceWarning: unclosed <socket.socket fd=17, family=1, type=1, proto=0>
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/unraisableexception.py", line 63, in collect_unraisable
+    |     warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+    |     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | pytest.PytestUnraisableExceptionWarning: Exception ignored in: <socket.socket fd=17, family=1, type=1, proto=0>
+    | Enable tracemalloc to get traceback where the object was allocated.
+    | See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    +---------------- 2 ----------------
+    | Traceback (most recent call last):
+    |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/yaml/scanner.py", line 286, in stale_possible_simple_keys
+    |     for level in list(self.possible_simple_keys):
+    |                  ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | ResourceWarning: unclosed <socket.socket fd=12, family=1, type=1, proto=0>
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/unraisableexception.py", line 63, in collect_unraisable
+    |     warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+    |     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | pytest.PytestUnraisableExceptionWarning: Exception ignored in: <socket.socket fd=12, family=1, type=1, proto=0>
+    | Enable tracemalloc to get traceback where the object was allocated.
+    | See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    +---------------- 3 ----------------
+    | Traceback (most recent call last):
+    |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/asyncio/base_events.py", line 765, in __del__
+    |     _warn(f"unclosed event loop {self!r}", ResourceWarning, source=self)
+    |     ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | ResourceWarning: unclosed event loop <_UnixSelectorEventLoop running=False closed=False debug=False>
+    | 
+    | The above exception was the direct cause of the following exception:
+    | 
+    | Traceback (most recent call last):
+    |   File "/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/unraisableexception.py", line 63, in collect_unraisable
+    |     warnings.warn(pytest.PytestUnraisableExceptionWarning(msg))
+    |     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | pytest.PytestUnraisableExceptionWarning: Exception ignored in: <function BaseEventLoop.__del__ at 0x7fda3b87ef20>
+    | Enable tracemalloc to get traceback where the object was allocated.
+    | See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+    +------------------------------------
+=================================== FAILURES ===================================
+___ TestChatEndpoint.test_delegated_pre_start_lock_timeout_sets_break_reason ___
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________ TestChatEndpoint.test_session_restore_roundtrip_repl_globals _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______ TestChatEndpoint.test_session_restore_protocol_compat_diagnostics _______
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestChatEndpoint.test_chat_response_includes_budget_diagnostics_from_primitives _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___ TestChatEndpoint.test_chat_response_includes_cache_stats_from_primitives ___
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestChatEndpoint.test_chat_repl_response_surfaces_tool_chain_wave_diagnostics _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ TestDocumentClient.test_client_health_check_mocked ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________ TestDocumentClient.test_client_context_manager ________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________________ TestDocumentClient.test_ocr_image_mocked ___________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestDocumentClient.test_process_document_uses_local_odl_structured_extractor _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____ TestDocumentClient.test_process_document_default_pdf_uses_ocr_client _____
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestDocumentPreprocessor.test_preprocess_uses_structured_context_when_available _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestDocumentPreprocessor.test_preprocess_suppresses_unsafe_odl_context_when_scan_enabled _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestDocumentPreprocessor.test_preprocess_keeps_odl_context_when_scan_disabled _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestDocumentPreprocessor.test_preprocess_body_scan_default_policy_preserves_body _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestDocumentPreprocessor.test_preprocess_body_scan_warns_without_mutating_body _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ TestFigureAnalyzer.test_analyze_single_figure_mocked _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________ TestFigureAnalyzer.test_analyze_single_figure_timeout _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________ TestFigureAnalyzer.test_analyze_single_figure_api_error ____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ TestFigureAnalyzer.test_analyze_figures_empty_list ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________ TestFigureAnalyzer.test_analyze_figures_nonexistent_pdf ____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____ TestFigureAnalyzerIntegration.test_preprocessor_with_figure_analysis _____
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________ TestDocumentAPIEndpoints.test_health_endpoint _________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________ TestDocumentAPIEndpoints.test_process_endpoint_missing_input _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_final_answer_extraction _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_final_numeric_answer ___________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_final_with_computation __________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________________________ test_non_final_turn ______________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_turn_counter_increments _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ test_programmatic_tool_facts_reach_next_prompt_once ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____ test_programmatic_feedback_prompt_path_is_inert_when_step_logging_off _____
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________ test_loop_guard_fires_after_repeated_no_progress _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______ test_refused_tool_echo_marker_does_not_count_as_progress[FINAL(] _______
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__ test_refused_tool_echo_marker_does_not_count_as_progress[file_write_safe(] __
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________ test_refused_tool_echo_is_unchanged_when_loop_guard_is_off __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________________ test_loop_guard_inert_when_flag_off ______________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________________________ test_repl_runtime_error ____________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________________ test_no_primitives_returns_error _______________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_no_repl_returns_error __________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________________ test_comment_only_code_nudges _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____ test_tool_required_comment_only_nudge_requests_executable_tool_code ______
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_silent_execution_nudges _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________________ test_status_message_final_rejected ______________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________ test_final_done_accepted_after_loop_guard_halt ________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ test_final_done_accepted_in_interleaved_edit_mode _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________ test_status_final_still_rejected_when_edit_rider_not_injected _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________________________ test_prose_answer_rescue ___________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________________ test_session_log_records_turn _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_repl_execution_count ___________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_code_in_markdown_block __________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_workspace_state_updated _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________________ test_llm_call_exception_returns_error _____________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_turn_recorded_when_on __________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________________ test_nothing_recorded_when_off ________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________ test_production_recording_replays_byte_for_byte ________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________ test_stub_registry_default_is_caught_and_really_diverges ___________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________________ test_recorded_sub_call_is_load_bearing ____________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________ test_registry_drift_between_recording_and_replay_is_reported _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________________ test_per_node_langgraph_dispatch_replays ___________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________ test_recording_does_not_change_what_the_model_is_sent _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ test_prefix_replays_every_real_turn_byte_for_byte _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________________ test_each_neutraliser_is_load_bearing _____________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________ test_environment_drift_is_reported_not_hidden _________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________ test_restart_goes_live_and_patch_reaches_only_the_llm _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ test_prompt_bytes_identical_with_flags_on_and_off _______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_frontdoor_happy_path ___________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________________ test_frontdoor_max_turns_failure _______________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________________ test_frontdoor_max_turns_rescue ________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_frontdoor_error_retry __________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_______________________ test_frontdoor_error_escalation ________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________________________ test_worker_happy_path ____________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_________________________ test_worker_non_final_loops __________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________ test_worker_escalates_on_repeated_failures __________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________________________ test_coder_happy_path _____________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________________ test_coder_escalates_to_architect _______________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________ test_coder_records_mitigation_on_success_after_escalation ___________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________________________ test_run_task_end_to_end ___________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________________ test_run_task_escalation_flow _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________________________ test_run_task_max_turns_stops _________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________________________ test_role_history_tracked ___________________________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________ TestMakeEndResult.test_end_result_records_success_evidence __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________ TestMakeEndResult.test_end_result_records_failure_evidence __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________ TestMakeEndResult.test_end_result_updates_workspace_decisions _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ TestMakeEndResult.test_end_result_contains_metadata ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestMakeEndResult.test_end_result_records_compaction_quality_outcomes_only_when_monitor_exists _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ TestMakeEndResult.test_end_result_does_not_create_compaction_monitor_when_absent _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___ test_length_cutoff_retries_once_and_request_builder_carries_thinking_off ___
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_length_cutoff_does_not_retry_when_selected_role_cannot_honor_thinking_off _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_action_tool_call_and_missing_native_reason_do_not_retry[FINAL("already acted")-length] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_action_tool_call_and_missing_native_reason_do_not_retry[CALL("web_search", query="x")-length] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_action_tool_call_and_missing_native_reason_do_not_retry[unfinished thought-tool_calls] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_action_tool_call_and_missing_native_reason_do_not_retry[unfinished thought-None] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________ test_default_off_is_single_call_even_for_native_length_cutoff _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+________ test_runaway_retry_is_one_shot_even_if_retry_also_hits_length _________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____ test_retry_failure_preserves_primary_and_does_not_execute_retry_output ____
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+____________ test_task_state_context_never_reaches_the_turn_prompt _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+______________ test_compaction_makes_no_index_llm_call_by_default ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+___________ test_llm_index_flag_restores_the_call_with_capped_input ____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ test_context_overflow_no_longer_claims_a_compaction ______________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+__________ test_forced_answer_turn_demands_final_and_skips_compaction __________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_____________ test_no_forced_answer_before_the_point_or_when_unset _____________
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+=============================== warnings summary ===============================
+src/graph/graph.py:10
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/src/graph/graph.py:10: PydanticGraphDeprecationWarning: Importing `Graph` from `pydantic_graph` is deprecated. The `BaseNode`-based `Graph` runner and its persistence machinery are deprecated and will be removed (or repurposed) in v2; use the builder-based `GraphBuilder` API instead, or pin to `pydantic_graph<2` to keep using them.
+    from pydantic_graph import Graph
+
+../../../../../opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/config/__init__.py:1636
+  /opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/site-packages/_pytest/config/__init__.py:1636: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+tests/integration/test_chat_pipeline.py:387
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_chat_pipeline.py:387: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_chat_pipeline.py:458
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_chat_pipeline.py:458: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_chat_pipeline.py:565
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_chat_pipeline.py:565: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_chat_pipeline.py:684
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_chat_pipeline.py:684: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_chat_pipeline.py:763
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_chat_pipeline.py:763: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_chat_pipeline.py:838
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_chat_pipeline.py:838: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:391
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:391: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:410
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:410: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:418
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:418: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:440
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:440: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:499
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:499: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:651
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:651: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:719
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:719: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:794
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:794: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:843
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:843: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:886
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:886: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1183
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1183: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1210
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1210: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1232
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1232: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1256
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1256: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1268
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1268: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1289
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1289: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1388
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1388: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_document_pipeline.py:1414
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_document_pipeline.py:1414: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:37
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:37: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:51
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:51: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:64
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:64: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:80
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:80: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:99
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:99: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:113
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:113: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:160
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:160: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:184
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:184: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:200
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:200: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:230
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:230: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:258
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:258: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:273
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:273: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:289
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:289: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:303
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:303: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:320
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:320: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:337
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:337: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:356
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:356: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:370
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:370: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:384
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:384: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:400
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:400: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:419
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:419: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:445
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:445: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:464
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:464: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:484
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:484: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:500
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:500: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:516
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:516: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn.py:535
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn.py:535: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn_replay.py:34
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn_replay.py:34: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_execute_turn_replay.py:48
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_execute_turn_replay.py:48: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_production_repl.py:137
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_production_repl.py:137: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_production_repl.py:166
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_production_repl.py:166: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_production_repl.py:190
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_production_repl.py:190: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_production_repl.py:205
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_production_repl.py:205: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_production_repl.py:228
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_production_repl.py:228: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_production_repl.py:243
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_production_repl.py:243: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_replay.py:105
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_replay.py:105: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_replay.py:135
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_replay.py:135: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_replay.py:167
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_replay.py:167: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_replay.py:178
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_replay.py:178: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_graph_harness_replay.py:195
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_graph_harness_replay.py:195: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:36
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:36: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:55
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:55: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:75
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:75: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:97
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:97: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:115
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:115: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:137
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:137: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:155
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:155: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:173
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:173: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:194
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:194: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:213
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:213: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:231
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:231: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:260
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:260: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:279
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:279: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:303
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:303: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_node_execution.py:325
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_node_execution.py:325: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_observability.py:255
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_observability.py:255: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_observability.py:269
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_observability.py:269: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_observability.py:282
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_observability.py:282: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_observability.py:296
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_observability.py:296: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_observability.py:312
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_observability.py:312: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_observability.py:332
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_observability.py:332: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_reasoning_runaway_retry.py:61
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_reasoning_runaway_retry.py:61: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_reasoning_runaway_retry.py:127
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_reasoning_runaway_retry.py:127: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_reasoning_runaway_retry.py:145
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_reasoning_runaway_retry.py:145: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_reasoning_runaway_retry.py:172
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_reasoning_runaway_retry.py:172: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_reasoning_runaway_retry.py:188
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_reasoning_runaway_retry.py:188: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_reasoning_runaway_retry.py:201
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_reasoning_runaway_retry.py:201: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_ufh14_b1_graph.py:58
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_ufh14_b1_graph.py:58: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_ufh14_b1_graph.py:74
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_ufh14_b1_graph.py:74: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_ufh14_b1_graph.py:86
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_ufh14_b1_graph.py:86: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_ufh14_b1_graph.py:101
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_ufh14_b1_graph.py:101: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_ufh14_b1_graph.py:150
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_ufh14_b1_graph.py:150: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+tests/integration/test_ufh14_b1_graph.py:163
+  /home/runner/work/epyc-orchestrator/epyc-orchestrator/tests/integration/test_ufh14_b1_graph.py:163: PytestUnknownMarkWarning: Unknown pytest.mark.asyncio - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.asyncio
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] tests/integration/test_archive_pipeline.py:29: Skipping archive tests in CI (require local paths)
+SKIPPED [1] tests/integration/test_documents_route.py:17: Skipping document route tests in CI
+SKIPPED [1] tests/integration/test_sessions_route.py:16: Skipping session route tests in CI
+SKIPPED [1] tests/integration/test_cache_hits.py:208: Need --run-server to run live server tests
+SKIPPED [1] tests/integration/test_cache_hits.py:217: Need --run-server to run live server tests
+SKIPPED [1] tests/integration/test_cache_hits.py:254: Need --run-server to run live server tests
+SKIPPED [1] tests/integration/test_cache_hits.py:289: Performance benchmarks unreliable on CI runners
+SKIPPED [1] tests/integration/test_cache_hits.py:310: Performance benchmarks unreliable on CI runners
+SKIPPED [1] tests/integration/test_cache_integration.py:346: Need --run-server to run live server tests
+SKIPPED [1] tests/integration/test_cache_integration.py:362: Need --run-server to run live server tests
+SKIPPED [1] tests/integration/test_cache_integration.py:387: Need --run-server to run live server tests
+SKIPPED [1] tests/integration/test_document_formalizer.py:168: Need --run-ocr-server option to run
+SKIPPED [1] tests/integration/test_document_formalizer.py:213: Need --run-ocr-server option to run
+SKIPPED [4] tests/integration/test_model_tool_compliance.py:521: Need --run-live-models to run live model tests
+ERROR tests/integration/test_model_tool_compliance.py::TestREPLToolExecution::test_list_dir_executes_successfully - ExceptionGroup: multiple unraisable exception warnings (3 sub-exceptions)
+FAILED tests/integration/test_chat_pipeline.py::TestChatEndpoint::test_delegated_pre_start_lock_timeout_sets_break_reason - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_chat_pipeline.py::TestChatEndpoint::test_session_restore_roundtrip_repl_globals - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_chat_pipeline.py::TestChatEndpoint::test_session_restore_protocol_compat_diagnostics - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_chat_pipeline.py::TestChatEndpoint::test_chat_response_includes_budget_diagnostics_from_primitives - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_chat_pipeline.py::TestChatEndpoint::test_chat_response_includes_cache_stats_from_primitives - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_chat_pipeline.py::TestChatEndpoint::test_chat_repl_response_surfaces_tool_chain_wave_diagnostics - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentClient::test_client_health_check_mocked - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentClient::test_client_context_manager - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentClient::test_ocr_image_mocked - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentClient::test_process_document_uses_local_odl_structured_extractor - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentClient::test_process_document_default_pdf_uses_ocr_client - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentPreprocessor::test_preprocess_uses_structured_context_when_available - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentPreprocessor::test_preprocess_suppresses_unsafe_odl_context_when_scan_enabled - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentPreprocessor::test_preprocess_keeps_odl_context_when_scan_disabled - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentPreprocessor::test_preprocess_body_scan_default_policy_preserves_body - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentPreprocessor::test_preprocess_body_scan_warns_without_mutating_body - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestFigureAnalyzer::test_analyze_single_figure_mocked - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestFigureAnalyzer::test_analyze_single_figure_timeout - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestFigureAnalyzer::test_analyze_single_figure_api_error - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestFigureAnalyzer::test_analyze_figures_empty_list - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestFigureAnalyzer::test_analyze_figures_nonexistent_pdf - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestFigureAnalyzerIntegration::test_preprocessor_with_figure_analysis - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentAPIEndpoints::test_health_endpoint - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_document_pipeline.py::TestDocumentAPIEndpoints::test_process_endpoint_missing_input - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_final_answer_extraction - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_final_numeric_answer - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_final_with_computation - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_non_final_turn - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_turn_counter_increments - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_programmatic_tool_facts_reach_next_prompt_once - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_programmatic_feedback_prompt_path_is_inert_when_step_logging_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_loop_guard_fires_after_repeated_no_progress - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_refused_tool_echo_marker_does_not_count_as_progress[FINAL(] - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_refused_tool_echo_marker_does_not_count_as_progress[file_write_safe(] - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_refused_tool_echo_is_unchanged_when_loop_guard_is_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_loop_guard_inert_when_flag_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_repl_runtime_error - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_no_primitives_returns_error - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_no_repl_returns_error - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_comment_only_code_nudges - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_tool_required_comment_only_nudge_requests_executable_tool_code - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_silent_execution_nudges - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_status_message_final_rejected - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_final_done_accepted_after_loop_guard_halt - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_final_done_accepted_in_interleaved_edit_mode - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_status_final_still_rejected_when_edit_rider_not_injected - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_prose_answer_rescue - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_session_log_records_turn - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_repl_execution_count - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_code_in_markdown_block - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_workspace_state_updated - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn.py::test_llm_call_exception_returns_error - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn_replay.py::test_turn_recorded_when_on - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_execute_turn_replay.py::test_nothing_recorded_when_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_production_repl.py::test_production_recording_replays_byte_for_byte - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_production_repl.py::test_stub_registry_default_is_caught_and_really_diverges - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_production_repl.py::test_recorded_sub_call_is_load_bearing - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_production_repl.py::test_registry_drift_between_recording_and_replay_is_reported - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_production_repl.py::test_per_node_langgraph_dispatch_replays - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_production_repl.py::test_recording_does_not_change_what_the_model_is_sent - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_replay.py::test_prefix_replays_every_real_turn_byte_for_byte - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_replay.py::test_each_neutraliser_is_load_bearing - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_replay.py::test_environment_drift_is_reported_not_hidden - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_replay.py::test_restart_goes_live_and_patch_reaches_only_the_llm - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_graph_harness_replay.py::test_prompt_bytes_identical_with_flags_on_and_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_frontdoor_happy_path - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_frontdoor_max_turns_failure - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_frontdoor_max_turns_rescue - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_frontdoor_error_retry - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_frontdoor_error_escalation - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_worker_happy_path - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_worker_non_final_loops - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_worker_escalates_on_repeated_failures - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_coder_happy_path - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_coder_escalates_to_architect - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_coder_records_mitigation_on_success_after_escalation - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_run_task_end_to_end - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_run_task_escalation_flow - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_run_task_max_turns_stops - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_node_execution.py::test_role_history_tracked - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_observability.py::TestMakeEndResult::test_end_result_records_success_evidence - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_observability.py::TestMakeEndResult::test_end_result_records_failure_evidence - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_observability.py::TestMakeEndResult::test_end_result_updates_workspace_decisions - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_observability.py::TestMakeEndResult::test_end_result_contains_metadata - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_observability.py::TestMakeEndResult::test_end_result_records_compaction_quality_outcomes_only_when_monitor_exists - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_observability.py::TestMakeEndResult::test_end_result_does_not_create_compaction_monitor_when_absent - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_length_cutoff_retries_once_and_request_builder_carries_thinking_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_length_cutoff_does_not_retry_when_selected_role_cannot_honor_thinking_off - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_action_tool_call_and_missing_native_reason_do_not_retry[FINAL("already acted")-length] - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_action_tool_call_and_missing_native_reason_do_not_retry[CALL("web_search", query="x")-length] - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_action_tool_call_and_missing_native_reason_do_not_retry[unfinished thought-tool_calls] - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_action_tool_call_and_missing_native_reason_do_not_retry[unfinished thought-None] - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_default_off_is_single_call_even_for_native_length_cutoff - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_runaway_retry_is_one_shot_even_if_retry_also_hits_length - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_reasoning_runaway_retry.py::test_retry_failure_preserves_primary_and_does_not_execute_retry_output - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_ufh14_b1_graph.py::test_task_state_context_never_reaches_the_turn_prompt - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_ufh14_b1_graph.py::test_compaction_makes_no_index_llm_call_by_default - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_ufh14_b1_graph.py::test_llm_index_flag_restores_the_call_with_capped_input - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_ufh14_b1_graph.py::test_context_overflow_no_longer_claims_a_compaction - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_ufh14_b1_graph.py::test_forced_answer_turn_demands_final_and_skips_compaction - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+FAILED tests/integration/test_ufh14_b1_graph.py::test_no_forced_answer_before_the_point_or_when_unset - Failed: async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+= 101 failed, 267 passed, 17 skipped, 99 warnings, 1 error in 115.06s (0:01:55) =
+make: *** [Makefile:260: integration-sanity] Error 1

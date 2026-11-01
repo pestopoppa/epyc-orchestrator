@@ -58,6 +58,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field, replace
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -431,6 +432,34 @@ class PoolOccupancy:
     # KPF-27e: ``/slots[*].kv_pool`` = ``{size, used, shared}`` (the same snapshot
     # in every entry; ``used`` counts UNIQUE cells). None on a v10 / fork-off server.
     kv_pool: dict[str, int] | None = field(default=None, compare=False)
+    # KPF-24: native /metrics gauges, read from this URL in the same refresh.
+    # Missing/fork-off is None; zero is a valid measured usage, never a default.
+    kv_metrics: dict[str, int] | None = field(default=None, compare=False)
+
+    @property
+    def unique_cells(self) -> int | None:
+        """Native unique attention cells; never a sum of logical slot tokens.
+
+        /slots and /metrics are consecutive snapshots. Keep the higher usage
+        when both are valid, and reject a capacity mismatch (e.g. a restart).
+        """
+        snapshots = [p for p in (self.kv_pool, self.kv_metrics) if _valid_cell_pool(p)]
+        if not snapshots or len({p["size"] for p in snapshots}) != 1:
+            return None
+        return max(p["used"] for p in snapshots)
+
+    @property
+    def unique_cell_capacity(self) -> int | None:
+        """Native capacity, None if absent, or 0 to refuse capacity drift.
+
+        Both valid snapshots remain evidence when their capacities disagree;
+        they must not enable the legacy missing-telemetry admission exception.
+        """
+        snapshots = [p for p in (self.kv_pool, self.kv_metrics) if _valid_cell_pool(p)]
+        if not snapshots:
+            return None
+        sizes = {p["size"] for p in snapshots}
+        return sizes.pop() if len(sizes) == 1 else 0
 
     @property
     def processing(self) -> int:
@@ -479,21 +508,16 @@ class PoolOccupancy:
         return total
 
     def projected_unique_tokens(self, new_token_ratio: float = 1.0) -> int:
-        """``projected_tokens`` with forked cells counted ONCE (KPF-27e). With the
-        server's per-slot ``kv_cells`` and pool ``shared`` total, the cells the
-        processing slots hold are at most ``sum(private) + pool.shared`` (every
-        shared cell counted once even if no processing slot references it: an
-        upper bound, so still conservative) and at most ``sum(n_prompt_tokens)``.
-        Without those fields it IS ``projected_tokens``."""
-        total = self.projected_tokens(new_token_ratio)
-        pool = self.kv_pool or {}
-        shared = pool.get("shared")
-        busy = [s for s in self.slots if s.is_processing]
-        if not isinstance(shared, int) or any(s.kv_private is None for s in busy):
-            return total
-        held = sum(s.n_prompt_tokens for s in busy)
-        unique = min(held, sum(int(s.kv_private or 0) for s in busy) + max(0, shared))
-        return total - held + unique
+        """Native unique cells plus ratio-weighted outstanding decode.
+
+        The native count includes idle cells and speculative attention cells;
+        neither is silently subtracted. Missing counters retain legacy sizing.
+        """
+        used = self.unique_cells
+        if used is None:
+            return self.projected_tokens(new_token_ratio)
+        held = sum(s.n_prompt_tokens for s in self.slots if s.is_processing)
+        return used + self.projected_tokens(new_token_ratio) - held
 
 
 # A server may render the cached prompt with a leading BOS / special token the
@@ -577,6 +601,44 @@ def _nonneg_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+def _valid_cell_pool(pool: Any) -> bool:
+    return (isinstance(pool, dict) and _nonneg_int(pool.get("size")) is not None
+            and pool["size"] > 0
+            and _nonneg_int(pool.get("used")) is not None
+            and pool["used"] <= pool["size"])
+
+
+def parse_kv_cell_metrics(body: Any) -> dict[str, int] | None:
+    """Read KPF-16's unlabelled native gauges, in attention cells.
+
+    The native producer emits one series per server, not one per slot/model.
+    Reject duplicates, labels, fractional/nonfinite values and impossible
+    capacity. In particular, absent fork-off series are not measured zeros.
+    """
+    if not isinstance(body, str):
+        return None
+    names = {"llamacpp:kv_cells_size": "size", "llamacpp:kv_cells_used": "used"}
+    pool: dict[str, int] = {}
+    for line in body.splitlines():
+        parts = line.split()
+        if not parts or parts[0].startswith("#"):
+            continue
+        name = parts[0].split("{", 1)[0]
+        if name not in names:
+            continue
+        key = names[name]
+        if parts[0] != name or len(parts) != 2 or key in pool:
+            return None
+        try:
+            value = Decimal(parts[1])
+        except InvalidOperation:
+            return None
+        if not value.is_finite() or value < 0 or value != value.to_integral_value():
+            return None
+        pool[key] = int(value)
+    return pool if _valid_cell_pool(pool) else None
+
+
 def _parse_checkpoints(raw: Any) -> tuple[SlotCheckpoint, ...]:
     """``/slots[i].checkpoints`` (KPF-27e); () when absent or malformed."""
     if not isinstance(raw, list):
@@ -599,6 +661,14 @@ def _default_fetch_slots(url: str, timeout_s: float) -> Any:
     return resp.json()
 
 
+def _default_fetch_metrics(url: str, timeout_s: float) -> str:
+    import httpx
+
+    resp = httpx.get(f"{url.rstrip('/')}/metrics", timeout=timeout_s)
+    resp.raise_for_status()
+    return resp.text
+
+
 def _default_fetch(url: str, timeout_s: float) -> dict[str, Any] | None:
     import httpx
 
@@ -618,6 +688,7 @@ class ContextLimitResolver:
         props_timeout_s: float = DEFAULT_PROPS_TIMEOUT_S,
         fetch_props: Callable[[str, float], dict[str, Any] | None] | None = None,
         fetch_slots: Callable[[str, float], Any] | None = None,
+        fetch_metrics: Callable[[str, float], Any] | None = None,
         occupancy_ttl_s: float = DEFAULT_OCCUPANCY_TTL_S,
         registry_facts: Callable[[], dict[int, dict[str, Any]]] | None = None,
         role_urls: Callable[[], dict[str, list[str]]] | None = None,
@@ -633,6 +704,10 @@ class ContextLimitResolver:
         self._props_timeout_s = props_timeout_s
         self._fetch = fetch_props or _default_fetch
         self._fetch_slots = fetch_slots or _default_fetch_slots
+        # An injected slots reader stays hermetic unless metrics are injected
+        # too. Production uses the same URL/timeout for both native endpoints.
+        self._fetch_metrics = (fetch_metrics if fetch_metrics is not None else
+                               (_default_fetch_metrics if fetch_slots is None else None))
         self._occupancy_ttl_s = max(0.0, occupancy_ttl_s)
         self._occupancy_cache: dict[str, tuple[float, PoolOccupancy | None]] = {}
         self._fork_caps_cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
@@ -755,6 +830,16 @@ class ContextLimitResolver:
         except Exception as exc:
             log.debug("context limits: GET %s/slots failed: %s", url, exc)
             occ = None
+        if occ is not None and self._fetch_metrics is not None:
+            from src.inference import prefix_index
+
+            if prefix_index.enabled():
+                try:
+                    metrics = parse_kv_cell_metrics(self._fetch_metrics(url, self._props_timeout_s))
+                    occ = replace(occ, kv_metrics=metrics,
+                                  source="live_slots+metrics" if metrics is not None else occ.source)
+                except Exception as exc:
+                    log.debug("context limits: GET %s/metrics failed: %s", url, exc)
         with self._lock:
             self._occupancy_cache[url] = (now + self._occupancy_ttl_s, occ)
         return occ
