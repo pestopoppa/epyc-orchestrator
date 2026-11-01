@@ -1,0 +1,9 @@
+[main 0162aa16] Add isolated episodic control experiment
+ 7 files changed, 190 insertions(+)
+ create mode 100644 docs/evidence/ap29-episodic-control-20261101/README.md
+ create mode 100644 docs/evidence/ap29-episodic-control-20261101/caller-audit.log
+ create mode 100644 docs/evidence/ap29-episodic-control-20261101/readset.sha256
+ create mode 100644 docs/evidence/ap29-episodic-control-20261101/tests.log
+ create mode 100644 orchestration/repl_memory/episodic_control.py
+ create mode 100644 tests/unit/test_episodic_control.py
+{"schema": "bounded-r11-native-profile-supervisor/v1", "elapsed_s": 1.2222026318777353, "sampled_peak_tree_rss_bytes": 75268096, "samples": 13, "verified_exited_processes": 1, "verified_exited_threads": 0, "per_process_address_space_limit_bytes": null, "rss_scope": "sum of sampled resident pages across owned process tree; sampling may miss transients and double-count shared pages", "leader_pid": 2783688, "leader_birth": 162673977, "child_rc": 0, "children_drained": true, "failure": null}
