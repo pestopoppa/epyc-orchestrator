@@ -304,7 +304,7 @@ def test_real_capture_path_pins_before_two_same_incumbent_draws(tmp_path, monkey
         journal=journal,
         archive=archive,
         tower=tower,
-        checkpoint_dir=tmp_path,
+        checkpoint_dir=checkpoint_root,
         orchestrator_url="http://unused",
         study_id="study-paired-1",
         planned_k=1,
@@ -313,7 +313,7 @@ def test_real_capture_path_pins_before_two_same_incumbent_draws(tmp_path, monkey
         dispatch_fingerprint=infra,
     )
 
-    assert response["pair"]["status"] == "complete"
+    assert response["pair"]["status"] == "complete", response["pair"]
     assert response["pair"]["q_outgoing"] == 0.8
     assert response["pair"]["q_incoming"] == 0.6
     assert response["pair"]["drop"] == pytest.approx(0.2)

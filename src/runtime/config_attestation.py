@@ -107,8 +107,14 @@ async def _observe_backend(url: str, client: Any, semaphore: asyncio.Semaphore) 
         "::1",
     }:
         raise ValueError("backend endpoint is not a directly observable local listener")
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError("backend endpoint contains unsupported credential or query fields")
+    if (
+        parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("backend endpoint contains unsupported credentials or URL path fields")
     port = parsed.port
     if port is None:
         raise ValueError("backend endpoint has no explicit port")
