@@ -1631,12 +1631,14 @@ def _latest_promotion_suite_health_path() -> Path | None:
         path = Path(override)
         return path if path.exists() else None
     reports_dir = Path(__file__).resolve().parents[2] / "orchestration" / "reports"
-    candidates = sorted(
-        reports_dir.glob(PROMOTION_EVAL_SUITE_HEALTH_GLOB),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    return candidates[0] if candidates else None
+    candidates = []
+    for path in reports_dir.glob(PROMOTION_EVAL_SUITE_HEALTH_GLOB):
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            # A report may disappear or become inaccessible during discovery.
+            continue
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
 
 
 def _promotion_excluded_suites_from_health() -> tuple[set[str], dict[str, Any]]:
