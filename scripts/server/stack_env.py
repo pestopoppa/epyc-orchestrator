@@ -309,6 +309,29 @@ def _role_env_overrides(role: str) -> dict[str, str]:
     return {}
 
 
+def recipe_for(role: str) -> dict:
+    """Read a process role's recipe from the compiled runtime registry."""
+    from src.registry.registry_loader import load_server_mode
+
+    row = load_server_mode().get(role, {})
+    recipe = row.get("recipe") if isinstance(row, dict) else None
+    if recipe is None:
+        return {}
+    if not isinstance(recipe, dict):
+        raise ValueError(f"invalid recipe for {role!r}")
+    return recipe
+
+
+def recipe_env_for(role: str) -> dict[str, str]:
+    """Recipe env, before the documented per-role override layer."""
+    declared = recipe_for(role).get("env", {})
+    if not isinstance(declared, dict) or any(
+        not isinstance(k, str) or not isinstance(v, str) for k, v in declared.items()
+    ):
+        raise ValueError(f"invalid recipe.env for {role!r}: expected string mapping")
+    return dict(declared)
+
+
 def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
     """Compose the full env dict for a llama-server launch.
 
@@ -317,7 +340,8 @@ def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[
         2. LLVM-20 libomp prepended to LD_LIBRARY_PATH (canonical recipe)
         3. canonical OMP env stack (always applied)
         4. explicit base GGML_IQK override, if present, for v6 iqk A/B gates
-        5. per-role GGML_* env block (from v5 deployment draft)
+        5. registry recipe.env
+        6. per-role override block (from v5 deployment draft)
 
     The per-role block is allowed to override OMP if it must, though no current
     role does so.
@@ -340,5 +364,6 @@ def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[
     env.update(_CANONICAL_OMP_ENV)
     if explicit_iqk is not None:
         env["GGML_IQK"] = explicit_iqk
+    env.update(recipe_env_for(role))
     env.update(_role_env_overrides(role))
     return env

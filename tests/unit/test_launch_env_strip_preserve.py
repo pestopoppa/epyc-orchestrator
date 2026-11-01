@@ -92,5 +92,5 @@ def test_every_launch_branch_strips() -> None:
     src = inspect.getsource(launcher.start_server)
     n_env = src.count("build_launch_env(")
     n_strip = src.count("_apply_runtime_requirements_env(") + src.count("_strip_ambient_ggml(")
-    n_preserve = src.count("preserve=_role_env_overrides(") + src.count("_strip_ambient_ggml(")
+    n_preserve = src.count("preserve={**recipe_env_for(") + src.count("_strip_ambient_ggml(")
     assert n_env == n_strip == n_preserve, (n_env, n_strip, n_preserve)
