@@ -297,6 +297,64 @@ def test_ast_planned_slice_preserves_crlf_source_lines() -> None:
     assert "def target():\r\n    return os.getcwd()\r\n" in rendered
 
 
+def test_ast_slice_keeps_module_guarded_import_blocks_only() -> None:
+    body = '''from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pkg.contracts import Contract
+
+try:
+    import fast_optional
+except ImportError:
+    fast_optional = None
+
+def target():
+    return 1
+
+def unrelated():
+    import local_only
+    return local_only
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+    pass
+'''
+    files = {"guarded.py": body}
+    hit_line = body.splitlines().index("    return 1") + 1
+    hit = DiscoveredHit("guarded.py", [LineRange(hit_line, hit_line)], .9)
+    candidate = cost_candidates([hit], file_reader_fn=lambda path: files[path])[0]
+    bundle = assemble_delegation_bundle(
+        "edit target",
+        budget=candidate.cost_slices,
+        code_search_fn=lambda _query, _limit: [hit],
+        file_reader_fn=lambda path: files[path],
+    )
+    rendered = render_bundle(bundle, file_reader_fn=lambda path: files[path])
+
+    assert "if TYPE_CHECKING:\n    from pkg.contracts import Contract" in rendered
+    assert "try:\n    import fast_optional\nexcept ImportError:\n    fast_optional = None" in rendered
+    assert "def target():\n    return 1" in rendered
+    assert "local_only" not in rendered
+    assert candidate.cost_slices == bundle.total_tokens()
+    assert conservative_char_estimator(rendered) <= bundle.total_tokens()
+
+
 def test_unranged_colgrep_and_non_colgrep_slices_keep_existing_rendering() -> None:
     body = "def untouched():\n    return 1\n"
     full_bundle = assemble_delegation_bundle(

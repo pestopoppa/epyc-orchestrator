@@ -201,8 +201,27 @@ def _python_edit_segments(source: str, hit_ranges: list[LineRange]):
         for child in ast.iter_child_nodes(parent):
             parents[child] = parent
 
-    # Module imports are shared setup context. Local imports in unrelated functions are not.
-    imports = [span(node) for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+    # Module imports are shared setup context, including imports protected by module guards.
+    # Stop at function/class scopes so unrelated local imports do not pull in their bodies.
+    def has_module_scope_import(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                return True
+            if has_module_scope_import(child):
+                return True
+        return False
+
+    guarded_import_types = (ast.If, ast.Try)
+    if hasattr(ast, "TryStar"):
+        guarded_import_types += (ast.TryStar,)
+    imports = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append(span(node))
+        elif isinstance(node, guarded_import_types) and has_module_scope_import(node):
+            imports.append(span(node))
     selected: list[tuple[int, int]] = []
     enclosing_classes: set[ast.ClassDef] = set()
     statements = [
