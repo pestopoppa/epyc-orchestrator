@@ -103,7 +103,8 @@ class TestStreamMock:
     def test_plan_mode_yields_plan_analysis(self):
         request = _mock_request(permission_mode="plan")
         routing = _mock_routing()
-        state = MagicMock(progress_logger=None)
+        logger = MagicMock()
+        state = MagicMock(progress_logger=logger)
 
         events = _collect(_stream_mock(request, routing, state, 0.0))
 
@@ -111,6 +112,10 @@ class TestStreamMock:
         assert "token" in types
         # Plan mode: turn_start, token (plan analysis), turn_end, done
         assert types[-1] == "done"
+        completion_meta = logger.log_task_completed.call_args.kwargs["completion_meta"]
+        assert completion_meta["producer_role"] is None
+        assert completion_meta["producer_stage"] == "plan"
+        assert completion_meta["final_answer_role"] is None
 
     def test_logs_completion_when_logger_present(self):
         request = _mock_request()
@@ -121,6 +126,10 @@ class TestStreamMock:
         _collect(_stream_mock(request, routing, state, 0.0))
 
         logger.log_task_completed.assert_called_once()
+        completion_meta = logger.log_task_completed.call_args.kwargs["completion_meta"]
+        assert completion_meta["producer_role"] is None
+        assert completion_meta["producer_stage"] == "mock"
+        assert completion_meta["final_answer_role"] is None
 
 
 # ── generate_stream ────────────────────────────────────────────────────
@@ -158,13 +167,18 @@ class TestGenerateStream:
         mock_init.side_effect = RuntimeError("No backends")
 
         request = _mock_request(mock_mode=False, real_mode=True)
-        state = MagicMock(progress_logger=None)
+        logger = MagicMock()
+        state = MagicMock(progress_logger=logger)
 
         events = _collect(generate_stream(request, state))
 
         types = [e.get("event") for e in events]
         assert "error" in types
         assert "done" in types
+        completion_meta = logger.log_task_completed.call_args.kwargs["completion_meta"]
+        assert completion_meta["producer_role"] is None
+        assert completion_meta["producer_stage"] == "stream_init"
+        assert completion_meta["final_answer_role"] is None
 
     @patch("src.api.routes.chat_pipeline.stream_adapter._stream_repl")
     @patch("src.api.routes.chat_pipeline.stream_adapter._plan_review_gate")

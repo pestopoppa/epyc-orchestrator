@@ -2,7 +2,9 @@ name: NI programmatic feedback and DTAP contracts
 
 on:
   push:
-    branches: [codex/ni-dcp11-ast-render-ci-20261101]
+    branches:
+      - codex/ni-dcp11-ast-render-ci-20261101
+      - codex/ni-producer-stage-20261101
     paths:
       - 'src/trace/step_events.py'
       - 'src/graph/helpers.py'
@@ -18,6 +20,13 @@ on:
       - 'scripts/autopilot/evals/dtap/harness/runner.py'
       - 'scripts/autopilot/evals/dtap/tests/test_adversarial_contract_fixtures.py'
       - 'scripts/skillbank/seed_skills.py'
+      - 'src/api/routes/chat_pipeline/stages.py'
+      - 'src/api/routes/chat_pipeline/stream_adapter.py'
+      - 'src/api/routes/chat_pipeline/proactive_stage.py'
+      - 'tests/unit/test_chat_pipeline_stages.py'
+      - 'tests/unit/test_stream_adapter.py'
+      - 'tests/unit/test_chat_request_role_validation.py'
+      - 'tests/unit/test_q_reward_role_key.py'
       - '.github/workflows/ni-code-contracts-20261101.yml'
 
 permissions:
@@ -74,6 +83,13 @@ jobs:
             scripts/autopilot/evals/dtap/tests/test_judge_guard.py \
             scripts/autopilot/evals/dtap/tests/test_tool_contract.py \
             scripts/skillbank/seed_skills.py \
+            src/api/routes/chat_pipeline/stages.py \
+            src/api/routes/chat_pipeline/stream_adapter.py \
+            src/api/routes/chat_pipeline/proactive_stage.py \
+            tests/unit/test_chat_pipeline_stages.py \
+            tests/unit/test_stream_adapter.py \
+            tests/unit/test_chat_request_role_validation.py \
+            tests/unit/test_q_reward_role_key.py \
             pyproject.toml uv.lock \
             .github/workflows/ni-code-contracts-20261101.yml \
             | tee "$RESULT_DIR/source-files.sha256"
@@ -95,6 +111,10 @@ jobs:
             tests/unit/test_contextbench_score.py \
             tests/unit/test_distillation.py \
             scripts/autopilot/evals/dtap/tests/ \
+            tests/unit/test_chat_pipeline_stages.py \
+            tests/unit/test_stream_adapter.py \
+            tests/unit/test_chat_request_role_validation.py \
+            tests/unit/test_q_reward_role_key.py \
             2>&1 | tee "$RESULT_DIR/pytest.stdout.txt"
           test_rc=${PIPESTATUS[0]}
           printf '%s\n' "$test_rc" | tee "$RESULT_DIR/pytest.exit-code"

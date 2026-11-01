@@ -93,9 +93,10 @@ async def _stream_mock(
                 success=True,
                 details="Plan mode",
                 completion_meta={
-                    "producer_role": "plan",
+                    "producer_role": None,
+                    "producer_stage": "plan",
                     "delegation_lineage": ["plan"],
-                    "final_answer_role": "plan",
+                    "final_answer_role": None,
                 },
             )
             score_completed_task(
@@ -120,9 +121,10 @@ async def _stream_mock(
             success=True,
             details="Mock stream",
             completion_meta={
-                "producer_role": "mock",
+                "producer_role": None,
+                "producer_stage": "mock",
                 "delegation_lineage": ["mock"],
-                "final_answer_role": "mock",
+                "final_answer_role": None,
             },
         )
         score_completed_task(
@@ -461,9 +463,10 @@ async def generate_stream(
                 success=False,
                 details=str(e),
                 completion_meta={
-                    "producer_role": "stream_init",
+                    "producer_role": None,
+                    "producer_stage": "stream_init",
                     "delegation_lineage": ["stream_init"],
-                    "final_answer_role": "stream_init",
+                    "final_answer_role": None,
                     # Backend init failed: no role ever ran, so there is no
                     # quality signal here at all.
                     **failure_disposition_meta(error=e),

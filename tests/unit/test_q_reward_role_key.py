@@ -108,3 +108,40 @@ def test_known_unpriced_roles_do_not_warn(caplog):
         with caplog.at_level(logging.WARNING):
             _reward(data)
     assert not [r for r in caplog.records if "no baseline_tps_by_role" in r.message]
+
+
+def test_pipeline_stage_metadata_preserves_existing_price_selection():
+    """Stage fact separation preserves current reward attribution behavior.
+
+    The explicit `role` key remains the existing high-priority override. Without
+    it, stage sentinels and their split representation both have no priced role.
+    Proactive previously put an observed child contributor in
+    `final_answer_role`; the split record leaves both singular producer fields
+    empty because the aggregate itself had no single producer.
+    """
+    stages = (
+        ("mock", "mock", "mock"),
+        ("plan", "plan", "plan"),
+        ("stream_init", "stream_init", "stream_init"),
+        ("proactive_delegation", "proactive_delegation", "architect_critic"),
+    )
+    for stage, old_producer, old_final in stages:
+        old = {
+            "producer_role": old_producer,
+            "final_answer_role": old_final,
+            "tokens_generated": 100,
+            "generation_ms": 20_000,
+        }
+        new = {
+            "producer_role": None,
+            "producer_stage": stage,
+            "final_answer_role": None,
+            "tokens_generated": 100,
+            "generation_ms": 20_000,
+        }
+        assert _reward(old) == _reward(new) == 1.0, stage
+
+        old_with_role = {**old, "role": "architect_general"}
+        new_with_role = {**new, "role": "architect_general"}
+        assert _reward(old_with_role) == _reward(new_with_role), stage
+        assert _reward(new_with_role) < 1.0, stage

@@ -467,9 +467,13 @@ async def _execute_proactive(
             success=result.all_approved,
             details=f"Proactive delegation: {n_subtasks} subtasks, {elapsed:.3f}s",
             completion_meta={
-                "producer_role": "proactive_delegation",
-                "delegation_lineage": result.roles_used or [str(resolve_planner_role())],
-                "final_answer_role": (result.roles_used or [str(resolve_planner_role())])[-1],
+                # The aggregate is a concatenation of specialist outputs, not
+                # a final model call by the pipeline stage. Keep observed
+                # contributors in lineage; do not attribute one as producer.
+                "producer_role": None,
+                "producer_stage": "proactive_delegation",
+                "delegation_lineage": result.roles_used,
+                "final_answer_role": None,
                 **llm_completion_meta(primitives),
                 # M-11a2b
                 **work_completion_meta(answer=answer),

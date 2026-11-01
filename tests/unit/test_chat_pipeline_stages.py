@@ -387,6 +387,12 @@ class TestExecuteMock:
             _execute_mock(request, routing, mock_state, start_time)
 
         mock_state.progress_logger.log_task_completed.assert_called_once()
+        completion_meta = mock_state.progress_logger.log_task_completed.call_args.kwargs[
+            "completion_meta"
+        ]
+        assert completion_meta["producer_role"] is None
+        assert completion_meta["producer_stage"] == "mock"
+        assert completion_meta["final_answer_role"] is None
 
     def test_mock_no_progress_logger(self):
         """Mock mode handles missing progress_logger."""
@@ -1088,6 +1094,13 @@ class TestExecuteProactive:
         assert result.answer == "Proactive result"
         assert result.mode == "proactive"
         assert result.turns == 3  # 1 + 2 subtasks
+        completion_meta = mock_state.progress_logger.log_task_completed.call_args.kwargs[
+            "completion_meta"
+        ]
+        assert completion_meta["producer_role"] is None
+        assert completion_meta["producer_stage"] == "proactive_delegation"
+        assert completion_meta["final_answer_role"] is None
+        assert completion_meta["delegation_lineage"] == ["coder", "architect"]
 
     @pytest.mark.asyncio
     async def test_proactive_delegation_exception(self, mock_primitives, mock_state):
@@ -1362,6 +1375,9 @@ class TestExecuteDirect:
         assert mock_primitives.llm_call.call_args.kwargs["n_probs"] == 7
         call = mock_state.progress_logger.log_task_completed.call_args
         assert call.kwargs["completion_meta"]["tokens_generated"] == 100
+        assert call.kwargs["completion_meta"]["producer_role"] == "frontdoor"
+        assert call.kwargs["completion_meta"]["final_answer_role"] == "frontdoor"
+        assert "producer_stage" not in call.kwargs["completion_meta"]
         assert call.kwargs["completion_meta"]["prompt_eval_ms"] == 50.0
         assert call.kwargs["completion_meta"]["generation_ms"] == 200.0
         assert call.kwargs["completion_meta"]["http_overhead_ms"] == 10.0

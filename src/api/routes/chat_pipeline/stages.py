@@ -156,9 +156,10 @@ def _execute_mock(
             success=True,
             details=f"Mock response in {elapsed:.3f}s",
             completion_meta={
-                "producer_role": "mock",
+                "producer_role": None,
+                "producer_stage": "mock",
                 "delegation_lineage": ["mock"],
-                "final_answer_role": "mock",
+                "final_answer_role": None,
             },
         )
         score_completed_task(

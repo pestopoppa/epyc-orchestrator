@@ -11,6 +11,8 @@ penalty entirely.
 
 from __future__ import annotations
 
+import pytest
+
 from src.api.models.requests import ChatRequest
 
 
@@ -51,6 +53,15 @@ def test_force_role_is_validated_too():
 def test_non_role_pipeline_sentinels_pass_through():
     """'mock' is a real wire value for the mock pipeline; do not rewrite it."""
     assert _req(role="mock").role == "mock"
+
+
+@pytest.mark.parametrize(
+    "sentinel", ["mock", "plan", "stream_init", "proactive_delegation"]
+)
+def test_pipeline_sentinels_remain_valid_request_role_controls(sentinel):
+    """Telemetry separation must not change request role/force_role controls."""
+    assert _req(role=sentinel).role == sentinel
+    assert _req(force_role=sentinel).force_role == sentinel
 
 
 def test_every_role_value_used_by_production_harnesses_survives():
