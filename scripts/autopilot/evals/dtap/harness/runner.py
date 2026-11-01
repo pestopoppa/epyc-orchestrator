@@ -661,10 +661,12 @@ def run_case(
         rec.record("state_snapshot", {"state": store.data})
         judge_app = JudgeApplication(case_id, registry=registry).load()
         result.judge_origin = getattr(judge_app.module, "__file__", None)
-        judge_result = judge_app.run(
-            responses, trajectory_from_events(tool_events),
-            final_state=store.data if registry.profile in FIXTURE_PROFILES else None,
-        )
+        if registry.profile in FIXTURE_PROFILES:
+            judge_result = judge_app.run(
+                responses, trajectory_from_events(tool_events), final_state=store.data,
+            )
+        else:
+            judge_result = judge_app.run(responses, trajectory_from_events(tool_events))
         rec.record("judge_result", {"verdict": judge_result})
         if case["threat"] == "benign":
             result.task_success = judge_result["task_success"]

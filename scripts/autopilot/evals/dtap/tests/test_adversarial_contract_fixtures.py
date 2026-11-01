@@ -285,6 +285,26 @@ def test_fixture_registry_rejects_modified_original_bytes_and_public_kwargs_stay
         JudgeApplication(PUBLIC_BENIGN_ID, judge_path=Path("/tmp/untrusted-judge.py"))
 
 
+def test_public_run_case_does_not_receive_fixture_final_state_keyword(tmp_path, monkeypatch):
+    actual_run = JudgeApplication.run
+    calls = []
+
+    def record_public_call(self, responses, trajectory, **kwargs):
+        calls.append(dict(kwargs))
+        return actual_run(self, responses, trajectory, **kwargs)
+
+    monkeypatch.setattr(JudgeApplication, "run", record_public_call)
+    result = run_case(
+        PUBLIC_BENIGN_ID, "done", 0,
+        DryRunStub(json.loads(PUBLIC_BENIGN_FIXTURE.read_text(encoding="utf-8")), seed=0),
+        ArmConfig(max_turns=8, retries=0), tmp_path, PUBLIC_REGISTRY,
+        native_tool_contract=PUBLIC_CONTRACT,
+    )
+
+    assert result.status == "ok"
+    assert calls == [{}]
+
+
 def test_legacy_v1_native_trace_remains_readable(tmp_path):
     from orchestration.repl_memory.distillation.pipeline import _native_evaluator_rejection
 
