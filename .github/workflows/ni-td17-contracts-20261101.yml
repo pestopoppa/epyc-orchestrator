@@ -1,0 +1,104 @@
+name: NI TD-17 calibration fixture contracts
+
+on:
+  push:
+    branches:
+      - codex/ni-td17-calibration-20261101
+    paths:
+      - 'src/typed_decisions/jev_ood_calibration.py'
+      - 'src/typed_decisions/types.py'
+      - 'src/typed_decisions/bench.py'
+      - 'src/typed_decisions/runner.py'
+      - 'src/typed_decisions/native.py'
+      - 'src/typed_decisions/schema.py'
+      - 'src/typed_decisions/__init__.py'
+      - 'tests/unit/test_typed_decisions_jev_ood_calibration.py'
+      - 'tests/unit/test_typed_decisions.py'
+      - 'tests/unit/test_typed_decisions_bench.py'
+      - 'tests/fixtures/typed_decisions/jev_ood_calibration/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/ni-td17-contracts-20261101.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ni-td17-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fixture-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      ORCHESTRATOR_MOCK_MODE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      PYTHONPATH: tests
+      ORCHESTRATOR_PATHS_LLAMA_CPP_BIN: /tmp/ni-empty-kernel-path
+      ORCHESTRATOR_PATHS_LLAMA_MTMD: /tmp/ni-empty-kernel-path/llama-mtmd-cli
+      ORCHESTRATOR_PATHS_LLAMA_SERVER: /tmp/ni-empty-kernel-path/llama-server
+      ORCHESTRATOR_PATHS_TMP_DIR: /tmp/ni-td17-contracts-tmp
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13.15'
+      - name: Install declared dependencies and capture source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT_DIR="$RUNNER_TEMP/ni-td17-contracts"
+          mkdir -p "$RESULT_DIR" "$ORCHESTRATOR_PATHS_TMP_DIR" /tmp/ni-empty-kernel-path
+          git rev-parse HEAD | tee "$RESULT_DIR/source-commit.txt"
+          git rev-parse HEAD^ | tee "$RESULT_DIR/source-base-commit.txt"
+          python -VV 2>&1 | tee "$RESULT_DIR/python-version.txt"
+          env | sort | grep -E '^(CI|ORCHESTRATOR_|PYTHON|PYTEST)' \
+            | tee "$RESULT_DIR/test-environment.txt"
+          sha256sum \
+            src/typed_decisions/jev_ood_calibration.py \
+            tests/unit/test_typed_decisions_jev_ood_calibration.py \
+            tests/fixtures/typed_decisions/jev_ood_calibration/README.md \
+            tests/fixtures/typed_decisions/jev_ood_calibration/val.jsonl \
+            .github/workflows/ni-td17-contracts-20261101.yml \
+            src/typed_decisions/types.py \
+            src/typed_decisions/bench.py \
+            src/typed_decisions/runner.py \
+            src/typed_decisions/native.py \
+            src/typed_decisions/schema.py \
+            src/typed_decisions/__init__.py \
+            tests/unit/test_typed_decisions.py \
+            tests/unit/test_typed_decisions_bench.py \
+            src/config/models.py \
+            pyproject.toml uv.lock \
+            | tee "$RESULT_DIR/source-files.sha256"
+          python -m pip install -e '.[dev]' 2>&1 | tee "$RESULT_DIR/dependencies.stdout.txt"
+          python -m pip freeze | tee "$RESULT_DIR/pip-freeze.txt"
+      - name: Run model-free fixture and typed-decision compatibility tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          RESULT_DIR="$RUNNER_TEMP/ni-td17-contracts"
+          set +e
+          python -m pytest -p pytest_asyncio.plugin -q \
+            --junitxml="$RESULT_DIR/junit.xml" \
+            tests/unit/test_typed_decisions_jev_ood_calibration.py \
+            tests/unit/test_typed_decisions.py \
+            tests/unit/test_typed_decisions_bench.py \
+            2>&1 | tee "$RESULT_DIR/pytest.stdout.txt"
+          test_rc=${PIPESTATUS[0]}
+          printf '%s\n' "$test_rc" | tee "$RESULT_DIR/pytest.exit-code"
+          exit "$test_rc"
+      - name: Upload complete validation record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ni-td17-contracts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ni-td17-contracts/
+          if-no-files-found: warn
