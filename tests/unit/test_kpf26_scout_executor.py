@@ -127,15 +127,18 @@ def test_complete_observation_emits_native_record(monkeypatch, tmp_path):
 
     req, expected = pin("request.json", {}), pin("expected.json", {})
     source = "1" * 40
-    process = {"exe": "/server", "binary_sha256": "a" * 64, "argv": ["server", "m"], "ggml": {"/lib": "b" * 64}}
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"mock model")
+    model_sha = hashlib.sha256(model.read_bytes()).hexdigest()
+    process = {"exe": "/server", "binary_sha256": "a" * 64, "argv": ["server", str(model)], "ggml": {"/lib": "b" * 64}}
     grant_path = tmp_path / "row.grant"
     grant_path.write_text("grant")
     grant = {"grant_id": "row", "path": str(grant_path), "sha256": "a" * 64, "start_s": 0, "end_s": 9999999999, "regions": "0-1"}
     endpoint = {"url": "http://127.0.0.1:1", "pid": 1, "listener_inodes": ["1"]}
     m = {"schema": "epyc.kpf26.paired.v1", "arm_order": ["off", "on"], "arm_timeout_s": 30,
          "max_occupancy_sample_gap_s": 2,
-         "pins": {"model": "m", "server_binary_sha256": "a" * 64, "source_commit": source,
-                  "argv": "server m", "executor_sha256": "b" * 64},
+         "pins": {"model": str(model), "model_sha256": model_sha, "server_binary_sha256": "a" * 64, "source_commit": source,
+                  "argv": "server " + str(model), "executor_sha256": "b" * 64},
          "runtime": {"off": {"url": "http://127.0.0.1:1", "role": "worker", "server_pid": 1,
                              "window_id": "w", "sample_interval_s": 1, "grant_id": "row"}},
          "tasks": [{"id": "t", "siblings": 1, "request": req, "expected": expected}]}

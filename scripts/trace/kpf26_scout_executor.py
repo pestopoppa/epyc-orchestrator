@@ -34,6 +34,14 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def digest_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def pinned_file(base: Path, ref: dict[str, str]) -> bytes:
     raw = (base / ref["path"]).read_bytes()
     if digest(raw) != ref["sha256"]:
@@ -142,7 +150,7 @@ def write_belief(out: Path, tasks: list[dict[str, Any]], arm: str, manifest_hash
                      "completed": sum(c["status"] == "ok" for c in children)},
            "ttft_ms": [c["ttft_ms"] for c in children if isinstance(c["ttft_ms"], (int, float))],
            "unique_cells_peak": max(s["cells"] for task in tasks for s in task["unique_cells_samples"]),
-           "instrument_class": "serving-observation"}
+           "instrument_class": "serving-observation", "model_sha256": server["model_sha256"]}
     row["record_sha256"] = digest(json.dumps(row, sort_keys=True, separators=(",", ":")).encode())
     path = out / "belief_measurements.jsonl"
     with path.open("x") as stream:
@@ -326,6 +334,10 @@ def run(manifest: Path, arm: str, evidence: Path) -> int:
     before = process_snapshot(runtime["server_pid"])
     started = time.time()
     pins = m["pins"]
+    model = Path(pins["model"]).resolve(strict=True)
+    model_sha = pins.get("model_sha256")
+    if not isinstance(model_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", model_sha) or digest_file(model) != model_sha:
+        raise ValueError("model full-file digest missing or mismatched")
     if before["binary_sha256"] != pins["server_binary_sha256"] or " ".join(before["argv"]) != pins["argv"] or not before["ggml"] or pins["model"] not in before["argv"]:
         raise ValueError("server binary, argv or mapped ggml identity mismatch")
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -346,6 +358,8 @@ def run(manifest: Path, arm: str, evidence: Path) -> int:
         active_grant(runtime["grant_id"])
         tasks.append(collect_task(task, request, expected, runtime, manifest.parent, out))
     ended = time.time()
+    if digest_file(model) != model_sha:
+        raise ValueError("model bytes changed during collection")
     grant_after = active_grant(runtime["grant_id"])
     endpoint_after = endpoint_identity(runtime["server_pid"], runtime["url"])
     after = process_snapshot(runtime["server_pid"])
@@ -362,6 +376,7 @@ def run(manifest: Path, arm: str, evidence: Path) -> int:
         errors.append("server endpoint listener changed during collection")
     e["collection_errors"] = errors
     if not errors:
+        before["model_sha256"] = model_sha
         write_belief(out, tasks, arm, digest(raw), runtime, before, started, ended)
     evidence.write_text(json.dumps(e, indent=2, sort_keys=True) + "\n")
     return 1 if errors else 0
