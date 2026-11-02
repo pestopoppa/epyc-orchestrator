@@ -58,3 +58,35 @@ def test_classification_never_crashes_on_bad_journal():
         def recent_hypotheses(self, *a, **k):
             raise RuntimeError("journal unavailable")
     assert _classify_meta_halt(_Boom()) == "stuck"
+
+
+# ── JEV-2: typed halt record ──────────────────────────────────────────
+from autopilot import (  # type: ignore[import-not-found]  # noqa: E402
+    MetaHaltStopReason,
+    _classify_meta_halt_record,
+)
+
+
+def test_record_reason_is_enum_and_carries_evidence():
+    class _J:
+        def recent_hypotheses(self, n, exclude_bug_corrupted):
+            return [type("E", (), {"deficiency_category": "reproduction_confirmed", "bug_corrupted_by": ""})()]
+
+    r = _classify_meta_halt_record(_J())
+    assert r.reason is MetaHaltStopReason.CONVERGED
+    assert r.reproduction_confirmed == 1 and r.bug_corrupted == 0
+    assert r.to_dict()["reason"] == "converged"
+
+
+def test_record_exposes_classifier_error():
+    class _Boom:
+        def recent_hypotheses(self, n, exclude_bug_corrupted):
+            raise RuntimeError("journal gone")
+
+    r = _classify_meta_halt_record(_Boom())
+    assert r.reason is MetaHaltStopReason.STUCK
+    assert r.classifier_error and "journal gone" in r.classifier_error
+
+
+def test_stop_reason_enum_is_exhaustive():
+    assert {m.value for m in MetaHaltStopReason} == {"converged", "stuck"}

@@ -30,6 +30,7 @@ import atexit
 from collections import deque
 import copy
 import dataclasses
+import enum
 from dataclasses import asdict
 import fcntl
 import hashlib
@@ -8470,8 +8471,44 @@ def learning_exclusion_criticism(
     )
 
 
-def _classify_meta_halt(journal: Any) -> str:
-    """Classify a meta-action-loop halt as 'converged' vs 'stuck'.
+class MetaHaltStopReason(str, enum.Enum):
+    """Exhaustive stop reasons for a meta-action-loop halt (JEV-2).
+
+    ``str`` subclass so ``reason.value`` stays the legacy wire string stored in
+    ``state['_meta_halt_reason']``.
+    """
+
+    CONVERGED = "converged"
+    STUCK = "stuck"
+
+
+@dataclasses.dataclass(frozen=True)
+class MetaHaltRecord:
+    """Typed halt record: the stop reason plus the evidence it was derived from.
+
+    The rule is deterministic (counts over journal entries), so no model
+    judgment — and no ``src/typed_decisions`` call — is involved.
+    ``classifier_error`` is set when the journal could not be read; the reason
+    then falls back to STUCK, and the record says so instead of hiding it.
+    """
+
+    reason: MetaHaltStopReason
+    window: int
+    reproduction_confirmed: int
+    bug_corrupted: int
+    classifier_error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        d["reason"] = self.reason.value
+        return d
+
+
+_META_HALT_WINDOW = 5
+
+
+def _classify_meta_halt_record(journal: Any) -> MetaHaltRecord:
+    """Classify a meta-action-loop halt as CONVERGED vs STUCK.
 
     Convergence: the planner ran out of config moves because the recent metric
     trials REPRODUCED an already-established above-baseline config
@@ -8479,17 +8516,28 @@ def _classify_meta_halt(journal: Any) -> str:
     benign terminal state — the planner should be pointed at a NEW surface, not
     treated as a malfunction or an instrument-noise problem (2026-05-31). Any
     other shape (bug-corruptions, kills, regressions, genuine gate-lock) is
-    ``stuck`` and warrants operator review.
+    STUCK and warrants operator review.
     """
     try:
-        recent = journal.recent_hypotheses(n=5, exclude_bug_corrupted=False)
-    except Exception:  # noqa: BLE001 — never let classification crash the halt
-        return "stuck"
+        recent = journal.recent_hypotheses(n=_META_HALT_WINDOW, exclude_bug_corrupted=False)
+    except Exception as exc:  # noqa: BLE001 — never let classification crash the halt
+        return MetaHaltRecord(
+            MetaHaltStopReason.STUCK, _META_HALT_WINDOW, 0, 0,
+            classifier_error=f"{type(exc).__name__}: {exc}",
+        )
     repro = sum(
         1 for e in recent if getattr(e, "deficiency_category", "") == "reproduction_confirmed"
     )
     corrupt = sum(1 for e in recent if getattr(e, "bug_corrupted_by", ""))
-    return "converged" if (repro >= 1 and corrupt == 0) else "stuck"
+    reason = (
+        MetaHaltStopReason.CONVERGED if (repro >= 1 and corrupt == 0) else MetaHaltStopReason.STUCK
+    )
+    return MetaHaltRecord(reason, _META_HALT_WINDOW, repro, corrupt)
+
+
+def _classify_meta_halt(journal: Any) -> str:
+    """Legacy string form of :func:`_classify_meta_halt_record`."""
+    return _classify_meta_halt_record(journal).reason.value
 
 
 def load_blacklist() -> list[dict[str, Any]]:
@@ -10589,10 +10637,16 @@ def _run_loop_inner(
                     # operator explicitly resumes (clearing paused resets the
                     # counter — see top of loop), so a supervisor cannot re-enter
                     # the no-op loop.
-                    halt_reason = _classify_meta_halt(journal)
+                    halt_record = _classify_meta_halt_record(journal)
+                    halt_reason = halt_record.reason.value
                     state["paused"] = True
                     state["_dispatch_deficiency"] = "meta_action_loop"
                     state["_meta_halt_reason"] = halt_reason
+                    state["_meta_halt_record"] = {
+                        **halt_record.to_dict(),
+                        "trial_id": trial_counter,
+                        "meta_streak": meta_streak,
+                    }
                     save_state(state)
                     if halt_reason == "converged":
                         log.warning(
@@ -10615,6 +10669,7 @@ def _run_loop_inner(
                         trial_id=trial_counter,
                         meta_streak=meta_streak,
                         halt_reason=halt_reason,
+                        halt_record=halt_record.to_dict(),
                     )
                     break
                 continue
