@@ -154,9 +154,9 @@ def test_native_service_adapter_invokes_and_snapshots_actual_results():
     def tool(fn):
         return SimpleNamespace(fn=fn)
     async def get_entry_list(module_name, page, page_size):
-        return {"data": [{"id": module_name + "-1"}]}
+        return {"data": [{"id": module_name + "-1", "attributes": {"name": module_name}}]}
     async def get_entry(module_name, id):
-        return {"data": {"id": id, "attributes": {"name": module_name}}}
+        return {"data": {"id": id, "attributes": {"name": "Meridian Group" if module_name == "Accounts" else module_name}}}
     async def create_record(module_name, attributes):
         events.append((module_name, attributes))
         return {"id": "created"}
@@ -183,3 +183,51 @@ def test_upstream_module_loader_refuses_unpinned_bytes(tmp_path):
     module.write_text("raise RuntimeError('must never execute')")
     with pytest.raises(ValueError, match="does not match pinned bytes"):
         load_pinned_module(module, "slack")
+
+
+def test_private_service_provisioning_is_unique_and_reset_seed_pinned():
+    from pathlib import Path
+    from harness.crm_provision import PrivateServices, SEED_ACCOUNT_ID, prepare_seed
+    seed = Path(__file__).resolve().parent.parent / "fixtures/crm_pair/upstream-seed.sql"
+    sql, digest = prepare_seed(seed)
+    assert SEED_ACCOUNT_ID in sql and "UUID()" not in sql and "NOW()" not in sql
+    assert len(digest) == 64
+    class DryProvision(PrivateServices):
+        def __init__(self):
+            super().__init__(cpus="0-1", seed_path=seed)
+            self.calls = []
+            self.remaining = set()
+        def _docker(self, *args):
+            self.calls.append(args)
+            if args[:2] == ("network", "create"):
+                return "network-id"
+            if args[0] == "create":
+                ident = f"container-{len(self.remaining)}"
+                self.remaining.add(ident)
+                return ident
+            if args[:2] == ("inspect", "--format"):
+                return "172.20.0.2"
+            if args[:2] == ("rm", "-f"):
+                self.remaining.remove(args[2])
+                return args[2]
+            if args[0] == "inspect":
+                import subprocess
+                raise subprocess.CalledProcessError(1, args, stderr="No such object")
+            if args[:2] == ("network", "inspect"):
+                import subprocess
+                raise subprocess.CalledProcessError(1, args, stderr="No such network")
+            return "ok"
+        def _health(self, url, container):
+            pass
+        def _http(self, url, *, body=None):
+            self.calls.append(("http", url, body))
+            return {"ok": True}
+    p = DryProvision()
+    p.start()
+    assert len(p.containers) == 3
+    p.reset()
+    assert len([x for x in p.calls if x[0] == "http"]) == 4
+    p.close()
+    assert not p.containers and p.network is None
+    assert all("--cpuset-cpus" in call for call in p.calls if call[0] == "create")
+    assert p.crm_url.startswith("http://172.")
