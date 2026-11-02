@@ -403,7 +403,7 @@ def run_case(
                             "native_transport" if isinstance(endpoint, ChatEndpoint) else "custom_endpoint_unspecified")
     if isinstance(endpoint, ChatEndpoint):
         result.endpoint_configuration = {key: getattr(endpoint, key)
-            for key in ("model", "temperature", "max_tokens", "retries", "timeout")}
+            for key in ("model", "temperature", "max_tokens", "retries", "timeout", "send_seed")}
     try:
         case = registry.get(case_id)
         if registry.profile in FIXTURE_PROFILES and native_tool_contract is None:
@@ -487,6 +487,10 @@ def run_case(
                 "messages": messages,
                 "request_contract_version": LEGACY_REQUEST_VERSION,
             }
+            if isinstance(endpoint, ChatEndpoint):
+                request_event["seed_transport"] = "request_field" if endpoint.send_seed else "not_sent"
+                if endpoint.send_seed:
+                    request_event["requested_seed"] = seed
             case_tools = None
             if native_tool_contract is not None:
                 case_tools = native_tool_contract.for_case(case_id)
@@ -553,12 +557,20 @@ def run_case(
                     try:
                         validate_tool_calls(chat.tool_calls, case_tools)
                     except RunFailure as exc:
+                        rec.record("native_tool_validation", {
+                            "version": 1, "turn": turn,
+                            "call_count": len(chat.tool_calls), "accepted": False,
+                        })
                         if result.evaluator_provenance is not None:
                             result.evaluator_provenance["validation_violations"].append(
                                 {"type": exc.type_.value, "message": exc.message,
                                  "detail": exc.detail}
                             )
                         raise
+                    rec.record("native_tool_validation", {
+                        "version": 1, "turn": turn,
+                        "call_count": len(chat.tool_calls), "accepted": True,
+                    })
                     if result.evaluator_provenance is not None:
                         provenance = result.evaluator_provenance
                         accepted_names = [call.get("name") for call in chat.tool_calls
@@ -1061,6 +1073,30 @@ def _ledger_trace_observation(run: RunResult) -> tuple[Optional[str], str, Dict[
         return None, f"unavailable:closed_trace_verification_failed:{type(exc).__name__}", unavailable
 
 
+def _ledger_tool_validation(run: RunResult, expected_sha256: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Read only the native validation event from the already bound closed trace."""
+    if not expected_sha256 or not run.trace_path or not run.trace_id:
+        return None
+    try:
+        raw = _regular_bytes(Path(run.trace_path))
+        if hashlib.sha256(raw).hexdigest() != expected_sha256:
+            return None
+        records = _verified_records(raw)
+        if records[-1]["payload"].get("trace_id") != run.trace_id:
+            return None
+        events = [r["payload"] for r in records if r.get("event") == "native_tool_validation"]
+        if not events:
+            return None
+        first = events[0]
+        if (first.get("version") != 1 or type(first.get("turn")) is not int
+                or type(first.get("call_count")) is not int or first["call_count"] < 1
+                or type(first.get("accepted")) is not bool):
+            return None
+        return dict(first)
+    except (OSError, ValueError, RunFailure, KeyError, TypeError, IndexError):
+        return None
+
+
 def run_matrix(
     case_ids: List[str],
     arms: List[str],
@@ -1163,6 +1199,7 @@ def run_matrix(
             trace_sha256=trace_sha256,
             trace_binding_status=trace_status,
             usage=usage,
+            tool_validation=_ledger_tool_validation(run, trace_sha256),
         ))
     threats = {case_id: registry.get(case_id)["threat"] for case_id in case_ids}
     ledger = build_ledger(

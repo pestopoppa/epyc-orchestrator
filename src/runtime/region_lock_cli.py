@@ -258,6 +258,12 @@ def _acquire_subquarter(role: str, partial: dict[str, set[int]], timeout_s: floa
 def _run(args: argparse.Namespace) -> int:
     if not args.command:
         raise SystemExit("[region-lock] no command given after `--`")
+    receipt_prefix = getattr(args, "claim_receipt_prefix", None)
+    grant_file = getattr(args, "claim_grant_file", None)
+    if bool(receipt_prefix) != bool(grant_file):
+        raise SystemExit("[region-lock] receipt prefix and grant file must be supplied together")
+    if receipt_prefix:
+        return _run_receipted(args)
     if os.environ.get("FILLER_SMOKE") == "1" or os.environ.get("FILLER_DRYRUN") == "1":
         # ws58 2026-11-02 (operator): a dry run is tiny and never deals with leases or locks; it runs at once,
         # pinned to its own few cpus (WS58_REGIONS) when given.
@@ -341,6 +347,44 @@ def _run(args: argparse.Namespace) -> int:
     finally:
         for fh in sub_fhs:
             fh.close()
+
+
+def _run_receipted(args: argparse.Namespace) -> int:
+    """Opt-in full-quarter CPU provider receipts around the actual flock lifetime."""
+    from src.runtime import cpu_region_lock as lock_module
+    from src.runtime.region_claim_receipt import _cpu_set, close_receipt, open_receipt
+
+    if (os.environ.get("FILLER_SMOKE") == "1" or os.environ.get("FILLER_DRYRUN") == "1"
+            or not args.cpu_list or args.gpu_quiet or args.no_preflight
+            or os.environ.get("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "").strip().lower() not in _TRUTHY
+            or _subquarter_cores(args.cpu_list, getattr(args, "fold_siblings", True))):
+        raise SystemExit("[region-lock] receipts require a real full-quarter CPU claim and strict preflight")
+    prefix = Path(args.claim_receipt_prefix)
+    grant = Path(args.claim_grant_file)
+    if not prefix.is_absolute() or not grant.is_absolute():
+        raise SystemExit("[region-lock] receipt and grant paths must be absolute")
+    if any(Path(str(prefix) + suffix).exists() for suffix in (".open.json", ".close.json", ".grant")):
+        raise SystemExit("[region-lock] receipt path already exists")
+    regions = _resolve_regions(args)
+    expected_cpus = {cpu for name in regions for cpu in range(int(name[1:]) * 24, (int(name[1:]) + 1) * 24)}
+    if _cpu_set(args.cpu_list) != expected_cpus:
+        raise SystemExit("[region-lock] receipt claims require exact primary full-quarter CPU lists")
+    err = _preflight(strict=True)
+    if err:
+        raise SystemExit(f"[region-lock] refusing receipt claim: {err}")
+    try:
+        with cpu_region_lock(args.role, regions, timeout_s=args.timeout_s,
+                             request_tag=args.tag or "region-lock-receipt") as held:
+            opened = open_receipt(prefix, grant, args.cpu_list, held, Path(__file__), Path(lock_module.__file__),
+                                  lock_module._tmp_dir())
+            print(f"[region-lock] held {sorted(held)}; provider open receipt {opened['path']}", file=sys.stderr)
+            child_rc = _spawn(args.command)
+        # Only after the context releases its locks may the provider write close.
+        close_receipt(prefix, opened, child_rc)
+        return child_rc
+    except CpuRegionLockTimeout as exc:
+        print(f"[region-lock] receipt claim timed out: {exc}", file=sys.stderr)
+        return EX_TEMPFAIL
 
 
 def _spawn(command: list[str]) -> int:
@@ -492,6 +536,8 @@ def build_parser() -> argparse.ArgumentParser:
         "gpu-quiet+regions acquisition. Exit 75 on expiry.",
     )
     run.add_argument("--tag", help="opaque tag recorded in the lock payload for diagnostics")
+    run.add_argument("--claim-receipt-prefix", help="absolute prefix for opt-in provider open/close receipts")
+    run.add_argument("--claim-grant-file", help="absolute rowflow grant whose CPU scope and window must match")
     run.add_argument(
         "--no-preflight",
         action="store_true",

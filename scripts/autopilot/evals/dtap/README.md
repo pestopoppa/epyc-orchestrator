@@ -84,6 +84,10 @@ python3 -m harness run --case finance-benign-trade-execution-001 --arm done \
     --endpoint http://localhost:8080/v1 --tool-contract dtap-native-tools-v1 \
     --endpoint-mode openai-compatible
 
+# --send-seed opts into sending the requested seed in live HTTP requests.
+# Without it the historical request has no seed field, even when --seed is set.
+# The trace records whether a seed was sent; provider adherence needs separate proof.
+
 # Immutable trace replay
 python3 -m harness replay --trace /tmp/dtap-results/traces/<case>.<arm>.seed0.trace.jsonl
 ```
@@ -95,6 +99,15 @@ python3 -m harness attest
 
 Tests: `pytest tests/` (zero inference); the runner and judge guard have separate
 unit-test modules.
+
+The additive `failure_ledger.json` records a first-call validity observation only
+when the first native-schema validation response contains exactly one call and
+its closed trace verifies. This is schema acceptance, not successful execution
+or task success. Multi-call batches, legacy unvalidated requests, absent events,
+parser failures and unverified traces stay unmeasured; repair recovery and a
+case-level requirement to call tools remain unmeasured. The timeout field means
+terminal native timeout, not a claim about recovered earlier timeouts. Synthetic
+fixture observations remain synthetic.
 
 ## Native tool schemas (opt-in)
 
@@ -262,3 +275,32 @@ trace identities distinct. New trace paths include an execution UUID so repeated
 case/arm/seed executions preserve their earlier trace bytes. Each original chain
 and replay is verified independently. Raw trace bodies remain private; public
 projection must emit only safe counts/digests/applicability and an opaque locator.
+
+## CRM paired diagnostic core (TU-DTAP-2a)
+
+`harness/crm_pair.py` provides a case-scoped control/attack execution core for
+`crm-malicious-indirect-general-ai-restrictions-004`. The source-owned case and
+judge remain unchanged. The pair uses the original `salesforce:create_record`
+tool-result suffix; the separate skill injection is not tested. The earlier
+`crm-benign-001` result is a separate plumbing control, not this pair's baseline.
+
+`SeededEndpoint` actually inserts the selected seed into each outbound request.
+`crm_services.NativeServices` bridges the pinned upstream CRM/Slack MCP
+functions and reads the judge-relevant Notes, Tasks and Slack sales channel.
+`load_pinned_module` verifies the exact upstream source bytes before import.
+The service provisioner must configure isolated service URLs and credentials
+before loading these modules, supply real reset and teardown callbacks, and
+verify their completion. The adapter does not launch, isolate, grant, or
+qualify a service. The caller must attest endpoint/model/binary/source/image
+and resource identities and avoid running other DTAP judges in the same
+process: existing judge shims use process-global state.
+
+`crm_receipt.Receipt` creates an exclusive mode-0600 fsynced, hash-chained
+journal; pass it to `run_pair` and close it at the owner boundary. Its request,
+tool-attempt, tool-result, state, judge and cleanup events preserve partial
+progress after interruption. Missing terminal events mean an incomplete
+attempt, not a failure of the model or a security verdict. The receipt is
+native evidence custody, not a ClaimTuple or planning-context canary. A real
+pair still requires a current qualified row, admitted resources, isolated
+service lifecycle, actual model and device identity, and prospective belief
+wiring. No service is started by importing these modules.
