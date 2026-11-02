@@ -1196,7 +1196,13 @@ class SharedKVPoolAdmission:
         max_skips = pi._env_int(pi.LPM_MAX_SKIPS_ENV, pi.DEFAULT_LPM_MAX_SKIPS)
         if score <= 0 or score < min_tokens or max_skips <= 0:
             return None
-        if all(self._lpm_score.get(t, 0) < score and self._lpm_skips.get(t, 0) < max_skips
+        # A prefix hit only bypasses waiters that cannot fit now.  A head
+        # whose capacity just became available must retain FCFS priority even
+        # if this later waiter wakes first.  Unknown reservations fail closed.
+        if all(t in self._waiting
+               and not self._fits(url, self._waiting[t][0], pool_tokens, observed)
+               and self._lpm_score.get(t, 0) < score
+               and self._lpm_skips.get(t, 0) < max_skips
                for t in ahead):
             if self._fits(url, want, pool_tokens, observed):
                 for t in ahead:
