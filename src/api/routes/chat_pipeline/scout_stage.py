@@ -89,6 +89,7 @@ and the request is byte-identical to the pre-OAB-8 path.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -106,6 +107,14 @@ log = logging.getLogger(__name__)
 
 SCHEMA = "epyc.orchestrator.scouts.v1"
 TRANSPORT_NAME = "direct_chat_completions"
+
+# Per-thread admission data must not leak across concurrent scouts.
+_SCOUT_ADMISSION = contextvars.ContextVar("scout_admission", default=None)
+
+def _payload_sha256(payload: dict[str, Any]) -> str:
+    """Hash canonical client payload, without claiming it is the rendered server prompt."""
+    wire = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(wire.encode("utf-8")).hexdigest()
 
 # ── R4 caps (same as the seat's actor_tools_mcp) and per-scout budgets ───────────────────
 READ_MAX_LINES = 200
@@ -753,7 +762,9 @@ class ChatCompletionsTransport:
                 client.close()
             _b = body if isinstance(body, dict) else {}
             _record_scout_call("scout_stage_prefill_trunk", self.url, messages, 0, _ts0, _status,
-                               None, _b.get("timings"), _b.get("usage"), _err)
+                               None, _b.get("timings"), _b.get("usage"), _err,
+                               {"request_payload_sha256": _payload_sha256(payload),
+                                "checkpoint_at": payload.get("checkpoint_at")})
         timings = body.get("timings") if isinstance(body, dict) else None
         return {"timings": timings if isinstance(timings, dict) else None}
 
@@ -788,6 +799,7 @@ class ChatCompletionsTransport:
         _gaps: list[float] = []
         _last_mono: float | None = None
         _cancelled = False
+        _first_output_ms: float | None = None
         try:
             with client.stream("POST", f"{self.url}/v1/chat/completions", json=payload,
                                timeout=timeout) as resp:
@@ -827,6 +839,8 @@ class ChatCompletionsTransport:
                             log.debug("scouts: first-chunk hook failed", exc_info=True)
                     for choice in obj.get("choices") or ():
                         delta = choice.get("delta") or {}
+                        if _first_output_ms is None and (delta.get("content") or delta.get("reasoning_content")):
+                            _first_output_ms = max(0.0, (_now - started) * 1000.0)
                         if delta.get("content"):
                             text.append(delta["content"])
                         finish = choice.get("finish_reason") or finish
@@ -839,7 +853,12 @@ class ChatCompletionsTransport:
             try:
                 from src.backends import serving_calls
 
-                _notes: dict[str, Any] = {}
+                _notes: dict[str, Any] = {
+                    "request_payload_sha256": _payload_sha256(payload),
+                    "first_output_ms": _first_output_ms,
+                    "first_output_basis": "first nonempty streamed content or reasoning_content",
+                    "scout_admission": _SCOUT_ADMISSION.get(),
+                }
                 if _cancelled:
                     _notes["early_stop"] = True
                 _sg = serving_calls.stream_gap_stats(_gaps) if _gaps else None
@@ -943,6 +962,14 @@ class PoolGatedTransport:
         success = False
         result: CompletionResult | None = None
         try:
+            info = self.pool.admission_record(ticket)
+        except Exception:  # noqa: BLE001 -- telemetry never affects admission
+            info = None
+        admission_token = _SCOUT_ADMISSION.set({
+            "ticket": ticket, "wait_ms": round(waited * 1000.0, 3),
+            "record": info if isinstance(info, dict) else None,
+        })
+        try:
             result = self.inner.complete(messages, max_tokens=max_tokens,
                                          should_stop=should_stop,
                                          timeout_s=max(1.0, float(timeout_s) - waited),
@@ -953,6 +980,7 @@ class PoolGatedTransport:
             prefill_over()
             return result
         finally:
+            _SCOUT_ADMISSION.reset(admission_token)
             if key_kwargs and success and result is not None:
                 _scout_observe(self.pool, self.url, ticket, key_kwargs["prefix_key"], result)
             self.pool.release(self.url, ticket, success=success)
@@ -1311,6 +1339,13 @@ async def run_scouts(
 
         name = getattr(inner, "name", TRANSPORT_NAME)
         gate_kwargs = getattr(inner, "gate_kwargs", False) is True
+
+        def __init__(self):
+            # Preserve capability detection: transports without prefill_trunk
+            # must remain without it, rather than advertising a broken method.
+            prefill = getattr(inner, "prefill_trunk", None)
+            if callable(prefill):
+                self.prefill_trunk = prefill
 
         def complete(self, messages, **kwargs):
             nonlocal inflight, inflight_peak

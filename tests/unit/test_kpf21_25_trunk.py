@@ -357,3 +357,98 @@ def test_capability_matrix(monkeypatch):
     monkeypatch.delenv(pi.FLAG_ENV)
     monkeypatch.setenv(pi.FORK_ENV, "1")
     assert tp.capability(CK_CAPS, 1000) is None
+
+
+def test_run_scouts_forwards_trunk_prefill_through_counting_wrapper(monkeypatch, tmp_path):
+    """Exercise the actual stage wrapper, not just a directly constructed gate."""
+    import asyncio
+    from src.repl_environment.task_root import TaskScope
+    from src.runtime import direct_region_claim
+
+    _gate_env(monkeypatch)
+    events = []
+    server = FakeServer(events)
+    pool = _pool(CK_CAPS, events)
+    monkeypatch.setattr(direct_region_claim, "resolve_claim_target", lambda *args: None)
+    monkeypatch.setattr(S, "resolve_cap", lambda *args, **kwargs: {"cap": 2, "source": "test"})
+    limit = SimpleNamespace(pool_tokens=393216)
+    monkeypatch.setattr(S, "resolve_pool_gate", lambda *args, **kwargs: (limit, pool))
+
+    def run_scout(i, target, *, transport, **kwargs):
+        result = transport.complete(
+            [{"role": "system", "content": "T" * 6000},
+             {"role": "user", "content": f"child {i}"}],
+            max_tokens=8, should_stop=lambda: False, timeout_s=10)
+        return S.ScoutResult(i, target, status="ok", summary=result.text)
+
+    monkeypatch.setattr(S, "run_scout", run_scout)
+    inner = S.ChatCompletionsTransport(
+        URL, client=httpx.Client(transport=httpx.MockTransport(server.handler)))
+    result = asyncio.run(S.run_scouts(
+        {"targets": [{"label": "a"}, {"label": "b"}]},
+        scope=TaskScope(root=str(tmp_path), edit_mode="none"), role="worker",
+        url=URL, transport=inner, pool_admission=pool))
+    assert result.report["completed"] == 2
+    assert events.count("trunk_request") == 1
+    assert events.count("child_request") == 2
+    assert events.index("trunk_request") < events.index("child_request")
+
+
+def test_scout_stream_records_first_output_and_gate_data(monkeypatch):
+    import json
+
+    notes = []
+    monkeypatch.setattr(S, "_record_scout_call", lambda *args: notes.append(args[-1]))
+    server = FakeServer([])
+    pool = _pool(CK_CAPS, [])
+    pool.admission_record.return_value = {"queue_wait_ms": 3.2, "prefix_index": {"unique_cells": {"used": 42}}}
+    inner = S.ChatCompletionsTransport(
+        URL, client=httpx.Client(transport=httpx.MockTransport(server.handler)))
+    gate = S.PoolGatedTransport(inner, url=URL, limit=SimpleNamespace(pool_tokens=393216), pool=pool)
+    gate.complete([{"role": "user", "content": "hello"}], max_tokens=8,
+                  should_stop=lambda: False, timeout_s=10)
+    assert len(notes) == 1
+    assert len(notes[0]["request_payload_sha256"]) == 64
+    assert notes[0]["first_output_ms"] >= 0
+    assert notes[0]["scout_admission"]["ticket"] == 1
+    assert notes[0]["scout_admission"]["record"]["prefix_index"]["unique_cells"]["used"] == 42
+    json.dumps(notes[0])
+    # Context is reset; ungated calls cannot inherit a preceding ticket.
+    inner.complete([{"role": "user", "content": "next"}], max_tokens=8,
+                   should_stop=lambda: False, timeout_s=10)
+    assert notes[-1]["scout_admission"] is None
+
+
+def test_scout_stream_reports_unknown_first_output_on_empty_stream(monkeypatch):
+    notes = []
+    monkeypatch.setattr(S, "_record_scout_call", lambda *args: notes.append(args[-1]))
+
+    def handler(request):
+        return httpx.Response(200, content=(
+            'data: {"choices": [{"delta": {"role": "assistant"}}]}\n\n'
+            'data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}\n\n'
+            'data: [DONE]\n\n').encode())
+
+    inner = S.ChatCompletionsTransport(
+        URL, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    result = inner.complete([{"role": "user", "content": "hello"}], max_tokens=8,
+                            should_stop=lambda: False, timeout_s=10)
+    assert result.text == ""
+    assert notes[0]["first_output_ms"] is None
+    assert notes[0]["scout_admission"] is None
+
+
+def test_scout_stream_observes_reasoning_first_output(monkeypatch):
+    notes = []
+    monkeypatch.setattr(S, "_record_scout_call", lambda *args: notes.append(args[-1]))
+
+    def handler(request):
+        return httpx.Response(200, content=(
+            'data: {"choices": [{"delta": {"reasoning_content": "x"}}]}\n\n'
+            'data: [DONE]\n\n').encode())
+
+    inner = S.ChatCompletionsTransport(
+        URL, client=httpx.Client(transport=httpx.MockTransport(handler)))
+    inner.complete([{"role": "user", "content": "hello"}], max_tokens=8,
+                   should_stop=lambda: False, timeout_s=10)
+    assert notes[0]["first_output_ms"] >= 0
