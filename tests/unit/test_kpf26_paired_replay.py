@@ -94,3 +94,10 @@ def test_mock_executor_runs_both_arms_and_never_asserts_gate(tmp_path):
     result = json.loads((tmp_path / "out/result.json").read_text())
     assert result["status"] == "OBSERVATION_COMPLETE"
     assert result["gate_pass"] is None
+
+
+def test_unscored_children_cannot_pass_paired_evidence(tmp_path):
+    m = fixture(tmp_path)
+    e = evidence(m, "off")
+    e["tasks"][0]["children"][0]["outcome"] = None
+    assert any("scored outcome" in x for x in kpf.validate_evidence(e, m, "c" * 64, "off"))

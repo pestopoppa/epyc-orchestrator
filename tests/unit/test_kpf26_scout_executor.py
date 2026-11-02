@@ -174,3 +174,14 @@ def test_required_terms_scorer_preserves_exact_and_unknown():
     assert executor.score_summary("RELEASE_CODENAME", rule) is False
     with pytest.raises(ValueError, match="required_terms"):
         executor.validate_scorer({"schema": "epyc.kpf26.scorer.required-terms.v1", "required_terms": [[]]}, 1)
+
+
+def test_explicit_unscored_mode_never_invents_outcomes():
+    rules = executor.validate_scorer({"schema": "epyc.kpf26.scorer.unscored.v1"}, 2)
+    assert len(rules) == 2
+    assert executor.score_summary("a complete summary", rules[0]) is None
+    assert executor.score_summary(None, rules[1]) is None
+    with pytest.raises(ValueError):
+        executor.validate_scorer({"schema": "epyc.kpf26.scorer.unscored.v1", "summaries": ["a", "b"]}, 2)
+    with pytest.raises(ValueError):
+        executor.validate_scorer({"schema": "epyc.kpf26.scorer.unscored.v1"}, 0)

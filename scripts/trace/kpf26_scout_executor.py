@@ -238,6 +238,10 @@ def _checkpoint_witness(samples: list[dict[str, Any]], timing: dict[str, Any], s
 
 def validate_scorer(expected: dict[str, Any], siblings: int) -> list[dict[str, Any]]:
     """Validate the pinned scorer. Legacy exact-summary records remain supported."""
+    if expected.get("schema") == "epyc.kpf26.scorer.unscored.v1":
+        if set(expected) != {"schema"} or type(siblings) is not int or siblings < 1:
+            raise ValueError("unscored diagnostic requires only its schema and a positive sibling count")
+        return [{"mode": "unscored"} for _ in range(siblings)]
     if "summaries" in expected:
         values = expected["summaries"]
         if not isinstance(values, list) or len(values) != siblings or not all(isinstance(x, str) for x in values):
@@ -253,7 +257,7 @@ def validate_scorer(expected: dict[str, Any], siblings: int) -> list[dict[str, A
 
 
 def score_summary(summary: str | None, rule: dict[str, Any]) -> bool | None:
-    if summary is None:
+    if summary is None or rule["mode"] == "unscored":
         return None
     if rule["mode"] == "exact":
         return summary == rule["value"]
