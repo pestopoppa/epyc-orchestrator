@@ -26,10 +26,10 @@ def test_route_scoring_never_infers_outcome_from_preview():
 def test_mocked_http_collects_actual_route_and_native_data(monkeypatch, tmp_path):
     model = tmp_path / "model.gguf"
     model.write_bytes(b"no inference")
-    server = {"binary_sha256": "a" * 64, "argv": ["server", str(model)], "ggml": {"lib": "b" * 64}}
+    server = {"exe": "/server", "binary_sha256": "a" * 64, "argv": ["server", str(model)], "ggml": {"lib": "b" * 64}}
     manifest = prep.prepare(tmp_path / "packet", pid=1, url="http://127.0.0.1:1111", role="architect_critic",
                             model=model, grant="test", source="1" * 40, snapshot=server, verify_endpoint=False)
-    grant = {"grant_id": "test", "end_s": time.time() + 1200}
+    grant = {"grant_id": "test", "end_s": time.time() + 1200, "sha256": "c" * 64}
     monkeypatch.setenv("FILLER_DEADLINE", str(int(grant["end_s"])))
     monkeypatch.setattr(api, "active_grant", lambda _: grant)
     monkeypatch.setattr(api, "endpoint_identity", lambda pid, url: {"pid": pid, "url": url})
@@ -66,6 +66,24 @@ def test_mocked_http_collects_actual_route_and_native_data(monkeypatch, tmp_path
     assert result["flags"] == "unverified" and result["outcome"] is None
     assert hashlib.sha256((out / "response.bin").read_bytes()).hexdigest() == result["response_sha256"]
     assert len(captured) == 1
+    row = json.loads((out / "belief_measurements.jsonl").read_text())
+    assert row["schema"] == "epyc.kpf26.api-observation.v1"
+    assert row["flags"] == "unverified" and "arm" not in row
+    assert row["kpf26"] == {"tasks": 1, "children": 2, "completed": 2}
+    assert row["rows_sha256"] == hashlib.sha256((out / "response.bin").read_bytes()).hexdigest()
+
+
+def test_writer_refuses_incomplete_and_tampered_response(tmp_path):
+    import pytest
+    raw = json.dumps({"scouts": {"requested": 1, "completed": 0, "scouts": [{"status": "error"}]}}).encode()
+    (tmp_path / "response.bin").write_bytes(raw)
+    result = {"status": "INCOMPLETE", "http_status": 500}
+    with pytest.raises(ValueError, match="completed API response"):
+        api.write_api_observation(tmp_path, result, raw, {}, {}, "", "")
+    result = {"status": "API_SCOUTS_OBSERVED", "http_status": 200, "response_sha256": "0" * 64}
+    with pytest.raises(ValueError, match="native API report incomplete"):
+        api.write_api_observation(tmp_path, result, raw, {"role": "r", "url": "http://x"}, {}, "", "")
+    assert not (tmp_path / "belief_measurements.jsonl").exists()
 
 
 def test_stop_cancels_live_request(monkeypatch):
@@ -83,3 +101,19 @@ def test_stop_cancels_live_request(monkeypatch):
     cancel.set()
     with pytest.raises(RuntimeError, match="stop/deadline"):
         asyncio.run(api._post_bounded("http://127.0.0.1:8000/chat", {}, 60, cancel))
+
+
+def test_writer_binds_private_trace_when_present(tmp_path):
+    raw = json.dumps({"scouts": {"schema": "epyc.orchestrator.scouts.v1", "role": "r", "url": "http://server",
+                      "requested": 1, "launched": 1, "completed": 1, "scouts": [{"status": "ok"}]}}).encode()
+    (tmp_path / "response.bin").write_bytes(raw)
+    trace = b'{"matched":true}\n'
+    (tmp_path / "scout-trace.json").write_bytes(trace)
+    result = {"status": "API_SCOUTS_OBSERVED", "http_status": 200, "response_sha256": hashlib.sha256(raw).hexdigest(),
+              "manifest_sha256": "a" * 64, "request_sha256": "b" * 64, "grant": {"sha256": "c" * 64},
+              "start_s": 1, "end_s": 2, "scout_trace": {"trace_sha256": hashlib.sha256(trace).hexdigest()}}
+    api.write_api_observation(tmp_path, result, raw, {"grant_id": "g", "window_id": "w", "role": "r", "url": "http://server"},
+                              {"exe": "/server", "binary_sha256": "d" * 64, "argv": ["/server"]}, "e" * 64, "http://api")
+    row = json.loads((tmp_path / "belief_measurements.jsonl").read_text())
+    assert row["scout_trace"]["sha256"] == hashlib.sha256(trace).hexdigest()
+    assert row["flags"] == "unverified" and "arm" not in row

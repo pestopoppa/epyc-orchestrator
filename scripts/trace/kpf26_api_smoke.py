@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -21,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.trace.kpf26_paired_replay import validate_manifest  # noqa: E402
 from scripts.trace.kpf26_scout_executor import (  # noqa: E402
     Sampler, active_grant, digest_file, endpoint_identity, pinned_file, process_snapshot,
-    score_summary, validate_scorer, _slot_witness, _checkpoint_witness,
+    score_summary, validate_scorer, _slot_witness, _checkpoint_witness, utc,
 )
 
 
@@ -149,6 +150,54 @@ def read_trace(directory: Path, request_id: str, api_pid: int, body: dict[str, A
                  "note": "raw flags only; absent task/slot samples remain unknown"}
 
 
+def write_api_observation(out: Path, result: dict[str, Any], response_raw: bytes,
+                          runtime: dict[str, Any], server: dict[str, Any],
+                          model_sha256: str, api_url: str) -> None:
+    """Seal a completed API response at capture time; never infer fork or quality."""
+    if result.get("status") != "API_SCOUTS_OBSERVED" or result.get("http_status") != 200:
+        raise ValueError("completed API response required")
+    body = json.loads(response_raw)
+    report = body.get("scouts") if isinstance(body, dict) else None
+    scouts = report.get("scouts") if isinstance(report, dict) else None
+    if not isinstance(scouts, list) or not scouts or any(not isinstance(c, dict) for c in scouts):
+        raise ValueError("native scout rows missing")
+    completed = sum(c.get("status") == "ok" for c in scouts)
+    if summarize(body, len(scouts), runtime["role"], runtime["url"])["status"] != "API_SCOUTS_OBSERVED":
+        raise ValueError("native API report incomplete or scope mismatched")
+    rows = out / "response.bin"
+    if rows.read_bytes() != response_raw:
+        raise ValueError("response bytes changed before sealing")
+    response_sha = hashlib.sha256(response_raw).hexdigest()
+    if result.get("response_sha256") != response_sha:
+        raise ValueError("response digest mismatch")
+    row = {"schema": "epyc.kpf26.api-observation.v1", "run_id": runtime["grant_id"],
+           "window_id": runtime["window_id"], "host": socket.gethostname(), "api_url": api_url,
+           "role": runtime["role"], "server_url": runtime["url"],
+           "start_utc": utc(result["start_s"]), "end_utc": utc(result["end_s"]),
+           "binary": server["exe"], "binary_realpath": server["exe"],
+           "binary_sha256": server["binary_sha256"], "model_sha256": model_sha256,
+           "argv": server["argv"], "prompt_set_sha256": result["manifest_sha256"],
+           "request_sha256": result["request_sha256"], "grant_sha256": result["grant"]["sha256"],
+           "http_status": 200, "flags": "unverified", "category": "CANDIDATE",
+           "rows": str(rows), "rows_sha256": response_sha,
+           "kpf26": {"tasks": 1, "children": len(scouts), "completed": completed}}
+    trace = result.get("scout_trace")
+    if trace is not None:
+        trace_path = out / "scout-trace.json"
+        if not isinstance(trace, dict) or not trace_path.is_file():
+            raise ValueError("matched scout trace missing")
+        trace_sha = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+        if trace.get("trace_sha256") != trace_sha:
+            raise ValueError("matched scout trace digest mismatch")
+        row["scout_trace"] = {"path": str(trace_path), "sha256": trace_sha}
+    canonical = json.dumps(row, sort_keys=True, separators=(",", ":"))
+    row["record_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+    with (out / "belief_measurements.jsonl").open("x") as stream:
+        stream.write(json.dumps(row, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def run(packet: Path, api_url: str, api_pid: int, out: Path, trace_dir: Path | None = None) -> int:
     raw = (packet / "manifest.json").read_bytes()
     manifest = json.loads(raw)
@@ -237,7 +286,10 @@ def run(packet: Path, api_url: str, api_pid: int, out: Path, trace_dir: Path | N
                    "server": before, "api_url": api_url, "server_url": runtime["url"],
                    "scope": files, "flags": "unverified", "outcome": None})
     (out / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-    return 0 if result["status"] == "API_SCOUTS_OBSERVED" else 1
+    if result["status"] == "API_SCOUTS_OBSERVED":
+        write_api_observation(out, result, response_raw, runtime, before, pins["model_sha256"], api_url)
+        return 0
+    return 1
 
 
 def main() -> int:
