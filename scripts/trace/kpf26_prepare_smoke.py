@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import re
+import secrets
 import subprocess
 import sys
 from pathlib import Path
@@ -72,7 +73,8 @@ def prepare(output: Path, *, pid: int, url: str, role: str, model: Path, grant: 
                 "required_terms": [["RELEASE_CODENAME", "amber-heron-47"]] * 2}
     request_ref = write_json(output / "request.json", request)
     expected_ref = write_json(output / "expected.json", expected)
-    api_request = {"prompt": "Summarize the release metadata from the scoped repository.",
+    api_request = {"request_id": "kpf26-" + grant + "-" + secrets.token_hex(16),
+                   "prompt": "Summarize the release metadata from the scoped repository.",
                    "real_mode": True, "mock_mode": False, "force_mode": "direct", "force_role": role,
                    "allow_delegation": False, "task_root": str(scope.resolve()), "scouts": request["spec"],
                    "max_turns": 1, "max_tokens": 256, "timeout_s": 600, "x_request_source": "smoke"}

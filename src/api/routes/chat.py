@@ -765,6 +765,13 @@ async def _run_scout_stage(
 
     spec = request.scouts
     role = str(spec.role or request.force_role or initial_role)
+    from src.api.routes.chat_pipeline import scout_evidence
+    capture = None
+    try:
+        capture = scout_evidence.Capture.begin(request.request_id)
+    except Exception:  # noqa: BLE001 -- optional trace never changes product behavior
+        log.exception("scout evidence capture setup failed")
+    stage = None
     try:
         stage = await run_scouts(
             spec,
@@ -782,6 +789,12 @@ async def _run_scout_stage(
                             "role": role, "error": f"{type(exc).__name__}: {exc}"[:500],
                             "launched": 0, "completed": 0, "scouts": []}
         return request
+    finally:
+        if capture is not None:
+            try:
+                capture.finish(stage)
+            except Exception:  # noqa: BLE001 -- optional trace never changes product behavior
+                log.exception("scout evidence capture failed")
     holder["report"] = stage.report
     if not stage.block:
         return request

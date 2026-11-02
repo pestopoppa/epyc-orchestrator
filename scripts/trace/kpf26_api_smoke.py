@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 from scripts.trace.kpf26_paired_replay import validate_manifest  # noqa: E402
 from scripts.trace.kpf26_scout_executor import (  # noqa: E402
     Sampler, active_grant, digest_file, endpoint_identity, pinned_file, process_snapshot,
+    score_summary, validate_scorer, _slot_witness, _checkpoint_witness,
 )
 
 
@@ -77,7 +78,78 @@ async def _post_bounded(url: str, request: dict[str, Any], timeout_s: float,
                     pass
 
 
-def run(packet: Path, api_url: str, api_pid: int, out: Path) -> int:
+def _descends_from(pid: int, root_pid: int) -> bool:
+    for _ in range(16):
+        if pid == root_pid:
+            return True
+        if pid <= 1:
+            return False
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        pid = int(stat[stat.rfind(")") + 2:].split()[1])
+    return False
+
+
+def read_trace(directory: Path, request_id: str, api_pid: int, body: dict[str, Any],
+               start: float, end: float, samples: list[dict], scorer: list[dict]) -> tuple[bytes, dict]:
+    """Accept only the private exact-request capture and independently matched slot samples."""
+    import stat
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.stat(f"/proc/{api_pid}").st_uid or info.st_mode & 0o077:
+        raise ValueError("trace directory must be private and owned by the API user")
+    path = directory / (hashlib.sha256(request_id.encode()).hexdigest() + ".json")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.stat(f"/proc/{api_pid}").st_uid or info.st_mode & 0o077:
+            raise ValueError("trace file must be private and owned by the API user")
+        with os.fdopen(fd, "rb") as stream:
+            fd = -1
+            raw = stream.read(16 * 1024 * 1024 + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(raw) > 16 * 1024 * 1024:
+        raise ValueError("trace exceeds capture limit")
+    trace = json.loads(raw)
+    if (not isinstance(trace, dict) or trace.get("schema") != "epyc.kpf26.api-scout-trace.v1"
+            or trace.get("complete") is not True or trace.get("request_id") != request_id
+            or type(trace.get("pid")) is not int or not _descends_from(trace["pid"], api_pid)
+            or not start <= trace.get("start_s", 0) <= trace.get("end_s", 0) <= end
+            or trace.get("report") != body.get("scouts")):
+        raise ValueError("trace does not bind to this completed API request")
+    summaries, calls = trace.get("summaries"), trace.get("calls")
+    if not isinstance(summaries, list) or len(summaries) != len(scorer) or not isinstance(calls, list):
+        raise ValueError("trace scout count or calls missing")
+    children = []
+    report_rows = trace["report"].get("scouts", [])
+    for i, (summary, rule) in enumerate(zip(summaries, scorer, strict=True)):
+        if not isinstance(summary, dict) or summary.get("index") != i or i >= len(report_rows):
+            raise ValueError("trace scout index mismatch")
+        text = summary.get("summary")
+        if text is not None and not isinstance(text, str):
+            raise ValueError("invalid summary")
+        expected = hashlib.sha256(text.encode()).hexdigest() if text else None
+        if report_rows[i].get("summary_sha256") != expected or report_rows[i].get("status") != summary.get("status"):
+            raise ValueError("trace summary does not match API provenance")
+        rows = [r for r in calls if isinstance(r, dict) and r.get("scout") == i
+                and r.get("method") == "scout_stage_chat_stream"]
+        call = rows[0] if len(rows) == 1 else {}
+        timing = call.get("timings") if isinstance(call.get("timings"), dict) else {}
+        t0, t1 = call.get("ts_start"), call.get("ts_end")
+        witness = _slot_witness(samples, timing, t0, t1) if isinstance(t0, (int, float)) and isinstance(t1, (int, float)) else None
+        children.append({"index": i, "outcome": score_summary(text, rule), "summary_sha256": expected,
+                         "n_fork_tokens": timing.get("n_fork_tokens"), "slot_witness": witness})
+    trunks = [r for r in calls if isinstance(r, dict) and r.get("method") == "scout_stage_prefill_trunk"]
+    trunk = trunks[0] if len(trunks) == 1 else {}
+    tt = trunk.get("timings") if isinstance(trunk.get("timings"), dict) else {}
+    t0, t1 = trunk.get("ts_start"), trunk.get("ts_end")
+    checkpoint = _checkpoint_witness(samples, tt, t0, t1) if isinstance(t0, (int, float)) and isinstance(t1, (int, float)) else None
+    return raw, {"trace_sha256": hashlib.sha256(raw).hexdigest(), "children": children,
+                 "checkpoint_witness": checkpoint, "flags_raw": trace.get("flags_raw"),
+                 "note": "raw flags only; absent task/slot samples remain unknown"}
+
+
+def run(packet: Path, api_url: str, api_pid: int, out: Path, trace_dir: Path | None = None) -> int:
     raw = (packet / "manifest.json").read_bytes()
     manifest = json.loads(raw)
     validate_manifest(manifest, packet)
@@ -112,7 +184,7 @@ def run(packet: Path, api_url: str, api_pid: int, out: Path) -> int:
     if remaining < 30:
         raise ValueError("grant cannot fit bounded route smoke")
     request["client_deadline_unix_s"] = deadline
-    out.mkdir(parents=True, exist_ok=False)
+    out.mkdir(parents=True, mode=0o700, exist_ok=False)
     request_raw = (json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n").encode()
     (out / "request.json").write_bytes(request_raw)
     start = time.time()
@@ -143,6 +215,22 @@ def run(packet: Path, api_url: str, api_pid: int, out: Path) -> int:
             raise ValueError("grant, API or target identity changed")
     except (OSError, ValueError) as exc:
         result = {"status": "INCOMPLETE", "reason": str(exc), "gate_pass": None}
+    if trace_dir is not None:
+        try:
+            if not isinstance(body, dict) or result.get("status") != "API_SCOUTS_OBSERVED":
+                raise ValueError("completed API scout report missing")
+            request_id = request.get("request_id")
+            if not isinstance(request_id, str) or not request_id:
+                raise ValueError("request id missing")
+            expected = json.loads(pinned_file(packet, task["expected"]))
+            trace_raw, trace_result = read_trace(trace_dir, request_id, api_pid, body, start, end,
+                                                 sampler.samples, validate_scorer(expected, task["siblings"]))
+            trace_output = out / "scout-trace.json"
+            trace_output.write_bytes(trace_raw)
+            os.chmod(trace_output, 0o600)
+            result["scout_trace"] = trace_result
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            result = {"status": "INCOMPLETE", "reason": f"trace: {exc}", "gate_pass": None}
     result.update({"manifest_sha256": hashlib.sha256(raw).hexdigest(), "request_sha256": hashlib.sha256(request_raw).hexdigest(),
                    "response_sha256": hashlib.sha256(response_raw).hexdigest(), "http_status": response_status,
                    "start_s": start, "end_s": end, "grant": grant_before, "api": api_before,
@@ -158,9 +246,10 @@ def main() -> int:
     p.add_argument("--api-url", required=True)
     p.add_argument("--api-pid", type=int, required=True)
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--trace-dir", type=Path, help="private directory configured on the API for this exact request")
     args = p.parse_args()
     try:
-        return run(args.packet.resolve(), args.api_url, args.api_pid, args.output.resolve())
+        return run(args.packet.resolve(), args.api_url, args.api_pid, args.output.resolve(), args.trace_dir)
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
         print(f"kpf26-api-smoke: {exc}", file=sys.stderr)
         return 2

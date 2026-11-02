@@ -696,6 +696,11 @@ def _record_scout_call(method: str, url: str, messages: list[dict[str, str]], ma
     """UFH14-LB6.2: one ``serving_call.v1`` record for a scout ``/v1/chat/completions``
     call (it bypasses ``LlamaServerBackend``). Never raises, never alters the call."""
     try:
+        from src.api.routes.chat_pipeline import scout_evidence
+        scout_evidence.record_call(method, url, ts_start, status, finish, timings, usage, notes, exc is not None)
+    except Exception:  # noqa: BLE001 -- optional evidence never changes serving
+        log.exception("scout evidence recording failed")
+    try:
         from src.backends import serving_calls
 
         prompt = "\n".join(str(m.get("content") or "") for m in messages)
@@ -1372,10 +1377,13 @@ async def run_scouts(
         with lock:
             active += 1
             peak = max(peak, active)
+        from src.api.routes.chat_pipeline import scout_evidence
+        trace_token = scout_evidence.scout_start(i)
         try:
             return run_scout(i, wanted[i], reader=reader, transport=call_transport, config=config,
                              should_stop=should_stop, deadline=deadline, clock=clock, t0=t0)
         finally:
+            scout_evidence.scout_end(trace_token)
             with lock:
                 active -= 1
 
