@@ -100,6 +100,15 @@ python3 -m harness attest
 Tests: `pytest tests/` (zero inference); the runner and judge guard have separate
 unit-test modules.
 
+The additive `failure_ledger.json` records a first-call validity observation only
+when the first native-schema validation response contains exactly one call and
+its closed trace verifies. This is schema acceptance, not successful execution
+or task success. Multi-call batches, legacy unvalidated requests, absent events,
+parser failures and unverified traces stay unmeasured; repair recovery and a
+case-level requirement to call tools remain unmeasured. The timeout field means
+terminal native timeout, not a claim about recovered earlier timeouts. Synthetic
+fixture observations remain synthetic.
+
 ## Native tool schemas (opt-in)
 
 The live request remains message-only unless `--tool-contract dtap-native-tools-v1`
