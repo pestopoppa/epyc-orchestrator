@@ -302,3 +302,25 @@ def test_capture_seals_control_failure_and_not_attempted_attack(tmp_path):
     assert seal["arms"]["control"]["status"] == "failed"
     assert seal["arms"]["attack"] == {"status": "not_attempted", "delivery": "not_observed"}
     assert any(x["kind"] == "arm_skipped" for x in read_journal(journal)[1])
+
+
+def test_live_capture_waits_for_provider_close_and_fails_without_it(tmp_path):
+    from harness.crm_pair_capture import capture_pair
+    from harness.crm_pair_seal import seal_pair
+    m = pair_manifest()
+    prov = {"source_commit": "1" * 40, "source_tree_sha256": "2" * 64,
+            "model_sha256": "3" * 64, "server_sha256": "4" * 64, "template_sha256": "5" * 64,
+            "tool_schema_sha256": m["schema_sha256"], "case_sha256": m["registry_sha256"],
+            "grant_id": "synthetic", "model_pid": 123, "model_pid_starttime": 1, "backend": "unknown"}
+    grant = tmp_path / "grant"
+    grant.write_text("synthetic")
+    source = tmp_path / "source"
+    source.write_text("synthetic")
+    journal, seal_path = tmp_path / "journal", tmp_path / "seal"
+    _, seal = capture_pair(Endpoint(), Backend(), seed=42, journal_path=journal,
+        seal_path=seal_path, capture_kind="live", provenance=prov,
+        grant_receipt_path=grant, source_manifest_path=source)
+    assert seal is None and not seal_path.exists()
+    with pytest.raises(ValueError, match="provider open/close"):
+        seal_pair(journal_path=journal, output_path=seal_path, capture_kind="live", provenance=prov,
+                  grant_receipt_path=grant, source_manifest_path=source, producer_path=source)
