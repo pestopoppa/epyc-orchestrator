@@ -28,6 +28,10 @@ def capture_pair(endpoint, services, *, seed, journal_path, seal_path, capture_k
         receipt.append("terminal", {"arms": arms, "cleanup": result["cleanup"]})
     finally:
         receipt.close()
+    # A provider close receipt cannot exist until this child has exited and the
+    # region-lock context releases its flock. Live sealing is a parent step.
+    if capture_kind == "live":
+        return result, None
     seal = seal_pair(journal_path=Path(journal_path), output_path=Path(seal_path),
                      capture_kind=capture_kind, provenance=provenance,
                      grant_receipt_path=Path(grant_receipt_path),

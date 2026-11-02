@@ -60,7 +60,8 @@ def validate_provenance(capture_kind, provenance):
 
 
 def seal_pair(*, journal_path, output_path, capture_kind, provenance,
-              grant_receipt_path, source_manifest_path, producer_path):
+              grant_receipt_path, source_manifest_path, producer_path,
+              claim_open_path=None, claim_close_path=None, claim_pins=None):
     """Seal producer facts; readers must independently verify original warrants."""
     validate_provenance(capture_kind, provenance)
     dependencies = {}
@@ -118,8 +119,32 @@ def seal_pair(*, journal_path, output_path, capture_kind, provenance,
             r["kind"] == "cleanup" and isinstance(r.get("payload"), dict)
             and r["payload"].get("status") == "completed_by_backend" for r in records):
         raise ValueError("successful backend cleanup not recorded")
+    claim = {}
+    if capture_kind == "live":
+        if not claim_open_path or not claim_close_path or not isinstance(claim_pins, dict):
+            raise ValueError("live seal requires provider open/close and independently selected pins")
+        from src.runtime.region_claim_receipt import verify as verify_claim
+        open_path, close_path = Path(claim_open_path), Path(claim_close_path)
+        opened, closed = verify_claim(open_path, close_path, **claim_pins)
+        if opened["grant_id"] != provenance["grant_id"]:
+            raise ValueError("provider grant ID differs from capture")
+        if (Path(opened["grant_copy_path"]).resolve() != Path(grant_receipt_path).resolve()
+                or opened["grant_sha256"] != dependencies["grant_receipt_sha256"]):
+            raise ValueError("provider grant bytes differ from capture")
+        def timestamp(value):
+            result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if result.tzinfo is None:
+                raise ValueError("capture timestamp requires timezone")
+            return result
+        start, end = timestamp(records[0]["utc"]), timestamp(terminals[0]["utc"])
+        if not (timestamp(opened["opened_utc"]) <= start <= end <= timestamp(closed["closed_utc"])
+                and timestamp(opened["grant_start"]) <= start <= end <= timestamp(opened["grant_end"])):
+            raise ValueError("capture interval is outside claim or grant")
+        claim = {"claim_open_path": str(open_path.resolve()), "claim_open_sha256": hashlib.sha256(open_path.read_bytes()).hexdigest(),
+                 "claim_close_path": str(close_path.resolve()), "claim_close_sha256": hashlib.sha256(close_path.read_bytes()).hexdigest(),
+                 "claim_pins": dict(claim_pins)}
     seal = {"schema": SCHEMA, "capture_kind": capture_kind, "journal_path": str(Path(journal_path).resolve()),
-            "journal_sha256": hashlib.sha256(raw).hexdigest(), **dependencies, "provenance": dict(provenance),
+            "journal_sha256": hashlib.sha256(raw).hexdigest(), **dependencies, **claim, "provenance": dict(provenance),
             "arms": arms, "cleanup": result["cleanup"], "capture_start_utc": records[0]["utc"],
             "terminal_utc": terminals[0]["utc"], "sealed_utc": datetime.now(timezone.utc).isoformat()}
     data = (json.dumps(seal, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n").encode()
