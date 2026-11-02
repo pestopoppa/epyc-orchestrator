@@ -83,7 +83,8 @@ def pair_manifest() -> dict:
             "skill_injection": "not_tested"}
 
 
-def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8) -> dict:
+def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8,
+             receipt: Any = None) -> dict:
     """Execute both arms using one case, endpoint and backend, resetting before each.
 
     Partial records are returned on operational failure, including teardown. The
@@ -99,9 +100,17 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
     tools = contract.for_case(CASE)
     manifest = pair_manifest()
     results: dict[str, Any] = {"manifest": manifest, "seed": seed, "max_turns": max_turns,
+                               "endpoint": {key: getattr(endpoint, key, None) for key in
+                                            ("base_url", "model", "temperature", "max_tokens", "retries", "timeout")},
                                "arms": {}, "cleanup": "not_attempted"}
     baseline_state_hash = None
+    def emit(kind: str, payload: Any) -> None:
+        if receipt is not None:
+            receipt.append(kind, copy.deepcopy(payload))
+
     try:
+        emit("pair_manifest", {"manifest": manifest, "seed": seed, "max_turns": max_turns,
+                               "endpoint": results["endpoint"]})
         for arm in ("control", "attack"):
             record: dict[str, Any] = {"status": "running", "events": [], "delivery": "not_observed",
                                       "judge": None, "error": None}
@@ -112,6 +121,7 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                     raise ValueError("reset must return actual state")
                 record["initial_state"] = copy.deepcopy(initial)
                 record["initial_state_sha256"] = _digest(initial)
+                emit("reset", {"arm": arm, "state": initial, "sha256": record["initial_state_sha256"]})
                 if baseline_state_hash is None:
                     baseline_state_hash = record["initial_state_sha256"]
                 elif record["initial_state_sha256"] != baseline_state_hash:
@@ -121,6 +131,8 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                 trajectory = []
                 for turn in range(max_turns):
                     request_messages = copy.deepcopy(messages)
+                    emit("request", {"arm": arm, "turn": turn, "seed": seed,
+                                     "messages": request_messages, "tools_sha256": manifest["case_tools_sha256"]})
                     chat = endpoint.complete(messages, seed=seed, tools=tools,
                                              tool_choice="auto", endpoint_mode="openai-compatible")
                     if record["delivery"] == "queued_not_confirmed":
@@ -128,6 +140,8 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                     record["events"].append({"type": "model", "turn": turn,
                                              "request_messages": request_messages, "raw": chat.raw,
                                              "usage": chat.usage, "usage_status": chat.usage_status})
+                    emit("model", {"arm": arm, "turn": turn, "raw": chat.raw,
+                                   "usage": chat.usage, "usage_status": chat.usage_status})
                     if not chat.tool_calls:
                         response = chat.text
                         break
@@ -140,6 +154,7 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                             "name": c["name"], "arguments": json.dumps(c["arguments"])}}
                                        for c in chat.tool_calls]})
                     for call in chat.tool_calls:
+                        emit("tool_attempt", {"arm": arm, "turn": turn, "call": call})
                         try:
                             output = services.invoke(call["name"], copy.deepcopy(call["arguments"]))
                             if isinstance(output, dict) and output.get("error"):
@@ -158,6 +173,7 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                                                  "arguments": copy.deepcopy(call["arguments"]),
                                                  "native_result": copy.deepcopy(output),
                                                  "model_visible_result": body})
+                        emit("tool_result", {"arm": arm, **record["events"][-1]})
                         trajectory.append(({"tool": call["name"], "arguments": call["arguments"]},
                                            {"result": output}))
                         messages.append({"role": "tool", "tool_call_id": call["id"], "content": body})
@@ -172,6 +188,7 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                     raise ValueError("snapshot missing judge-relevant Slack channels")
                 record["final_state"] = copy.deepcopy(state)
                 record["final_state_sha256"] = _digest(state)
+                emit("state", {"arm": arm, "state": state, "sha256": record["final_state_sha256"]})
                 store = StateStore(state)
                 shims = (finance, gmail, paypal, salesforce, slack)
                 # Shims hold process-global state. Restore it even if the judge fails.
@@ -191,9 +208,13 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                         for shim, old_store in zip(shims, prior):
                             shim._set_store(old_store)
                 record["status"] = "complete"
+                emit("judged", {"arm": arm, "judge": record["judge"],
+                                "date_local": record["judge_date_local"],
+                                "date_utc": record["judge_date_utc"], "delivery": record["delivery"]})
             except Exception as exc:
                 record["status"] = "failed"
                 record["error"] = {"type": type(exc).__name__, "message": str(exc)}
+                emit("arm_failed", {"arm": arm, "error": record["error"], "delivery": record["delivery"]})
                 break
     finally:
         try:
@@ -202,4 +223,5 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
         except Exception as exc:
             results["cleanup"] = "failed"
             results["cleanup_error"] = {"type": type(exc).__name__, "message": str(exc)}
+        emit("cleanup", {"status": results["cleanup"], "error": results.get("cleanup_error")})
     return results
