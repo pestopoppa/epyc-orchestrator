@@ -123,6 +123,8 @@ def seal_pair(*, journal_path, output_path, capture_kind, provenance,
     if capture_kind == "live":
         if not claim_open_path or not claim_close_path or not isinstance(claim_pins, dict):
             raise ValueError("live seal requires provider open/close and independently selected pins")
+        from .crm_source_manifest import verify_manifest
+        verify_manifest(source_manifest_path, provenance["source_commit"], provenance["source_tree_sha256"])
         from src.runtime.region_claim_receipt import verify as verify_claim
         open_path, close_path = Path(claim_open_path), Path(claim_close_path)
         opened, closed = verify_claim(open_path, close_path, **claim_pins)

@@ -6,6 +6,7 @@ from pathlib import Path
 from .crm_pair import run_pair
 from .crm_pair_seal import seal_pair, validate_provenance
 from .crm_receipt import Receipt
+from .crm_source_manifest import verify_manifest
 
 
 def capture_pair(endpoint, services, *, seed, journal_path, seal_path, capture_kind,
@@ -15,6 +16,8 @@ def capture_pair(endpoint, services, *, seed, journal_path, seal_path, capture_k
     for path in (grant_receipt_path, source_manifest_path):
         if not Path(path).is_file() or not Path(path).stat().st_size:
             raise ValueError(f"required custody input missing or empty: {path}")
+    if capture_kind == "live":
+        verify_manifest(source_manifest_path, provenance["source_commit"], provenance["source_tree_sha256"])
     receipt = Receipt(Path(journal_path), {"capture_kind": capture_kind, "provenance": provenance})
     try:
         result = run_pair(endpoint, services, seed=seed, max_turns=max_turns, receipt=receipt)
