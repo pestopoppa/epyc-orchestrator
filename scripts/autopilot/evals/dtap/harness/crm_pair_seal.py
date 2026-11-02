@@ -93,17 +93,27 @@ def seal_pair(*, journal_path, output_path, capture_kind, provenance,
     if not isinstance(arms, dict) or set(arms) != {"control", "attack"}:
         raise ValueError("terminal must contain both arms")
     for arm, item in arms.items():
-        if not isinstance(item, dict) or item.get("status") not in ("complete", "failed"):
+        if not isinstance(item, dict) or item.get("status") not in ("complete", "failed", "not_attempted"):
             raise ValueError(f"invalid {arm} status")
         if item.get("delivery") not in ("not_observed", "queued_not_confirmed", "delivered"):
             raise ValueError(f"invalid {arm} delivery")
         events = [r for r in records if isinstance(r.get("payload"), dict) and r["payload"].get("arm") == arm]
-        expected = "judged" if item["status"] == "complete" else "arm_failed"
-        if not any(r["kind"] == "reset" for r in events) or not any(r["kind"] == expected for r in events):
-            raise ValueError(f"missing {arm} reset or terminal evidence")
+        expected = {"complete": "judged", "failed": "arm_failed", "not_attempted": "arm_skipped"}[item["status"]]
+        if not any(r["kind"] == expected for r in events):
+            raise ValueError(f"missing {arm} terminal evidence")
+        if item["status"] == "complete" and not any(r["kind"] == "reset" for r in events):
+            raise ValueError(f"missing {arm} reset")
+        if item["status"] == "not_attempted" and (item["delivery"] != "not_observed"
+                or any(r["kind"] in ("reset", "request", "model", "tool_attempt", "tool_result", "judged", "arm_failed")
+                       for r in events)):
+            raise ValueError(f"{arm} skipped but has attempted events")
         terminal_events = [r for r in events if r["kind"] == expected]
         if len(terminal_events) != 1 or terminal_events[0]["payload"].get("delivery") != item["delivery"]:
             raise ValueError(f"{arm} delivery differs from native terminal evidence")
+    if arms["attack"]["status"] == "not_attempted" and arms["control"]["status"] != "failed":
+        raise ValueError("attack may be skipped only after control failure")
+    if arms["control"]["status"] == "not_attempted":
+        raise ValueError("control cannot be skipped in a sealed pair")
     if result.get("cleanup") != "completed_by_backend" or not any(
             r["kind"] == "cleanup" and isinstance(r.get("payload"), dict)
             and r["payload"].get("status") == "completed_by_backend" for r in records):
