@@ -70,6 +70,11 @@ def _verifier():
     return lambda task, ans: bool(score_response(ans or "", task["expected"], task.get("q") or {}))
 
 
+def _load_tasks(path: str) -> list[dict]:
+    txt = Path(path).read_text()
+    return json.loads(txt) if txt.lstrip().startswith("[") else [json.loads(x) for x in txt.splitlines() if x.strip()]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -80,6 +85,8 @@ def main() -> int:
     r.add_argument("--timeout", type=float, default=300.0); r.add_argument("--db", required=True)
     p = sub.add_parser("report")
     p.add_argument("--manifest", required=True); p.add_argument("--db", required=True); p.add_argument("--out", required=True)
+    p.add_argument("--tasks", help="task file (JSON list or JSONL) supplying tool_required for manifests recorded without it; "
+                   "without either source the zero-step agreement block is empty")
     p.add_argument("--human", help="json {task_key: [[role, tool, status], ...]}"); p.add_argument("--n-tasks", type=int, default=10)
     p.add_argument("--min-replays", type=int, default=20); p.add_argument("--top-m", type=int, default=3)
     p.add_argument("--belief-sidecar", action="store_true", help="also write <out>.beliefs.jsonl via the root belief-kernel writer")
@@ -102,7 +109,8 @@ def main() -> int:
                          "session id = run id? Stopping.")
         return 0
     human = json.loads(Path(a.human).read_text()) if a.human else None
-    per_task, acct = traces_for_manifest(a.db, load_manifest(a.manifest))
+    tasks = _load_tasks(a.tasks) if a.tasks else None
+    per_task, acct = traces_for_manifest(a.db, load_manifest(a.manifest), tasks)
     Path(a.out).write_text(dumps(build_report(per_task, acct, n_tasks=a.n_tasks, min_replays=a.min_replays,
                                               top_m=a.top_m, human=human)))
     if a.belief_sidecar:

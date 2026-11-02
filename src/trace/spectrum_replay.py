@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from src.trace.l2.detectors import DetectorConfig
-from src.trace.l2.loaders import load_step_events
+from src.trace.l2.loaders import apply_tool_required, load_step_events, tool_required_map
 from src.trace.l2.model import L2Trace
 from src.trace.spectrum import (eligible_for_spectrum, l2_agreement, overlap_with_human, rank_task,
                                 ranking_to_dict)
@@ -39,7 +39,8 @@ def replay_task(task: dict, n: int, runner: Runner, verifier: Verifier, manifest
             rid = f"{prefix}-{i:02d}"
             out = runner(task, rid, i)
             outcome = "unknown" if out.error else ("pass" if verifier(task, out.final_answer) else "fail")
-            e = {"task_key": task["task_key"], "run_id": rid, "replay": i, "outcome": outcome, "error": out.error}
+            e = {"task_key": task["task_key"], "run_id": rid, "replay": i, "outcome": outcome, "error": out.error,
+                 "tool_required": tool_required_map([task])[task["task_key"]]}
             fh.write(json.dumps(e, sort_keys=True) + "\n")
             fh.flush()
             entries.append(e)
@@ -50,12 +51,26 @@ def load_manifest(path: Path | str) -> list[dict]:
     return [json.loads(x) for x in Path(path).read_text().splitlines() if x.strip()]
 
 
-def traces_for_manifest(db_path: Path | str, entries: Iterable[dict]) -> tuple[dict[str, list[L2Trace]], dict[str, Any]]:
-    """task_key -> traces. Returns also the join accounting: replays started / with steps / unlabelled."""
+def traces_for_manifest(db_path: Path | str, entries: Iterable[dict],
+                        tasks: Iterable[dict] | None = None) -> tuple[dict[str, list[L2Trace]], dict[str, Any]]:
+    """task_key -> traces. Returns also the join accounting: replays started / with steps / unlabelled.
+
+    ``tool_required`` is not stored in the step-event DB, so it is applied here (HIL-15c; without it
+    ``zero_step_violation`` never fires and ``l2_agreement`` silently drops that block). Source, in order:
+    the manifest entry's own ``tool_required`` bool (recorded by ``replay_task`` from the task); else the
+    ``tasks`` list (driver task file; ``tool_required_map`` semantics). Traces with neither stay None
+    (unobserved).
+    """
     entries = list(entries)
     by_rid = {e["run_id"]: e for e in entries}
     base = {rid: L2Trace(trace_id=rid, task_key=e["task_key"], outcome=e["outcome"]) for rid, e in by_rid.items()}
     got = {t.trace_id: t for t in load_step_events(db_path, outcomes=base) if t.trace_id in by_rid}
+    required = tool_required_map(list(tasks)) if tasks is not None else {}
+    apply_tool_required(list(got.values()), required)
+    for rid, t in got.items():
+        v = by_rid[rid].get("tool_required")
+        if isinstance(v, bool):
+            t.tool_required = v
     per_task: dict[str, list[L2Trace]] = {}
     for rid, t in got.items():
         per_task.setdefault(by_rid[rid]["task_key"], []).append(t)

@@ -120,3 +120,48 @@ def test_wrapper_end_to_end_and_join_accounting(tmp_path):
     top = rep["tasks"][0]["ranking"]["top"][0]
     assert top["key"] == ["worker", "calc", "error:result_marker"] and top["k2"] == 1.0
     assert json.loads(json.dumps(rep))["schema"] == "spectrum_report/v1"
+
+
+def _zero_step_store(tmp_path, rids):
+    """Step-bearing runs with no tool call: one message step each (the zero-step shape)."""
+    from types import SimpleNamespace
+    from src.trace.step_events import StepEventLog, trace_store_sink
+    db = tmp_path / "z.sqlite"
+    trace_store.ensure_schema(db).close()
+    for rid in rids:
+        StepEventLog(rid, role="worker", sink=trace_store_sink(db)).observe_turn_end(
+            SimpleNamespace(is_final=False, error=None), 0)
+    return db
+
+
+def test_traces_for_manifest_sets_tool_required_so_zero_step_block_is_present(tmp_path):
+    """Regression (OBS-13): traces_for_manifest left tool_required None, so zero_step_violation never fired
+    and the spectrum report's l2_agreement silently dropped the zero-step block."""
+    ents = [{"task_key": "t1", "run_id": f"r{i:02d}", "replay": i, "outcome": "fail" if i % 2 else "pass"} for i in range(24)]
+    db = _zero_step_store(tmp_path, [e["run_id"] for e in ents])
+
+    # requirement from the manifest entries themselves (what replay_task now records)
+    ents2 = [dict(e, tool_required=True) for e in ents]
+    per_task, acct = traces_for_manifest(db, ents2)
+    assert build_report(per_task, acct, min_replays=20)["l2_agreement_pooled"]["zero_step_violation"]["failed_runs_flagged"] == 12
+
+    # no source of the requirement: unobserved, block absent, every failure unclassified
+    per_task, acct = traces_for_manifest(db, ents)
+    assert all(t.tool_required is None for t in per_task["t1"])
+    assert "zero_step_violation" not in build_report(per_task, acct, min_replays=20)["l2_agreement_pooled"]
+
+    # requirement from the task file
+    tasks = [{"task_key": "t1", "prompt": "Use the write_file tool to save x, then answer."}]
+    per_task, acct = traces_for_manifest(db, ents, tasks)
+    assert all(t.tool_required is True for t in per_task["t1"])
+    rep = build_report(per_task, acct, min_replays=20)
+    assert rep["l2_agreement_pooled"]["zero_step_violation"]["failed_runs_flagged"] == 12
+    assert rep["tasks"][0]["l2_agreement"]["unclassified"] == 0
+
+
+def test_replay_task_records_tool_required_in_manifest(tmp_path):
+    man = tmp_path / "m.jsonl"
+    ents = replay_task({"task_key": "t1", "prompt": "Use the read_file tool.", "expected": "1"}, 2,
+                       lambda task, rid, i: RunOutcome(final_answer="1"), lambda t, a: True, man)
+    assert [e["tool_required"] for e in ents] == [True, True]
+    assert json.loads(man.read_text().splitlines()[0])["tool_required"] is True
