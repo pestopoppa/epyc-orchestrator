@@ -21,6 +21,9 @@ def _threads(entry: dict, name: str) -> int | None:
     argv = [str(t) for t in entry.get("argv", [])]
     if name == "whisper":
         return int(argv[argv.index("-t") + 1]) if "-t" in argv else None
+    flag = entry.get("tts_thread_flag")
+    if isinstance(flag, dict):
+        return flag.get("threads")
     nprocs = (entry.get("env") or {}).get("SHIM_NPROCS")
     return int(nprocs) // 2 if nprocs else None  # qwentts uses hardware_concurrency()/2
 

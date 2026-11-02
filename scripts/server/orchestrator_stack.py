@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import hashlib
 import json
 import os
 import re
@@ -2933,6 +2934,26 @@ _VERIFY_GGML_LINKAGE_SCRIPT = Path(
 )
 
 
+def _tts_thread_flag(service) -> dict[str, Any] | None:
+    """Return an explicitly declared future TTS selection, validated at launch."""
+    if service.name != "tts":
+        return None
+    from scripts.server.stack_manifest import _MANIFEST
+    entries = [entry for entry in _MANIFEST["aux_services"] if entry.get("name") == "tts"]
+    if len(entries) != 1:
+        raise ValueError("expected exactly one TTS manifest entry")
+    flag = entries[0].get("tts_thread_flag")
+    if flag is None:
+        return None
+    if (service.backend != "tts" or not isinstance(flag, dict)
+            or set(flag) != {"threads", "binary_sha256"}
+            or type(flag.get("threads")) is not int or flag["threads"] <= 0
+            or not isinstance(flag.get("binary_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", flag["binary_sha256"]) is None):
+        raise ValueError("tts_thread_flag requires positive threads and exact binary_sha256")
+    return dict(flag)
+
+
 def _resolve_aux_launch(service) -> tuple[list[str], list[str], Path | None]:
     """Resolve a service's argv, LD_LIBRARY_PATH entries and expected ggml tree.
 
@@ -2954,6 +2975,20 @@ def _resolve_aux_launch(service) -> tuple[list[str], list[str], Path | None]:
         argv[0] = str(server_binary(service.backend))
         ld_paths = backend_ld_library_path(service.backend)
         tree = backend_dir(service.backend)
+    thread_flag = _tts_thread_flag(service)
+    if thread_flag is not None:
+        # Only a digest bound at future kernel promotion can activate this path.
+        # Never treat a binary name or a mutable build directory as proof.
+        frozen_v1 = "369fc2f1de88e41f4459e1f56c0e962035e20984acf0ea2d4678f602232ff654"
+        if service.name != "tts" or service.backend != "tts" or tree is None:
+            raise ValueError("explicit TTS threads require the TTS backend")
+        if "--threads" in argv:
+            raise ValueError("duplicate TTS --threads")
+        binary = Path(argv[0]).read_bytes()
+        actual = hashlib.sha256(binary).hexdigest()
+        if actual == frozen_v1 or actual != thread_flag["binary_sha256"] or b"--threads" not in binary:
+            raise ValueError("TTS binary is not the pinned future thread-flag kernel")
+        argv.extend(["--threads", str(thread_flag["threads"])])
     return argv, ld_paths, tree
 
 
@@ -2961,6 +2996,13 @@ def _build_aux_env(service, ld_paths: list[str]) -> dict[str, str]:
     """Compose the launch environment for one aux service."""
     spec = service._replace(ld_library_path=tuple(ld_paths))
     env = build_service_env(spec, os.environ.copy())
+    if _tts_thread_flag(service) is not None:
+        # Remove only the historical TTS shim, never a different preload.
+        preload = env.get("LD_PRELOAD", "")
+        if preload not in ("", "/mnt/raid0/llm/cache/shims/nprocs_shim.so"):
+            raise ValueError("unexpected TTS preload; refusing thread-flag transition")
+        env.pop("LD_PRELOAD", None)
+        env.pop("SHIM_NPROCS", None)
     if service.pythonpath:
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = os.pathsep.join(service.pythonpath) + (
@@ -3148,7 +3190,11 @@ def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | Non
         print(f"    [FAIL] working directory not found: {service.cwd}")
         return None
 
-    env = _build_aux_env(service, ld_paths)
+    try:
+        env = _build_aux_env(service, ld_paths)
+    except (OSError, ValueError) as exc:
+        print(f"    [FAIL] {service.name}: {exc}")
+        return None
     # A declared aux cpuset (whisper/tts are HIP builds with HIP hidden) gets the same
     # ROCr affinity override as every pinned llama-server (launch_affinity.py).
     apply_pinned_launch_env(env, spawn_prefix)
@@ -3156,7 +3202,7 @@ def start_aux_service(name: str, bench_force: bool = False) -> ProcessInfo | Non
     # warning and runs the binary without it. For the CPU TTS that silently means
     # 96 spinning threads on a 16-core cpuset instead of 16 (see nprocs_shim.c), so
     # a declared preload that does not exist fails THIS service's launch.
-    for preload in (service.env.get("LD_PRELOAD") or "").replace(":", " ").split():
+    for preload in (env.get("LD_PRELOAD") or "").replace(":", " ").split():
         if not Path(preload).is_file():
             print(
                 f"    [FAIL] {service.name}: declared LD_PRELOAD {preload} does not exist "
