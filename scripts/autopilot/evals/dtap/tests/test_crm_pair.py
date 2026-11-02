@@ -425,3 +425,44 @@ def test_stop_before_request_records_failure_and_skips_attack(tmp_path):
     assert result["arms"]["control"]["error"]["type"] == "InterruptedError"
     assert seal["arms"]["attack"]["status"] == "not_attempted"
     assert not result["arms"]["control"]["events"]
+
+
+def test_live_worker_refuses_deadline_before_transport():
+    import importlib.util
+    import time
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "tools" / "crm_live_worker.py"
+    spec = importlib.util.spec_from_file_location("crm_live_worker_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    def transport(*_args, **_kwargs):
+        raise AssertionError("deadline should prevent transport")
+    endpoint = module.DeadlineEndpoint("http://127.0.0.1:1234/v1", seed=42, opener=transport,
+        deadline=time.time() - 1, should_stop=lambda: False)
+    with pytest.raises(InterruptedError, match="deadline"):
+        endpoint.complete([{"role": "user", "content": "x"}], seed=42)
+
+
+def test_posthash_stop_and_fixture_scope(tmp_path):
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "tools" / "crm_posthash.py"
+    spec = importlib.util.spec_from_file_location("crm_posthash_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    data = tmp_path / "data"
+    data.write_bytes(b"fixture bytes")
+    with pytest.raises(InterruptedError):
+        module.hash_stable(data, lambda: True)
+    root = tmp_path / "dry"
+    root.mkdir()
+    output = root / "result.json"
+    env = dict(os.environ, FILLER_DRYRUN="1", FILLER_DRYRUN_DIR=str(root),
+               FILLER_DRYRUN_RESULT_PATH=str(output))
+    subprocess.run([sys.executable, str(path)], env=env, check=True, timeout=10)
+    result = json.loads(output.read_text())
+    assert result["schema"] == "dtap.crm_posthash_fixture.v1"
+    assert result["capture_kind"] == "fixture"

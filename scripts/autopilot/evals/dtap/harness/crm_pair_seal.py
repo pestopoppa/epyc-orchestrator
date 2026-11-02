@@ -61,7 +61,7 @@ def validate_provenance(capture_kind, provenance):
 
 def seal_pair(*, journal_path, output_path, capture_kind, provenance,
               grant_receipt_path, source_manifest_path, producer_path,
-              claim_open_path=None, claim_close_path=None, claim_pins=None):
+              claim_open_path=None, claim_close_path=None, claim_pins=None, posthash_path=None):
     """Seal producer facts; readers must independently verify original warrants."""
     validate_provenance(capture_kind, provenance)
     dependencies = {}
@@ -123,6 +123,8 @@ def seal_pair(*, journal_path, output_path, capture_kind, provenance,
     if capture_kind == "live":
         if not claim_open_path or not claim_close_path or not isinstance(claim_pins, dict):
             raise ValueError("live seal requires provider open/close and independently selected pins")
+        if not posthash_path:
+            raise ValueError("live seal requires separately captured post-hash")
         from .crm_source_manifest import verify_manifest
         verify_manifest(source_manifest_path, provenance["source_commit"], provenance["source_tree_sha256"])
         from src.runtime.region_claim_receipt import verify as verify_claim
@@ -142,9 +144,19 @@ def seal_pair(*, journal_path, output_path, capture_kind, provenance,
         if not (timestamp(opened["opened_utc"]) <= start <= end <= timestamp(closed["closed_utc"])
                 and timestamp(opened["grant_start"]) <= start <= end <= timestamp(opened["grant_end"])):
             raise ValueError("capture interval is outside claim or grant")
+        post_path = Path(posthash_path)
+        post_data = post_path.read_bytes()
+        post = json.loads(post_data)
+        if (post.get("schema") != "dtap.crm_posthash.v1" or post.get("capture_kind") != "live"
+                or post.get("fact", {}).get("sha256") != provenance["model_sha256"]
+                or post.get("claim_close_sha256") != hashlib.sha256(close_path.read_bytes()).hexdigest()
+                or post.get("pair_journal_sha256") != hashlib.sha256(raw).hexdigest()
+                or timestamp(post["started_utc"]) < timestamp(closed["closed_utc"])):
+            raise ValueError("post-hash does not bind capture/model/provider close")
         claim = {"claim_open_path": str(open_path.resolve()), "claim_open_sha256": hashlib.sha256(open_path.read_bytes()).hexdigest(),
                  "claim_close_path": str(close_path.resolve()), "claim_close_sha256": hashlib.sha256(close_path.read_bytes()).hexdigest(),
-                 "claim_pins": dict(claim_pins)}
+                 "claim_pins": dict(claim_pins), "posthash_path": str(post_path.resolve()),
+                 "posthash_sha256": hashlib.sha256(post_data).hexdigest()}
     seal = {"schema": SCHEMA, "capture_kind": capture_kind, "journal_path": str(Path(journal_path).resolve()),
             "journal_sha256": hashlib.sha256(raw).hexdigest(), **dependencies, **claim, "provenance": dict(provenance),
             "arms": arms, "cleanup": result["cleanup"], "capture_start_utc": records[0]["utc"],
