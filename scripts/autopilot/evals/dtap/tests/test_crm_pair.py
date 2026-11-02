@@ -405,3 +405,23 @@ def test_rowflow_fixture_confines_output_and_drains_stop(tmp_path):
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=8)
+
+
+def test_stop_before_request_records_failure_and_skips_attack(tmp_path):
+    from harness.crm_pair_capture import capture_pair
+    m = pair_manifest()
+    prov = {"source_commit": "1" * 40, "source_tree_sha256": "2" * 64,
+            "model_sha256": "3" * 64, "server_sha256": "4" * 64, "template_sha256": "5" * 64,
+            "tool_schema_sha256": m["schema_sha256"], "case_sha256": m["registry_sha256"],
+            "grant_id": "fixture", "model_pid": 123, "model_pid_starttime": 1, "backend": "unknown"}
+    grant, source = tmp_path / "grant", tmp_path / "source"
+    grant.write_text("fixture")
+    source.write_text("fixture")
+    backend = Backend()
+    result, seal = capture_pair(Endpoint(), backend, seed=42, journal_path=tmp_path / "journal",
+        seal_path=tmp_path / "seal", capture_kind="fixture", provenance=prov,
+        grant_receipt_path=grant, source_manifest_path=source, should_stop=lambda: True)
+    assert backend.closed
+    assert result["arms"]["control"]["error"]["type"] == "InterruptedError"
+    assert seal["arms"]["attack"]["status"] == "not_attempted"
+    assert not result["arms"]["control"]["events"]

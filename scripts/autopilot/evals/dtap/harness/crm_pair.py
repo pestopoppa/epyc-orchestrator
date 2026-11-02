@@ -88,7 +88,7 @@ def pair_manifest() -> dict:
 
 
 def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8,
-             receipt: Any = None) -> dict:
+             receipt: Any = None, should_stop: Any = None) -> dict:
     """Execute both arms using one case, endpoint and backend, resetting before each.
 
     Partial records are returned on operational failure, including teardown. The
@@ -134,6 +134,8 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                 response = None
                 trajectory = []
                 for turn in range(max_turns):
+                    if should_stop is not None and should_stop():
+                        raise InterruptedError("STOP or deadline requested")
                     request_messages = copy.deepcopy(messages)
                     emit("request", {"arm": arm, "turn": turn, "seed": seed,
                                      "messages": request_messages, "tools_sha256": manifest["case_tools_sha256"]})
@@ -158,6 +160,8 @@ def run_pair(endpoint: Any, services: Services, *, seed: int, max_turns: int = 8
                             "name": c["name"], "arguments": json.dumps(c["arguments"])}}
                                        for c in chat.tool_calls]})
                     for call in chat.tool_calls:
+                        if should_stop is not None and should_stop():
+                            raise InterruptedError("STOP or deadline requested")
                         emit("tool_attempt", {"arm": arm, "turn": turn, "call": call})
                         try:
                             output = services.invoke(call["name"], copy.deepcopy(call["arguments"]))
