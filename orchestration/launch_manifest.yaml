@@ -945,6 +945,9 @@ aux_services:
            "--host", "127.0.0.1",
            "--port", "9002"]
     cpuset: "24-39"
+    # Future promotion only: add tts_thread_flag with {threads: 16, binary_sha256:
+    # <ratified-new-kernel-sha256>}. The launcher verifies the selected binary
+    # before replacing the shim. Absent here: production-speech-v1 is unchanged.
     env:
       GGML_BACKEND: "CPU"
       HIP_VISIBLE_DEVICES: "-1"
