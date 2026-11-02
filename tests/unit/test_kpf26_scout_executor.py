@@ -63,6 +63,7 @@ def test_collect_real_scout_stage_retains_native_data_and_unknown(monkeypatch, t
         def __exit__(self, *_args):
             self.samples.append({"t": time.time() + 1, "cells": 6, "slots": []})
 
+    monkeypatch.setenv("FILLER_DEADLINE", str(int(time.time()) + 100))
     monkeypatch.setattr(executor, "Sampler", FakeSampler)
     monkeypatch.setattr(stage, "ChatCompletionsTransport", FakeTransport)
     monkeypatch.setattr(stage, "resolve_cap", lambda *a, **kw: {"cap": 1, "source": "mock"})
@@ -84,25 +85,65 @@ def test_collect_real_scout_stage_retains_native_data_and_unknown(monkeypatch, t
                               {"url": "http://test", "role": "worker", "sample_interval_s": 1}, tmp_path, tmp_path)
 
 
-def test_grant_and_endpoint_custody_cannot_be_claimed_by_echo(monkeypatch, tmp_path):
+
+def test_live_grant_requires_launcher_window_and_unchanged_file(monkeypatch, tmp_path):
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc).replace(second=0, microsecond=0)
+    start = now - dt.timedelta(minutes=1)
+    end = now + dt.timedelta(minutes=20)
+    (tmp_path / "row.grant").write_text(f"regions=0-1 start={start:%Y-%m-%dT%H:%MZ} end={end:%Y-%m-%dT%H:%MZ} holds=\n")
+    monkeypatch.setattr(executor, "GRANTS", tmp_path)
+    monkeypatch.setenv("FILLER_ID", "row")
+    monkeypatch.setenv("FILLER_END", str(int(end.timestamp())))
+    monkeypatch.setenv("FILLER_DEADLINE", str(int(end.timestamp()) - 90))
+    monkeypatch.setenv("FILLER_STOPFILE", str(tmp_path / "stop"))
+    assert executor.active_grant("row")["regions"] == "0-1"
+    monkeypatch.setenv("FILLER_ID", "other")
+    with pytest.raises(ValueError, match="matching filler"):
+        executor.active_grant("row")
+    monkeypatch.setenv("FILLER_ID", "row")
+    (tmp_path / "stop").touch()
+    with pytest.raises(ValueError, match="stop file"):
+        executor.active_grant("row")
+
+
+def test_pid_must_own_the_actual_listening_socket():
+    import os
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        url = f"http://127.0.0.1:{sock.getsockname()[1]}"
+        assert executor.endpoint_identity(os.getpid(), url)["pid"] == os.getpid()
+        with pytest.raises(ValueError, match="local explicit"):
+            executor.endpoint_identity(os.getpid(), "http://example.org:80")
+
+
+def test_complete_observation_emits_native_record(monkeypatch, tmp_path):
     def pin(name, content):
         data = json.dumps(content).encode()
         (tmp_path / name).write_bytes(data)
         return {"path": name, "sha256": hashlib.sha256(data).hexdigest()}
 
-    req, expected, grant = pin("request.json", {}), pin("expected.json", {}), pin("grant.json", {})
+    req, expected = pin("request.json", {}), pin("expected.json", {})
     source = "1" * 40
-    process = {"binary_sha256": "a" * 64, "argv": ["server"], "ggml": {"/lib": "b" * 64}}
+    process = {"exe": "/server", "binary_sha256": "a" * 64, "argv": ["server", "m"], "ggml": {"/lib": "b" * 64}}
+    grant_path = tmp_path / "row.grant"
+    grant_path.write_text("grant")
+    grant = {"grant_id": "row", "path": str(grant_path), "sha256": "a" * 64, "start_s": 0, "end_s": 9999999999, "regions": "0-1"}
+    endpoint = {"url": "http://127.0.0.1:1", "pid": 1, "listener_inodes": ["1"]}
     m = {"schema": "epyc.kpf26.paired.v1", "arm_order": ["off", "on"], "arm_timeout_s": 30,
          "max_occupancy_sample_gap_s": 2,
          "pins": {"model": "m", "server_binary_sha256": "a" * 64, "source_commit": source,
-                  "argv": "server", "executor_sha256": "b" * 64},
-         "runtime": {"off": {"url": "http://test", "role": "worker", "server_pid": 1,
-                             "window_id": "w", "sample_interval_s": 1, "grant": grant}},
+                  "argv": "server m", "executor_sha256": "b" * 64},
+         "runtime": {"off": {"url": "http://127.0.0.1:1", "role": "worker", "server_pid": 1,
+                             "window_id": "w", "sample_interval_s": 1, "grant_id": "row"}},
          "tasks": [{"id": "t", "siblings": 1, "request": req, "expected": expected}]}
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(m))
     monkeypatch.setattr(executor, "process_snapshot", lambda pid: process)
+    monkeypatch.setattr(executor, "active_grant", lambda row: grant)
+    monkeypatch.setattr(executor, "endpoint_identity", lambda pid, url: endpoint)
     monkeypatch.setattr(executor.subprocess, "check_output",
                         lambda command, **kwargs: source if command[1] == "rev-parse" else "")
     monkeypatch.setattr(executor, "collect_task", lambda task, *a: {
@@ -111,8 +152,9 @@ def test_grant_and_endpoint_custody_cannot_be_claimed_by_echo(monkeypatch, tmp_p
         "children": [{"id": "0", "status": "ok", "ttft_ms": 1, "admission_wait_ms": 0,
                       "prefill_tokens": 1, "output_sha256": "c" * 64, "outcome": True}]})
     evidence = tmp_path / "out.json"
-    assert executor.run(path, "off", evidence) == 1
+    assert executor.run(path, "off", evidence) == 0
     result = json.loads(evidence.read_text())
-    assert result["grant_authority_verified"] is False
-    assert "grant authority and window coverage not verified" in result["collection_errors"]
-    assert "server PID to listening endpoint binding not verified" in result["collection_errors"]
+    assert result["grant_authority_verified"] is True
+    row = json.loads((tmp_path / "out-native" / "belief_measurements.jsonl").read_text())
+    assert row["kpf26"] == {"tasks": 1, "children": 1, "completed": 1}
+    assert row["rows_sha256"] == hashlib.sha256((tmp_path / "out-native" / "belief_rows.jsonl").read_bytes()).hexdigest()

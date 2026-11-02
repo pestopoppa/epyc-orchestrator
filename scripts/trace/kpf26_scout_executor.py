@@ -9,15 +9,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextvars
+import datetime as dt
 import hashlib
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -55,6 +59,98 @@ def process_snapshot(pid: int) -> dict[str, Any]:
             "ggml": {p: digest(Path(p).read_bytes()) for p in libraries}}
 
 
+GRANTS = Path("/mnt/raid0/llm/tmp/compute-flags/grants")
+_GRANT = re.compile(r"regions=([^ ]+) start=(\d{4}-\d\d-\d\dT\d\d:\d\dZ) end=(\d{4}-\d\d-\d\dT\d\d:\d\dZ)(?: holds=([^ ]*))?\n?")
+
+
+def active_grant(grant_id: str) -> dict[str, Any]:
+    """Require the live rowflow grant and its launcher-enforced hard end."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", grant_id):
+        raise ValueError("invalid grant id")
+    if os.environ.get("FILLER_ID") != grant_id:
+        raise ValueError("executor is not inside the matching filler launcher")
+    path = GRANTS / (grant_id + ".grant")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("canonical active grant absent")
+    raw = path.read_bytes()
+    match = _GRANT.fullmatch(raw.decode("ascii"))
+    if not match:
+        raise ValueError("invalid grant format")
+    regions, start, end, _holds = match.groups()
+    def parse(value: str) -> float:
+        return dt.datetime.strptime(value, "%Y-%m-%dT%H:%MZ").replace(tzinfo=dt.timezone.utc).timestamp()
+
+    start_s, end_s = parse(start), parse(end)
+    now = time.time()
+    if not start_s <= now < end_s or os.environ.get("FILLER_END") != str(int(end_s)):
+        raise ValueError("grant window inactive or launcher hard end disagrees")
+    stop = os.environ.get("FILLER_STOPFILE")
+    if (not os.environ.get("FILLER_DEADLINE", "").isdigit()
+            or not now < int(os.environ["FILLER_DEADLINE"]) <= int(end_s)):
+        raise ValueError("missing or invalid launcher deadline")
+    if not stop or Path(stop).exists():
+        raise ValueError("missing or active launcher stop file")
+    return {"grant_id": grant_id, "path": str(path), "sha256": digest(raw),
+            "regions": regions, "start_s": start_s, "end_s": end_s}
+
+
+def endpoint_identity(pid: int, url: str) -> dict[str, Any]:
+    """Bind a local HTTP endpoint to the listener in the declared PID's fd table."""
+    target = urlsplit(url)
+    if target.scheme != "http" or target.hostname != "127.0.0.1" or target.port is None:
+        raise ValueError("only a local explicit HTTP endpoint can be bound")
+    inodes = set()
+    for name in ("/proc/self/net/tcp", "/proc/self/net/tcp6"):
+        for line in Path(name).read_text().splitlines()[1:]:
+            fields = line.split()
+            if fields[3] == "0A" and int(fields[1].rsplit(":", 1)[1], 16) == target.port:
+                inodes.add(fields[9])
+    owned = set()
+    for fd in Path(f"/proc/{pid}/fd").iterdir():
+        try:
+            match = re.fullmatch(r"socket:\[(\d+)\]", os.readlink(fd))
+        except FileNotFoundError:
+            continue
+        if match:
+            owned.add(match.group(1))
+    if not inodes or not inodes <= owned:
+        raise ValueError("endpoint listener is missing or not exclusively owned by the pinned PID")
+    return {"url": url, "pid": pid, "listener_inodes": sorted(inodes)}
+
+
+def utc(seconds: float) -> str:
+    return dt.datetime.fromtimestamp(seconds, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def write_belief(out: Path, tasks: list[dict[str, Any]], arm: str, manifest_hash: str,
+                 runtime: dict[str, Any], server: dict[str, Any], start: float, end: float) -> None:
+    """Write the observation at collection time; preserve each original native row."""
+    rows = out / "belief_rows.jsonl"
+    with rows.open("x") as stream:
+        for task in tasks:
+            stream.write(json.dumps(task, sort_keys=True, separators=(",", ":")) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    children = [c for task in tasks for c in task["children"]]
+    row = {"schema": "epyc.kpf.run.v1", "kpf_task": "KPF-26",
+           "run_id": runtime["grant_id"], "arm": "fork_on" if arm == "on" else "fork_off",
+           "binary": server["exe"], "binary_realpath": server["exe"], "binary_sha256": server["binary_sha256"],
+           "argv": server["argv"], "prompt_set_sha256": manifest_hash, "window_id": runtime["window_id"],
+           "host": socket.gethostname(), "start_utc": utc(start), "end_utc": utc(end), "category": "CANDIDATE",
+           "equivalence": {"not_measured": True}, "rows": str(rows), "rows_sha256": digest(rows.read_bytes()),
+           "kpf26": {"tasks": len(tasks), "children": len(children),
+                     "completed": sum(c["status"] == "ok" for c in children)},
+           "ttft_ms": [c["ttft_ms"] for c in children if isinstance(c["ttft_ms"], (int, float))],
+           "unique_cells_peak": max(s["cells"] for task in tasks for s in task["unique_cells_samples"]),
+           "instrument_class": "serving-observation"}
+    row["record_sha256"] = digest(json.dumps(row, sort_keys=True, separators=(",", ":")).encode())
+    path = out / "belief_measurements.jsonl"
+    with path.open("x") as stream:
+        stream.write(json.dumps(row, sort_keys=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def _pool(slots: Any) -> int | None:
     if not isinstance(slots, list):
         return None
@@ -64,8 +160,8 @@ def _pool(slots: Any) -> int | None:
 
 
 class Sampler:
-    def __init__(self, url: str, interval: float):
-        self.url, self.interval = url.rstrip("/"), interval
+    def __init__(self, url: str, interval: float, cancel: threading.Event):
+        self.url, self.interval, self.cancel = url.rstrip("/"), interval, cancel
         self.samples: list[dict[str, Any]] = []
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -75,7 +171,7 @@ class Sampler:
         import httpx
         started = time.time()
         try:
-            response = httpx.get(self.url + "/slots", timeout=2.0)
+            response = httpx.get(self.url + "/slots", timeout=2.0, trust_env=False)
             response.raise_for_status()
             slots = response.json()
             self.samples.append({"t": time.time(), "request_start_s": started, "cells": _pool(slots), "slots": slots})
@@ -86,6 +182,8 @@ class Sampler:
     def _run(self) -> None:
         self._sample()
         while not self.stop.wait(self.interval):
+            if Path(os.environ["FILLER_STOPFILE"]).exists() or time.time() >= float(os.environ["FILLER_DEADLINE"]):
+                self.cancel.set()
             self._sample()
         self._sample()
 
@@ -132,6 +230,7 @@ def _checkpoint_witness(samples: list[dict[str, Any]], timing: dict[str, Any], s
 
 def collect_task(task: dict[str, Any], request: dict[str, Any], expected: dict[str, Any],
                  runtime: dict[str, Any], base: Path, output: Path) -> dict[str, Any]:
+    import httpx
     from src.api.routes.chat_pipeline import scout_stage as stage
     from src.repl_environment.task_root import TaskScope
 
@@ -170,10 +269,15 @@ def collect_task(task: dict[str, Any], request: dict[str, Any], expected: dict[s
 
     stage._record_scout_call, stage.run_scout = record, run
     try:
-        with Sampler(runtime["url"], runtime["sample_interval_s"]) as sampler:
+        cancel = threading.Event()
+        with Sampler(runtime["url"], runtime["sample_interval_s"], cancel) as sampler:
             start = time.time()
-            result = asyncio.run(stage.run_scouts(spec, scope=TaskScope(root=str(scope), edit_mode="none"),
-                                                  role=runtime["role"], url=runtime["url"]))
+            with httpx.Client(trust_env=False) as client:
+                transport = stage.ChatCompletionsTransport(runtime["url"], client=client)
+                result = asyncio.run(stage.run_scouts(spec, scope=TaskScope(root=str(scope), edit_mode="none"),
+                                                      role=runtime["role"], url=runtime["url"], transport=transport,
+                                                      cancel_event=cancel, request_deadline_s=time.perf_counter() +
+                                                      max(0, float(os.environ["FILLER_DEADLINE"]) - time.time())))
             end = time.time()
     finally:
         stage._record_scout_call, stage.run_scout = original_record, original_run
@@ -212,15 +316,17 @@ def run(manifest: Path, arm: str, evidence: Path) -> int:
     m = json.loads(raw)
     validate_manifest(m, manifest.parent)
     runtime = m.get("runtime", {}).get(arm)
-    if not isinstance(runtime, dict) or not all(k in runtime for k in ("url", "role", "server_pid", "window_id", "sample_interval_s", "grant")):
+    if not isinstance(runtime, dict) or not all(k in runtime for k in ("url", "role", "server_pid", "window_id", "sample_interval_s", "grant_id")):
         raise ValueError("runtime must pin server, role, window, sample interval and grant for each arm")
     interval = runtime["sample_interval_s"]
     if type(interval) not in (int, float) or not 0 < interval <= m["max_occupancy_sample_gap_s"] / 2:
         raise ValueError("sampling interval must be at most half the declared sample gap")
-    grant = pinned_file(manifest.parent, runtime["grant"])
+    grant_before = active_grant(runtime["grant_id"])
+    endpoint_before = endpoint_identity(runtime["server_pid"], runtime["url"])
     before = process_snapshot(runtime["server_pid"])
+    started = time.time()
     pins = m["pins"]
-    if before["binary_sha256"] != pins["server_binary_sha256"] or " ".join(before["argv"]) != pins["argv"] or not before["ggml"]:
+    if before["binary_sha256"] != pins["server_binary_sha256"] or " ".join(before["argv"]) != pins["argv"] or not before["ggml"] or pins["model"] not in before["argv"]:
         raise ValueError("server binary, argv or mapped ggml identity mismatch")
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     if source != pins["source_commit"] or subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT, text=True).strip():
@@ -232,24 +338,31 @@ def run(manifest: Path, arm: str, evidence: Path) -> int:
              "fork": os.environ["ORCHESTRATOR_PREFIX_INDEX_FORK"] == "1", "lpm_max_skips": 1}
     out = evidence.parent / (evidence.stem + "-native")
     out.mkdir(parents=True, exist_ok=False)
-    (out / "grant.json").write_bytes(grant)
+    (out / "grant.txt").write_bytes(Path(grant_before["path"]).read_bytes())
     tasks = []
     for task in m["tasks"]:
         request = json.loads(pinned_file(manifest.parent, task["request"]))
         expected = json.loads(pinned_file(manifest.parent, task["expected"]))
+        active_grant(runtime["grant_id"])
         tasks.append(collect_task(task, request, expected, runtime, manifest.parent, out))
+    ended = time.time()
+    grant_after = active_grant(runtime["grant_id"])
+    endpoint_after = endpoint_identity(runtime["server_pid"], runtime["url"])
     after = process_snapshot(runtime["server_pid"])
     e = {"arm": arm, "manifest_sha256": digest(raw), "pins": pins, "flags": flags,
          "window_id": runtime["window_id"], "tasks": tasks, "server_before": before,
-         "server_after": after, "grant_sha256": digest(grant), "grant_authority_verified": False}
+         "server_after": after, "grant": grant_before, "grant_authority_verified": True,
+         "endpoint": endpoint_before}
     errors = validate_evidence(e, m, digest(raw), arm)
     if before != after:
         errors.append("server process or mapped library identity changed")
-    # A grant digest proves file custody, not authority or active-window coverage.
-    # A future owner-bound validator must establish those facts before a gate can pass.
-    errors.append("grant authority and window coverage not verified")
-    errors.append("server PID to listening endpoint binding not verified")
+    if grant_before != grant_after:
+        errors.append("grant changed during collection")
+    if endpoint_before != endpoint_after:
+        errors.append("server endpoint listener changed during collection")
     e["collection_errors"] = errors
+    if not errors:
+        write_belief(out, tasks, arm, digest(raw), runtime, before, started, ended)
     evidence.write_text(json.dumps(e, indent=2, sort_keys=True) + "\n")
     return 1 if errors else 0
 
