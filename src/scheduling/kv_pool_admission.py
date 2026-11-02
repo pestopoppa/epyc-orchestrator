@@ -1120,7 +1120,14 @@ class SharedKVPoolAdmission:
         leaf, so this nests safely. Cheap by construction (D4): the key is
         already hashed, and ``unique_cells`` is filled in after the lock."""
         m = view.get("match")
-        info: dict[str, Any] = {"verdict": verdict, "fork": bool(view.get("fork"))}
+        # Snapshot before acquire's finally block removes the ticket's queue
+        # bookkeeping. This counts times this ticket was bypassed, not times it
+        # bypassed another ticket; queue_wait_ms is recorded alongside it.
+        info: dict[str, Any] = {
+            "verdict": verdict,
+            "fork": bool(view.get("fork")),
+            "lpm_skips_observed": self._lpm_skips.get(ticket, 0),
+        }
         try:
             floor = _env_float(KV_POOL_PREFILL_FLOOR_TPS_ENV, DEFAULT_PREFILL_FLOOR_TPS)
             pidx.begin(ticket, key, prompt_tokens=int(prefill_tokens),

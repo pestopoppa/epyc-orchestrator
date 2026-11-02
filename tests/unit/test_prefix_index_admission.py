@@ -126,10 +126,14 @@ def test_lpm_admits_a_reusable_prefix_ahead_of_a_head_that_does_not_fit(monkeypa
     assert hot is not None and "cold" not in out
     info = pool.admission_record(hot)["prefix_index"]
     assert info["verdict"] == "lpm" and info["lpm_score"] > 0
+    assert info["lpm_skips_observed"] == 0  # this request did the passing
     assert pi.get_index(URL).stats["lpm_passes"] == 1
     pool.release(URL, held)
     cold.join(timeout=5)
     assert out["cold"] is not None
+    cold_record = pool.admission_record(out["cold"])
+    assert cold_record["prefix_index"]["lpm_skips_observed"] == 1
+    assert cold_record["queue_wait_ms"] > 0
     pool.release(URL, hot)
     pool.release(URL, out["cold"])
 
