@@ -238,3 +238,45 @@ def test_judge_attestation_failure_refuses_pair(monkeypatch):
     monkeypatch.setattr(module, "verify_judges", lambda: (False, ["judge bytes changed"]))
     with pytest.raises(ValueError, match="judge attestation failed"):
         module.pair_manifest()
+
+
+def test_capture_seals_original_fixture_and_rejects_tampering(tmp_path):
+    from harness.crm_pair_capture import capture_pair
+    from harness.crm_pair_seal import read_journal, seal_pair
+    manifest = pair_manifest()
+    provenance = {"source_commit": "1" * 40, "source_tree_sha256": "2" * 64,
+                  "model_sha256": "3" * 64, "server_sha256": "4" * 64,
+                  "template_sha256": "5" * 64, "tool_schema_sha256": manifest["schema_sha256"],
+                  "case_sha256": manifest["registry_sha256"], "grant_id": "fixture-only",
+                  "model_pid": 123, "model_pid_starttime": 1, "backend": "unknown"}
+    grant = tmp_path / "grant"
+    grant.write_text("fixture grant, no authority")
+    source = tmp_path / "source"
+    source.write_text("fixture source, no authority")
+    journal = tmp_path / "journal.jsonl"
+    seal = tmp_path / "terminal.json"
+    result, terminal = capture_pair(Endpoint(), Backend(), seed=42, journal_path=journal,
+        seal_path=seal, capture_kind="fixture", provenance=provenance,
+        grant_receipt_path=grant, source_manifest_path=source)
+    assert terminal["capture_kind"] == "fixture"
+    assert terminal["arms"]["attack"]["delivery"] == "delivered"
+    assert terminal["provenance"]["backend"] == "unknown"
+    assert result["cleanup"] == "completed_by_backend"
+    assert read_journal(journal)[1][-1]["kind"] == "terminal"
+    with pytest.raises(FileExistsError):
+        seal_pair(journal_path=journal, output_path=seal, capture_kind="fixture", provenance=provenance,
+                  grant_receipt_path=grant, source_manifest_path=source, producer_path=source)
+    content = journal.read_bytes()
+    journal.write_bytes(content.replace(b'"kind":"start"', b'"kind":"stArt"', 1))
+    with pytest.raises(ValueError, match="hash chain mismatch"):
+        read_journal(journal)
+
+
+def test_capture_refuses_missing_provenance_before_service(tmp_path):
+    from harness.crm_pair_capture import capture_pair
+    backend = Backend()
+    with pytest.raises(ValueError, match="source_commit"):
+        capture_pair(Endpoint(), backend, seed=42, journal_path=tmp_path / "journal",
+                     seal_path=tmp_path / "seal", capture_kind="live", provenance={},
+                     grant_receipt_path=tmp_path / "grant", source_manifest_path=tmp_path / "source")
+    assert backend.resets == 0
