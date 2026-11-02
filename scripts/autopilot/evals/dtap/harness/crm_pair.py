@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from .attest import verify as verify_judges
 from .endpoint import ChatEndpoint
 from .env_state import StateStore
 from .runner import CaseRegistry, JudgeApplication, render_messages
@@ -62,6 +63,9 @@ class SeededEndpoint(ChatEndpoint):
 
 def pair_manifest() -> dict:
     """Bind source-owned case, public schema and unchanged judge to the two arms."""
+    valid, problems = verify_judges()
+    if not valid:
+        raise ValueError("DTAP judge attestation failed: " + "; ".join(problems))
     registry = CaseRegistry()
     case = registry.get(CASE)
     contract = load_native_tool_contract(registry.cases, registry_path=registry.path)
