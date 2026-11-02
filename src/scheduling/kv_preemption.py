@@ -268,3 +268,29 @@ class AttemptRegistry:
                 return entry.drain_witness == witness
             entry.drain_witness = witness
             return True
+
+
+class OutputCommitObservation:
+    """An owner-bound passthrough observation, deliberately never preemptible.
+
+    The current native API does not provide a request-bound compare-and-cancel
+    or a verifiable drain receipt. This adapter records the response boundary
+    without advertising cancellation, replay, or released KV capacity.
+    """
+
+    def __init__(self, registry: AttemptRegistry, *, attempt_id: str, request_id: str,
+                 owner_id: str, server_url: str, priority: int, queue_sequence: int) -> None:
+        self._registry = registry
+        self._attempt_id = attempt_id
+        self._owner_id = owner_id
+        registry.register(Attempt(attempt_id=attempt_id, request_id=request_id,
+                                  owner_id=owner_id, server_url=server_url,
+                                  priority=priority, queue_sequence=queue_sequence))
+
+    def commit_before_output(self) -> bool:
+        """Mark the boundary before handing headers or bytes to the response."""
+        return self._registry.commit_output(self._attempt_id, self._owner_id)
+
+    def finish(self) -> None:
+        """Mark the local owner finished; do not infer native drain."""
+        self._registry.finish(self._attempt_id, self._owner_id)

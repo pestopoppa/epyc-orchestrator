@@ -298,6 +298,8 @@ class _Call:
     server_slot: int | None = None
     cancel: threading.Event = field(default_factory=threading.Event)
     response: Any = None  # live httpx.Response, for a best-effort close on cancel
+    # Optional, default-off non-preemptible output-boundary observation only.
+    preemption_observation: Any = field(default=None, repr=False)
     # outcome
     t_staged: float = field(default_factory=time.time)
     t_dispatch: float | None = None
@@ -760,6 +762,9 @@ def run_upstream(call: _Call, state: AppState, emit) -> None:
                         k: v for k, v in resp.headers.items()
                         if k.lower() in ("content-type",)
                     }
+                    if (call.preemption_observation is not None
+                            and not call.preemption_observation.commit_before_output()):
+                        raise RuntimeError("preemption observation refused output commit")
                     emit("start", (resp.status_code, passed))
                     started = True
                     is_sse = "text/event-stream" in resp.headers.get("content-type", "")
@@ -801,6 +806,8 @@ def run_upstream(call: _Call, state: AppState, emit) -> None:
             health.record_failure(call.base_url)
     finally:
         call.response = None
+        if call.preemption_observation is not None:
+            call.preemption_observation.finish()
         write_serving_record(call, error)
         if error is not None and not started:
             emit("refused", error)

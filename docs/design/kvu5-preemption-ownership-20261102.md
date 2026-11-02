@@ -85,3 +85,28 @@ owner loss; and fork-source/lease release. Assert exact queue order, one
 logical response and one terminal record, no early reservation credit, no
 starvation under the declared bounded policy, and identical flag-off behavior.
 Only a separate authorized integration run can establish actual server drain.
+
+## Concrete owner boundary and native obstacle (2026-11-02)
+
+The passthrough owner has an optional, default-off `OutputCommitObservation`.
+It registers an attempt with no native task identity, cancellation or replay
+capability, so selection always refuses it. If attached, `run_upstream` marks
+that attempt committed before it queues the response headers. Its `finish`
+marks only the local owner terminal; it does not certify native drain or release
+capacity. Normal calls do not construct or attach this observation. This is an
+integration seam, not an enabled preemption path.
+
+The frozen v10 server's `SERVER_TASK_TYPE_SLOT_ERASE` implementation in
+`tools/server/server-context.cpp` looks up the slot **when the erase task is
+processed**, force-releases whichever task is then processing, and clears the
+slot. The route `handle_slots_erase` accepts a slot ID without an expected
+`id_task` condition. A `/slots` observation followed by erase therefore has a
+slot-reuse race: it can cancel a successor. The OpenAI streaming response's
+`id` is `oaicompat_cmpl_id`; it does not expose the native slot `id_task` for
+an owner-bound compare. Disconnecting the upstream socket also supplies no
+native task-bound terminal/drain receipt. The owner cannot safely select a
+victim using these endpoints. It needs a native operation that atomically
+checks server incarnation plus expected task identity, cancels only that task,
+and returns or supports a verifiable terminal/drain witness; the admission owner
+then needs to retain its reservation until that witness and local termination
+agree. The frozen production kernel remains unchanged.
