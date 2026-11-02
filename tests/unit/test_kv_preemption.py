@@ -12,6 +12,7 @@ def attempt(name, *, sequence=10, priority=0, url="server", **kwargs):
                    cancellable=kwargs.pop("cancellable", True),
                    replayable=kwargs.pop("replayable", True),
                    output_uncommitted_verified=kwargs.pop("output_uncommitted_verified", True),
+                   server_task_id=kwargs.pop("server_task_id", f"task-{name}"),
                    **kwargs)
 
 
@@ -29,6 +30,7 @@ def test_default_ineligible_without_explicit_owner_capabilities():
     registry.register(attempt("e", url="other"))
     registry.register(attempt("f", sequence=0))
     registry.register(attempt("g", output_uncommitted_verified=False))
+    registry.register(attempt("h", server_task_id=None))
     assert choose(registry) is None
 
 
@@ -143,8 +145,7 @@ def test_cancellation_requires_selection_owner_and_native_task_id():
     victim = choose(registry)
     with pytest.raises(ValueError, match="owner"):
         registry.begin_cancel(victim, "wrong-owner")
-    with pytest.raises(ValueError, match="identity missing"):
-        registry.begin_cancel(victim, "owner-a")
+    assert registry.begin_cancel(victim, "owner-a").server_task_id == "task-a"
 
 
 def test_ack_and_verified_drain_are_bound_and_idempotent():

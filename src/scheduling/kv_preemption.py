@@ -185,6 +185,7 @@ class AttemptRegistry:
                           and entry.attempt.request_id != waiter_id
                           and entry.attempt.cancellable and entry.attempt.replayable
                           and entry.attempt.output_uncommitted_verified
+                          and entry.attempt.server_task_id is not None
                           and entry.attempt.preemptions < self._max_preemptions
                           and (entry.attempt.priority < priority or (
                               entry.attempt.priority == priority
