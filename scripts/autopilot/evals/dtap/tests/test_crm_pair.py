@@ -304,9 +304,11 @@ def test_capture_seals_control_failure_and_not_attempted_attack(tmp_path):
     assert any(x["kind"] == "arm_skipped" for x in read_journal(journal)[1])
 
 
-def test_live_capture_waits_for_provider_close_and_fails_without_it(tmp_path):
+def test_live_capture_waits_for_provider_close_and_fails_without_it(tmp_path, monkeypatch):
+    import harness.crm_pair_capture as capture_module
     from harness.crm_pair_capture import capture_pair
     from harness.crm_pair_seal import seal_pair
+    monkeypatch.setattr(capture_module, "verify_manifest", lambda *args: None)
     m = pair_manifest()
     prov = {"source_commit": "1" * 40, "source_tree_sha256": "2" * 64,
             "model_sha256": "3" * 64, "server_sha256": "4" * 64, "template_sha256": "5" * 64,
@@ -324,3 +326,82 @@ def test_live_capture_waits_for_provider_close_and_fails_without_it(tmp_path):
     with pytest.raises(ValueError, match="provider open/close"):
         seal_pair(journal_path=journal, output_path=seal_path, capture_kind="live", provenance=prov,
                   grant_receipt_path=grant, source_manifest_path=source, producer_path=source)
+
+
+def test_source_manifest_reopens_exact_committed_files(tmp_path):
+    import subprocess
+    from harness.crm_source_manifest import FILES, source_facts, verify_manifest, write_manifest
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for path in FILES:
+        item = repo / path
+        item.parent.mkdir(parents=True, exist_ok=True)
+        item.write_text("fixture " + path)
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git("init", "-q")
+    git("add", "--", *FILES)
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", "fixture")
+    commit = git("rev-parse", "HEAD")
+    manifest_path = tmp_path / "manifest.json"
+    facts = write_manifest(manifest_path, repo, commit)
+    assert verify_manifest(manifest_path, commit, facts["source_tree_sha256"]) == facts
+    assert source_facts(repo, commit) == facts
+    (repo / FILES[0]).write_text("tampered")
+    with pytest.raises(ValueError, match="working source differs"):
+        verify_manifest(manifest_path, commit, facts["source_tree_sha256"])
+
+
+def test_prepared_file_hash_is_explicit_preflight_fact(tmp_path):
+    import hashlib
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "tools" / "crm_prepare.py"
+    spec = importlib.util.spec_from_file_location("crm_prepare_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    data = tmp_path / "model"
+    data.write_bytes(b"not-a-model")
+    fact = module.file_fact(data)
+    assert fact["sha256"] == hashlib.sha256(b"not-a-model").hexdigest()
+    assert fact["path"] == str(data.resolve())
+    assert fact["size"] == 11
+
+
+def test_rowflow_fixture_confines_output_and_drains_stop(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    script = Path(__file__).resolve().parent.parent / "tools" / "crm_row_fixture.py"
+    root = tmp_path / "dry"
+    root.mkdir()
+    output = root / "fixture.json"
+    live = tmp_path / "live.json"
+    env = dict(os.environ, FILLER_DRYRUN="1", FILLER_DRYRUN_DIR=str(root),
+               FILLER_DRYRUN_RESULT_PATH=str(output), FILLER_STOPFILE=str(root / "stop"))
+    subprocess.run([sys.executable, str(script)], env=env, check=True, timeout=15)
+    assert json.loads(output.read_text())["capture_kind"] == "fixture"
+    assert not live.exists()
+    env["FILLER_DRYRUN_RESULT_PATH"] = str(live)
+    assert subprocess.run([sys.executable, str(script)], env=env, capture_output=True, timeout=15).returncode != 0
+    assert not live.exists()
+    output.unlink()
+    env.update(FILLER_DRYRUN_RESULT_PATH=str(output), CRM_FIXTURE_HOLD="1")
+    process = subprocess.Popen([sys.executable, str(script)], env=env)
+    try:
+        deadline = time.monotonic() + 8
+        while not (root / "fixture-child.pid").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        child = int((root / "fixture-child.pid").read_text())
+        (root / "stop").touch()
+        assert process.wait(timeout=8) == 75
+        with pytest.raises(ProcessLookupError):
+            os.kill(child, 0)
+        assert not output.exists() and not live.exists()
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=8)
