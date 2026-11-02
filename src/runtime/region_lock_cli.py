@@ -210,6 +210,51 @@ def _resolve_regions(args: argparse.Namespace) -> frozenset[str]:
     return frozenset(names)
 
 
+def _subquarter_cores(cpu_list: str, fold: bool) -> dict[str, set[int]]:
+    """ws58 2026-11-02 sub-quarter packing: quarter -> physical cores of `cpu_list` for every quarter it covers only
+    PARTLY (< 24 cores; SMT siblings 96-191 count as their core when folding). Such a quarter is not locked whole:
+    the holder takes LOCK_SH on the quarter (so a whole-quarter holder still excludes it) plus LOCK_EX per core, so
+    holders on disjoint cpu lists inside one quarter run side by side. REGION_LOCK_SUBQUARTER=0 restores whole quarters."""
+    if os.environ.get("REGION_LOCK_SUBQUARTER", "1").strip() not in _TRUTHY:
+        return {}
+    by: dict[str, set[int]] = {}
+    for tok in cpu_list.split(","):
+        a, _, b = tok.strip().partition("-")
+        if not a.isdigit():
+            return {}
+        for c in range(int(a), int(b or a) + 1):
+            if c >= 96:
+                if not fold or c >= 192:
+                    continue
+                c -= 96
+            by.setdefault(f"q{c // 24}", set()).add(c)
+    return {q: cs for q, cs in by.items() if len(cs) < 24 and q in ATOMIC_REGIONS}
+
+
+def _acquire_subquarter(role: str, partial: dict[str, set[int]], timeout_s: float, tag: str) -> list:
+    """Open + flock the sub-quarter locks (sorted order); the returned handles hold them until closed."""
+    import fcntl
+
+    from src.runtime.cpu_region_lock import _acquire_one_with_timeout
+
+    fhs: list = []
+    try:
+        for q in sorted(partial):
+            paths = [(global_region_lock_path(q), fcntl.LOCK_SH), (region_lock_path(role, q), fcntl.LOCK_SH)]
+            paths += [(_lock_dir() / f"cpu_core.{c}.lock", fcntl.LOCK_EX) for c in sorted(partial[q])]
+            for path, mode in paths:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                fh = open(path, "a+b")
+                fhs.append(fh)
+                _acquire_one_with_timeout(fh, region=q, role=role, timeout_s=timeout_s, deadline_s=None,
+                                          cancel_check=None, request_tag=tag, lock_type=mode)
+    except BaseException:
+        for fh in fhs:
+            fh.close()
+        raise
+    return fhs
+
+
 def _run(args: argparse.Namespace) -> int:
     if not args.command:
         raise SystemExit("[region-lock] no command given after `--`")
@@ -228,6 +273,8 @@ def _run(args: argparse.Namespace) -> int:
         return EX_USAGE
 
     regions = _resolve_regions(args)
+    partial = _subquarter_cores(args.cpu_list, getattr(args, "fold_siblings", True)) if args.cpu_list else {}
+    regions = frozenset(r for r in regions if r not in partial)
     if regions:
         # The cross-role preflight is about the region GLOBAL layer; a gpu-quiet-only
         # hold takes no region lock and has nothing to be one-sided against.
@@ -250,7 +297,14 @@ def _run(args: argparse.Namespace) -> int:
         f"[region-lock] acquiring {what} as role={args.role!r} (timeout_s={args.timeout_s}) …",
         file=sys.stderr,
     )
+    sub_fhs: list = []
     try:
+        if partial:
+            sub_fhs = _acquire_subquarter(args.role, partial, args.timeout_s, tag)
+            print(f"[region-lock] held sub-quarter cores {{{', '.join(f'{q}: {sorted(c)}' for q, c in sorted(partial.items()))}}}",
+                  file=sys.stderr)
+        if not regions and args.gpu_quiet is None:
+            return _spawn(args.command)
         if args.gpu_quiet is None:
             # Byte-for-byte the pre-gpu-quiet path.
             with cpu_region_lock(
@@ -284,6 +338,9 @@ def _run(args: argparse.Namespace) -> int:
     except CpuRegionLockTimeout as e:
         print(f"[region-lock] TIMEOUT acquiring {what}: {e}", file=sys.stderr)
         return EX_TEMPFAIL
+    finally:
+        for fh in sub_fhs:
+            fh.close()
 
 
 def _spawn(command: list[str]) -> int:
