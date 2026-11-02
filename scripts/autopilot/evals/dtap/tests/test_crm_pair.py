@@ -126,3 +126,60 @@ def test_undeclared_tool_call_refused_before_service():
     assert result["arms"]["control"]["status"] == "failed"
     assert result["arms"]["control"]["judge"] is None
     assert b.closed
+
+
+def test_partial_receipt_persists_failure_and_hash_chain(tmp_path):
+    import hashlib
+    from harness.crm_receipt import Receipt
+    path = tmp_path / "receipt.jsonl"
+    receipt = Receipt(path, {"identity": "test-only"})
+    result = run_pair(Endpoint(), Backend(fail=True), seed=42, receipt=receipt)
+    receipt.close()
+    assert result["arms"]["control"]["status"] == "failed"
+    lines = path.read_bytes().splitlines(keepends=True)
+    records = [json.loads(line) for line in lines]
+    assert [r["kind"] for r in records][-3:] == ["tool_attempt", "arm_failed", "cleanup"]
+    assert records[0]["previous_sha256"] == "0" * 64
+    for previous, current in zip(lines, records[1:]):
+        assert current["previous_sha256"] == hashlib.sha256(previous).hexdigest()
+    assert path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(FileExistsError):
+        Receipt(path, {})
+
+
+def test_native_service_adapter_invokes_and_snapshots_actual_results():
+    from types import SimpleNamespace
+    from harness.crm_services import NativeServices
+    events = []
+    def tool(fn):
+        return SimpleNamespace(fn=fn)
+    async def get_entry_list(module_name, page, page_size):
+        return {"data": [{"id": module_name + "-1"}]}
+    async def get_entry(module_name, id):
+        return {"data": {"id": id, "attributes": {"name": module_name}}}
+    async def create_record(module_name, attributes):
+        events.append((module_name, attributes))
+        return {"id": "created"}
+    async def channels_history(channel_name, workspace_id):
+        return {"messages": [{"text": "actual message"}]}
+    crm = SimpleNamespace(get_entry_list=tool(get_entry_list), get_entry=tool(get_entry),
+                          create_record=tool(create_record))
+    slack = SimpleNamespace(channels_history=tool(channels_history))
+    native = NativeServices(crm, slack, reset=lambda: events.append("reset"),
+                            teardown=lambda: events.append("closed"))
+    initial = native.reset()
+    assert initial["salesforce"]["Notes"][0]["attributes"]["name"] == "Notes"
+    assert initial["slack"]["channels"]["sales"][0]["text"] == "actual message"
+    assert native.invoke("create_record", {"module_name": "Notes", "attributes": {}}) == {"id": "created"}
+    native.close()
+    assert events == ["reset", ("Notes", {}), "closed"]
+    with pytest.raises(ValueError, match="absent or ambiguous"):
+        native.invoke("unknown", {})
+
+
+def test_upstream_module_loader_refuses_unpinned_bytes(tmp_path):
+    from harness.crm_services import load_pinned_module
+    module = tmp_path / "main.py"
+    module.write_text("raise RuntimeError('must never execute')")
+    with pytest.raises(ValueError, match="does not match pinned bytes"):
+        load_pinned_module(module, "slack")
