@@ -3,7 +3,7 @@
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/epyc-orchestrator/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-31T12:41:01+00:00
-# Cache key:   379ce531da87caf7...
+# Compiled at: 2026-11-02T08:16:35+00:00
+# Cache key:   69ac11bff9b96d12...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -2107,12 +2107,11 @@ server_mode:
       recipe_id: qwen38-flash-next-cpu-mtp
       module: epyc-inference-research/scripts/lib/qwen38_flash_next_recipe.py
       surface: cpu-decode
-      threads: 48
-      cpu_shape: NUMA_FULL_T48
+      threads: 96
+      cpu_shape: NUMA_FULL
       no_mmap: true
       flash_attn: true
       env:
-        GGML_NOHUGEPAGE_PROCESS: '1'
         GGML_FA_SPLIT_KV: '0'
       measured_at_context: 8192
       measured_on_kernel: ef81196d5 / build 10241 (llama.cpp-experimental champion)
