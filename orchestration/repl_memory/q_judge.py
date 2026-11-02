@@ -5,11 +5,64 @@ Extracted from q_scorer.py during the 2026-05-22 Task-G refactor.
 
 from __future__ import annotations
 
+import enum
 import logging
 import subprocess
-from typing import Any, Dict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+class JudgeStatus(str, enum.Enum):
+    """Whether the judge produced a score at all (JEV-1)."""
+
+    SCORED = "scored"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class JudgeResult:
+    """Typed judge outcome.
+
+    ``score`` is None whenever ``status`` is UNAVAILABLE.  A timeout, a
+    subprocess error or an unparseable answer is NOT a score: it must be
+    counted separately and never folded into a reward (JEV-1; previously
+    these paths fabricated ``SCORE: 1``).
+    """
+
+    status: JudgeStatus
+    score: Optional[int]
+    reason: str
+
+    @property
+    def available(self) -> bool:
+        return self.status is JudgeStatus.SCORED
+
+    @classmethod
+    def unavailable(cls, reason: str) -> "JudgeResult":
+        return cls(JudgeStatus.UNAVAILABLE, None, reason)
+
+
+def tally_judge_results(results: Iterable[JudgeResult]) -> Dict[str, Any]:
+    """Aggregate judge results, counting unavailable separately.
+
+    ``mean_score`` is over SCORED results only (None if there are none).
+    """
+    scores: List[int] = []
+    unavailable = 0
+    for r in results:
+        if r.available:
+            assert r.score is not None
+            scores.append(r.score)
+        else:
+            unavailable += 1
+    return {
+        "scored": len(scores),
+        "unavailable": unavailable,
+        "mean_score": (sum(scores) / len(scores)) if scores else None,
+    }
 
 
 class ClaudeAsJudge:
@@ -37,7 +90,7 @@ class ClaudeAsJudge:
         task_ir: Dict[str, Any],
         routing_decision: List[str],
         outcome: str,
-    ) -> Tuple[int, str]:
+    ) -> JudgeResult:
         """
         Score a routing decision.
 
@@ -47,18 +100,17 @@ class ClaudeAsJudge:
             outcome: Task outcome
 
         Returns:
-            (score, reason) tuple where score is 0-3
+            JudgeResult; score is 0-3, or None when the judge is unavailable
         """
         prompt = self._build_routing_prompt(task_ir, routing_decision, outcome)
-        response = self._call_model(prompt)
-        return self._parse_score(response)
+        return self._judge(prompt)
 
     def score_plan(
         self,
         task_ir: Dict[str, Any],
         plan: Dict[str, Any],
         outcome: str,
-    ) -> Tuple[int, str]:
+    ) -> JudgeResult:
         """
         Score a task plan.
 
@@ -68,10 +120,15 @@ class ClaudeAsJudge:
             outcome: Task outcome
 
         Returns:
-            (score, reason) tuple where score is 0-3
+            JudgeResult; score is 0-3, or None when the judge is unavailable
         """
         prompt = self._build_plan_prompt(task_ir, plan, outcome)
+        return self._judge(prompt)
+
+    def _judge(self, prompt: str) -> JudgeResult:
         response = self._call_model(prompt)
+        if isinstance(response, JudgeResult):
+            return response
         return self._parse_score(response)
 
     def _build_routing_prompt(
@@ -135,8 +192,8 @@ Respond with exactly:
 SCORE: <0-3>
 REASON: <brief explanation>"""
 
-    def _call_model(self, prompt: str) -> str:
-        """Call the judge model."""
+    def _call_model(self, prompt: str) -> "str | JudgeResult":
+        """Call the judge model; failures return an UNAVAILABLE JudgeResult."""
         try:
             result = subprocess.run(
                 [
@@ -152,24 +209,27 @@ REASON: <brief explanation>"""
             )
             return result.stdout
         except subprocess.TimeoutExpired:
-            return "SCORE: 1\nREASON: Judge model timed out"
-        except Exception as e:
-            return f"SCORE: 1\nREASON: Judge model error: {e}"
+            return JudgeResult.unavailable("judge model timed out")
+        except Exception as e:  # noqa: BLE001 - any failure means no verdict
+            return JudgeResult.unavailable(f"judge model error: {e}")
 
-    def _parse_score(self, response: str) -> Tuple[int, str]:
-        """Parse score from model response."""
-        score = 1  # Default to middle-low
-        reason = "Could not parse response"
+    def _parse_score(self, response: str) -> JudgeResult:
+        """Parse score from model response; no valid SCORE line = UNAVAILABLE."""
+        score: Optional[int] = None
+        reason = ""
 
         for line in response.split("\n"):
             line = line.strip()
-            if line.startswith("SCORE:"):
+            if line.startswith("SCORE:") and score is None:
                 try:
-                    score = int(line.split(":")[1].strip())
-                    score = max(0, min(3, score))
+                    value = int(line.split(":")[1].strip())
                 except (ValueError, IndexError):
-                    pass
+                    continue
+                if 0 <= value <= 3:
+                    score = value
             elif line.startswith("REASON:"):
-                reason = line.split(":", 1)[1].strip() if ":" in line else reason
+                reason = line.split(":", 1)[1].strip()
 
-        return (score, reason)
+        if score is None:
+            return JudgeResult.unavailable("could not parse judge response")
+        return JudgeResult(JudgeStatus.SCORED, score, reason)
