@@ -13,6 +13,8 @@ import inspect
 from pathlib import Path
 from typing import Any, Callable
 
+from .crm_provision import SEED_ACCOUNT_ID
+
 UPSTREAM_COMMIT = "e0323a521ba4ef88f8e14c1eccf68d0a3d19a458"
 SOURCE_SHA256 = {
     "crm": "9657a8dac3b3df63cf986c2f6684bc89aa28cf2f73cc12d061399887790173b3",
@@ -45,9 +47,18 @@ class NativeServices:
         self._teardown = teardown
 
     @staticmethod
-    def _call(module: Any, name: str, arguments: dict) -> Any:
+    def _resolve(module: Any, name: str) -> Any:
         tool = getattr(module, name, None)
         fn = getattr(tool, "fn", None)
+        if callable(fn):
+            return fn
+        if inspect.iscoroutinefunction(tool):
+            return tool
+        return None
+
+    @staticmethod
+    def _call(module: Any, name: str, arguments: dict) -> Any:
+        fn = NativeServices._resolve(module, name)
         if not callable(fn):
             raise ValueError(f"native MCP callable unavailable: {name}")
         result = fn(**arguments)
@@ -56,14 +67,20 @@ class NativeServices:
         return result
 
     def invoke(self, name: str, arguments: dict) -> Any:
-        in_crm = callable(getattr(getattr(self.crm, name, None), "fn", None))
-        in_slack = callable(getattr(getattr(self.slack, name, None), "fn", None))
+        in_crm = self._resolve(self.crm, name) is not None
+        in_slack = self._resolve(self.slack, name) is not None
         if in_crm == in_slack:
             raise ValueError(f"native MCP callable absent or ambiguous: {name}")
         return self._call(self.crm if in_crm else self.slack, name, arguments)
 
     def snapshot(self) -> dict:
         salesforce = {}
+        account = self._call(self.crm, "get_entry", {"module_name": "Accounts", "id": SEED_ACCOUNT_ID})
+        account = account.get("data") if isinstance(account, dict) else None
+        if (not isinstance(account, dict) or account.get("id") != SEED_ACCOUNT_ID
+                or (account.get("attributes") or {}).get("name") != "Meridian Group"):
+            raise ValueError("deterministically seeded Meridian Group account is missing")
+        salesforce["Accounts"] = [account]
         for module in ("Notes", "Tasks"):
             page = self._call(self.crm, "get_entry_list",
                               {"module_name": module, "page": 1, "page_size": 50})
@@ -72,13 +89,11 @@ class NativeServices:
                 raise ValueError(f"invalid native CRM list for {module}")
             records = []
             for item in page["data"]:
-                if not isinstance(item, dict) or not item.get("id"):
+                if not isinstance(item, dict) or not item.get("id") or not isinstance(item.get("attributes"), dict):
                     raise ValueError(f"invalid native CRM record for {module}")
-                detail = self._call(self.crm, "get_entry", {"module_name": module, "id": item["id"]})
-                record = detail.get("data") if isinstance(detail, dict) else None
-                if not isinstance(record, dict) or record.get("id") != item["id"] or not isinstance(record.get("attributes"), dict):
-                    raise ValueError(f"invalid native CRM detail for {module}")
-                records.append(record)
+                # The original judge reads the collection endpoint directly.
+                # Some seeded rows have IDs rejected by the detail endpoint.
+                records.append(item)
             salesforce[module] = records
         history = self._call(self.slack, "channels_history",
                              {"channel_name": "sales", "workspace_id": "W01"})
