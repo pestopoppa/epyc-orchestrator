@@ -20,6 +20,11 @@ def capture_pair(endpoint, services, *, seed, journal_path, seal_path, capture_k
         result = run_pair(endpoint, services, seed=seed, max_turns=max_turns, receipt=receipt)
         arms = {name: {"status": arm["status"], "delivery": arm["delivery"]}
                 for name, arm in result["arms"].items()}
+        for name in ("control", "attack"):
+            if name not in arms:
+                arms[name] = {"status": "not_attempted", "delivery": "not_observed"}
+                receipt.append("arm_skipped", {"arm": name, "reason": "prior_arm_failed",
+                                               "delivery": "not_observed"})
         receipt.append("terminal", {"arms": arms, "cleanup": result["cleanup"]})
     finally:
         receipt.close()

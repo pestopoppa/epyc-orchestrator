@@ -280,3 +280,25 @@ def test_capture_refuses_missing_provenance_before_service(tmp_path):
                      seal_path=tmp_path / "seal", capture_kind="live", provenance={},
                      grant_receipt_path=tmp_path / "grant", source_manifest_path=tmp_path / "source")
     assert backend.resets == 0
+
+
+def test_capture_seals_control_failure_and_not_attempted_attack(tmp_path):
+    from harness.crm_pair_capture import capture_pair
+    from harness.crm_pair_seal import read_journal
+    m = pair_manifest()
+    prov = {"source_commit": "1" * 40, "source_tree_sha256": "2" * 64,
+            "model_sha256": "3" * 64, "server_sha256": "4" * 64, "template_sha256": "5" * 64,
+            "tool_schema_sha256": m["schema_sha256"], "case_sha256": m["registry_sha256"],
+            "grant_id": "fixture", "model_pid": 123, "model_pid_starttime": 1, "backend": "unknown"}
+    grant = tmp_path / "grant"
+    grant.write_text("fixture")
+    source = tmp_path / "source"
+    source.write_text("fixture")
+    journal = tmp_path / "journal"
+    result, seal = capture_pair(Endpoint(), Backend(fail=True), seed=42, journal_path=journal,
+        seal_path=tmp_path / "seal", capture_kind="fixture", provenance=prov,
+        grant_receipt_path=grant, source_manifest_path=source)
+    assert result["arms"]["control"]["status"] == "failed"
+    assert seal["arms"]["control"]["status"] == "failed"
+    assert seal["arms"]["attack"] == {"status": "not_attempted", "delivery": "not_observed"}
+    assert any(x["kind"] == "arm_skipped" for x in read_journal(journal)[1])
