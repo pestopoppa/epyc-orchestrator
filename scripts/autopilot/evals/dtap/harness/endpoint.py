@@ -79,6 +79,7 @@ class ChatEndpoint:
         retries: int = 2,
         timeout: float = 60.0,
         opener: Optional[Callable[..., Any]] = None,
+        send_seed: bool = False,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -90,6 +91,7 @@ class ChatEndpoint:
         # Optional deterministic fake-transport seam; None preserves the
         # existing late-bound urllib opener (including monkeypatch callers).
         self._opener = opener
+        self.send_seed = send_seed
 
     def complete(
         self,
@@ -106,6 +108,12 @@ class ChatEndpoint:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        # Explicit opt-in preserves the historical unseeded request contract.
+        # Sending a seed is a request, not proof the server honors it.
+        if self.send_seed:
+            if type(seed) is not int:
+                raise ValueError("seed must be an integer")
+            body["seed"] = seed
         # Keep the pre-contract message-only request byte-compatible by making
         # every tool-specific body field conditional on an explicit contract.
         if tools is not None:

@@ -8,7 +8,7 @@ import pathlib
 import pytest
 
 from harness import cli, runner
-from harness.endpoint import ChatEndpoint
+from harness.endpoint import ChatEndpoint, ChatResult
 from harness.failure_ledger import (
     build_ledger,
     normalize_comparison_pairs,
@@ -17,6 +17,7 @@ from harness.failure_ledger import (
 )
 from harness.outcomes import EndpointFailure
 from harness.runner import RunResult
+from harness.tool_contract import CONTRACT_VERSION, NativeToolContract
 
 DTAP_DIR = pathlib.Path(__file__).resolve().parent.parent
 BENIGN_FIXTURE = DTAP_DIR / "fixtures" / "finance-benign-trade-execution-001.done.json"
@@ -259,6 +260,55 @@ def test_no_producer_fields_stay_explicitly_unmeasured():
     assert unit["no_valid_tool_call"]["state"] == "unmeasured"
     assert unit["first_try_valid_call"]["state"] == "unmeasured"
     assert unit["repair_recovery"]["state"] == "unmeasured"
+
+
+@pytest.mark.parametrize("calls,expected", [
+    ([{"name": "known", "arguments": {}}], True),
+    ([{"name": "unknown", "arguments": {}}], False),
+    ([{"name": "known", "arguments": {}}, {"name": "unknown", "arguments": {}}], None),
+])
+def test_matrix_binds_first_native_single_call_validation_to_closed_trace(tmp_path, calls, expected):
+    case_id = "crm-benign-001"
+    tool = {"type": "function", "function": {"name": "known", "description": "fixture",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}
+    contract = NativeToolContract.from_mappings(
+        CONTRACT_VERSION, {"repository": "fixture", "commit": "0" * 40, "tree": "0" * 40},
+        {case_id: [tool]}, "a" * 64,
+    )
+
+    class Endpoint:
+        def __init__(self):
+            self.turn = 0
+
+        def complete(self, *_args, **_kwargs):
+            self.turn += 1
+            return (ChatResult("", calls, "tool_calls") if self.turn == 1
+                    else ChatResult("done", [], "stop"))
+
+    runner.run_matrix([case_id], ["done"], [0], lambda *_: Endpoint(),
+                      results_dir=tmp_path, native_tool_contract=contract)
+    unit = json.loads((tmp_path / "failure_ledger.json").read_text())["units"][0]
+    assert unit["trace_binding_status"] == "verified_closed_trace"
+    first = unit["first_try_valid_call"]
+    if expected is None:
+        assert first["state"] == "unmeasured"
+    else:
+        assert first["state"] == "observed" and first["value"] is expected
+    assert unit["repair_recovery"]["state"] == "unmeasured"
+
+
+def test_first_call_and_timeout_never_invent_facts():
+    usage = summarize_response_usage(())
+    event = {"version": 1, "turn": 1, "call_count": 1, "accepted": True}
+    run = _run("b", "done", 0, status="failed", completion="other_error").to_dict()
+    unit = unit_record(run, threat="benign", trace_sha256=None,
+                       trace_binding_status="unavailable", usage=usage, tool_validation=event)
+    assert unit["first_try_valid_call"]["state"] == "unmeasured"
+    assert unit["ran_out_of_time"]["state"] == "unmeasured"
+    run["completion_state"] = "terminal_timeout"
+    unit = unit_record(run, threat="benign", trace_sha256=None,
+                       trace_binding_status="unavailable", usage=usage)
+    assert unit["ran_out_of_time"]["value"] is True
 
 
 def test_matrix_keeps_primary_summary_and_native_timeout_receipt_semantics(

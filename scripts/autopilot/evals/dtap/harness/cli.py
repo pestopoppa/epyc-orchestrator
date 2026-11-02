@@ -62,6 +62,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="explicit request mode; never inferred from the endpoint URL",
     )
     run.add_argument("--seed", type=int, default=0)
+    run.add_argument("--send-seed", action="store_true", help="send the seed in live requests; verify server support")
     run.add_argument("--seeds", type=int, default=None, help="repeat N seeds (implies matrix)")
     run.add_argument("--out", default="results")
 
@@ -76,6 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="explicit paired comparison for failure_ledger.json (repeatable; no inferred pairs)",
     )
     mat.add_argument("--seeds", type=int, default=5)
+    mat.add_argument("--send-seed", action="store_true", help="send each seed in live requests; verify server support")
     mat.add_argument("--stub", action="store_true")
     mat.add_argument("--endpoint", default=None)
     mat.add_argument("--api-key", default="none")
@@ -132,6 +134,7 @@ def _endpoint_factory_from(args: argparse.Namespace, arm_config: ArmConfig):
             max_tokens=args.max_tokens,
             retries=args.retries,
             timeout=args.timeout,
+            send_seed=getattr(args, "send_seed", False),
         )
         return lambda _case_id, _arm, _seed: endpoint
     raise SystemExit("live mode needs --endpoint (or pass --stub for a zero-inference dry run)")

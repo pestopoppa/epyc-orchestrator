@@ -129,6 +129,7 @@ def unit_record(
     trace_sha256: str | None,
     trace_binding_status: str,
     usage: Mapping[str, Any],
+    tool_validation: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project a returned native run without rewriting its verdict or failure."""
     if threat == "benign":
@@ -178,6 +179,32 @@ def unit_record(
     else:
         still_failing, still_failing_basis = False, "native_primary_value_desirable"
 
+    # Validation covers a whole response atomically. A rejected multi-call
+    # response says nothing about which individual call failed.
+    first_call: dict[str, Any] = {
+        "state": "unmeasured",
+        "reason": "no trace-bound single-call native validation event",
+    }
+    if (trace_binding_status == "verified_closed_trace" and tool_validation is not None
+            and tool_validation.get("version") == 1
+            and type(tool_validation.get("turn")) is int
+            and tool_validation["turn"] > 0
+            and type(tool_validation.get("call_count")) is int
+            and tool_validation["call_count"] == 1
+            and type(tool_validation.get("accepted")) is bool):
+        first_call = {
+            "state": "observed", "value": tool_validation["accepted"],
+            "scope": "first native-schema-validated single-call response",
+            "turn": tool_validation["turn"],
+        }
+    completion = run.get("completion_state")
+    if completion == "terminal_timeout":
+        timed_out = {"state": "observed", "value": True, "basis": "native_terminal_timeout"}
+    elif completion == "judged" and status == "ok":
+        timed_out = {"state": "observed", "value": False, "basis": "native_judged_terminal"}
+    else:
+        timed_out = {"state": "unmeasured", "reason": "native terminal does not establish timeout status"}
+
     return {
         "case_id": run.get("case_id"),
         "arm": run.get("arm"),
@@ -202,6 +229,7 @@ def unit_record(
         "elapsed_s": run.get("elapsed_s"),
         "endpoint_kind": run.get("endpoint_kind"),
         "usage": dict(usage),
+        "ran_out_of_time": timed_out,
         "failed_verification": {
             "state": "unmapped",
             "reason": "DTAP native result does not carry a separate verifier result",
@@ -210,10 +238,7 @@ def unit_record(
             "state": "unmeasured",
             "reason": "case registry exposes no public requires_tool_call field",
         },
-        "first_try_valid_call": {
-            "state": "unmeasured",
-            "reason": "no run-attributable first-try validity event is produced",
-        },
+        "first_try_valid_call": first_call,
         "repair_recovery": {
             "state": "unmeasured",
             "reason": "no run-attributable repair/recovery event is produced",
