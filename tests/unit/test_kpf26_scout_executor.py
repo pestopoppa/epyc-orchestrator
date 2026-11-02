@@ -161,3 +161,16 @@ def test_complete_observation_emits_native_record(monkeypatch, tmp_path):
     row = json.loads((tmp_path / "out-native" / "belief_measurements.jsonl").read_text())
     assert row["kpf26"] == {"tasks": 1, "children": 1, "completed": 1}
     assert row["rows_sha256"] == hashlib.sha256((tmp_path / "out-native" / "belief_rows.jsonl").read_bytes()).hexdigest()
+
+
+def test_required_terms_scorer_preserves_exact_and_unknown():
+    exact = executor.validate_scorer({"summaries": ["answer"]}, 1)[0]
+    assert executor.score_summary("answer", exact) is True
+    assert executor.score_summary("Answer", exact) is False
+    assert executor.score_summary(None, exact) is None
+    rule = executor.validate_scorer({"schema": "epyc.kpf26.scorer.required-terms.v1",
+                                     "required_terms": [["RELEASE_CODENAME", "amber-heron-47"]]}, 1)[0]
+    assert executor.score_summary("release_codename is amber-heron-47", rule) is True
+    assert executor.score_summary("RELEASE_CODENAME", rule) is False
+    with pytest.raises(ValueError, match="required_terms"):
+        executor.validate_scorer({"schema": "epyc.kpf26.scorer.required-terms.v1", "required_terms": [[]]}, 1)

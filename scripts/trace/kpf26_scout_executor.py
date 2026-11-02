@@ -236,6 +236,30 @@ def _checkpoint_witness(samples: list[dict[str, Any]], timing: dict[str, Any], s
     return None
 
 
+def validate_scorer(expected: dict[str, Any], siblings: int) -> list[dict[str, Any]]:
+    """Validate the pinned scorer. Legacy exact-summary records remain supported."""
+    if "summaries" in expected:
+        values = expected["summaries"]
+        if not isinstance(values, list) or len(values) != siblings or not all(isinstance(x, str) for x in values):
+            raise ValueError("expected summaries must contain one string per scout")
+        return [{"mode": "exact", "value": value} for value in values]
+    values = expected.get("required_terms")
+    if (expected.get("schema") != "epyc.kpf26.scorer.required-terms.v1" or
+            not isinstance(values, list) or len(values) != siblings or
+            not all(isinstance(row, list) and row and all(isinstance(x, str) and x.strip() for x in row)
+                    for row in values)):
+        raise ValueError("required_terms must contain a nonempty string list per scout")
+    return [{"mode": "required_terms", "value": row} for row in values]
+
+
+def score_summary(summary: str | None, rule: dict[str, Any]) -> bool | None:
+    if summary is None:
+        return None
+    if rule["mode"] == "exact":
+        return summary == rule["value"]
+    return all(term.casefold() in summary.casefold() for term in rule["value"])
+
+
 def collect_task(task: dict[str, Any], request: dict[str, Any], expected: dict[str, Any],
                  runtime: dict[str, Any], base: Path, output: Path) -> dict[str, Any]:
     import httpx
@@ -252,9 +276,7 @@ def collect_task(task: dict[str, Any], request: dict[str, Any], expected: dict[s
     actual = {str(p.relative_to(scope)): digest(p.read_bytes()) for p in scope.rglob("*") if p.is_file() and not p.is_symlink()}
     if any(p.is_symlink() for p in scope.rglob("*")) or files != actual:
         raise ValueError("scope file set or digest mismatch")
-    summaries = expected.get("summaries")
-    if not isinstance(summaries, list) or len(summaries) != task["siblings"] or not all(isinstance(x, str) for x in summaries):
-        raise ValueError("expected summaries must contain one string per scout")
+    scorer = validate_scorer(expected, task["siblings"])
 
     records: list[dict[str, Any]] = []
     lock = threading.Lock()
@@ -301,7 +323,7 @@ def collect_task(task: dict[str, Any], request: dict[str, Any], expected: dict[s
         children.append({"id": str(r.index), "status": r.status, "ttft_ms": notes.get("first_output_ms"),
                          "admission_wait_ms": admission.get("wait_ms"), "prefill_tokens": timing.get("prompt_n"),
                          "output_sha256": digest(summary.encode()) if summary is not None else None,
-                         "outcome": summary == summaries[r.index] if summary is not None else None,
+                         "outcome": score_summary(summary, scorer[r.index]),
                          "n_fork_tokens": timing.get("n_fork_tokens"),
                          "fork_task_slot_witness": _slot_witness(samples, timing, call.get("ts_start", start), call.get("ts_end", end))})
     trunks = [x for x in records if x["method"] == "scout_stage_prefill_trunk"]
