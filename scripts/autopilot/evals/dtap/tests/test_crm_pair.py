@@ -231,3 +231,10 @@ def test_private_service_provisioning_is_unique_and_reset_seed_pinned():
     assert not p.containers and p.network is None
     assert all("--cpuset-cpus" in call for call in p.calls if call[0] == "create")
     assert p.crm_url.startswith("http://172.")
+
+
+def test_judge_attestation_failure_refuses_pair(monkeypatch):
+    import harness.crm_pair as module
+    monkeypatch.setattr(module, "verify_judges", lambda: (False, ["judge bytes changed"]))
+    with pytest.raises(ValueError, match="judge attestation failed"):
+        module.pair_manifest()
