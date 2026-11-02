@@ -213,6 +213,13 @@ def _resolve_regions(args: argparse.Namespace) -> frozenset[str]:
 def _run(args: argparse.Namespace) -> int:
     if not args.command:
         raise SystemExit("[region-lock] no command given after `--`")
+    if os.environ.get("FILLER_SMOKE") == "1" or os.environ.get("FILLER_DRYRUN") == "1":
+        # ws58 2026-11-02 (operator): a dry run is tiny and never deals with leases or locks; it runs at once,
+        # pinned to its own few cpus (WS58_REGIONS) when given.
+        cmd = list(args.command[1:] if args.command[:1] == ["--"] else args.command)
+        cpus = os.environ.get("WS58_REGIONS")
+        print(f"[region-lock] dry run: no lock taken (cpus={cpus or 'any'})", file=sys.stderr)
+        return subprocess.call((["taskset", "-c", cpus] if cpus else []) + cmd)
     if not (args.regions or args.cpu_list or args.gpu_quiet):
         print(
             "[region-lock] run needs --regions, --cpu-list and/or --gpu-quiet",
