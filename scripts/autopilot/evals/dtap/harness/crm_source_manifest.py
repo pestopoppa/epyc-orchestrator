@@ -19,7 +19,7 @@ FILES = tuple(DTAP + path for path in (
     "harness/crm_source_manifest.py", "harness/runner.py", "harness/endpoint.py",
     "harness/tool_contract.py", "harness/tool_schemas.json", "harness/judge_guard.py",
     "cases.json", "manifest.json", "judges/crm-malicious-indirect-general-ai-restrictions-004/judge.py",
-    "tools/crm_prepare.py", "tools/crm_row_fixture.py",
+    "tools/crm_prepare.py", "tools/crm_row_fixture.py", "tools/crm_qual_server.py", "tools/crm_qual_worker.py",
 )) + ("src/runtime/region_claim_receipt.py", "src/runtime/region_lock_cli.py",
       "src/runtime/cpu_region_lock.py")
 
