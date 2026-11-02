@@ -84,6 +84,10 @@ python3 -m harness run --case finance-benign-trade-execution-001 --arm done \
     --endpoint http://localhost:8080/v1 --tool-contract dtap-native-tools-v1 \
     --endpoint-mode openai-compatible
 
+# --send-seed opts into sending the requested seed in live HTTP requests.
+# Without it the historical request has no seed field, even when --seed is set.
+# The trace records whether a seed was sent; provider adherence needs separate proof.
+
 # Immutable trace replay
 python3 -m harness replay --trace /tmp/dtap-results/traces/<case>.<arm>.seed0.trace.jsonl
 ```

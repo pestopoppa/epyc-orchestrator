@@ -69,6 +69,29 @@ def test_legacy_request_stays_message_only_and_schema_is_opt_in():
     assert set(captured[0]["body"]) == {"model", "messages", "temperature", "max_tokens"}
 
 
+def test_seed_is_explicitly_opted_in_and_sent_on_each_request():
+    opener, captured = _transport()
+    endpoint = ChatEndpoint("http://fake/v1", opener=opener, send_seed=True)
+    endpoint.complete([], seed=0)
+    endpoint.complete([], seed=42, tools=[_schema()], endpoint_mode="openai-compatible")
+    assert [item["body"]["seed"] for item in captured] == [0, 42]
+    with pytest.raises(ValueError):
+        endpoint.complete([], seed=True)
+    assert len(captured) == 2
+
+
+@pytest.mark.parametrize("send_seed", [False, True])
+def test_trace_distinguishes_requested_seed_from_unsent_seed(tmp_path, send_seed):
+    opener, captured = _transport()
+    endpoint = ChatEndpoint("http://fake/v1", opener=opener, send_seed=send_seed)
+    result = run_case("crm-benign-001", "done", 42, endpoint, DEFAULT_ARM_CONFIG, tmp_path)
+    records = [json.loads(line) for line in Path(result.trace_path).read_text().splitlines()]
+    request = next(r["payload"] for r in records if r["event"] == "endpoint_request")
+    assert request["seed_transport"] == ("request_field" if send_seed else "not_sent")
+    assert request.get("requested_seed") == (42 if send_seed else None)
+    assert captured[0]["body"].get("seed") == (42 if send_seed else None)
+
+
 @pytest.mark.parametrize(
     ("endpoint_mode", "expects_client_marker"),
     [("openai-compatible", False), ("orchestrator-client", True)],

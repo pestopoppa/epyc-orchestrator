@@ -403,7 +403,7 @@ def run_case(
                             "native_transport" if isinstance(endpoint, ChatEndpoint) else "custom_endpoint_unspecified")
     if isinstance(endpoint, ChatEndpoint):
         result.endpoint_configuration = {key: getattr(endpoint, key)
-            for key in ("model", "temperature", "max_tokens", "retries", "timeout")}
+            for key in ("model", "temperature", "max_tokens", "retries", "timeout", "send_seed")}
     try:
         case = registry.get(case_id)
         if registry.profile in FIXTURE_PROFILES and native_tool_contract is None:
@@ -487,6 +487,10 @@ def run_case(
                 "messages": messages,
                 "request_contract_version": LEGACY_REQUEST_VERSION,
             }
+            if isinstance(endpoint, ChatEndpoint):
+                request_event["seed_transport"] = "request_field" if endpoint.send_seed else "not_sent"
+                if endpoint.send_seed:
+                    request_event["requested_seed"] = seed
             case_tools = None
             if native_tool_contract is not None:
                 case_tools = native_tool_contract.for_case(case_id)
