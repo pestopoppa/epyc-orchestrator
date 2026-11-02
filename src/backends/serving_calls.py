@@ -71,6 +71,20 @@ _DEFAULT_MAX_MB = 64
 _DEFAULT_KEEP = 8
 _DISABLED_VALUES = {"off", "0", "none", "false", "disabled"}
 
+#: ws58 2026-11-02: private / experimental servers (8102, 8199, 18283, 18973 ...) appended
+#: to the PRODUCTION log, the evidence base of gates such as UFH14-B4a's 200-call window.
+#: Only a call to a production port (a ``live_stack`` serving port in the compiled stack
+#: priors, i.e. registry x topology) is written to the default log; every other port goes
+#: to the run-local path in ``PRIVATE_LOG_ENV`` (``off`` drops them), default
+#: ``serving_calls.private.jsonl`` beside the production log. An explicit ``LOG_ENV`` path
+#: is a caller-chosen log and still receives every record. A record without a port (a
+#: gate refusal or a call abandoned before a backend was chosen) is an orchestrator-side
+#: event and stays in the production log.
+PRIVATE_LOG_ENV = "ORCHESTRATOR_SERVING_CALLS_PRIVATE_LOG"
+#: Comma-separated override of the production port set (default: the stack priors).
+PRODUCTION_PORTS_ENV = "ORCHESTRATOR_SERVING_CALLS_PRODUCTION_PORTS"
+PRIVATE_LOG_NAME = "serving_calls.private.jsonl"
+
 #: The subset of llama.cpp's ``timings`` object every record carries verbatim.
 TIMING_KEYS = (
     "cache_n",
@@ -125,6 +139,9 @@ _STATS: dict[str, int] = {
     "skipped_nested": 0,
     "build_failed": 0,
     "write_failed": 0,
+    "routed_private": 0,
+    "routed_private_unresolved": 0,
+    "skipped_private_disabled": 0,
 }
 _stats_lock = threading.Lock()
 _logged_failure_kinds: set[str] = set()
@@ -154,9 +171,13 @@ def health() -> dict[str, Any]:
     were dropped by an exception (the first of each kind is logged at WARNING).
     """
     path = log_path()
+    private = private_log_path()
+    ports = production_ports()
     with _stats_lock:
         stats = dict(_STATS)
-    return {"enabled": path is not None, "path": str(path) if path else None, **stats,
+    return {"enabled": path is not None, "path": str(path) if path else None,
+            "private_path": str(private) if private else None,
+            "production_ports": sorted(ports) if ports is not None else None, **stats,
             "pid": os.getpid()}
 
 
@@ -206,6 +227,75 @@ def log_path() -> Path | None:
     if override:
         return Path(override)
     return _log_dir() / "serving_calls" / "serving_calls.jsonl"
+
+
+def private_log_path() -> Path | None:
+    """Where records of calls to a NON-production port go, or None when dropped."""
+    override = os.environ.get(PRIVATE_LOG_ENV, "").strip()
+    if override.lower() in _DISABLED_VALUES:
+        return None
+    if override:
+        return Path(override)
+    path = log_path()
+    return path.with_name(PRIVATE_LOG_NAME) if path is not None else None
+
+
+_PROD_PORTS_CACHE: dict[str, Any] = {"key": None, "ports": None}
+
+
+def production_ports() -> frozenset[int] | None:
+    """Ports whose calls belong in the production log, or None when unresolvable.
+
+    ``PRODUCTION_PORTS_ENV`` wins; otherwise every serving/endpoint port of a
+    ``live_stack`` role in ``orchestration/derived/stack_priors.yaml`` (re-read when
+    that file changes)."""
+    env = os.environ.get(PRODUCTION_PORTS_ENV, "").strip()
+    if env:
+        try:
+            return frozenset(int(p) for p in env.replace(" ", "").split(",") if p)
+        except ValueError:
+            return None
+    try:
+        from src.registry import stack_priors as sp
+
+        path = Path(sp.DEFAULT_OUTPUT)
+        key = (str(path), path.stat().st_mtime_ns)
+    except Exception:
+        return None
+    if _PROD_PORTS_CACHE["key"] != key:
+        ports: set[int] = set()
+        try:
+            for rec in sp.live_stack_role_records(path).values():
+                serving = sp.stack_prior_serving(rec)
+                ports.update(sp.stack_prior_serving_ports(serving))
+                try:
+                    endpoint = sp.stack_prior_endpoint_port(serving)
+                except ValueError:
+                    endpoint = None
+                if endpoint is not None:
+                    ports.add(int(endpoint))
+        except Exception:
+            ports = set()
+        _PROD_PORTS_CACHE.update(key=key, ports=frozenset(ports) or None)
+    return _PROD_PORTS_CACHE["ports"]
+
+
+def destination(record: dict[str, Any]) -> tuple[Path | None, str]:
+    """(path, scope) for one record: scope is override | production | private."""
+    path = log_path()
+    if path is None:
+        return None, "disabled"
+    if os.environ.get(LOG_ENV, "").strip():
+        return path, "override"
+    server = record.get("server") if isinstance(record.get("server"), dict) else {}
+    port = server.get("port")
+    if port is None:
+        return path, "production"
+    ports = production_ports()
+    if ports is not None and int(port) in ports:
+        return path, "production"
+    _bump("routed_private_unresolved" if ports is None else "routed_private")
+    return private_log_path(), "private"
 
 
 def launch_sidecar_dir() -> Path:
@@ -538,9 +628,18 @@ def record_digest(record: dict[str, Any]) -> str:
 
 
 def write_record(record: dict[str, Any]) -> bool:
-    """Append one self-hashed record under a cross-process flock (several uvicorn workers)."""
-    path = log_path()
+    """Append one self-hashed record under a cross-process flock (several uvicorn workers).
+
+    The file is chosen per record by :func:`destination`: a call to a non-production
+    port never lands in the production log."""
+    try:
+        path, scope = destination(record)
+    except Exception as exc:
+        _bump("write_failed", exc)
+        return False
     if path is None:
+        if scope == "private":
+            _bump("skipped_private_disabled")
         return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
