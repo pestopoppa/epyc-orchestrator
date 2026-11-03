@@ -605,6 +605,35 @@ eras:
       SELF-CHECK (SELF_CHECK_VERSION 2, full pool of 77,823): 0 wrong, 0 scorer_error, no flagged
       suite. Not checkable by design: llm_judge 3,806, code_execution 1,854, no expected 1,140.
 
+  # Candidate-binary bindings (NOT kernel cutovers): no `from`, so derive_era /
+  # derive_kernel_era ignore them; era_for_binary() resolves them by binary_version only.
+  - id: E10-cpu-candidate-lbt-181483cfc
+    scope: cpu_bench
+    kernel_name: experimental-llama-bench-load-threads-20261103
+    binary_version: 10420
+    kernel_commit: "181483cfc8154be00c6369eb4ee0d7d931c9faf8"
+    note: >
+      Champion-candidate CPU build, NOT a production cutover. Source 181483cfc on
+      llama.cpp branch experimental/llama-bench-load-threads-20261103 (forked from
+      champion tip c72ec82f5417bb2937310326120f149b665e8400), build dir
+      /mnt/raid0/llm/kernels/builds/cpu-20261103-181483cfc-lbt, llama-bench sha256
+      07651dec5d77f9c0f70e517f479c3beab945e35a163c4c63750d16f380fc85b3, llama-server
+      sha256 9b222ba09185269a7c53046c4f53cb7cbe2cda8b99607418a56d387e2cc1204c.
+      Binds P1-2 cells to this binary. No `from`: carries no cutover claim.
+
+  - id: E10-cpu-candidate-c6-729599d69
+    scope: cpu_bench
+    kernel_name: experimental-refactor-c6-20261030
+    binary_version: 10500
+    kernel_commit: "729599d69871181d67af715a4c2f9162d5153a2e"
+    note: >
+      C6 candidate CPU build, NOT a production cutover. Source 729599d69 (worktree
+      refactor-c6-20261030, champion_expected c72ec82f5), build dir
+      /mnt/raid0/llm/kernels/builds/cpu-20261030-729599d69-c6, llama-bench sha256
+      718faad47abb189f7266c7fd27ee6b10fb47b62bdc019d379acf69190b036476, llama-server
+      sha256 ef395837ec0748dc4f8826c9be9bb8aabbc0b11295842c2694e725d7bdeb911c.
+      No `from`: carries no cutover claim.
+
 known_dead_instrument_items:
   # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
   # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
