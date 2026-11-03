@@ -110,3 +110,103 @@ def test_cli_wait_prints_holder_and_exits_75(lock_dir):
     assert res.stderr.count("held by pid") >= 2          # a line per wait iteration, not once
     assert f"pid {os.getpid()}" in res.stderr and "blocker" in res.stderr
 
+
+# ---- change 2: gpu-quiet is opt-in (default none) ---------------------------------------------------
+
+def test_gpu_quiet_defaults_to_none_and_help_says_decision_grade_only():
+    from src.runtime import region_lock_cli as cli
+
+    parser = cli.build_parser()
+    assert parser.parse_args(["run", "--regions", "q0", "--", "true"]).gpu_quiet == "none"
+    assert parser.parse_args(["run", "--gpu-quiet", "shared", "--", "true"]).gpu_quiet == "shared"
+    assert parser.parse_args(["run", "--gpu-quiet", "none", "--", "true"]).gpu_quiet == "none"
+    run_help = next(a for a in parser._subparsers._group_actions[0].choices["run"]._actions
+                    if "--gpu-quiet" in a.option_strings).help
+    assert "OPT-IN" in run_help and "decision-grade" in run_help
+    assert "co-residency" in (cli.__doc__ or "") and "OPT-IN" in (cli.__doc__ or "")
+
+
+def test_cli_default_run_takes_no_gpu_quiet_lock(lock_dir):
+    probe = ("import fcntl,sys\nfh=open(sys.argv[1],'a+b')\n"
+             "try:\n    fcntl.flock(fh.fileno(), fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept OSError:\n    sys.exit(7)\n")
+    for extra in ([], ["--gpu-quiet", "none"]):
+        res = _cli(lock_dir, ["run", "--regions", "q1", "--no-preflight", *extra, "--",
+                              sys.executable, "-c", probe, str(lock_dir / "gpu_quiet.lock")])
+        assert res.returncode == 0, res.stderr          # nobody holds gpu-quiet while the child runs
+        assert "gpu-quiet" not in res.stderr.split("acquiring", 1)[1].split("\n", 1)[0]
+
+
+def test_cli_gpu_quiet_none_alone_is_a_usage_error(lock_dir):
+    res = _cli(lock_dir, ["run", "--gpu-quiet", "none", "--", "true"])
+    assert res.returncode == 64 and "--gpu-quiet" in res.stderr
+
+
+# ---- change 3: a gpu-quiet wait cites a hardware sample ----------------------------------------------
+
+def _fake_sysfs(root: Path, *, busy: int, used: int, total: int, kfd_pids=(11, 12)) -> tuple[Path, Path]:
+    drm = root / "drm"
+    dev = drm / "card2" / "device"
+    dev.mkdir(parents=True)
+    (dev / "gpu_busy_percent").write_text(f"{busy}\n")
+    (dev / "mem_info_vram_used").write_text(f"{used}\n")
+    (dev / "mem_info_vram_total").write_text(f"{total}\n")
+    (drm / "card2-DP-1").mkdir()            # a connector: ignored
+    (drm / "card0" / "device").mkdir(parents=True)  # no VRAM files: ignored
+    kfd = root / "kfd"
+    kfd.mkdir()
+    for pid in kfd_pids:
+        (kfd / str(pid)).mkdir()
+    return drm, kfd
+
+
+def test_gpu_hw_sample_reads_sysfs_only(tmp_path, monkeypatch):
+    from src.runtime.region_lock_cli import gpu_hw_sample
+
+    monkeypatch.setenv("GPU_QUIET_HW_CHECK", "1")
+    drm, kfd = _fake_sysfs(tmp_path, busy=87, used=8 * 2**30, total=64 * 2**30)
+
+    def no_rocm_smi():
+        raise AssertionError("rocm-smi must not run when sysfs answers")
+
+    text = gpu_hw_sample(drm_dir=drm, kfd_dir=kfd, rocm_smi=no_rocm_smi)
+    assert text == "hw: card2 busy=87% vram=8.0/64.0GiB; kfd_procs=2"
+
+
+def test_gpu_hw_sample_falls_back_to_rocm_smi_and_can_be_disabled(tmp_path, monkeypatch):
+    from src.runtime.region_lock_cli import gpu_hw_sample
+
+    monkeypatch.setenv("GPU_QUIET_HW_CHECK", "1")
+    (tmp_path / "drm").mkdir()
+    text = gpu_hw_sample(drm_dir=tmp_path / "drm", kfd_dir=tmp_path / "nokfd", rocm_smi=lambda: "rocm-smi X")
+    assert text == "hw: rocm-smi X; kfd_procs=?"
+    monkeypatch.setenv("GPU_QUIET_HW_CHECK", "0")
+    assert "disabled" in gpu_hw_sample(drm_dir=tmp_path / "drm", kfd_dir=tmp_path / "nokfd")
+
+
+def test_wait_observer_adds_hw_sample_for_gpu_quiet_only():
+    from src.runtime.region_lock_cli import make_wait_observer
+
+    out = io.StringIO()
+    obs = make_wait_observer(print_every_s=0, clock=lambda: 0.0, out=out,
+                             describe=lambda path, region: "pid 9", hw_sample=lambda: "hw: SAMPLE")
+    obs("gpu-quiet", "r", Path("/x/gpu_quiet.lock"), 0.0, "t")
+    obs("q0", "r", Path("/x/cpu_region.GLOBAL.q0.lock"), 0.0, "t")
+    gq_line, q_line = out.getvalue().splitlines()
+    assert "held by pid 9 | hw: SAMPLE" in gq_line
+    assert "hw:" not in q_line
+
+
+def test_cli_gpu_quiet_wait_and_timeout_cite_hardware(lock_dir):
+    from src.runtime.gpu_quiet_lock import gpu_quiet_lock
+
+    drm, kfd = _fake_sysfs(lock_dir / "fakesys", busy=0, used=1 * 2**30, total=64 * 2**30, kfd_pids=())
+    env = {"GPU_QUIET_HW_CHECK": "1", "ORCHESTRATOR_DRM_CLASS_DIR": str(drm),
+           "ORCHESTRATOR_KFD_PROC_DIR": str(kfd), "REGION_LOCK_WAIT_PRINT_EVERY_S": "0"}
+    with gpu_quiet_lock("exclusive", role="gpu-bench", timeout_s=2, request_tag="yarn-like"):
+        res = _cli(lock_dir, ["run", "--gpu-quiet", "shared", "--timeout-s", "0.5", "--", "true"], env)
+    assert res.returncode == 75, res.stderr
+    waits = [ln for ln in res.stderr.splitlines() if ln.startswith("[region-lock] waiting")]
+    assert waits and all("hw: card2 busy=0% vram=1.0/64.0GiB; kfd_procs=0" in ln for ln in waits)
+    assert all(f"pid {os.getpid()}" in ln and "tag=yarn-like" in ln for ln in waits)
+    assert "gpu-quiet at timeout: held by" in res.stderr and "kfd_procs=0" in res.stderr
+

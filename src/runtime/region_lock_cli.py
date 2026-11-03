@@ -28,6 +28,19 @@ claim also 503s every serving role placed there); CPU measurements take it
 SHARED alongside their regions. Orchestrator per-call serving claims never
 look at it. Order: gpu-quiet first, then regions (with back-off, see module).
 
+gpu-quiet is OPT-IN (2026-11-03, session review 3.2): `--gpu-quiet` defaults to
+`none`. Only rows classed decision-grade / quiet-host (timing or A/B evidence
+whose noise floor the GPU would move) ask for `shared` or `exclusive`, and they
+must say so explicitly. Diagnostic / indicative work does not take it: the
+2026-10-22 co-residency policy permits GPU+CPU co-residency for that work, and a
+default hold produced "held but idle" — a shared holder that blocked every
+exclusive acquirer for its whole window. When a gpu-quiet acquire has to wait,
+the holder line is printed WITH a read-only hardware sample (GPU busy %, VRAM
+used/total from amdgpu sysfs, KFD process count; `rocm-smi --showuse
+--showmemuse` only when sysfs has no amdgpu card) so the operator sees whether
+the GPU is actually busy, not only that a flock is held. Set
+GPU_QUIET_HW_CHECK=0 to omit the sample.
+
 `--cpu-list` folds SMT sibling CPUs onto their physical cores' regions by
 default (`--fold-siblings`, REGION-SIBLING-1); `--no-fold-siblings` restores the
 legacy mapping that ignores CPUs 96-191. The library default in
@@ -86,6 +99,11 @@ from src.runtime.lock_queue import queue_status as _fifo_queue_status  # noqa: E
 EX_TEMPFAIL = 75
 EX_USAGE = 64
 
+#: `--gpu-quiet` default: take no gpu-quiet lock (opt-in only, 2026-11-03).
+GPU_QUIET_NONE = "none"
+#: GPU_QUIET_HW_CHECK=0 omits the hardware sample printed beside a gpu-quiet holder line.
+GPU_HW_CHECK_ENV = "GPU_QUIET_HW_CHECK"
+_FALSY = {"0", "false", "no", "off"}
 
 #: Default per-acquire budget. A caller that wants the old "block forever" says
 #: ``--timeout-s 0`` explicitly (2026-11-03 session review, section 3.2: a default
@@ -240,17 +258,75 @@ def describe_holders(lock_path: Path, region: str, *, now: float | None = None) 
     return "; ".join(parts)
 
 
+def _read_int(path: Path) -> int | None:
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _rocm_smi_sample() -> str:
+    """Fallback when sysfs exposes no amdgpu card: `rocm-smi --showuse --showmemuse` (a read-only query)."""
+    try:
+        out = subprocess.run(
+            ["rocm-smi", "--showuse", "--showmemuse", "--csv"],
+            capture_output=True, text=True, timeout=10, check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "rocm-smi unavailable"
+    rows = [line.strip() for line in out.splitlines() if line.strip() and not line.startswith("=")]
+    return "rocm-smi " + " | ".join(rows) if rows else "rocm-smi returned nothing"
+
+
+def gpu_hw_sample(*, drm_dir: Path | None = None, kfd_dir: Path | None = None, rocm_smi=_rocm_smi_sample) -> str:
+    """One line of READ-ONLY GPU evidence: busy %, VRAM used/total per amdgpu card, KFD process count.
+
+    Reads amdgpu sysfs (the source `rocm-smi --showuse --showmemuse` reports from) and
+    `/sys/class/kfd/kfd/proc`; falls back to `rocm-smi` only when sysfs shows no amdgpu card. Opens no
+    device and signals nothing. GPU_QUIET_HW_CHECK=0 disables it.
+    """
+    if os.environ.get(GPU_HW_CHECK_ENV, "1").strip().lower() in _FALSY:
+        return "hw sample disabled (GPU_QUIET_HW_CHECK=0)"
+    drm = drm_dir or Path(os.environ.get("ORCHESTRATOR_DRM_CLASS_DIR", "/sys/class/drm"))
+    kfd = kfd_dir or Path(os.environ.get("ORCHESTRATOR_KFD_PROC_DIR", "/sys/class/kfd/kfd/proc"))
+    parts: list[str] = []
+    try:
+        cards = sorted(c for c in drm.glob("card*") if c.name[4:].isdigit())
+    except OSError:
+        cards = []
+    for card in cards:
+        dev = card / "device"
+        total = _read_int(dev / "mem_info_vram_total")
+        if not total:
+            continue  # not an amdgpu card with VRAM (connector, other vendor)
+        used = _read_int(dev / "mem_info_vram_used")
+        busy = _read_int(dev / "gpu_busy_percent")
+        parts.append(
+            f"{card.name} busy={'?' if busy is None else busy}% "
+            f"vram={'?' if used is None else f'{used / 2**30:.1f}'}/{total / 2**30:.1f}GiB"
+        )
+    if not parts:
+        parts.append(rocm_smi())
+    try:
+        parts.append(f"kfd_procs={sum(1 for e in kfd.iterdir() if e.name.isdigit())}")
+    except OSError:
+        parts.append("kfd_procs=?")
+    return "hw: " + "; ".join(parts)
+
+
 def make_wait_observer(
     *,
     print_every_s: float | None = None,
     clock=time.monotonic,
     out=None,
     describe=describe_holders,
+    hw_sample=gpu_hw_sample,
 ):
     """Build the per-poll hook for `cpu_region_lock._WAIT_OBSERVER`.
 
     Prints the holder (pid, role/tag, age) to stderr the FIRST time a given lock blocks and then
     every `print_every_s` seconds (0 = every poll). The lock module calls it on every wait iteration.
+    A gpu-quiet wait also carries `hw_sample()` — flock state alone does not say the GPU is busy.
     """
     if print_every_s is None:
         try:
@@ -265,11 +341,13 @@ def make_wait_observer(
         if key in last and now - last[key] < print_every_s:
             return
         last[key] = now
-        print(
+        line = (
             f"[region-lock] waiting {elapsed_s:.1f}s for {region} ({lock_path.name}) as role={role!r} "
-            f"tag={tag!r}: held by {describe(lock_path, region)}",
-            file=out if out is not None else sys.stderr,
+            f"tag={tag!r}: held by {describe(lock_path, region)}"
         )
+        if region == "gpu-quiet":
+            line += f" | {hw_sample()}"
+        print(line, file=out if out is not None else sys.stderr)
 
     return observe
 
@@ -362,6 +440,8 @@ def _acquire_subquarter(role: str, partial: dict[str, set[int]], timeout_s: floa
 def _run(args: argparse.Namespace) -> int:
     if not args.command:
         raise SystemExit("[region-lock] no command given after `--`")
+    if getattr(args, "gpu_quiet", None) == GPU_QUIET_NONE:
+        args.gpu_quiet = None  # opt-in: 'none' (the default) takes no gpu-quiet lock
     receipt_prefix = getattr(args, "claim_receipt_prefix", None)
     grant_file = getattr(args, "claim_grant_file", None)
     if bool(receipt_prefix) != bool(grant_file):
@@ -451,6 +531,15 @@ def _run(args: argparse.Namespace) -> int:
             return _spawn(args.command)
     except CpuRegionLockTimeout as e:
         print(f"[region-lock] TIMEOUT acquiring {what}: {e}", file=sys.stderr)
+        if args.gpu_quiet:
+            # A gpu-quiet refusal cites hardware, not only flock state.
+            from src.runtime.gpu_quiet_lock import gpu_quiet_lock_path
+
+            print(
+                f"[region-lock] gpu-quiet at timeout: held by "
+                f"{describe_holders(gpu_quiet_lock_path(), 'gpu-quiet')} | {gpu_hw_sample()}",
+                file=sys.stderr,
+            )
         return EX_TEMPFAIL
     finally:
         _crl_module._WAIT_OBSERVER = prev_observer
@@ -626,10 +715,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--gpu-quiet",
-        choices=GPU_QUIET_MODES,
-        help="also hold the host-wide gpu-quiet lock: 'exclusive' for a GPU bench (valid "
-        "with no regions — GPU benches should take NO region claim), 'shared' for a CPU "
-        "measurement (waits for any exclusive holder). Taken BEFORE the regions.",
+        choices=(GPU_QUIET_NONE, *GPU_QUIET_MODES),
+        default=GPU_QUIET_NONE,
+        help="host-wide gpu-quiet lock, OPT-IN (default: none). Only for rows classed "
+        "decision-grade / quiet-host: 'exclusive' for a GPU timing bench (valid with no "
+        "regions — GPU benches should take NO region claim), 'shared' for a CPU timing "
+        "measurement (waits for any exclusive holder). Diagnostic / indicative work leaves "
+        "it at 'none' (2026-10-22 co-residency policy permits GPU+CPU co-residency). Taken "
+        "BEFORE the regions; a wait prints the holder plus a read-only GPU hardware sample.",
     )
     run.add_argument(
         "--role",
