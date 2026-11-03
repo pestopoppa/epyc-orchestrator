@@ -114,8 +114,10 @@ WAIT_PRINT_EVERY_ENV = "REGION_LOCK_WAIT_PRINT_EVERY_S"
 _DEFAULT_WAIT_PRINT_EVERY_S = 5.0
 
 _TRUTHY = {"1", "true", "yes", "on"}
-# Matches how the stack launches the API; used only for the preflight probe.
-_DISPATCH_PROC_HINT = "uvicorn src.api:app"
+#: Key of the orchestrator API in the stack state file `orchestrator_stack.py` writes.
+_STACK_STATE_API_KEY = "orchestrator"
+#: A recorded pid counts as the dispatch process only while its cmdline still names the API module.
+_DISPATCH_CMDLINE_MARK = b"src.api"
 
 
 def _lock_dir() -> Path:
@@ -146,18 +148,34 @@ def _flock_held(path: Path) -> bool:
         return True
 
 
-def _dispatch_pids() -> list[int]:
-    """Best-effort: pids of live orchestrator API processes."""
+def _stack_state_file() -> Path:
+    """`orchestrator_stack.py`'s state file (`scripts/server/stack_paths.STATE_FILE`), resolved from the same env."""
+    log_dir = os.environ.get("ORCHESTRATOR_PATHS_LOG_DIR")
+    if log_dir:
+        return Path(log_dir) / "orchestrator_state.json"
+    root = os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT") or str(Path(__file__).resolve().parents[2])
+    return Path(root) / "logs" / "orchestrator_state.json"
+
+
+def _dispatch_pids(state_file: Path | None = None) -> list[int]:
+    """The orchestrator API pid recorded by the stack launcher, read from its state file (config).
+
+    No process-name scan (CLAUDE.md bans `pgrep`/`pkill` name patterns on this shared host). The
+    recorded pid is trusted only while `/proc/<pid>/cmdline` still names the API module, so a
+    stale record whose pid was reused never stands in for the dispatcher. An API the stack did not
+    launch is not seen here; such a process is outside the stack contract that sets the flag.
+    """
+    path = _stack_state_file() if state_file is None else state_file
     try:
-        out = subprocess.run(
-            ["pgrep", "-f", _DISPATCH_PROC_HINT],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
+        record = json.loads(path.read_text(encoding="utf-8")).get(_STACK_STATE_API_KEY) or {}
+        pid = int(record["pid"])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return []
-    return [int(line) for line in out.stdout.split() if line.strip().isdigit()]
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return []
+    return [pid] if _DISPATCH_CMDLINE_MARK in cmdline else []
 
 
 def _proc_has_cross_role_flag(pid: int) -> bool | None:

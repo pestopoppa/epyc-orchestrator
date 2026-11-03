@@ -210,3 +210,57 @@ def test_cli_gpu_quiet_wait_and_timeout_cite_hardware(lock_dir):
     assert all(f"pid {os.getpid()}" in ln and "tag=yarn-like" in ln for ln in waits)
     assert "gpu-quiet at timeout: held by" in res.stderr and "kfd_procs=0" in res.stderr
 
+
+# ---- change 4: cross-role preflight reads the stack's record, never a name-pattern scan ---------------
+
+def test_region_lock_cli_has_no_pgrep():
+    src = (REPO_ROOT / "src/runtime/region_lock_cli.py").read_text()
+    assert '"pgrep"' not in src and "pgrep -f" not in src
+
+
+def _state_file(path: Path, pid: int) -> Path:
+    import json
+
+    path.write_text(json.dumps({"orchestrator": {"role": "orchestrator", "pid": pid, "port": 8000,
+                                                 "started_at": "x", "model_path": "", "log_file": ""}}))
+    return path
+
+
+def test_dispatch_pids_reads_state_file_without_subprocess(tmp_path, monkeypatch):
+    from src.runtime import region_lock_cli as cli
+
+    def boom(*a, **k):
+        raise AssertionError("preflight must not spawn a process scan")
+
+    monkeypatch.setattr(cli.subprocess, "run", boom)
+    # Our own pid is live but its cmdline does not name the API module: a reused/stale record.
+    assert cli._dispatch_pids(_state_file(tmp_path / "s.json", os.getpid())) == []
+    assert cli._dispatch_pids(tmp_path / "missing.json") == []
+    (tmp_path / "bad.json").write_text("{not json")
+    assert cli._dispatch_pids(tmp_path / "bad.json") == []
+    monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(tmp_path))
+    assert cli._stack_state_file() == tmp_path / "orchestrator_state.json"
+    assert cli._preflight(strict=True) is None      # no state file there: nothing dispatching
+
+
+@pytest.mark.parametrize("flag, refused", [("0", True), ("1", False)])
+def test_preflight_judges_the_recorded_api_pid(tmp_path, monkeypatch, flag, refused):
+    from src.runtime import region_lock_cli as cli
+
+    env = {k: v for k, v in os.environ.items() if k != "ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT"}
+    env["ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT"] = flag
+    # A stand-in whose cmdline names the API module (argv after -c), started and reaped by this test only.
+    child = subprocess.Popen([sys.executable, "-c", "import sys,time; time.sleep(60)", "uvicorn", "src.api:app"],
+                             env=env)
+    try:
+        monkeypatch.setenv("ORCHESTRATOR_PATHS_LOG_DIR", str(tmp_path))
+        _state_file(tmp_path / "orchestrator_state.json", child.pid)
+        assert cli._dispatch_pids() == [child.pid]
+        err = cli._preflight(strict=True)
+        assert (err is not None) is refused
+        if refused:
+            assert str(child.pid) in err
+            assert cli._preflight(strict=False) is None
+    finally:
+        child.kill()
+        child.wait(timeout=10)
