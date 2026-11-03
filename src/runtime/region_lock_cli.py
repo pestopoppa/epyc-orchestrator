@@ -33,6 +33,10 @@ default (`--fold-siblings`, REGION-SIBLING-1); `--no-fold-siblings` restores the
 legacy mapping that ignores CPUs 96-191. The library default in
 `instance_topology` is unchanged ("drop"); only this CLI opts in.
 
+Waiting (2026-11-03): `--timeout-s` defaults to 600 s (an explicit `0` blocks forever); while a lock is
+held by someone else the holder's pid, role, tag and age are printed to stderr (first block, then every
+REGION_LOCK_WAIT_PRINT_EVERY_S seconds, default 5; 0 = on every poll).
+
 Exit codes:
     0..255  the child's exit status (or 128+N when it died on signal N)
     75      EX_TEMPFAIL — could not acquire the regions within the budget
@@ -81,6 +85,15 @@ from src.runtime.lock_queue import queue_status as _fifo_queue_status  # noqa: E
 
 EX_TEMPFAIL = 75
 EX_USAGE = 64
+
+
+#: Default per-acquire budget. A caller that wants the old "block forever" says
+#: ``--timeout-s 0`` explicitly (2026-11-03 session review, section 3.2: a default
+#: of forever turned one idle-held region into a 2-hour convoy).
+DEFAULT_TIMEOUT_S = 600.0
+#: Seconds between holder lines while waiting (0 = a line on every poll).
+WAIT_PRINT_EVERY_ENV = "REGION_LOCK_WAIT_PRINT_EVERY_S"
+_DEFAULT_WAIT_PRINT_EVERY_S = 5.0
 
 _TRUTHY = {"1", "true", "yes", "on"}
 # Matches how the stack launches the API; used only for the preflight probe.
@@ -168,6 +181,97 @@ def _preflight(strict: bool) -> str | None:
             file=sys.stderr,
         )
     return None
+
+
+def _pid_age_s(pid: int, *, now: float | None = None) -> float | None:
+    """Seconds since `pid` started (from /proc starttime + btime); None if unreadable."""
+    from src.runtime.gpu_quiet_lock import _start_ticks
+
+    ticks = _start_ticks(pid)
+    if ticks is None:
+        return None
+    try:
+        btime = next(
+            int(line.split()[1])
+            for line in Path("/proc/stat").read_text().splitlines()
+            if line.startswith("btime ")
+        )
+        return max(0.0, (time.time() if now is None else now) - (btime + ticks / os.sysconf("SC_CLK_TCK")))
+    except (OSError, ValueError, StopIteration):
+        return None
+
+
+def describe_holders(lock_path: Path, region: str, *, now: float | None = None) -> str:
+    """One-line "who holds this lock": pid, role, tag, age. Read-only witness (/proc/locks + payloads)."""
+    from src.runtime.cpu_region_lock import _current_lock_owner_pids
+    from src.runtime.gpu_quiet_lock import holders as _gq_holders
+    from src.runtime.gpu_quiet_lock import lock_owners
+
+    meta: dict[int, dict] = {}
+    modes: dict[int, str] = {}
+    if region == "gpu-quiet":
+        owners = lock_owners(lock_path)
+        modes = dict(owners or {})
+        pids = sorted(modes)
+        for rec in _gq_holders().get("holders", []):  # type: ignore[union-attr]
+            try:
+                meta[int(rec["pid"])] = rec  # type: ignore[index]
+            except (KeyError, TypeError, ValueError):
+                continue
+    else:
+        pids = sorted(int(p) for p in _current_lock_owner_pids(lock_path))
+        for sibling in sorted(_lock_dir().glob(f"cpu_region.*.{region}.lock")):
+            payload = read_region_lock_payload(sibling)
+            if payload and isinstance(payload.get("pid"), int):
+                meta[payload["pid"]] = payload
+    if not pids:
+        return "holder unknown (no /proc/locks owner for this lock)"
+    parts = []
+    for pid in pids:
+        rec = meta.get(pid, {})
+        started = rec.get("started_at")
+        age = (time.time() if now is None else now) - float(started) if isinstance(started, (int, float)) else _pid_age_s(pid, now=now)
+        parts.append(
+            f"pid {pid}"
+            + (f" mode={modes[pid]}" if pid in modes else "")
+            + f" role={rec.get('role', '?')} tag={rec.get('request_tag') or '-'}"
+            + (f" age={age:.0f}s" if age is not None else " age=?")
+        )
+    return "; ".join(parts)
+
+
+def make_wait_observer(
+    *,
+    print_every_s: float | None = None,
+    clock=time.monotonic,
+    out=None,
+    describe=describe_holders,
+):
+    """Build the per-poll hook for `cpu_region_lock._WAIT_OBSERVER`.
+
+    Prints the holder (pid, role/tag, age) to stderr the FIRST time a given lock blocks and then
+    every `print_every_s` seconds (0 = every poll). The lock module calls it on every wait iteration.
+    """
+    if print_every_s is None:
+        try:
+            print_every_s = float(os.environ.get(WAIT_PRINT_EVERY_ENV, _DEFAULT_WAIT_PRINT_EVERY_S))
+        except ValueError:
+            print_every_s = _DEFAULT_WAIT_PRINT_EVERY_S
+    last: dict[tuple[str, str], float] = {}
+
+    def observe(region: str, role: str, lock_path: Path, elapsed_s: float, tag: str | None) -> None:
+        key = (region, str(lock_path))
+        now = clock()
+        if key in last and now - last[key] < print_every_s:
+            return
+        last[key] = now
+        print(
+            f"[region-lock] waiting {elapsed_s:.1f}s for {region} ({lock_path.name}) as role={role!r} "
+            f"tag={tag!r}: held by {describe(lock_path, region)}",
+            file=out if out is not None else sys.stderr,
+        )
+
+    return observe
 
 
 def _resolve_regions(args: argparse.Namespace) -> frozenset[str]:
@@ -304,6 +408,10 @@ def _run(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     sub_fhs: list = []
+    from src.runtime import cpu_region_lock as _crl_module
+
+    prev_observer = _crl_module._WAIT_OBSERVER
+    _crl_module._WAIT_OBSERVER = make_wait_observer()
     try:
         if partial:
             sub_fhs = _acquire_subquarter(args.role, partial, args.timeout_s, tag)
@@ -345,6 +453,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"[region-lock] TIMEOUT acquiring {what}: {e}", file=sys.stderr)
         return EX_TEMPFAIL
     finally:
+        _crl_module._WAIT_OBSERVER = prev_observer
         for fh in sub_fhs:
             fh.close()
 
@@ -530,10 +639,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--timeout-s",
         type=float,
-        default=0.0,
-        help="per-region acquire timeout; 0 = block indefinitely (default), with periodic "
-        "waiting logs from the lock module. With --gpu-quiet it bounds the whole "
-        "gpu-quiet+regions acquisition. Exit 75 on expiry.",
+        default=DEFAULT_TIMEOUT_S,
+        help="per-region acquire timeout in seconds (default 600). An explicit 0 blocks "
+        "indefinitely. While waiting, the holder's pid/role/tag/age is printed to stderr. "
+        "With --gpu-quiet it bounds the whole gpu-quiet+regions acquisition. Exit 75 on expiry.",
     )
     run.add_argument("--tag", help="opaque tag recorded in the lock payload for diagnostics")
     run.add_argument("--claim-receipt-prefix", help="absolute prefix for opt-in provider open/close receipts")

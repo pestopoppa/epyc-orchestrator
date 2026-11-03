@@ -320,6 +320,19 @@ def _reserve_region_admission(
                 f"region admission timeout after {timeout_s:.1f}s "
                 f"(role={role}, blockers={blocker_roles}, tag={request_tag})"
             )
+        observer = _WAIT_OBSERVER
+        if observer is not None:
+            blocked = sorted(
+                requested.intersection(
+                    str(region) for item in blockers for region in item.get("regions") or []
+                )
+            )
+            if blocked:
+                try:
+                    observer(blocked[0], role, global_region_lock_path(blocked[0]), now - started,
+                             request_tag)
+                except Exception:  # noqa: BLE001 - diagnostics only
+                    pass
         if now - last_log >= _lock_log_every_s():
             logger.info(
                 "still waiting for region cohort role=%s regions=%s elapsed=%.1fs blockers=%s",
@@ -499,6 +512,14 @@ def _release_local_region_locks(keys: list[tuple[str, str]], *, shared: bool) ->
         _LOCAL_REGION_COND.notify_all()
 
 
+#: Optional per-poll wait hook ``(region, role, lock_path, elapsed_s, request_tag)``, called from
+#: both wait loops (cohort admission and the flock wait; admission passes the blocked region's
+#: GLOBAL lock path). Unset in the serving path; the standalone ``region-lock`` CLI installs one that
+#: prints the holder pid/tag/age so a blocked caller is never silent. Exceptions
+#: from the hook are swallowed: diagnostics must never change lock behaviour.
+_WAIT_OBSERVER: Optional[Callable[[str, str, Path, float, Optional[str]], None]] = None
+
+
 def _try_flock(fd: int, lock_type: int) -> bool:
     """Non-blocking fcntl.flock — returns True on success, False if the
     lock is held by another process. Any other OSError propagates.
@@ -552,6 +573,12 @@ def _acquire_one_with_timeout(
                 f"region lock timeout after {timeout_s:.1f}s "
                 f"(role={role}, region={region}, tag={request_tag})"
             )
+        observer = _WAIT_OBSERVER
+        if observer is not None:
+            try:
+                observer(region, role, Path(fh.name), now - start, request_tag)
+            except Exception:  # noqa: BLE001 - diagnostics only
+                pass
         if now - last_log >= log_every_s:
             holders = _current_lock_owner_pids(Path(fh.name))
             holder_tuple = tuple(holders)
