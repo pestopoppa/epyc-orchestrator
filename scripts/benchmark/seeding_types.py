@@ -367,7 +367,6 @@ def _discover_default_roles_fallback() -> list[str]:
     return list(_EMERGENCY_DEFAULT_ROLES_FALLBACK)
 
 
-DEFAULT_ROLES = _read_stack_prior_default_roles() or _discover_default_roles_fallback()
 # NOTE: React mode has been unified into REPL with structured_mode=True.
 # "react" is no longer a separate mode - REPL is the universal superset.
 DEFAULT_MODES = ["direct", "repl"]
@@ -375,7 +374,6 @@ DEFAULT_MODES = ["direct", "repl"]
 
 # ── Role / mode constraints ──────────────────────────────────────────
 
-ARCHITECT_ROLES = {role for role in DEFAULT_ROLES if role.startswith("architect_")} or {"architect_general"}
 ARCHITECT_MODES = {"direct", "delegated"}
 # INF-78 scoped exception (operator 2026-09-25): REPL is allowed for the architect only
 # on task-scoped requests (task_root set). Seeding requests are never task-scoped.
@@ -541,6 +539,12 @@ def discover_active_roles(
     # Sort by cost tier (cheapest first) for interleaving
     active.sort(key=lambda r: r["cost_tier"])
     return active
+
+
+# Computed here, after discover_active_roles() is defined: the fallback calls it at import
+# time, so assigning these above that def raised NameError whenever stack priors were absent.
+DEFAULT_ROLES = _read_stack_prior_default_roles() or _discover_default_roles_fallback()
+ARCHITECT_ROLES = {role for role in DEFAULT_ROLES if role.startswith("architect_")} or {"architect_general"}
 
 
 # ── Exceptions ────────────────────────────────────────────────────────
