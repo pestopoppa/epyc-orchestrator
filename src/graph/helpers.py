@@ -1631,9 +1631,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     str(role), shape="call" if _turn1_shape == "call" else "legacy"
                 )
                 if grammar:
+                    # V11-122: ORCHESTRATOR_GRAMMAR_LLGUIDANCE=1 (default off; LLAMA_LLGUIDANCE
+                    # servers only) sends the GBNF as %llguidance Lark so llguidance samples it.
+                    from src.backends.llg_grammar import route_grammar as _route_grammar
+
+                    grammar, _grammar_format = _route_grammar(grammar)
                     llm_kwargs["grammar"] = grammar
                     state.grammar_enforced = True
                     state.turn1_grammar_shape = "call" if _turn1_shape == "call" else "legacy"
+                    state.turn1_grammar_format = _grammar_format
         except Exception as _grammar_exc:
             # UFH14-LB3.3: a blanket pass here hid an UnboundLocalError for a day (LB3.2).
             # Fall back to unconstrained generation, but never silently.

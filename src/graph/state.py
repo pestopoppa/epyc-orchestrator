@@ -202,6 +202,7 @@ class TaskState:
     # UFH14-LB3.1: shape of the turn-1 grammar ("legacy"|"call"; "" = none applied) and
     # the raw turn-1 output probe {sha256, chars, head, truncated} so a later replay has a corpus.
     turn1_grammar_shape: str = ""
+    turn1_grammar_format: str = ""  # V11-122: "gbnf" | "llguidance" when a turn-1 grammar was sent
     turn1_output_probe: dict[str, Any] | None = None
 
     # Cache affinity bonus applied during routing

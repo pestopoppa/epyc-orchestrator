@@ -1,0 +1,24 @@
+{
+ "schema": "v11_122.gbnf_lark_parity.v1",
+ "corpus": "/mnt/raid0/llm/tmp/specgram3-llg/replay101/work/corpus.jsonl",
+ "n_cmds": 2885,
+ "shapes": {
+  "legacy": {
+   "texts": 25965,
+   "gbnf_accepted": 20195,
+   "agree": 25965,
+   "disagree": 0,
+   "mismatches": []
+  },
+  "call": {
+   "texts": 25965,
+   "gbnf_accepted": 5951,
+   "agree": 25965,
+   "disagree": 0,
+   "mismatches": []
+  }
+ },
+ "verdict": "PASS",
+ "validator": "/mnt/raid0/llm/kernels/production/cpu/test-gbnf-validator (stock GBNF engine)",
+ "llguidance": "python 1.0.1 wheel"
+}
