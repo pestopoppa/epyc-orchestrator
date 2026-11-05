@@ -165,6 +165,12 @@ def kill_process(*a, **kw):
     return _orchestrator_stack().kill_process(*a, **kw)
 
 
+def _verify_state_pid(info):
+    from scripts.server import stack_processes
+
+    return stack_processes.verify_state_pid(info, _pids_on_port)
+
+
 def is_port_in_use(*a, **kw):
     return _orchestrator_stack().is_port_in_use(*a, **kw)
 
@@ -2184,6 +2190,11 @@ def cmd_stop(args: argparse.Namespace) -> int:
                 else:
                     print(f"  [!] Failed to stop container {name}")
             else:
+                ok, _why = _verify_state_pid(info)
+                if not ok:
+                    print(f"[STALE] {name} PID {info.pid} is not this server; state entry dropped")
+                    del state[name]
+                    continue
                 print(f"Stopping {name} (PID {info.pid})...")
                 if kill_process(info.pid):
                     del state[name]
@@ -2364,7 +2375,11 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 key = f"server_{port}"
                 role = "embedder" if port == 8090 else f"embedder_{port - 8090}"
                 if key in state:
-                    kill_process(state[key].pid)
+                    if _verify_state_pid(state[key])[0]:
+                        kill_process(state[key].pid)
+                    else:
+                        print(f"[STALE] {key} PID {state[key].pid} is not this server; "
+                              "state entry dropped")
                     del state[key]
                 if role in state:
                     del state[role]

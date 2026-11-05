@@ -275,3 +275,91 @@ def set_oom_score_adj(pids: Iterable[int], adj: int = -1000, timeout: int = 5) -
                 "from earlyoom)")
     print(msg)
     return ok
+
+
+# ---------------------------------------------------------------------------
+# State-file PID identity verification
+# ---------------------------------------------------------------------------
+# pid_max is 4194304, so a PID recorded in the stack state file can be recycled
+# by an unrelated process long after the server died. Signalling it blindly
+# would SIGTERM/SIGKILL that bystander. Every kill path that takes a PID from
+# the state file must call verify_state_pid() first.
+
+_START_TIME_SLACK_S = 5.0
+
+
+def _proc_start_epoch(pid: int) -> float | None:
+    """Process start time as epoch seconds from /proc/<pid>/stat + boot time."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        # comm may contain spaces/parens: split after the last ')'.
+        fields = stat.rsplit(")", 1)[1].split()
+        start_ticks = int(fields[19])  # field 22 overall (starttime)
+        btime = None
+        for line in Path("/proc/stat").read_text().splitlines():
+            if line.startswith("btime "):
+                btime = int(line.split()[1])
+                break
+        if btime is None:
+            return None
+        return btime + start_ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _proc_cmdline(pid: int) -> list[str]:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return []
+    return [a for a in raw.decode("utf-8", "replace").split("\0") if a]
+
+
+def _cmdline_matches_server(argv: list[str], model_path: str, port: int) -> bool:
+    """True when argv is a llama-server for the recorded model path and port."""
+    if not argv or "llama-server" not in os.path.basename(argv[0]):
+        return False
+    model_ok = bool(model_path) and model_path in argv
+    port_ok = False
+    for i, arg in enumerate(argv):
+        if arg in ("--port", "-p") and i + 1 < len(argv) and argv[i + 1] == str(port):
+            port_ok = True
+        elif arg == f"--port={port}":
+            port_ok = True
+    return model_ok and port_ok
+
+
+def verify_state_pid(info, pids_on_port_fn=None) -> tuple[bool, str]:
+    """Check that a state-file PID is still the server recorded for it.
+
+    Returns (ok, reason). ok requires: the pid is alive, its start time is not
+    later than the state's started_at, and either it (or a descendant) listens
+    on the recorded port or its cmdline is llama-server with the recorded model
+    path and port.
+    """
+    from datetime import datetime
+
+    pid = int(info.pid)
+    if pid <= 0 or not pid_alive(pid):
+        return False, "not alive"
+
+    start = _proc_start_epoch(pid)
+    if start is not None:
+        try:
+            recorded = datetime.fromisoformat(str(info.started_at)).timestamp()
+        except (ValueError, TypeError):
+            recorded = None
+        if recorded is not None and start > recorded + _START_TIME_SLACK_S:
+            return False, "process started after state entry was recorded (PID reused)"
+
+    port = int(getattr(info, "port", 0) or 0)
+    if port > 0:
+        listeners = (pids_on_port_fn or pids_on_port)(port)
+        if listeners:
+            family = {pid, *collect_descendants(pid)}
+            if family.intersection(listeners):
+                return True, "listens on recorded port"
+
+    if _cmdline_matches_server(_proc_cmdline(pid), getattr(info, "model_path", ""), port):
+        return True, "cmdline matches recorded server"
+    return False, "no port listener and cmdline does not match recorded server"

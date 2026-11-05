@@ -484,6 +484,8 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     )
     monkeypatch.setattr(stack, "RegistryLoader", lambda: object())
     monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
+    # fake pid 111 is not a live process; identity verification has its own tests
+    monkeypatch.setattr(stack_commands, "_verify_state_pid", lambda info: (True, "test"))
     monkeypatch.setattr(stack, "is_port_in_use", lambda port: port == 8090)
     monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
 
