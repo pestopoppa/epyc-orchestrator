@@ -722,6 +722,7 @@ class SharedKVPoolAdmission:
         pidx = None
         phashes: tuple[str, ...] = ()
         caps: dict[str, Any] | None = None
+        fork_witness: dict[str, Any] | None = None
         if prefix_key:
             from src.inference import prefix_index as _prefix_index
 
@@ -729,7 +730,12 @@ class SharedKVPoolAdmission:
                 pidx = _prefix_index.get_index(url)
                 # Hash the key ONCE per ticket, outside the lock (review D4).
                 phashes = _prefix_index.block_hashes(prefix_key, pidx.block)
-                caps = self.fork_caps(url) if _prefix_index.fork_requested() else None
+                if _prefix_index.fork_requested():
+                    caps = self.fork_caps(url)
+                    # KPF-26: the per-sibling attestation of what the server
+                    # reported, built here from the value already read, outside
+                    # the lock. Flag off: never built, no new record field.
+                    fork_witness = _fork_witness(caps)
         pview: dict[str, Any] | None = None
         with self._cond:
             queue = self._queue.setdefault(url, [])
@@ -848,6 +854,17 @@ class SharedKVPoolAdmission:
                             self._admission_info[ticket]["prefix_index"] = self._prefix_index_admit(
                                 pidx, ticket, prefix_key, prefill_tokens, pview, verdict,
                                 hashes=phashes)
+                            if fork_witness is not None:
+                                # Pure dict copies of values computed above; no
+                                # I/O, no new lock. A failure never touches the
+                                # verdict or the reservation already taken.
+                                try:
+                                    self._admission_info[ticket]["prefix_index"][
+                                        "fork_witness"] = _fork_witness_for_ticket(
+                                            fork_witness, pview)
+                                except Exception:
+                                    logger.debug("KV pool admission: fork witness failed",
+                                                 exc_info=True)
                         if logged:
                             logger.info(
                                 "KV pool admission: %s request of %d tokens admitted after %.1fs%s",
@@ -1369,6 +1386,45 @@ class SharedKVPoolAdmission:
                 if idx is not None:
                     entry["prefix_index"] = idx.status()
         return out
+
+
+def _fork_witness(caps: Any) -> dict[str, Any]:
+    """KPF-26 / KPF-18.2: what this ticket's ``fork_caps`` read reported. Only
+    built with the fork requested. Null or non-dict caps (an unreadable
+    ``/props``, a v10 server, or a ``fork_caps`` failure) are ``unknown``: the
+    anti-vacuity rule, a missing witness never reads as a fork capability."""
+    if not isinstance(caps, dict):
+        return {"caps_state": "unknown", "attestation": "unknown",
+                "server_fork_mode": None, "server_min_tokens": None,
+                "server_checkpoint_at": None}
+    mode = caps.get("mode")
+    return {
+        "caps_state": "present",
+        "attestation": "fork_capable" if mode in ("kv", "checkpoint") else "fork_not_capable",
+        "server_fork_mode": mode,
+        "server_min_tokens": caps.get("min_tokens"),
+        "server_checkpoint_at": caps.get("checkpoint_at"),
+    }
+
+
+def _fork_witness_for_ticket(base: dict[str, Any], view: dict[str, Any] | None) -> dict[str, Any]:
+    """The per-sibling witness: the server report plus the fork facts the
+    admission view derived for THIS ticket. Copies only; never raises upward
+    of its caller's try."""
+    out = dict(base)
+    view = view or {}
+    busy = view.get("fork_busy_slot")
+    out.update(
+        view_fork=bool(view.get("fork")),
+        fork_source_ticket=view.get("fork_source_ticket"),
+        fork_busy_slot=list(busy) if busy is not None else None,
+        fork_credit_tokens=int(view.get("fork_credit_tokens") or 0),
+        trunk_hold=bool(view.get("trunk_hold")),
+    )
+    if out["attestation"] != "fork_capable":
+        # The view cannot have forked without capable caps; record it if it did.
+        out["view_fork_without_capable_caps"] = out["view_fork"]
+    return out
 
 
 _shared_pool_admission = SharedKVPoolAdmission()

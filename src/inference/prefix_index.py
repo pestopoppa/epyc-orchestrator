@@ -549,6 +549,31 @@ def _new_stats() -> dict[str, Any]:
     }
 
 
+def _ratio(num: Any, den: Any) -> dict[str, Any]:
+    """Raw numerator and denominator; ``value`` is null on an empty
+    denominator (never 0 error, never a pass)."""
+    n = int(num or 0)
+    d = int(den or 0)
+    return {"numerator": n, "denominator": d, "value": (n / d) if d > 0 else None}
+
+
+def shadow_capture(stats: dict[str, Any]) -> dict[str, Any]:
+    """KPF-27d: the shadow-window metrics as raw per-worker numerators and
+    denominators. Worker identity is data (pid), not a separate accessor;
+    windows are formed by differencing two captures from the same pid."""
+    stale = dict(stats.get("stale_drops") or {})
+    return {
+        "worker_pid": os.getpid(),
+        "captured_at_unix": time.time(),
+        "prediction_abs_err_tokens": _ratio(stats.get("prediction_abs_err_tokens"),
+                                            stats.get("predictions")),
+        "slot_prediction_hits": _ratio(stats.get("slot_prediction_hits"),
+                                       stats.get("slot_predictions")),
+        "stale_drops": {"by_reason": stale, "total": sum(int(v or 0) for v in stale.values()),
+                        "lookups": int(stats.get("lookups") or 0)},
+    }
+
+
 def _bump(d: dict[str, Any], key: str, n: int = 1) -> None:
     d[key] = d.get(key, 0) + n
 
@@ -1140,6 +1165,8 @@ class PrefixIndex:
                 "stats": json.loads(json.dumps(self.stats)),
             }
         out["unique_cells"] = self.unique_cells()
+        # KPF-27d: per-worker shadow-window capture, from the copied counters.
+        out["shadow_capture"] = shadow_capture(out["stats"])
         return out
 
     # -- host-wide ledger ------------------------------------------------------------
