@@ -163,6 +163,25 @@ def _bump(key: str, exc: BaseException | None = None) -> None:
         )
 
 
+def _spec_canary_snapshot() -> dict[str, Any] | None:
+    try:
+        from src.backends import spec_canary
+
+        return spec_canary.snapshot()
+    except Exception:
+        return None
+
+
+def _spec_canary_observe(record: dict[str, Any], result: Any = None) -> None:
+    """SPEC-CANARY.1: passive acceptance-collapse / repetition-tail check. Never raises."""
+    try:
+        from src.backends import spec_canary
+
+        spec_canary.observe(record, output_text=getattr(result, "output", None) if result is not None else None)
+    except Exception:
+        pass
+
+
 def health() -> dict[str, Any]:
     """Per-process recorder state: where records go and what happened to the calls.
 
@@ -178,7 +197,7 @@ def health() -> dict[str, Any]:
     return {"enabled": path is not None, "path": str(path) if path else None,
             "private_path": str(private) if private else None,
             "production_ports": sorted(ports) if ports is not None else None, **stats,
-            "pid": os.getpid()}
+            "pid": os.getpid(), "spec_canary": _spec_canary_snapshot()}
 
 
 def last_call() -> dict[str, Any] | None:
@@ -1156,6 +1175,7 @@ def recorded_call(method: str) -> Callable:
                     )
                     if write_record(record):
                         _LAST_CALL.set(_last_call_summary(record))
+                    _spec_canary_observe(record, result)
                     try:
                         from src.backends import prompt_layout
 
@@ -1248,6 +1268,7 @@ def record_http_call(
             staged=None,
             notes=n,
         )
+        _spec_canary_observe(record)
         return write_record(record)
     except Exception as e:
         _bump("build_failed", e)
