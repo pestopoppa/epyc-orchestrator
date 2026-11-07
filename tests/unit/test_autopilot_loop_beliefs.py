@@ -952,7 +952,7 @@ def test_reader_shape_decimal_strings_and_not_evidence_lists() -> None:
               refuted_claim_ids=["clm_r1"], claims=[{"claim_id": "clm_t1", "tier": "target"}],
               banner="No beliefs are scoped to X.")
     ready = lb.validate_ready(_ready_answer(**ev))
-    assert lb.host_claim_ids(ready.evidence) == {"clm_h1"}
+    assert lb.host_claim_ids(ready.answer["evidence"]) == {"clm_h1"}
     flags = lb.known_good_flags(ready)
     assert "refuted" in lb.premise_flag_reason(["clm_r1"], flags)
     assert "host-tier" in lb.premise_flag_reason(["clm_h1"], flags)
@@ -1260,6 +1260,28 @@ def test_check_answer_accepts_the_knob_and_lineup_tiers() -> None:
     block = lb.render_prompt_block(ready)
     assert "Evidence tiers: knob 2, target 1, lineup 0, sibling 1, host 1." in block
     assert "Citable in vidya_claim_ids" in block and "k1, l1" in block
+
+
+def test_check_answer_accepts_the_harness_tier_as_context_only() -> None:
+    """ROOT answers carry a `harness` tier (VB-AK-WIRE-PLANNER-TIER). Before 2026-11-07 the
+    bridge rejected every such answer as malformed; harness ids are never citable premises."""
+    ev = {"tiers": {"knob": 0, "target": 1, "lineup": 0, "sibling": 0, "host": 0, "harness": 1},
+          "tiers_shown": {"knob": 0, "target": 1, "lineup": 0, "sibling": 0, "host": 0,
+                          "harness": 1},
+          "claim_ids": ["t1"], "not_evidence_claim_ids": ["h1"],
+          "claims": [{"claim_id": "t1", "tier": "target"},
+                     {"claim_id": "h1", "tier": "harness"}]}
+    ready = lb.validate_ready(_ready_answer(**ev))
+    block = lb.render_prompt_block(ready)
+    assert "harness 1" in block and "h1" not in block.split("Citable in")[1].splitlines()[0]
+    assert "h1" in lb.host_claim_ids(ready.answer["evidence"])
+    assert lb.premise_flag_reason(["h1"], {"host": lb.host_claim_ids(ready.answer["evidence"])})
+
+
+def test_check_answer_negative_control_unknown_tier_still_malformed() -> None:
+    ev = {"tiers": {"target": 1, "bogus": 1}, "claim_ids": [], "claims": []}
+    with pytest.raises(Exception):
+        lb.validate_ready(_ready_answer(**ev))
 
 
 def test_shadow_call_rows_are_tagged_at_the_archive_and_checker_ignores_them(

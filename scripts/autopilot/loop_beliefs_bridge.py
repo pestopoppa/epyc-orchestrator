@@ -72,7 +72,11 @@ EXIT_READY, EXIT_REFUSED = 0, 3
 CONSUMER_ALARMED_REFUSALS = ("reader_stale",)
 #: DESIGN §7.1 evidence tiers. Only `target` and `sibling` ids may be cited as premises; `host`
 #: (device/backend-only, e.g. INF-70 bandwidth ceilings) is background and is refused.
-TIERS = ("knob", "target", "lineup", "sibling", "host")
+#: `harness` (ROOT e9f943781, VB-AK-WIRE-PLANNER-TIER): consumer-scoped loop-infrastructure
+#: findings; context only, like host. Missing it here made every ROOT answer that carried a
+#: `harness` tier count fail validation as `reader_invalid_answer` (found by canary B 2026-11-07).
+TIERS = ("knob", "target", "lineup", "sibling", "host", "harness")
+NOT_EVIDENCE_TIERS = ("host", "harness")
 #: Tiers whose claim ids may be cited as premises (everything but host background).
 CITABLE_TIERS = ("knob", "target", "lineup", "sibling")
 
@@ -780,7 +784,7 @@ def _claim_rows(ev: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def host_claim_ids(ev: Mapping[str, Any]) -> set[str]:
     """Ids this answer labelled `tier: host`. An older answer labels none, so none is refused."""
-    ids = {str(r["claim_id"]) for r in _claim_rows(ev) if r.get("tier") == "host"}
+    ids = {str(r["claim_id"]) for r in _claim_rows(ev) if r.get("tier") in NOT_EVIDENCE_TIERS}
     for key in ("host_claim_ids", "not_evidence_claim_ids"):
         ids |= {str(i) for i in ev.get(key) or () if isinstance(i, str)}
     return ids
@@ -863,7 +867,7 @@ def _value_lines(ev: Mapping[str, Any], section: str) -> list[str]:
     rows = _claim_rows(ev)
     if any(r.get("tier") for r in rows):
         citable = [str(r["claim_id"]) for r in rows if r.get("tier") in CITABLE_TIERS]
-        host = [str(r["claim_id"]) for r in rows if r.get("tier") == "host"]
+        host = [str(r["claim_id"]) for r in rows if r.get("tier") in NOT_EVIDENCE_TIERS]
         if citable:
             lines.append(f"  Citable in {REPLY_FIELD} (knob/target/lineup/sibling tier): "
                          + ", ".join(citable[:MAX_CITABLE_IDS])
