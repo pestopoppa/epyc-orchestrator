@@ -111,3 +111,59 @@ def test_only_host_eligible_choices_are_offered():
     )
     assert prepared.offered_choices == ("inspect",)
     assert _validate(prepared, selected_id="apply").status == "unknown_id"
+
+
+# UFH-TE-1 / UFH-TE-2
+SERVING = {
+    "descriptor_digest": "d1",
+    "handler_artifact_digest": "h1",
+    "config_digest": "c1",
+    "serving_tree_commit": "abc",
+    "process_start_ns": 1,
+}
+
+
+def _prepared_serving():
+    return prepare_action(
+        task_revision="revision-1", catalog=CATALOG, read_set=READ_SET,
+        expires_at_ns=100, serving_identity=SERVING,
+    )
+
+
+def test_benign_restart_is_not_stale_but_handler_swap_is():
+    prepared = _prepared_serving()
+    restart = dict(SERVING, process_start_ns=999)
+    assert _validate(prepared, current_serving_identity=restart).status == "accepted"
+    assert _validate(prepared, current_serving_identity=SERVING).status == "accepted"
+    for key in ("descriptor_digest", "handler_artifact_digest", "config_digest", "serving_tree_commit"):
+        swapped = dict(SERVING, **{key: "changed"})
+        result = _validate(prepared, current_serving_identity=swapped)
+        assert result.status == "stale", key  # negative control per key
+        assert result.fallback == "incumbent_fallback"
+    assert _validate(prepared).status == "stale"  # identity missing at dispatch
+
+
+def test_no_serving_identity_keeps_legacy_behaviour():
+    assert _validate(_prepared(), current_serving_identity={"descriptor_digest": "x"}).status == "accepted"
+
+
+def test_validator_fields_optional_and_emitted_when_set(tmp_path):
+    prepared = _prepared()
+    result = _validate(prepared)
+    kw = dict(
+        authorization_result="allowed", component_timing_ms={}, total_timing_ms=0.0,
+        observed_downstream_outcome={},
+    )
+    path = tmp_path / "r.jsonl"
+    append_receipt(path, make_receipt(prepared, result, **kw))
+    legacy = json.loads(path.read_text().strip())
+    assert "validator_id" not in legacy and "conclusion_valid_until_ns" not in legacy
+    path2 = tmp_path / "r2.jsonl"
+    append_receipt(
+        path2,
+        make_receipt(prepared, result, validator_id="v", validator_version="1",
+                     conclusion_valid_until_ns=5, **kw),
+    )
+    row = json.loads(path2.read_text().strip())
+    assert (row["validator_id"], row["validator_version"], row["conclusion_valid_until_ns"]) == ("v", "1", 5)
+    assert row["schema_version"] == SCHEMA_VERSION

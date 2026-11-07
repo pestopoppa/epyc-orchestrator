@@ -1,0 +1,61 @@
+# Authored effect contracts for registry tools reachable by stored/replayed calls (UFH-TE-4).
+# classes: read-only | mutating | external_side_effect | irreversible | unknown
+# Rule: a class is recorded only where the registry declares it (side_effects) or the description states it
+# outright. Everything else is `unknown`, which BLOCKS reuse. No inference from names or permissions.
+# Stored-call set = every tool in orchestration/tool_registry.yaml (the TOOL/CALL surface); none is excluded.
+contracts:
+  http_get: {effect_class: read-only, destination: "arbitrary caller-supplied URL", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  http_post: {effect_class: external_side_effect, destination: "arbitrary caller-supplied URL", principal: "requesting role (network permission)", basis: "stated in description", reuse_allowed: true}
+  web_search: {effect_class: read-only, destination: "DuckDuckGo", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  web_research: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  fetch_wikipedia: {effect_class: read-only, destination: "Wikipedia", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  search_arxiv: {effect_class: read-only, destination: "arXiv", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  search_papers: {effect_class: read-only, destination: "Semantic Scholar", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  search_wikipedia: {effect_class: read-only, destination: "Wikipedia", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  get_wikipedia_article: {effect_class: read-only, destination: "Wikipedia", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  search_books: {effect_class: read-only, destination: "Google Books", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  json_query: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  csv_to_json: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  json_to_csv: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  sql_query: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  python_eval: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  run_shell: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  git_status: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  lint_python: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  calculate: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  statistics: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  monte_carlo: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  symbolic_solve: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  matrix_solve: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  matrix_eigenvalues: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  matrix_svd: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  solve_ode: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  optimize: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  monte_carlo_native: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  mcmc: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  bayesopt: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  plot_braille: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  plot_function: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  histogram: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  plot_sixel: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  render_math: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  read_file: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  write_file: {effect_class: mutating, destination: "local filesystem, caller-supplied path", principal: "requesting role (filesystem permission)", basis: "stated in description", reuse_allowed: true}
+  list_directory: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  get_current_date: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  get_current_time: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  embed_text: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  similarity_search: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  classify_text: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  ocr_extract: {effect_class: unknown, destination: "unknown", principal: "unknown", basis: "not declared read_only or mutating in the registry; no inference", reuse_allowed: false}
+  vision_analyze: {effect_class: mutating, destination: "vision index state (declared system_state, calls_llm)", principal: "requesting role", basis: "declared side_effects=['calls_llm', 'system_state']", reuse_allowed: true}
+  vision_search: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  vision_face_identify: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  task_create: {effect_class: mutating, destination: "task manager state for the current request", principal: "requesting role", basis: "declared side_effects=['system_state']", reuse_allowed: true}
+  task_update: {effect_class: mutating, destination: "task manager state for the current request", principal: "requesting role", basis: "declared side_effects=['system_state']", reuse_allowed: true}
+  task_list: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  budget_override: {effect_class: mutating, destination: "active task tool budget", principal: "requesting role", basis: "declared side_effects=['system_state']", reuse_allowed: true}
+  user_profile: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  user_search: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  user_context: {effect_class: read-only, destination: "none (in-process / local read)", principal: "requesting role", basis: "declared side_effects=['read_only']", reuse_allowed: true}
+  user_conclude: {effect_class: mutating, destination: "durable user profile store", principal: "requesting role", basis: "declared side_effects=['system_state']", reuse_allowed: true}

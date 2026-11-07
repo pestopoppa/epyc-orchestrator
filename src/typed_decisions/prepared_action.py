@@ -35,6 +35,7 @@ class PreparedAction:
     expires_at_ns: int
     requested_model: str | None
     resolved_model: str | None
+    serving_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,27 @@ class DecisionReceipt:
     selector_reason: str | None = None
     selector_calls: tuple[Mapping[str, Any], ...] = ()
     shadow_mode: str | None = None
+    # UFH-TE-1: optional validator identity and conclusion validity interval.
+    validator_id: str | None = None
+    validator_version: str | None = None
+    conclusion_valid_until_ns: int | None = None
+
+
+# UFH-TE-2: serving-identity keys compared at dispatch.  ``process_start_ns`` is
+# recorded for audit but deliberately NOT compared: a benign restart that serves
+# identical artifacts must not invalidate a prepared action.  A restart that
+# changes what is served shows up through the other keys.
+SERVING_IDENTITY_COMPARED_KEYS = (
+    "descriptor_digest",
+    "handler_artifact_digest",
+    "config_digest",
+    "serving_tree_commit",
+)
+
+
+def serving_identity_fingerprint(identity: Mapping[str, Any]) -> str:
+    """Fingerprint the comparable part of a serving identity (missing keys count as None)."""
+    return fingerprint({key: identity.get(key) for key in SERVING_IDENTITY_COMPARED_KEYS})
 
 
 def prepare_action(
@@ -78,6 +100,7 @@ def prepare_action(
     offered_choices: Sequence[str] | None = None,
     requested_model: str | None = None,
     resolved_model: str | None = None,
+    serving_identity: Mapping[str, Any] | None = None,
 ) -> PreparedAction:
     """Freeze the exact host menu and inputs before asking for a selection."""
     if not task_revision or not isinstance(task_revision, str):
@@ -99,6 +122,9 @@ def prepare_action(
         expires_at_ns=expires_at_ns,
         requested_model=requested_model,
         resolved_model=resolved_model,
+        serving_fingerprint=(
+            serving_identity_fingerprint(serving_identity) if serving_identity is not None else None
+        ),
     )
 
 
@@ -110,6 +136,7 @@ def validate_prepared_action(
     current_catalog: Mapping[str, Any],
     current_read_set: Mapping[str, Any],
     current_offered_choices: Sequence[str] | None = None,
+    current_serving_identity: Mapping[str, Any] | None = None,
     authorized: bool,
     model_available: bool,
     now_ns: int | None = None,
@@ -139,6 +166,14 @@ def validate_prepared_action(
             and tuple(sorted(current_offered_choices)) != prepared.offered_choices
         )
         or selected_id not in current_catalog
+        or (
+            prepared.serving_fingerprint is not None
+            and (
+                current_serving_identity is None
+                or serving_identity_fingerprint(current_serving_identity)
+                != prepared.serving_fingerprint
+            )
+        )
     ):
         status = "stale"
     else:
@@ -164,6 +199,9 @@ def make_receipt(
     selector_reason: str | None = None,
     selector_calls: Sequence[Mapping[str, Any]] = (),
     shadow_mode: str | None = None,
+    validator_id: str | None = None,
+    validator_version: str | None = None,
+    conclusion_valid_until_ns: int | None = None,
 ) -> DecisionReceipt:
     return DecisionReceipt(
         schema_version=SCHEMA_VERSION,
@@ -187,6 +225,9 @@ def make_receipt(
         selector_reason=selector_reason,
         selector_calls=tuple(dict(call) for call in selector_calls),
         shadow_mode=shadow_mode,
+        validator_id=validator_id,
+        validator_version=validator_version,
+        conclusion_valid_until_ns=conclusion_valid_until_ns,
     )
 
 
@@ -204,6 +245,11 @@ def append_receipt(path: Path, receipt: DecisionReceipt) -> None:
             "shadow_mode",
         ):
             row.pop(key)
+    # UFH-TE-1: emit the optional validator fields only when set, so rows that
+    # do not use them stay byte-identical to pre-TE-1 receipts.
+    for key in ("validator_id", "validator_version", "conclusion_valid_until_ns"):
+        if row.get(key) is None:
+            row.pop(key, None)
     payload = (json.dumps(row, sort_keys=True, allow_nan=False) + "\n").encode()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:

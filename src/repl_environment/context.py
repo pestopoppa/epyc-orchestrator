@@ -675,6 +675,7 @@ class _ContextMixin:
                         expires_at_ns=time.time_ns() + 60_000_000_000,
                         offered_choices=offered,
                         requested_model=f"role:{self.role}",
+                        serving_identity=self._tool_serving_identity(tool_name),
                     )
             except Exception:
                 log.exception("tool argument shadow preparation failed")
@@ -694,6 +695,7 @@ class _ContextMixin:
                 current_catalog=catalog,
                 current_read_set=read_set,
                 current_offered_choices=current_offered,
+                current_serving_identity=self._tool_serving_identity(tool_name),
                 authorized=authorized,
                 model_available=self._selector_model_available(),
             )
@@ -772,6 +774,13 @@ class _ContextMixin:
                 pass  # Silently ignore research tracking failures
 
         return result
+
+    def _tool_serving_identity(self, tool_name: str) -> dict[str, Any]:
+        """UFH-TE-2: identity of what would serve ``tool_name`` right now."""
+        from src.typed_decisions.serving_identity import build_serving_identity
+
+        tool = getattr(getattr(self, "tool_registry", None), "_tools", {}).get(tool_name)
+        return build_serving_identity(tool)
 
     def _tool_decision_snapshot(self) -> tuple[dict[str, Any], dict[str, str], str]:
         """Capture the live tool catalogue and task inputs for dispatch recheck."""
