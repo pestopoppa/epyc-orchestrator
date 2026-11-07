@@ -45,7 +45,8 @@ class FakeStack:
             post_json=self.post_json, pids_on_port=self.pids, proc_maps=self.maps,
             proc_exe=lambda pid: f"{self.libdir}/llama-server",
             device_held=lambda dev: self.device_held,
-            now=lambda: self.clock[0], sleep=self.sleep)
+            now=lambda: self.clock[0], sleep=self.sleep,
+            pid_alive=lambda pid: self.up)
 
     def sleep(self, s: float) -> None:
         self.clock[0] += s
@@ -99,6 +100,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv(gwe.PENDING_ENV, str(tmp_path / "stack_change_pending.json"))
     monkeypatch.setenv(gwe.TOKENS_ENV, str(tmp_path / "tokens"))
     monkeypatch.setenv(gwe.POLICY_ENV, str(tmp_path / "no_policy.yaml"))  # fail-closed default
+    (tmp_path / "state.json").write_text(json.dumps({"server_8083": {"port": 8083, "pid": 4242}}))
+    monkeypatch.setenv(gwe.STACK_STATE_ENV, str(tmp_path / "state.json"))
+    monkeypatch.setenv(gwe.STACK_STOP_ENV, str(tmp_path / "no_stop_marker.json"))
     clock = [1_900_000_000.0]
     fake = FakeStack(clock)
     schedule = window.with_name("schedule.json")
@@ -855,3 +859,40 @@ def test_manual_restore_of_a_legacy_park_refuses_while_device_busy(env):
         env.ex.close(reason="manual_cli")
     assert exc.value.reason == "device_busy"
     assert _window(env)["holder"] == "autokernel" and env.fake.calls == []
+
+
+# -- production liveness (AKX-ALL-15a) ----------------------------------------
+
+def _live_env(env, monkeypatch, *, pid=4242, alive=True, stop=False):
+    state = env.tmp / "state.json"
+    state.write_text(json.dumps({"server_8083": {"port": 8083, "pid": pid}}))
+    monkeypatch.setenv(gwe.STACK_STATE_ENV, str(state))
+    marker = env.tmp / "stopped.json"
+    monkeypatch.setenv(gwe.STACK_STOP_ENV, str(marker))
+    if stop:
+        marker.write_text("{}")
+    ops = env.fake.ops()
+    ops.pid_alive = lambda p: alive
+    return gwe.Executor(env.window, ops)
+
+
+def test_dead_pid_reports_holder_none(env, monkeypatch):
+    snap = _live_env(env, monkeypatch, alive=False).snapshot()
+    assert snap["holder"] == "none" and snap["verdict"] == "down" and snap["reason"]
+
+
+def test_live_pid_failing_health_is_flagged(env, monkeypatch):
+    env.fake.up = False
+    snap = _live_env(env, monkeypatch).snapshot()
+    assert snap["holder"] == "none" and snap["verdict"] == "stale"
+
+
+def test_intentional_stop_is_not_an_alarm(env, monkeypatch):
+    snap = _live_env(env, monkeypatch, alive=False, stop=True).snapshot()
+    assert snap["holder"] == "none" and snap["reason"] == "stopped-by-operator"
+    assert snap["verdict"] not in ("alarm", "down", "stale")
+
+
+def test_live_pid_healthy_reports_production(env, monkeypatch):
+    snap = _live_env(env, monkeypatch).snapshot()
+    assert snap["holder"] == "production" and snap["verdict"] == "ok"

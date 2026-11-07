@@ -491,6 +491,41 @@ def gpu_quiet_exclusive() -> list[str] | None:
 # ---------------------------------------------------------------------------
 
 
+def pid_alive(pid: int) -> bool:
+    """``ps -p`` liveness (``kill -0`` is unreliable on this host)."""
+    try:
+        r = subprocess.run(["ps", "-p", str(int(pid)), "-o", "pid="], capture_output=True,
+                           text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return r.returncode == 0 and bool(r.stdout.strip())
+
+
+PROD_HEALTH_PORT = 8083
+STACK_STATE_ENV = "GPU_WINDOW_STACK_STATE_FILE"
+STACK_STOP_ENV = "GPU_WINDOW_STACK_STOP_FILE"
+
+
+def _stack_state_path() -> Path:
+    return Path(os.environ.get(STACK_STATE_ENV) or ORCH_ROOT / "logs" / "orchestrator_state.json")
+
+
+def _stack_stop_path() -> Path:
+    """Marker an operator stop leaves (any JSON/text content); removed on start."""
+    return Path(os.environ.get(STACK_STOP_ENV) or ORCH_ROOT / "logs" / "stack_stopped_by_operator.json")
+
+
+def _registered_pid(port: int) -> int | None:
+    try:
+        data = json.loads(_stack_state_path().read_text(encoding="utf-8"))
+        for rec in data.values():
+            if isinstance(rec, dict) and rec.get("port") == port:
+                return int(rec["pid"])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return None
+
+
 @dataclass
 class StackOps:
     stop: Callable[[str], bool]
@@ -505,6 +540,7 @@ class StackOps:
     sleep: Callable[[float], None] = time.sleep
     kfd_pids: Callable[[], list[int] | None] = kfd_pids
     gpu_quiet_exclusive: Callable[[], list[str] | None] = gpu_quiet_exclusive
+    pid_alive: Callable[[int], bool] = pid_alive
 
 
 def _stack_cmd(action: str, component: str) -> bool:
@@ -1039,14 +1075,17 @@ class Executor:
         end = gw._parse_ts(current.get("expected_end"))
         holder = current.get("holder") or "production"
         overdue = holder != "production" and (end is None or now >= end + RESTORE_GRACE_S)
+        liveness: dict[str, Any] = {}
         if holder == "production":
-            verdict = "ok"
+            liveness = self.production_liveness()
+            holder = liveness["holder"]
+            verdict = liveness["verdict"]
         elif lease.get("state") == "restore_failed" or overdue:
             verdict = "alarm"
         else:
             verdict = "window_open"
         busy = (self.device_busy(current.get("parked_ports") or lease.get("ports") or [])
-                if holder != "production" else [])
+                if holder not in ("production", "none") else [])
         return {
             "device_busy": busy, "legacy_park": self._is_legacy(lease, current),
             "holder": holder, "grant_state": current.get("grant_state"),
@@ -1056,7 +1095,24 @@ class Executor:
             "lease_state": lease.get("state"), "overdue": overdue, "verdict": verdict,
             "stack_change_pending": pending_stack_change() is not None,
             "device_held": self.ops.device_held(DEVICE_ID),
+            **({"reason": liveness["reason"]} if liveness.get("reason") else {}),
         }
+
+    def production_liveness(self) -> dict[str, Any]:
+        """Never report holder=production without proving the holder: registered pid alive
+        (``ps``) and :8083 /health answering. Intentional stop => ``none`` + no alarm."""
+        stop = _stack_stop_path()
+        if stop.exists():
+            return {"holder": "none", "verdict": "stopped", "reason": "stopped-by-operator"}
+        pid = _registered_pid(PROD_HEALTH_PORT)
+        if pid is None or not self.ops.pid_alive(pid):
+            return {"holder": "none", "verdict": "down",
+                    "reason": f"production pid {pid} not alive (:{PROD_HEALTH_PORT})"}
+        code, _ = self.ops.get_json(f"http://127.0.0.1:{PROD_HEALTH_PORT}/health", 5.0)
+        if code != 200:
+            return {"holder": "none", "verdict": "stale",
+                    "reason": f"pid {pid} alive but :{PROD_HEALTH_PORT}/health={code}"}
+        return {"holder": "production", "verdict": "ok", "reason": None}
 
     def write_status(self, action: str, detail: str) -> dict[str, Any]:
         now = self.ops.now()
