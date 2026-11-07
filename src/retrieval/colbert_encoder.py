@@ -337,6 +337,39 @@ def _validate_query_expansion_config(model_dir: Path) -> None:
         raise RuntimeError("do_query_expansion=true is unsupported by the ColBERT encoder")
 
 
+def _validate_graph_contract(model_dir: Path, session) -> None:
+    """Fail loudly when the loaded graph contradicts the checkpoint's declaration.
+
+    K2 fail-loud check. `uses_token_type_ids` and `embedding_dim` are read from
+    the merged declared config; an absent key declares nothing and is accepted.
+    A present key that disagrees with the graph (or is malformed) raises, because
+    the alternative is a silent wrong-width or wrong-input encoder. A dynamic or
+    unreadable output width is not evidence of a mismatch and is not refused.
+    """
+    config = _load_declared_config(model_dir)
+    if "uses_token_type_ids" in config:
+        declared = config["uses_token_type_ids"]
+        if type(declared) is not bool:
+            raise ValueError("uses_token_type_ids must be a boolean when declared")
+        has_input = any(i.name == "token_type_ids" for i in session.get_inputs())
+        if declared != has_input:
+            raise RuntimeError(
+                f"declared uses_token_type_ids={declared} but the graph "
+                f"{'declares' if has_input else 'lacks'} a token_type_ids input"
+            )
+    if "embedding_dim" in config:
+        declared_dim = config["embedding_dim"]
+        if type(declared_dim) is not int or declared_dim <= 0:
+            raise ValueError("embedding_dim must be a positive integer when declared")
+        outputs = list(session.get_outputs())
+        shape = getattr(outputs[0], "shape", None) if outputs else None
+        width = shape[-1] if shape else None
+        if type(width) is int and width != declared_dim:
+            raise RuntimeError(
+                f"declared embedding_dim={declared_dim} but the graph output width is {width}"
+            )
+
+
 def _load_declared_prefix_ids(model_dir: Path) -> dict:
     """Declared `{"query": id, "document": id}`; a key is absent when unstated.
 
@@ -574,6 +607,7 @@ def ensure_loaded() -> bool:
         # InvalidArgument and the encoder returns None for every text. Pattern
         # borrowed from cross_encoder.py:148, which already does this.
         loaded_input_names = tuple(i.name for i in loaded_session.get_inputs())
+        _validate_graph_contract(_MODEL_DIR, loaded_session)
 
         loaded_query_prefix, loaded_document_prefix = _load_declared_prefixes(_MODEL_DIR)
         declared = _load_declared_prefix_ids(_MODEL_DIR)
