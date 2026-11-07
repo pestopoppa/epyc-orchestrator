@@ -386,3 +386,22 @@ def mock_llm_primitives():
     primitives.get_cache_stats.return_value = {"hits": 5, "misses": 2}
     primitives.llm_call.return_value = "Test response"
     return primitives
+
+
+@pytest.fixture(autouse=True)
+def _isolate_seeding_batch_telemetry(monkeypatch, tmp_path):
+    """No test may write the live seeding telemetry (LOOP-SAFETY-C3 / D-B1).
+
+    ``_BATCH_HISTORY_PATH`` is read from the environment at IMPORT, so setting the env
+    alone is not enough once ``seeding_telemetry`` is already in ``sys.modules``: patch the
+    module attribute under every import spelling too."""
+    import sys as _sys
+
+    path = str(tmp_path / "seeding_batch_telemetry.jsonl")
+    monkeypatch.setenv("SEEDING_BATCH_TELEMETRY_PATH", path)
+    for name, module in list(_sys.modules.items()):
+        if name.rsplit(".", 1)[-1] == "seeding_telemetry" and hasattr(
+            module, "_BATCH_HISTORY_PATH"
+        ):
+            monkeypatch.setattr(module, "_BATCH_HISTORY_PATH", path)
+    yield

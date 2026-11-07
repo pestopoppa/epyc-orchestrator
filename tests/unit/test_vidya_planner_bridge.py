@@ -126,7 +126,9 @@ def test_default_lookups_fall_back_to_the_root_view_when_workspace_lags(tmp_path
     lagging.mkdir()
     _fake_root(view)
     monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", lagging)
-    monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))
+    monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))  # explicit test-only fallback
+    for name in lb.ROOT_REPO_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(bridge.KVQ_LOOKUP_ENV, raising=False)
     monkeypatch.delenv(bridge.LOOKUP_ENV, raising=False)
     seen = []
@@ -155,6 +157,8 @@ def test_default_lookup_prefers_workspace_and_env_override_wins(tmp_path, monkey
     workspace, view = _fake_root(tmp_path / "workspace"), _fake_root(tmp_path / "view")
     monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", workspace)
     monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))
+    for name in lb.ROOT_REPO_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(bridge.KVQ_LOOKUP_ENV, raising=False)
     assert bridge._resolved_lookup("kvq_planner_context.py") == (
         workspace / "scripts" / "vidya" / "kvq_planner_context.py"

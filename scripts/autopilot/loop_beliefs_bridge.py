@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -45,12 +46,16 @@ RECEIPT_SCHEMA = "epyc.vidya.loop_beliefs_planner_receipt.v1"
 DEGRADED_SCHEMA = "epyc.autopilot.belief_degraded.v1"
 REVIEW_FLAG_SCHEMA = "epyc.autopilot.belief_review_flag.v1"
 
-DEFAULT_ROOT_REPO = Path("/workspace")
-#: Used only when the default checkout has no reader (a lagging /workspace on 2026-10-21 was
-#: 466 commits behind origin/main and lacked scripts/vidya/loop_beliefs.py). The reader's alarm
-#: state is the canonical bus (session_bus.get_bus_root, not __file__-relative), so running it
-#: from another checkout of the same ROOT repo does not fork alarm state.
-ROOT_REPO_FALLBACKS = (Path("/mnt/raid0/llm/views/epyc-root-main"),)
+#: The hub-refreshed view of root origin/main. /workspace is NOT a default: on 2026-10-21 it was
+#: 466 commits behind and on 2026-10-25 a stale ROOT silently fed the planner old beliefs
+#: (LOOP-SAFETY-C1). The reader's alarm state is the canonical bus, so running it from another
+#: checkout of the same ROOT repo does not fork alarm state.
+DEFAULT_ROOT_REPO = Path("/mnt/raid0/llm/views/epyc-root-main")
+#: Extra candidates tried only when DEFAULT_ROOT_REPO has no reader. Deliberately empty:
+#: a silent fallback to a lagging checkout is the defect C1 removes.
+ROOT_REPO_FALLBACKS: tuple[Path, ...] = ()
+#: Precedence matches AutoKernel belief_context: argv > EPYC_ROOT_REPO > EPYC_ROOT > default.
+ROOT_REPO_ENV_VARS = ("EPYC_ROOT_REPO", "EPYC_ROOT")
 DEFAULT_ESCALATE_AFTER_S = 3600.0
 #: Measured 2026-10-21: one `prepare` over the 30.8k-frame canonical ledger takes 20-25 s on a
 #: 4-core niced slice (verify ~8 s, read ~3 s, fold ~5 s, index sha ~2 s) and grows with the
@@ -63,6 +68,8 @@ DEGRADED_LOG_PATH = ORCH_ROOT / "logs" / "loop_beliefs_degraded.jsonl"
 REVIEW_FLAGS_PATH = ORCH_ROOT / "logs" / "loop_beliefs_review_flags.jsonl"
 
 EXIT_READY, EXIT_REFUSED = 0, 3
+#: Reader refusals for which the consumer ALSO raises its own alarm (the reader's is untrusted).
+CONSUMER_ALARMED_REFUSALS = ("reader_stale",)
 #: DESIGN §7.1 evidence tiers. Only `target` and `sibling` ids may be cited as premises; `host`
 #: (device/backend-only, e.g. INF-70 bandwidth ceilings) is background and is refused.
 TIERS = ("knob", "target", "lineup", "sibling", "host")
@@ -91,6 +98,8 @@ class BeliefSettings:
     alarm_state: Path | None = None
     alarm_config: Path | None = None
     index: Path | None = None
+    #: Forwarded to `prepare --read-log` so each planner turn's belief reads are logged (D-B5).
+    read_log: Path | None = None
     consumer: str = CONSUMER
     python: str = field(default_factory=lambda: sys.executable)
     degraded_log: Path = DEGRADED_LOG_PATH
@@ -117,11 +126,15 @@ class BeliefSettings:
 
 
 def resolve_root_repo(explicit: str | Path | None = None) -> Path:
-    """`explicit` (argv) wins verbatim. Otherwise the first of DEFAULT_ROOT_REPO and
-    ROOT_REPO_FALLBACKS that actually holds the reader; none -> DEFAULT_ROOT_REPO, so a missing
-    reader still raises the critical `reader_missing` alarm in `prepare`."""
+    """argv `explicit` > $EPYC_ROOT_REPO > $EPYC_ROOT > DEFAULT_ROOT_REPO, each taken verbatim
+    (an explicit choice without a reader alarms `reader_missing` in `prepare`). Only the default
+    may fall through to ROOT_REPO_FALLBACKS (empty); /workspace is never chosen silently."""
     if explicit:
         return Path(explicit)
+    for name in ROOT_REPO_ENV_VARS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return Path(value)
     for candidate in (DEFAULT_ROOT_REPO, *ROOT_REPO_FALLBACKS):
         if (candidate / "scripts" / "vidya" / "loop_beliefs.py").is_file():
             if candidate != DEFAULT_ROOT_REPO:
@@ -665,6 +678,8 @@ def prepare(settings: BeliefSettings, targets: Iterable[Mapping[str, Any]] | Non
         argv += ["--known-good", str(settings.known_good)]
     if settings.index:
         argv += ["--index", str(settings.index)]
+    if settings.read_log:
+        argv += ["--read-log", str(settings.read_log)]
     try:
         proc = run(argv, capture_output=True, text=True, check=False,
                    timeout=max(0.1, settings.reader_timeout_s))
@@ -683,9 +698,11 @@ def prepare(settings: BeliefSettings, targets: Iterable[Mapping[str, Any]] | Non
         stderr = str(getattr(proc, "stderr", "") or "")[-300:]
         return refused("reader_garbage", f"exit={returncode}; {exc}; {stderr}", alarm=True)
     if answer.get("status") == "refused" and returncode == EXIT_REFUSED:
-        # The reader already raised (and escalates) the operator alarm itself.
-        return refused(str(answer.get("reason") or "refused"), str(answer.get("detail") or ""),
-                       alarm=False, answer=answer)
+        # The reader already raised (and escalates) the operator alarm itself -- except a stale
+        # checkout: its alarm code is itself behind origin/main, so the consumer raises too.
+        reason = str(answer.get("reason") or "refused")
+        return refused(reason, str(answer.get("detail") or ""),
+                       alarm=reason in CONSUMER_ALARMED_REFUSALS, answer=answer)
     if returncode != EXIT_READY:
         return refused("reader_invalid_answer",
                        f"exit={returncode} status={answer.get('status')}", alarm=True,
@@ -881,6 +898,22 @@ def render_prompt_block(ready: ReadyBeliefs) -> str:
         f"{header}\n  (no ingested claim applies to this turn's targets: "
         f"{', '.join(ev.get('reasons') or []) or 'none'}; ledger-wide contested/withdrawn "
         "claims are still enforced against declared premises before dispatch)")
+
+
+def reconcile_kvq_text(kvq_context: Mapping[str, Any], ready: ReadyBeliefs) -> str:
+    """Planner text for the KV-quant block that cannot contradict the belief block (D-B4).
+
+    The kvq lookup is a separate child and can be `unavailable` (timeout, stale root) while the
+    loop-beliefs answer, a different source, lists kvq claims; the prompt then said both "no
+    kvq evidence" and showed kvq claims. When that happens the unavailable line says so."""
+    text = str(kvq_context.get("text") or "")
+    if kvq_context.get("status") != "unavailable":
+        return text
+    if "kvq" not in str(ready.evidence.get("section") or "").lower():
+        return text
+    return (text + "\n  NOTE: this is the dedicated kvq lookup failing, NOT absence of evidence: "
+            "the Vidya loop-beliefs block lists kvq claims from a separate source; cite those "
+            "by their claim ids, not this block's.")
 
 
 # ------------------------------------------------------------------------------ DP-4(A) shadow draft

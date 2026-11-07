@@ -123,6 +123,7 @@ orchestration/autopilot_journal.*
 orchestration/autopilot_journal_*
 orchestration/autopilot_plots/
 orchestration/autopilot_rejected_mutations.jsonl
+orchestration/seeding_batch_telemetry.jsonl
 orchestration/autopilot_short_term_memory.md
 orchestration/autopilot_state.json*
 orchestration/autopilot_state.pre-*.json

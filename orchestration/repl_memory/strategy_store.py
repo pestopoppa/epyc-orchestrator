@@ -283,6 +283,11 @@ class StrategyEntry:
         return asdict(self)
 
 
+class MissingStrategyStoreError(RuntimeError):
+    """strategies.db is absent where it must already exist (LOOP-SAFETY-C2): recreating it
+    silently discards the live strategy memory. Pass ``create=True`` for first-time init."""
+
+
 class StrategyStore:
     """FAISS + SQLite strategy store for AutoPilot species memory.
 
@@ -296,8 +301,19 @@ class StrategyStore:
         path: str | Path = DEFAULT_STRATEGY_PATH,
         embedding_dim: int = LEGACY_EMBEDDING_DIM,
         embedder: Any = None,
+        *,
+        create: bool | None = None,
     ):
+        """``create=None``: the live DEFAULT_STRATEGY_PATH must already hold strategies.db (else
+        ``MissingStrategyStoreError``); an explicit other path is created on demand.
+        ``create=True`` always creates; ``create=False`` always requires an existing db."""
         self.path = Path(path)
+        is_live_default = self.path.resolve() == Path(DEFAULT_STRATEGY_PATH).resolve()
+        if create is False or (create is None and is_live_default):
+            if not (self.path / "strategies.db").is_file():
+                raise MissingStrategyStoreError(
+                    f"{self.path / 'strategies.db'} is missing; refusing to recreate the "
+                    "strategy store (pass create=True for first-time init)")
         self.path.mkdir(parents=True, exist_ok=True)
         self.embedding_dim = embedding_dim
 

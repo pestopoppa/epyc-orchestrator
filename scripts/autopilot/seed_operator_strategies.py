@@ -355,7 +355,7 @@ def seed_rows(
             "Seed operator StrategyStore hints",
             f"campaign={campaign}; rows={len(rows)}; source_trial_id={source_trial_id}",
         )
-    store = StrategyStore(path=strategy_path)
+    store = StrategyStore(path=strategy_path, create=True)
     try:
         before_count = store.count()
         existing_ids = _existing_ids(store, rows)
@@ -437,7 +437,7 @@ def purge_campaign(
         "Purge operator StrategyStore hint campaign",
         f"campaign={campaign}; strategy_path={strategy_path}",
     )
-    store = StrategyStore(path=strategy_path)
+    store = StrategyStore(path=strategy_path, create=True)
     try:
         report = store.purge_strategy_campaign(campaign)
         _agent_log(

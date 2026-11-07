@@ -58,9 +58,13 @@ _MAX_RECOMMEND_TIMEOUT_S = _env_int("SEEDING_TELEMETRY_MAX_TIMEOUT_S", 600)
 _PERSIST_BATCH_HISTORY = os.environ.get(
     "SEEDING_BATCH_TELEMETRY_PERSIST", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
+#: Default lives under <orchestrator root>/orchestration, NOT /mnt/raid0/llm/tmp (tmp is a
+#: reclaim target and tests once wrote 48 fake rows into the live file; LOOP-SAFETY-C3).
+_DEFAULT_BATCH_HISTORY_PATH = str(
+    Path(__file__).resolve().parents[2] / "orchestration" / "seeding_batch_telemetry.jsonl"
+)
 _BATCH_HISTORY_PATH = os.environ.get(
-    "SEEDING_BATCH_TELEMETRY_PATH",
-    "/mnt/raid0/llm/tmp/seeding_batch_telemetry.jsonl",
+    "SEEDING_BATCH_TELEMETRY_PATH", _DEFAULT_BATCH_HISTORY_PATH,
 )
 
 

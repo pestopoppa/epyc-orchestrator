@@ -9951,7 +9951,9 @@ def _run_loop_inner(
                     operator_outbox_feedback=_build_operator_outbox_feedback(),
                     operator_hypotheses_block=_build_operator_hypotheses_block(blacklist),
                     vidya_settled_ground_block=_build_vidya_settled_ground_block(),
-                    vidya_kvq_evidence_block=vidya_kvq_context["text"],
+                    vidya_kvq_evidence_block=_loop_beliefs.reconcile_kvq_text(
+                        vidya_kvq_context, belief_ready
+                    ),
                     vidya_loop_beliefs_block=_loop_beliefs.render_prompt_block(belief_ready),
                     feature_flags_block=_build_feature_flags_block(
                         lab,

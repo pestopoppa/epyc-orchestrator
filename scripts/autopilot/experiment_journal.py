@@ -906,11 +906,28 @@ def _snapshot_hash(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+class MissingJournalError(RuntimeError):
+    """The journal directory/shards are absent where they must already exist (LOOP-SAFETY-C2).
+
+    Silently reading an empty journal makes every downstream count, frontier and dedup look
+    like a fresh run. Pass ``create=True`` only on a legitimate first-time init."""
+
+
 class ExperimentJournal:
     """Append-only experiment log with TSV (human-readable) + JSONL (machine-readable)."""
 
-    def __init__(self, journal_dir: Path | None = None, *, segment_snapshots: bool = True):
+    def __init__(self, journal_dir: Path | None = None, *, segment_snapshots: bool = True,
+                 create: bool | None = None):
+        """``create=None``: the live default directory must already hold shards (else
+        ``MissingJournalError``); an explicitly passed directory is created on demand.
+        ``create=True`` always creates; ``create=False`` always requires existing shards."""
         self.journal_dir = journal_dir or DEFAULT_JOURNAL_DIR
+        is_live_default = Path(self.journal_dir).resolve() == Path(DEFAULT_JOURNAL_DIR).resolve()
+        if create is False or (create is None and is_live_default):
+            if not journal_shards(self.journal_dir):
+                raise MissingJournalError(
+                    f"no journal shards in {self.journal_dir}; refusing to read an empty "
+                    "journal (pass create=True for first-time init)")
         # W3: append a chained snapshot row when a shard closes (see _maybe_close_segment).
         self.segment_snapshots = segment_snapshots
         # Replay scope for segment snapshots ({"objective_policy", "exclude_before_ts"});
@@ -1631,14 +1648,31 @@ class ExperimentJournal:
         """Human-readable summary for LLM controller prompt."""
         s = self.summary()
         entries = self.entries_with_supersessions()
+        # D-B2: honour the same epoch fence the archive's frontier uses (the planner prompt
+        # otherwise shows two contradictory frontier sizes). Unfenced -> label says so.
+        fence = (self.segment_snapshot_scope or {}).get("exclude_before_ts")
+        if fence is not None:
+            from src.autopilot_core.journal_reconstruction import parse_journal_ts
+
+            def _in_epoch(e: JournalEntry) -> bool:
+                ts = parse_journal_ts(e.timestamp)
+                return ts is not None and ts >= fence
+
+            fenced_label = " (current epoch)"
+        else:
+            def _in_epoch(e: JournalEntry) -> bool:  # noqa: ARG001
+                return True
+
+            fenced_label = " (all epochs, unfenced)"
         eligible_pareto_count = sum(
             1
             for e in entries
             if e.pareto_status == "frontier" and e.tier > 0 and not e.bug_corrupted_by
+            and _in_epoch(e)
         )
         lines = [
             f"Total trials: {s['total_trials']}",
-            f"Eligible Pareto frontier size (T1/T2, trustworthy): {eligible_pareto_count}",
+            f"Eligible Pareto frontier size (T1/T2, trustworthy){fenced_label}: {eligible_pareto_count}",
             f"Species counts: {s.get('species_counts', {})}",
         ]
         recent = entries[-last_n:]

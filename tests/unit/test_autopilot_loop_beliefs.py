@@ -677,20 +677,41 @@ def _fake_root(path: Path) -> Path:
     return path
 
 
-def test_resolve_root_repo_prefers_default_then_view_then_default(
+def test_resolve_root_repo_precedence_argv_env_default_never_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    default, view = tmp_path / "workspace", tmp_path / "view"
+    default = tmp_path / "view"
     monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", default)
-    monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))
-    # neither holds the reader: the default stays, so prepare() still raises reader_missing
-    assert lb.resolve_root_repo() == default
-    _fake_root(view)
-    assert lb.resolve_root_repo() == view  # lagging default checkout -> view
+    for name in lb.ROOT_REPO_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    assert lb.DEFAULT_ROOT_REPO != Path("/workspace") and lb.ROOT_REPO_FALLBACKS == ()
+    assert lb.resolve_root_repo() == default  # no reader: default stays -> reader_missing alarm
     _fake_root(default)
-    assert lb.resolve_root_repo() == default  # the default wins when it has the reader
-    # explicit argv is taken verbatim, even when it has no reader (it then alarms)
-    assert lb.resolve_root_repo(tmp_path / "elsewhere") == tmp_path / "elsewhere"
+    assert lb.resolve_root_repo() == default
+    monkeypatch.setenv("EPYC_ROOT", str(tmp_path / "e2"))
+    assert lb.resolve_root_repo() == tmp_path / "e2"
+    monkeypatch.setenv("EPYC_ROOT_REPO", str(tmp_path / "e1"))
+    assert lb.resolve_root_repo() == tmp_path / "e1"  # EPYC_ROOT_REPO > EPYC_ROOT
+    assert lb.resolve_root_repo(tmp_path / "argv") == tmp_path / "argv"  # argv wins verbatim
+
+
+def test_real_default_root_is_the_hub_view() -> None:
+    assert str(lb.DEFAULT_ROOT_REPO) == "/mnt/raid0/llm/views/epyc-root-main"
+
+
+def test_reader_stale_refusal_is_degraded_with_consumer_alarm(settings: Any) -> None:
+    runner = FakeRunner(prepare=(3, _refused_answer("reader_stale")),
+                        alarm=(0, {"key": "belief-ledger-not-current"}))
+    outcome = lb.prepare(settings, [], runner=runner)
+    assert outcome.status == "refused" and outcome.ready is None
+    assert outcome.reason == "reader_stale"
+    assert runner.subcommands() == ["prepare", "alarm"]
+    assert runner.calls[1][runner.calls[1].index("--reason") + 1] == "reader_stale"
+    assert outcome.consumer_alarm["invoked"] is True
+    with pytest.raises(lb.BeliefContextRefused):
+        planner_coordinator.plan_with_providers(
+            "prompt", session_id=None, provider_factory=lambda _n: 1 / 0,
+            belief_context=outcome.ready)
 
 
 def test_start_argv_without_root_repo_resolves_and_reader_budget_covers_a_real_ledger(
@@ -699,8 +720,9 @@ def test_start_argv_without_root_repo_resolves_and_reader_budget_covers_a_real_l
     import argparse
 
     view = _fake_root(tmp_path / "view")
-    monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", tmp_path / "workspace")
-    monkeypatch.setattr(lb, "ROOT_REPO_FALLBACKS", (view,))
+    monkeypatch.setattr(lb, "DEFAULT_ROOT_REPO", view)
+    for name in lb.ROOT_REPO_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
     built = autopilot._belief_settings_from_args(argparse.Namespace(belief_root_repo=None))
     assert built.root_repo == view
     # measured 20-25 s per prepare on the 30.8k-frame ledger: the deadline needs real headroom
@@ -1266,3 +1288,28 @@ def test_shadow_call_rows_are_tagged_at_the_archive_and_checker_ignores_them(
                    {"type": "planner_coordinator", "prompt_sha256_16": "abc", "trial_id": 3,
                     "ts": 7.0, "vidya_loop_beliefs": confirmed["vidya_loop_beliefs"]}]
     assert bpc.evaluate([confirmed] + shadow_rows)["confirmed_turns"] == 1
+
+
+def test_prepare_forwards_read_log_and_omits_it_when_unset(settings: Any, tmp_path: Path) -> None:
+    """D-B5: the bridge could not pass `--read-log` to the reader at all."""
+    runner = FakeRunner(prepare=(0, _ready_answer()))
+    lb.prepare(settings, [], runner=runner)
+    assert "--read-log" not in runner.calls[0]
+    log_path = tmp_path / "reads.jsonl"
+    with_log = lb.BeliefSettings(**{**settings.__dict__, "read_log": log_path})
+    runner = FakeRunner(prepare=(0, _ready_answer()))
+    lb.prepare(with_log, [], runner=runner)
+    argv = runner.calls[0]
+    assert argv[argv.index("--read-log") + 1] == str(log_path)
+
+
+def test_kvq_unavailable_text_cannot_contradict_a_belief_block_with_kvq_claims() -> None:
+    """D-B4: 'kvq unavailable' next to a belief block listing kvq claims."""
+    unavailable = {"status": "unavailable", "text": "  !! VIDYA KV-QUANT EVIDENCE UNAVAILABLE: x"}
+    with_kvq = lb.validate_ready(_ready_answer(
+        status="present", reasons=[], section="- claim clm_1 [kvq] q8_0 K cache within 1%"))
+    without = lb.validate_ready(_ready_answer())
+    assert "NOT absence of evidence" in lb.reconcile_kvq_text(unavailable, with_kvq)
+    assert lb.reconcile_kvq_text(unavailable, without) == unavailable["text"]  # negative control
+    available = {"status": "available", "text": "bench rows"}
+    assert lb.reconcile_kvq_text(available, with_kvq) == "bench rows"
