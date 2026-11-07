@@ -3498,6 +3498,56 @@ def _cmd_validate_only(args) -> int:
     return 0 if result.valid else 1
 
 
+# --- operator-stop marker (read by src/runtime/gpu_window_executor.py watchdog) ---
+OPERATOR_STOP_ENV = "GPU_WINDOW_STACK_STOP_FILE"
+OPERATOR_STOP_ROLES = ("server_8083", "coder_escalation")
+
+
+def operator_stop_marker_path() -> Path:
+    """Same resolution as the watchdog's _stack_stop_path()."""
+    return Path(
+        os.environ.get(OPERATOR_STOP_ENV)
+        or Path(__file__).resolve().parent.parent.parent / "logs" / "stack_stopped_by_operator.json"
+    )
+
+
+def _operator_stop_roles(command: str, args: Any) -> list[str]:
+    """Marker-relevant roles a stop/start/reload touches ([] when it is unrelated)."""
+    if command == "stop" and getattr(args, "all", False):
+        return ["all"]
+    return [c for c in (getattr(args, "components", None) or []) if c in OPERATOR_STOP_ROLES]
+
+
+def write_operator_stop_marker(
+    roles: list[str], reason: str | None = None, who: str | None = None, path: Path | None = None
+) -> Path:
+    """Atomically (tmp + fsync + os.replace) record that an operator stop is in force."""
+    target = path or operator_stop_marker_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "who": who or os.environ.get("EPYC_AGENT_ID") or os.environ.get("USER") or "unknown",
+        "when": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "roles": list(roles),
+        "reason": reason or "",
+    }
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, target)
+    return target
+
+
+def clear_operator_stop_marker(path: Path | None = None) -> bool:
+    try:
+        (path or operator_stop_marker_path()).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Orchestrator stack manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -3637,6 +3687,9 @@ def main() -> int:
     stop_parser = subparsers.add_parser("stop", help="Stop components")
     stop_parser.add_argument("--all", action="store_true", help="Stop all components")
     stop_parser.add_argument("components", nargs="*", help="Components to stop")
+    stop_parser.add_argument(
+        "--reason", default=None, help="Reason recorded in the operator-stop marker"
+    )
 
     # Reload command
     reload_parser = subparsers.add_parser("reload", help="Reload components")
@@ -3773,12 +3826,17 @@ def main() -> int:
     # incident context was already printed where the refusal was raised; a
     # refusal raised without one (e.g. a malformed taskset prefix) prints here.
     try:
-        if args.command == "start":
-            return cmd_start(args)
-        elif args.command == "stop":
-            return cmd_stop(args)
-        elif args.command == "reload":
-            return cmd_reload(args)
+        if args.command in ("start", "stop", "reload"):
+            rc = {"start": cmd_start, "stop": cmd_stop, "reload": cmd_reload}[args.command](args)
+            marker_roles = _operator_stop_roles(args.command, args)
+            if rc == 0 and marker_roles:
+                if args.command == "stop":
+                    write_operator_stop_marker(marker_roles, getattr(args, "reason", None))
+                else:
+                    clear_operator_stop_marker()
+            elif rc == 0 and args.command == "start" and not getattr(args, "validate_only", False):
+                clear_operator_stop_marker()
+            return rc
         elif args.command == "status":
             return cmd_status(args)
     except BenchPlacementRefusal as exc:
