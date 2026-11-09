@@ -170,6 +170,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("helpfulness_scoring", False, False, "HELPFULNESS_SCORING", "CF Phase 2c: heuristic helpfulness scoring"),
     FeatureSpec("process_reward_telemetry", False, False, "PROCESS_REWARD_TELEMETRY", "CF Phase 3a: process reward telemetry"),
     FeatureSpec("role_aware_compaction", False, False, "ROLE_AWARE_COMPACTION", "CF Phase 3b: role-aware profiles"),
+    FeatureSpec("compaction_shadow", False, False, "COMPACTION_SHADOW", "RTG-08 option C: non-mutating compaction shadow; computes role-aware compaction + helpfulness and creates the quality monitor but never writes seg.consolidated. Still requires two_level_condensation to be reached"),
     # Context window management
     FeatureSpec("accurate_token_counting", False, False, "ACCURATE_TOKEN_COUNTING", "Use llama-server /tokenize"),
     FeatureSpec("tool_result_clearing", False, True, "TOOL_RESULT_CLEARING", "Clear stale tool output blocks"),
@@ -718,6 +719,7 @@ class Features:
 
     # Context-Folding Phase 3b: role-aware compaction profiles
     role_aware_compaction: bool = False  # Per-role compaction aggressiveness (architect conservative, worker aggressive)
+    compaction_shadow: bool = False  # RTG-08 option C: non-mutating shadow of role-aware compaction (needs two_level_condensation)
 
     # Context window management (C2/C3/C1)
     accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
