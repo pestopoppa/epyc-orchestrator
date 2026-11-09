@@ -153,9 +153,15 @@ def belief_capture(res: dict, out: Path, roles, role_gguf: dict, fx: dict, run_i
 
 
 def listening_pid(port: int):
-    out = subprocess.run(["ss", "-H", "-ltnp", f"sport = :{port}"], capture_output=True, text=True).stdout
-    m = re.search(r"pid=(\d+)", out)
-    return int(m.group(1)) if m else None
+    """pid whose fd table holds the LISTEN socket on ``port`` (/proc, no `ss`: the keeper's job env has no iproute2)."""
+    ops = importlib.util.spec_from_file_location("own_port_proof", ROOT / "scripts" / "benchmark" / "own_port_proof.py")
+    m = importlib.util.module_from_spec(ops)
+    ops.loader.exec_module(m)
+    inodes = m.listen_inodes(port)
+    for d in os.listdir("/proc"):
+        if d.isdigit() and inodes & m.pid_socket_inodes(int(d)):
+            return int(d)
+    return None
 
 
 def prove_port_ownership(url: str, pid: int, deny: set[int]) -> int:

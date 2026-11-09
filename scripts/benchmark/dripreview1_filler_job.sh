@@ -65,7 +65,7 @@ if [ -z "${SKIP_LINKAGE:-}" ]; then
   # NOT a results.jsonl unit: the row's first-progress signal must be server-ready (a smoke has to cover the model load)
   printf '{"sha256": "%s", "real_path": "%s", "version": "%s"}\n' "$GOT_SHA" "$REAL_BIN" "$(echo "$VER" | tr '\n' ' ')" >"$OUT/binary-proof.json"
 fi
-ss -ltn "sport = :$PORT" | grep -q LISTEN && {
+/usr/bin/python3 -I "$HERE/own_port_proof.py" listening "$PORT" && {
   echo "port $PORT already listening: not ours, refusing"
   exit 4
 }
@@ -89,22 +89,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if declare -F fl_wait_own_port >/dev/null; then
-  fl_wait_own_port "$PORT" "$SPID" 900 || exit $?
-else # standalone / test: same proof inline
-  for _ in $(seq 1 180); do
-    curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && ss -ltnp "sport = :$PORT" | grep -q "pid=$SPID," && break
-    kill -0 "$SPID" 2>/dev/null || {
-      echo "server died"
-      exit 6
-    }
-    sleep 5
-  done
-  ss -ltnp "sport = :$PORT" | grep -q "pid=$SPID," || {
-    echo "own-pid proof failed"
-    exit 7
+# own-pid proof WITHOUT ss (the keeper's job env has none; fl_wait_own_port would wait forever): /health answers AND the LISTEN
+# socket on PORT is in OUR server pid's fd table (own_port_proof.py reads /proc)
+for _ in $(seq 1 180); do
+  curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && /usr/bin/python3 -I "$HERE/own_port_proof.py" owner "$PORT" "$SPID" && break
+  kill -0 "$SPID" 2>/dev/null || {
+    echo "server died"
+    exit 6
   }
-fi
+  sleep 5
+done
+/usr/bin/python3 -I "$HERE/own_port_proof.py" owner "$PORT" "$SPID" || {
+  echo "own-pid proof failed"
+  exit 7
+}
 
 unit "{\"unit_id\": \"server-ready\", \"ok\": true, \"pid\": $SPID, \"cpus\": \"$FILLER_CPUS\"}"
 WINDOW_CONFIRMED=1 "$PY" "$HERE/run_repl_preview.py" --role "$ROLE=http://127.0.0.1:$PORT@$SPID" --n "$N" \

@@ -56,7 +56,7 @@ if [ -z "${SKIP_LINKAGE:-}" ]; then
       exit 5
     }
 fi
-ss -ltn "sport = :$PORT" | grep -q LISTEN && {
+/usr/bin/python3 -I "$HERE/own_port_proof.py" listening "$PORT" && {
   echo "port $PORT already listening: not ours, refusing"
   exit 4
 }
@@ -80,22 +80,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if declare -F fl_wait_own_port >/dev/null; then
-  fl_wait_own_port "$PORT" "$SPID" 900 || exit $?
-else
-  for _ in $(seq 1 180); do
-    curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && ss -ltnp "sport = :$PORT" | grep -q "pid=$SPID," && break
-    kill -0 "$SPID" 2>/dev/null || {
-      echo "server died"
-      exit 6
-    }
-    sleep 5
-  done
-  ss -ltnp "sport = :$PORT" | grep -q "pid=$SPID," || {
-    echo "own-pid proof failed"
-    exit 7
+# own-pid proof WITHOUT ss (the keeper's job env has none; fl_wait_own_port would wait forever): /health answers AND the LISTEN
+# socket on PORT is in OUR server pid's fd table (own_port_proof.py reads /proc)
+for _ in $(seq 1 180); do
+  curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && /usr/bin/python3 -I "$HERE/own_port_proof.py" owner "$PORT" "$SPID" && break
+  kill -0 "$SPID" 2>/dev/null || {
+    echo "server died"
+    exit 6
   }
-fi
+  sleep 5
+done
+/usr/bin/python3 -I "$HERE/own_port_proof.py" owner "$PORT" "$SPID" || {
+  echo "own-pid proof failed"
+  exit 7
+}
 
 WINDOW_CONFIRMED=1 "$PY" "$HERE/td16_label_word_bias.py" --fixture "$FIXTURE" --role "$ROLE" \
   --server-url "$ROLE=http://127.0.0.1:$PORT" --results "$RESULTS_JSONL" --out "$OUT/RESULT.json" \

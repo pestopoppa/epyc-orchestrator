@@ -137,3 +137,14 @@ def test_replay_shows_cause(tmp_path, capsys):
     assert M.main(["--replay", str(cf)]) == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     assert lines[0]["replay_how"] == "bad_final" and "no retained reply" in lines[1]["error"]
+
+
+def test_listening_pid_without_ss():
+    import os
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1)
+    try:
+        assert M.listening_pid(s.getsockname()[1]) == os.getpid()
+        assert M.prove_port_ownership(f"http://127.0.0.1:{s.getsockname()[1]}", os.getpid(), set()) == s.getsockname()[1]
+    finally:
+        s.close()
