@@ -300,3 +300,29 @@ def test_direct_lane_record_carries_finish_reason(monkeypatch, tmp_path):
     backend.infer(SimpleNamespace(name="architect_general"), _req())
     rec = [r for r in _recs(path) if r["kind"] == "dispatch"][0]
     assert rec["preceding_tool"] == "read" and "finish_reason" in rec
+
+
+def test_region_lock_wait_by_holder_surfaced_additively(monkeypatch, tmp_path):
+    """P1-8: dispatch records carry the cumulative wait snapshot; behaviour is unchanged."""
+    import src.runtime.cpu_region_lock as crl
+
+    crl.reset_region_lock_wait_stats_for_tests()
+    crl._record_region_lock_wait("coder", 1.5)
+    res = SimpleNamespace(success=True)
+    cab, path = _make(monkeypatch, tmp_path, result=res)
+    assert cab.infer(SimpleNamespace(name="frontdoor"), _req()) is res
+    _cfg, rec = _recs(path)
+    assert rec["region_lock_wait_s_by_holder"]["coder"]["wait_s"] == 1.5
+    assert rec["record_sha256"] == serving_calls.record_digest(rec)
+    crl.reset_region_lock_wait_stats_for_tests()
+    serving_calls.clear_staged()
+
+
+def test_region_lock_wait_snapshot_failure_is_swallowed(monkeypatch):
+    import src.runtime.cpu_region_lock as crl
+
+    def boom():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(crl, "region_lock_wait_s_by_holder", boom)
+    assert dispatch_log.region_lock_wait_snapshot() == {}

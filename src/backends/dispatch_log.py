@@ -135,6 +135,20 @@ def model_identity(port: int | None) -> dict[str, Any]:
         return {"identity_source": "error"}
 
 
+def region_lock_wait_snapshot() -> dict[str, Any]:
+    """P1-8: process-cumulative region-lock wait seconds by holder role (observation only).
+
+    Cumulative, so a consumer attributes a request's wait by differencing consecutive
+    records; never raises and never alters dispatch behaviour.
+    """
+    try:
+        from src.runtime.cpu_region_lock import region_lock_wait_s_by_holder
+
+        return region_lock_wait_s_by_holder()
+    except Exception:
+        return {}
+
+
 def config_digest(config: dict[str, Any]) -> str:
     canonical = json.dumps(
         serving_calls._json_safe(config), sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -389,6 +403,7 @@ class DispatchLog:
                     "instance": instance,
                     "fleet_at_arrival": handle["fleet_at_arrival"],
                     "fleet_at_dispatch": handle.get("fleet_at_dispatch"),
+                    "region_lock_wait_s_by_holder": region_lock_wait_snapshot(),
                     "provenance": serving_calls.process_provenance(),
                 }
             )
