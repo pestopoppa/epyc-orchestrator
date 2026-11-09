@@ -109,3 +109,11 @@ def test_load_only_ids_reads_newline_allowlist(tmp_path) -> None:
     ids_path.write_text("m1\n\nm2\n")
 
     assert reembed.load_only_ids(ids_path) == {"m1", "m2"}
+
+
+def test_llama_server_resolves_via_kernel_store_not_build_literal():
+    import inspect
+    from scripts.graph_router import reembed_episodic_store as mod
+
+    assert "llama.cpp/build/bin" not in inspect.getsource(mod)
+    assert mod.LLAMA_SERVER.name == "llama-server"

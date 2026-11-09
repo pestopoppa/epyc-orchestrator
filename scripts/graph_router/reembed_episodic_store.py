@@ -41,9 +41,10 @@ logger = logging.getLogger("reembed")
 DEFAULT_DB = PROJECT_ROOT / "orchestration/repl_memory/sessions/episodic.db"
 DEFAULT_MODEL = Path("/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf")
 DEFAULT_OUTPUT = PROJECT_ROOT / "orchestration/repl_memory/sessions/reembedded.npz"
-LLAMA_SERVER = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
 
 from scripts.graph_router.extract_training_data import normalize_action
+# Kernel STORE path (production/cpu), not an in-tree build literal.
+from scripts.server.stack_paths import LLAMA_SERVER
 from orchestration.repl_memory.indexed_memory_policy import indexed_memory_predicate
 
 TEXT_FIELDS = (
@@ -180,8 +181,13 @@ def start_embedding_server(model_path: Path, port: int, threads: int) -> subproc
         "--flash-attn", "on",
         "--log-disable",
     ]
+    # Each kernel tree carries its own ggml generation: pin the store's lib dir.
+    env = dict(os.environ)
+    bin_dir = str(Path(LLAMA_SERVER).parent)
+    env["LD_LIBRARY_PATH"] = bin_dir + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     proc = subprocess.Popen(
         cmd,
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid,
