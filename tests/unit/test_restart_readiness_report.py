@@ -1222,3 +1222,25 @@ def test_cli_accepts_journal_directory_and_rollover_batches(
     assert rc == 0
     assert out["restart_ready"] is True
     assert observed["trial_ids"] == [999, 1000]
+
+
+def test_restart_readiness_reads_all_shards_through_journal_shards(tmp_path: Path) -> None:
+    """JRN-5: the report's journal reader and the phase-health shard list both use the
+    canonical iterator (numeric order, gap tolerant, sidecars ignored)."""
+    import phase_status
+    from scripts.autopilot import journal_shards as shards_mod
+
+    for name, trial in (
+        ("autopilot_journal.jsonl", 0),
+        ("autopilot_journal_2.jsonl", 2),
+        ("autopilot_journal_10.jsonl", 10),
+        ("autopilot_journal.corrupt-1.jsonl", 99),
+    ):
+        (tmp_path / name).write_text(json.dumps({"trial_id": trial}) + "\n", encoding="utf-8")
+
+    assert report_mod._load_jsonl.__module__ == "preflight_audit"
+    rows = report_mod._load_jsonl(tmp_path / "autopilot_journal.jsonl")
+    assert [r["trial_id"] for r in rows] == [0, 2, 10]
+    assert [p.name for p in phase_status._journal_shards(tmp_path)] == [
+        p.name for p in shards_mod.journal_shards(tmp_path)
+    ] == ["autopilot_journal.jsonl", "autopilot_journal_2.jsonl", "autopilot_journal_10.jsonl"]
