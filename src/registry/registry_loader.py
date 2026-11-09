@@ -15,6 +15,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -257,6 +258,21 @@ class EscalationChain:
             return self.chain[idx:]
         except ValueError:
             return None
+
+
+def _llama_bin_dir() -> str:
+    """Directory of the production CPU kernel binaries, from the kernel store.
+
+    ORCHESTRATOR_PATHS_LLAMA_CPP_BIN overrides (an operator pinning a tree);
+    otherwise `kernels/production/cpu`. Raises KernelPathError if the store does
+    not resolve.
+    """
+    explicit = os.environ.get("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", "").strip()
+    if explicit:
+        return explicit
+    from src.registry.kernel_paths import backend_dir
+
+    return str(backend_dir("cpu"))
 
 
 class RegistryError(Exception):
@@ -741,6 +757,15 @@ class RegistryLoader:
             subs["mmproj_path"] = str(self._model_base_path / role.model.mmproj_path)
             template_name = "vision"
             template = self._command_templates.get("vision", template)
+
+        # `{llama_bin_dir}` resolves to the KERNEL STORE (production/cpu), never a build
+        # path: a `llama.cpp/build/bin` literal in a template keeps launching the kernel
+        # a promotion retired. Resolved lazily so templates without the placeholder never
+        # touch the store. An explicit ORCHESTRATOR_PATHS_LLAMA_CPP_BIN wins (same
+        # precedence as scripts/lib/executor_paths.get_binary_paths); an unresolvable
+        # store raises KernelPathError rather than substituting a stale path.
+        if "{llama_bin_dir}" in template:
+            subs["llama_bin_dir"] = _llama_bin_dir()
 
         # Apply substitutions
         cmd = template.strip()

@@ -128,6 +128,35 @@ def load_duration_baselines_by_role(
         p90 = stats.get("p90_s")
         if isinstance(p50, (int, float)) and isinstance(p90, (int, float)):
             out[str(role)] = {"p50_s": float(p50), "p90_s": float(p90)}
+
+    # RTG-DUR-1 freshness rule, DEFAULT OFF (ORCHESTRATOR_DURATION_BASELINE_FRESHNESS).
+    # `warn` logs stale roles and changes nothing; `enforce` drops them so the duration
+    # dimension is SKIPPED for that role (the existing absent-role guard) rather than
+    # priced against a distribution measured on another model, kernel or reward era.
+    # Enforcing fails closed: if freshness cannot be evaluated, no baseline is used.
+    mode = os.environ.get("ORCHESTRATOR_DURATION_BASELINE_FRESHNESS", "off").strip().lower()
+    if mode in ("warn", "enforce"):
+        try:
+            from src.registry.duration_baseline_freshness import check_files
+
+            root = Path(__file__).resolve().parents[2]
+            report = check_files(
+                path,
+                root / "orchestration" / "derived" / "stack_priors.yaml",
+                root / "orchestration" / "instrument_eras.yaml",
+            )
+        except Exception as exc:  # noqa: BLE001
+            if mode == "enforce":
+                return {}, f"duration baseline freshness could not be evaluated: {exc}"
+            logger.warning("duration baseline freshness could not be evaluated: %s", exc)
+            return out, None
+        stale = report.stale_roles
+        if stale:
+            summary = "; ".join(f"{r}: {','.join(why)}" for r, why in sorted(stale.items()))
+            if mode == "enforce":
+                out = {r: v for r, v in out.items() if r not in stale}
+                return out, f"duration baselines stale, dropped ({summary})"
+            logger.warning("duration baselines stale (warn only): %s", summary)
     return out, None
 
 FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {

@@ -453,3 +453,58 @@ class TestProductionRegistry:
         corpus_config = loader.get_corpus_config()
         assert corpus_config["enabled"] is False
         assert corpus_config["min_score"] == 0.0
+
+
+class TestCommandTemplateKernelStore:
+    """`{llama_bin_dir}` resolves to the kernel store, never a build-path literal."""
+
+    @staticmethod
+    def _registry_with_template(minimal_registry: Path, template: str) -> Path:
+        data = yaml.safe_load(minimal_registry.read_text())
+        data["command_templates"]["baseline"] = template
+        minimal_registry.write_text(yaml.dump(data))
+        return minimal_registry
+
+    def test_placeholder_resolves_to_kernel_store(self, minimal_registry, tmp_path, monkeypatch):
+        from src.registry import kernel_paths
+
+        store = tmp_path / "production"
+        (store / "cpu").mkdir(parents=True)
+        monkeypatch.setattr(kernel_paths, "PRODUCTION_ROOT", store)
+        monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", raising=False)
+        path = self._registry_with_template(
+            minimal_registry, "{llama_bin_dir}/llama-completion -m {model_path}"
+        )
+        cmd = RegistryLoader(path).generate_command("test_role", prompt="Hi", n_tokens=8)
+
+        assert cmd.startswith(f"{store}/cpu/llama-completion -m ")
+        assert "{llama_bin_dir}" not in cmd
+        assert "llama.cpp/build" not in cmd
+
+    def test_env_override_wins(self, minimal_registry, monkeypatch):
+        monkeypatch.setenv("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", "/pinned/tree/bin")
+        path = self._registry_with_template(minimal_registry, "{llama_bin_dir}/llama-server")
+        cmd = RegistryLoader(path).generate_command("test_role", prompt="Hi", n_tokens=8)
+
+        assert cmd.startswith("/pinned/tree/bin/llama-server")
+
+    def test_dangling_store_raises_not_substitutes(self, minimal_registry, tmp_path, monkeypatch):
+        from src.registry import kernel_paths
+
+        monkeypatch.setattr(kernel_paths, "PRODUCTION_ROOT", tmp_path / "no-such-store")
+        monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", raising=False)
+        path = self._registry_with_template(minimal_registry, "{llama_bin_dir}/llama-server")
+
+        with pytest.raises(kernel_paths.KernelPathError):
+            RegistryLoader(path).generate_command("test_role", prompt="Hi", n_tokens=8)
+
+    def test_template_without_placeholder_never_touches_store(
+        self, minimal_registry, tmp_path, monkeypatch
+    ):
+        from src.registry import kernel_paths
+
+        monkeypatch.setattr(kernel_paths, "PRODUCTION_ROOT", tmp_path / "no-such-store")
+        monkeypatch.delenv("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", raising=False)
+        cmd = RegistryLoader(minimal_registry).generate_command("test_role", prompt="Hi", n_tokens=8)
+
+        assert "llama-cli" in cmd
