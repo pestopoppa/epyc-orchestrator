@@ -447,7 +447,12 @@ class ProgressLogger:
                 "priority": task_ir.get("priority"),
                 **({"request_source": task_ir["request_source"]}
                    if isinstance(task_ir.get("request_source"), str)
-                   and task_ir["request_source"] in {"smoke", "probe", "health"} else {}),
+                   and (task_ir["request_source"] in {"smoke", "probe", "health"}
+                        # M-27d.1 (default off): journal the other known labels too
+                        or (os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1"
+                            and task_ir["request_source"] in {
+                                "interactive", "autopilot", "benchmark", "repl_experiment"}))
+                   else {}),
             },
         )
         self.log(task_started_entry)

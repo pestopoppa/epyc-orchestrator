@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import math
 from pathlib import Path
 from typing import Any
@@ -677,7 +678,10 @@ def log_routing_start(
     state.progress_logger.log_task_started(
         task_id=task_id,
         task_ir=({**task_ir, "request_source": request.x_request_source}
-                 if request.x_request_source in {"smoke", "probe", "health"} else task_ir),
+                 if request.x_request_source in {"smoke", "probe", "health"}
+                 or (request.x_request_source
+                     and os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1")
+                 else task_ir),
         routing_decision=routing_decision,
         routing_strategy=routing_strategy,
         routing_meta=routing_meta(

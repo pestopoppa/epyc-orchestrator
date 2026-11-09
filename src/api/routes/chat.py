@@ -1435,7 +1435,9 @@ async def chat_stream(
             "routing_preferences": request.routing_preferences,
         }
         task_ir = canonicalize_task_ir(task_ir)
-        if request.x_request_source in {"smoke", "probe", "health"}:
+        if request.x_request_source in {"smoke", "probe", "health"} or (
+            request.x_request_source and os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1"
+        ):
             task_ir["request_source"] = request.x_request_source
         if state.progress_logger:
             state.progress_logger.log_task_started(

@@ -61,8 +61,10 @@ from src.typed_decisions.types import Decision, Question, QuestionKind
 __all__ = [
     "ToolArgumentError",
     "ToolQuestionMapping",
+    "OriginalKwargsVerdict",
     "assemble_arguments",
     "tool_schema_to_questions",
+    "validate_original_kwargs",
 ]
 
 # A bounded integer range is mapped to one SCORE question per level; a wider
@@ -578,3 +580,76 @@ def _is_full_schema(parameters: Mapping[str, Any]) -> bool:
     ``$schema``); it is still structurally enforced by the assembly checks.
     """
     return "$schema" in parameters or parameters.get("type") == "object"
+
+
+# --- TD-29.M2: validate-first -------------------------------------------------
+
+# Keywords the typed projection cannot carry. A violation of one of these cannot be
+# repaired by selecting from the projected closed set, so it is REFUSED, never dropped.
+_UNPROJECTED_KEYWORDS = frozenset(
+    {
+        "pattern", "format", "minLength", "maxLength", "minItems", "maxItems", "uniqueItems",
+        "multipleOf", "exclusiveMinimum", "exclusiveMaximum", "oneOf", "anyOf", "allOf",
+        "not", "if", "then", "else", "$ref", "const", "patternProperties", "dependentRequired",
+    }
+)
+
+
+class OriginalKwargsVerdict(NamedTuple):
+    """Result of validating the original (free-form) kwargs against the FULL schema.
+
+    ``status`` is ``valid`` (zero repair calls), ``repair_eligible`` (invalid and every
+    violation is on an argument the closed-set projection can express, so at most one
+    repair proposal may be computed, initially in shadow), or ``refused_unsupported``
+    (a violation involves a constraint the projection drops; the ordinary
+    structured-failure / REPL repair path stays in charge).
+    """
+
+    status: str
+    reasons: list[str]
+    unsupported_constraints: list[str]
+
+
+def validate_original_kwargs(parameters: Mapping[str, Any], kwargs: Mapping[str, Any]) -> OriginalKwargsVerdict:
+    """Validate original kwargs against the lossless schema before asking for repair.
+
+    Pure and zero-inference. Uses the full Draft 2020-12 validator, not the projection,
+    so a constraint the converter drops (``additionalProperties: false``, ``pattern``,
+    ...) still counts. Invalid kwargs whose violating arguments carry a constraint outside
+    the projection are ``refused_unsupported``.
+    """
+    _require_object_schema(parameters)
+    try:
+        errors = sorted(
+            Draft202012Validator(dict(parameters)).iter_errors(dict(kwargs)),
+            key=lambda e: [str(x) for x in e.absolute_path],
+        )
+    except SchemaError as exc:
+        return OriginalKwargsVerdict("refused_unsupported", [f"invalid schema: {exc.message}"], ["schema"])
+    if not errors:
+        return OriginalKwargsVerdict("valid", [], [])
+
+    properties = parameters.get("properties") or {}
+    mapped_args = {
+        name for name, sch in properties.items() if _map_argument("t", str(name), sch)[1] is None
+    }
+    reasons: list[str] = []
+    unsupported: list[str] = []
+    for err in errors:
+        path = [str(x) for x in err.absolute_path]
+        reasons.append(f"{'/'.join(path) or '<root>'}: {err.message}")
+        if err.validator in _UNPROJECTED_KEYWORDS:
+            unsupported.append(f"{'/'.join(path) or '<root>'}:{err.validator}")
+            continue
+        if not path:  # root-level: required / additionalProperties (unknown key)
+            if err.validator == "required":
+                missing = [m for m in (err.validator_value or []) if m not in kwargs]
+                bad = [m for m in missing if m not in mapped_args]
+                if bad:
+                    unsupported.append(f"<root>:required-unmapped:{','.join(sorted(bad))}")
+            continue
+        if path[0] not in mapped_args:
+            unsupported.append(f"{path[0]}:unmapped-argument")
+    if unsupported:
+        return OriginalKwargsVerdict("refused_unsupported", reasons, sorted(set(unsupported)))
+    return OriginalKwargsVerdict("repair_eligible", reasons, [])
