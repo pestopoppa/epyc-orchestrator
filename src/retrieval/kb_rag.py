@@ -63,7 +63,7 @@ LEGACY_INDEX_DIR = _KB_RAG_DATA / "index"
 # Live store. `KB_RAG_INDEX_DIR` overrides it, which is the no-code-change
 # rollback lever: point it at LEGACY_INDEX_DIR to serve the old vectors.
 DEFAULT_INDEX_DIR = Path(
-    os.environ.get("KB_RAG_INDEX_DIR") or (_KB_RAG_DATA / "index-qd-v1")
+    os.environ.get("KB_RAG_INDEX_DIR") or (_KB_RAG_DATA / "index-qd-v2")
 )
 
 # Encoding bounds.
@@ -333,7 +333,8 @@ def _roles_for_convention(convention: str) -> tuple[str, str]:
     raise ValueError(
         f"index was built under unknown prefix convention {convention!r}; "
         f"this code understands {colbert_encoder.PREFIX_CONVENTION!r} and "
-        f"{colbert_encoder.LEGACY_CONVENTION!r}"
+        f"{colbert_encoder.LEGACY_CONVENTION!r}. Migrate by building a FRESH index "
+        f"dir and pointing readers at it (KB_RAG_INDEX_DIR); never re-stamp in place"
     )
 
 

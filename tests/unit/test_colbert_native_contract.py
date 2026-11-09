@@ -141,3 +141,16 @@ def test_new_contract_refuses_old_prefixed_store_without_mutating_it():
 def test_clear_drops_native_contract_state(native):
     encoder._clear_loaded_state()
     assert encoder._document_skip_ids == () and encoder._legacy_do_lower_case is False
+
+
+def test_default_index_is_a_fresh_qd_v2_dir_and_mismatch_names_the_remedy(monkeypatch):
+    # The live qd-v1 store must never be the default: the code refuses it.
+    import importlib
+    monkeypatch.delenv("KB_RAG_INDEX_DIR", raising=False)
+    mod = importlib.reload(kb_rag)
+    try:
+        assert mod.DEFAULT_INDEX_DIR.name == "index-qd-v2"
+        with pytest.raises(ValueError, match="FRESH index dir"):
+            mod._roles_for_convention("qd-v1")
+    finally:
+        importlib.reload(kb_rag)
