@@ -12,7 +12,10 @@ import os
 import re
 from typing import Any
 
-METRIC_SCHEMA_VERSION = 1
+# v2 (AP-29b(b), 2026-11-09): eval_details gains per_role_tokens / per_role_elapsed_s / baseline_tps.
+METRIC_SCHEMA_VERSION = 2
+# Harness / oracle / control-attestation payload schemas are unchanged by the v2 bump.
+COMPONENT_SCHEMA_VERSION = 1
 HARNESS_METRIC_VERSION = "hle-1-rule-v1"
 ORACLE_METRIC_VERSION = "hle-2-oracle-defaults-v1"
 CONTROL_ATTESTATION_VERSION = "w5-control-pair-report-v1"
@@ -221,7 +224,7 @@ def compute_harness_metrics(
     missing_axes = [name for name, payload in axes.items() if payload.get("missing")]
     return {
         "metric_version": HARNESS_METRIC_VERSION,
-        "schema_version": METRIC_SCHEMA_VERSION,
+        "schema_version": COMPONENT_SCHEMA_VERSION,
         "observe_only": True,
         "axes": axes,
         "summary": {
@@ -242,7 +245,7 @@ def infer_oracle_adequacy(eval_result: Any) -> dict[str, Any]:
         suites = ["unknown"]
     return {
         "metric_version": ORACLE_METRIC_VERSION,
-        "schema_version": METRIC_SCHEMA_VERSION,
+        "schema_version": COMPONENT_SCHEMA_VERSION,
         "observe_only": True,
         "suites": {suite: _oracle_profile(suite) for suite in suites},
         "control_attestation": infer_control_attestation(eval_result),
@@ -258,7 +261,7 @@ def infer_control_attestation(eval_result: Any) -> dict[str, Any]:
     """
     payload: dict[str, Any] = {
         "metric_version": CONTROL_ATTESTATION_VERSION,
-        "schema_version": METRIC_SCHEMA_VERSION,
+        "schema_version": COMPONENT_SCHEMA_VERSION,
         "observe_only": True,
         "env_flag": CONTROL_ATTESTATION_ENV,
         "enabled": _env_truthy(CONTROL_ATTESTATION_ENV),

@@ -167,3 +167,47 @@ def test_validator_fields_optional_and_emitted_when_set(tmp_path):
     row = json.loads(path2.read_text().strip())
     assert (row["validator_id"], row["validator_version"], row["conclusion_valid_until_ns"]) == ("v", "1", 5)
     assert row["schema_version"] == SCHEMA_VERSION
+
+
+_JOINT_KEYS = (
+    "joint_status", "joint_reason", "proposed_tool", "executed_tool",
+    "operation_differs", "ignored_unused_failures", "joint_arguments",
+)
+
+
+def test_joint_fields_absent_for_old_rows_and_emitted_when_set(tmp_path):
+    prepared = _prepared()
+    result = _validate(prepared)
+    kw = dict(
+        authorization_result="allowed", component_timing_ms={}, total_timing_ms=0.0,
+        observed_downstream_outcome={},
+    )
+    old = tmp_path / "old.jsonl"
+    append_receipt(old, make_receipt(prepared, result, **kw))
+    row = json.loads(old.read_text().strip())
+    assert not any(k in row for k in _JOINT_KEYS)
+    # Byte identity: the line equals the pre-seam serialisation (new keys stripped from asdict).
+    from dataclasses import asdict
+
+    legacy = asdict(make_receipt(prepared, result, **kw))
+    for k in _JOINT_KEYS:
+        legacy.pop(k)
+    for k in ("proposed_arguments", "executed_arguments", "selector_status", "selector_reason",
+              "selector_calls", "shadow_mode", "validator_id", "validator_version",
+              "conclusion_valid_until_ns"):
+        legacy.pop(k)
+    assert old.read_text() == json.dumps(legacy, sort_keys=True, allow_nan=False) + "\n"
+
+    new = tmp_path / "new.jsonl"
+    append_receipt(
+        new,
+        make_receipt(
+            prepared, result, selector_status="proposed", joint_status="proposed",
+            joint_reason=None, proposed_tool="read", executed_tool="write",
+            operation_differs=True, ignored_unused_failures=("a",), **kw,
+        ),
+    )
+    row = json.loads(new.read_text().strip())
+    assert row["joint_status"] == "proposed" and row["proposed_tool"] == "read"
+    assert row["executed_tool"] == "write" and row["operation_differs"] is True
+    assert row["ignored_unused_failures"] == ["a"] and row["joint_reason"] is None

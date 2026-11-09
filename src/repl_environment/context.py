@@ -650,6 +650,7 @@ class _ContextMixin:
         original_kwargs = None
         shadow_state = ""
         shadow_tool = None
+        shadow_joint_tools = None
         typed_enabled = features().typed_decisions_tool_args
         if typed_enabled:
             from src.typed_decisions.prepared_action import prepare_action
@@ -668,6 +669,21 @@ class _ContextMixin:
                     if live_tool is not None:
                         shadow_tool = copy.copy(live_tool)
                         shadow_tool.parameters = copy.deepcopy(getattr(live_tool, "parameters", {}))
+                    try:
+                        from src.typed_decisions.tool_args_integration import (
+                            registry_parameters_to_full_schema,
+                        )
+
+                        _tools = getattr(getattr(self, "tool_registry", None), "_tools", {})
+                        shadow_joint_tools = {
+                            n: sch
+                            for n in offered
+                            if (sch := registry_parameters_to_full_schema(
+                                getattr(_tools.get(n), "parameters", None)
+                            )) is not None
+                        } or None
+                    except Exception:
+                        shadow_joint_tools = None
                     prepared = prepare_action(
                         task_revision=revision,
                         catalog=catalog,
@@ -754,6 +770,7 @@ class _ContextMixin:
                                 / "decision_receipts.jsonl"
                             ),
                             mode="json",
+                            joint_tools=shadow_joint_tools,
                         )
                 except Exception:
                     log.exception("could not submit tool argument shadow")
