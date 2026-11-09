@@ -92,14 +92,9 @@ roles:
     quant: Q8_0
     tier: HOT
     ram_gb: 37
-    full:
-      port: 8070
-      numa: FULL
-      threads: 96
+    full:        # port / numa / threads DERIVED from numa_config (P1-4); only overrides here
       slot_save_path: /tmp/kv_frontdoor_full
-    quarters:
-      - { port: 8080, numa: HALF_A, threads: 48 }
-      - { port: 8180, numa: HALF_B, threads: 48 }
+    # quarters (:8080 HALF_A, :8180 HALF_B): fully derived, nothing to override
 
   coder_escalation:
     # 2026-08-01 W1: moved off frontdoor's 35B onto architect_general's :8083
@@ -138,10 +133,7 @@ roles:
     quant: UD-IQ4_XS
     tier: HOT
     ram_gb: 69
-    full:
-      port: 8074
-      numa: FULL
-      threads: 96
+    # full instance (:8074 FULL, 96t): derived from numa_config (P1-4)
 
   architect_critic:
     # 2026-09-27 ARCHITECT SWAP (operator-decided): this is the 27B MI210 process on
@@ -151,11 +143,8 @@ roles:
     quant: Q8_0
     tier: HOT
     ram_gb: 27.05
-    full:
-      port: 8083
-      numa: GPU_HOST_LANE
-      threads: 8
-      # spec_overrides {draft_max: 4, p_split: 0} DELETED 2026-10-03 (STACKCHG-KVPOOL-20261003).
+    # full instance (:8083 GPU_HOST_LANE, 8t): derived from numa_config (P1-4)
+    # spec_overrides {draft_max: 4, p_split: 0} DELETED 2026-10-03 (STACKCHG-KVPOOL-20261003).
       # It was a THIRD copy of this server's draft depth, stale since DRAFT-SEL-1: the drafter
       # and its draft_max are owned by the master's roles.qwen38_27b_q8_local.drafters, chosen
       # by stack_topology.yaml drafter_selection (dflash2, draft_max 7). Nothing launches from
@@ -177,10 +166,7 @@ roles:
     quant: Q4_K_M
     tier: WARM   # STACKCHG-DFLASH2-20261003: CPU, cold — not launched by a default start (was HOT, MI210)
     ram_gb: 17.3
-    full:
-      port: 8086
-      numa: HALF_A
-      threads: 48
+    # full instance (:8086 HALF_A, 48t): derived from numa_config (P1-4)
 
   vision_escalation:
     # 2026-08-01 W1 vision unification: the standalone :8087 instance was

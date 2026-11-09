@@ -131,6 +131,86 @@ class StackTemplate:
         return list(self.roles.keys())
 
 
+# === Topology derivation (P1-4 / INF-45) ===
+#
+# `orchestration/stack_topology.yaml` `numa_config:` (via scripts.server.stack_numa) is the
+# single source of "which ports, on which cpuset shape, with how many threads". A template
+# may OMIT `port` / `numa` / `threads` from a `full:` / `quarters:` block of a role the source
+# declares; they are filled here from the source. Keys the template does spell are kept
+# verbatim (a divergent one is caught by scripts/validate/default_template_topology_parity.py,
+# which also forbids spelling them in stack_templates/default.yaml).
+# Pairing: `full:` is the source's full instance; `quarters:` entries pair, in order, with the
+# remaining source instances.
+
+TOPOLOGY_KEYS = ("port", "numa", "threads")
+
+
+def _shape_to_template_numa(shape: str) -> str:
+    return shape[len("NUMA_"):] if shape.startswith("NUMA_") else shape
+
+
+def _source_instances(role: str) -> tuple[list[dict[str, Any]], int | None] | None:
+    """``([{port, numa, threads}, ...], full_idx)`` for a sourced role, else None."""
+    from scripts.server.stack_numa import NUMA_CONFIG, NUMA_INSTANCE_SHAPES
+
+    cfg = NUMA_CONFIG.get(role)
+    if not cfg:
+        return None
+    raw = list(cfg.get("instances") or [])
+    shapes = tuple(NUMA_INSTANCE_SHAPES.get(role, ()))
+    if len(shapes) != len(raw):
+        raise ValueError(
+            f"source role {role!r}: {len(raw)} instances but {len(shapes)} shapes; refusing to derive"
+        )
+    inst = [
+        {"port": int(port), "numa": _shape_to_template_numa(shape), "threads": int(threads)}
+        for (_cpuset, port, threads), shape in zip(raw, shapes)
+    ]
+    full_idx = cfg.get("full_instance_idx")
+    if full_idx is None and len(inst) == 1:
+        full_idx = 0
+    return inst, full_idx
+
+
+def resolve_template_topology(data: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of a parsed template document with omitted topology keys filled
+    from the single source. Roles the source does not declare, and aliases, pass through."""
+    import copy
+
+    out = copy.deepcopy(data)
+    for role_name, spec in (out.get("roles") or {}).items():
+        if not isinstance(spec, dict) or spec.get("alias_to"):
+            continue
+        blocks = [spec.get("full")] + list(spec.get("quarters") or [])
+        needs = any(
+            not isinstance(b, dict) or any(k not in b for k in TOPOLOGY_KEYS)
+            for b in blocks if b is not None
+        ) or "full" not in spec
+        if not needs:
+            continue
+        sourced = _source_instances(role_name)
+        if sourced is None:
+            continue
+        instances, full_idx = sourced
+        rest = [i for n, i in enumerate(instances) if n != full_idx]
+        if full_idx is not None:
+            blk = dict(spec.get("full") or {})
+            for k, v in instances[full_idx].items():
+                blk.setdefault(k, v)
+            spec["full"] = blk
+        if rest:
+            given = list(spec.get("quarters") or [])
+            quarters = []
+            for n, derived in enumerate(rest):
+                blk = dict(given[n]) if n < len(given) else {}
+                for k, v in derived.items():
+                    blk.setdefault(k, v)
+                quarters.append(blk)
+            quarters.extend(given[len(rest):])
+            spec["quarters"] = quarters
+    return out
+
+
 # === Loader ===
 
 def load_template(name: str, templates_dir: Path | None = None) -> StackTemplate:
@@ -158,6 +238,8 @@ def load_template(name: str, templates_dir: Path | None = None) -> StackTemplate
 
     if not isinstance(data, dict):
         raise ValueError(f"Template {name}: expected dict, got {type(data).__name__}")
+
+    data = resolve_template_topology(data)
 
     budget_data = data.get("resource_budget") or {}
     budget = ResourceBudget(

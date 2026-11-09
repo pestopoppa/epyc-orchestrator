@@ -470,10 +470,46 @@ def load_template_document(path: Path | None = None) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
+def authored_topology_problems(
+    document: Mapping[str, Any], sourced_roles: Iterable[str]
+) -> list[str]:
+    """P1-4: a template must NOT spell `port`/`numa`/`threads` for a role the source declares.
+
+    The loader (`src.config.stack_templates.resolve_template_topology`) derives them; a
+    template that still authors them is the fourth copy this gate exists to prevent.
+    """
+    problems: list[str] = []
+    roles = document.get("roles") or {}
+    for role in sorted(set(sourced_roles)):
+        spec = roles.get(role)
+        if not isinstance(spec, Mapping) or spec.get("alias_to"):
+            continue
+        blocks = [("full", spec.get("full"))] + [
+            (f"quarters[{i}]", b) for i, b in enumerate(spec.get("quarters") or [])
+        ]
+        for label, block in blocks:
+            if isinstance(block, Mapping):
+                spelled = sorted(k for k in ("port", "numa", "threads") if k in block)
+                if spelled:
+                    problems.append(
+                        f"{role}.{label}: spells {spelled} -- topology is DERIVED from "
+                        "numa_config, delete these keys"
+                    )
+    return problems
+
+
 def run_check(template_path: Path | None = None) -> ParityReport:
+    from src.config.stack_templates import resolve_template_topology  # noqa: PLC0415
+
     numa_config, instance_shapes, known_shapes = load_source()
     document = load_template_document(template_path)
-    return check_parity(numa_config, instance_shapes, document, known_shapes)
+    # Compare the RESOLVED document (what load_template yields), so a role whose
+    # topology is derived is checked end to end, not skipped for having no blocks.
+    report = check_parity(
+        numa_config, instance_shapes, resolve_template_topology(document), known_shapes
+    )
+    report.problems.extend(authored_topology_problems(document, numa_config))
+    return report
 
 
 def render_derived_blocks() -> str:

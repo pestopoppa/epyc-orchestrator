@@ -97,7 +97,11 @@ def source():
 
 @pytest.fixture(scope="module")
 def template_document():
-    return load_template_document()
+    # The RESOLVED document: what `load_template` sees after topology derivation
+    # (P1-4). The raw file no longer spells port/numa/threads for sourced roles.
+    from src.config.stack_templates import resolve_template_topology
+
+    return resolve_template_topology(load_template_document())
 
 
 def _check(source, document, **kwargs) -> ParityReport:
@@ -484,3 +488,43 @@ class TestCli:
         for role in SOURCE_ROLES_NOT_IN_TEMPLATE:
             assert f"  {role}:" not in rendered
         assert yaml.safe_load(rendered), "rendered blocks must be valid YAML"
+
+
+class TestTopologyIsDerivedNotAuthored:
+    """P1-4: default.yaml must not spell topology; the loader fills it from the source."""
+
+    def test_raw_default_template_spells_no_sourced_topology(self, source):
+        from scripts.validate.default_template_topology_parity import authored_topology_problems
+
+        assert authored_topology_problems(load_template_document(), source[0]) == []
+
+    def test_authored_key_for_a_sourced_role_is_flagged(self, source):
+        from scripts.validate.default_template_topology_parity import authored_topology_problems
+
+        doc = copy.deepcopy(load_template_document())
+        doc["roles"]["frontdoor"]["full"]["port"] = 8070
+        problems = authored_topology_problems(doc, source[0])
+        assert len(problems) == 1 and "frontdoor.full" in problems[0]
+
+    def test_run_check_is_green_and_non_vacuous(self):
+        report = run_check()
+        assert report.ok, report.problems
+        assert report.compared_instances >= MIN_COMPARED_INSTANCES
+
+    def test_loaded_template_matches_source_ports(self, source):
+        from src.config.stack_templates import load_template
+
+        tpl = load_template("default")
+        fd = tpl.roles["frontdoor"]
+        want = {int(p) for _c, p, _t in source[0]["frontdoor"]["instances"]}
+        got = {fd.full.port} | {q.port for q in fd.quarters}
+        assert got == want and fd.full.slot_save_path == "/tmp/kv_frontdoor_full"
+        assert tpl.roles["architect_critic"].full.threads == 8
+
+    def test_omitted_keys_fill_and_spelled_keys_win(self):
+        from src.config.stack_templates import resolve_template_topology
+
+        doc = {"roles": {"frontdoor": {"tier": "HOT", "full": {"threads": 7}}}}
+        out = resolve_template_topology(doc)["roles"]["frontdoor"]
+        assert out["full"]["threads"] == 7 and out["full"]["port"] and len(out["quarters"]) == 2
+        assert doc["roles"]["frontdoor"]["full"] == {"threads": 7}  # input not mutated
