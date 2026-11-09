@@ -94,7 +94,10 @@ DEFAULT_CONFIG = _REPO / "config" / "kb_rag_config.yaml"
 # 88-95 are its SMT siblings (same physical cores) — both are reserved so a
 # concurrent GPU benchmark keeps uncontended host threads.
 GPU_HOST_LANE = set(range(184, 192)) | set(range(88, 96))
-WORKER_CPUS = sorted(set(range(os.cpu_count() or 192)) - GPU_HOST_LANE)
+# Derived from the process's own affinity, never the whole host: sched_setaffinity
+# can WIDEN a taskset mask, so workers pinned to cpus outside the granted
+# affinity would escape a keeper grant.
+WORKER_CPUS = sorted(set(os.sched_getaffinity(0)) - GPU_HOST_LANE)
 
 
 def _set_pdeathsig() -> None:
