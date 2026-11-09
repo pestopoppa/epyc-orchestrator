@@ -31,6 +31,46 @@ def _recall_memory_scope() -> dict:
     }
 
 
+def _emit_recall_telemetry(tool: str, role: str, query: str, output: str) -> None:
+    """M-20: log one record per model-initiated recall()/route_advice() call.
+
+    Default OFF (``ORCHESTRATOR_RECALL_TELEMETRY=1`` enables it). Records the query, the
+    result status and hit count, never the full payload. If
+    ``ORCHESTRATOR_RECALL_TELEMETRY_PATH`` is set the record is appended there as JSONL,
+    otherwise it is logged at INFO. Never raises into the REPL.
+    """
+    import os
+
+    if os.environ.get("ORCHESTRATOR_RECALL_TELEMETRY", "0") != "1":
+        return
+    try:
+        import time
+
+        try:
+            payload = json.loads(output)
+        except Exception:
+            payload = {}
+        hits = payload.get("results", payload.get("similar_tasks", []))
+        rec = {
+            "ts": time.time(),
+            "tool": tool,
+            "role": role,
+            "query": (query or "")[:300],
+            "status": payload.get("status", payload.get("strategy")),
+            "hits": len(hits) if isinstance(hits, list) else None,
+            "best": payload.get("best_action", payload.get("recommended_role")),
+            "confidence": payload.get("confidence"),
+        }
+        path = os.environ.get("ORCHESTRATOR_RECALL_TELEMETRY_PATH")
+        if path:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        else:
+            logger.info("recall_telemetry %s", json.dumps(rec))
+    except Exception:  # telemetry must never break a REPL call
+        logger.debug("recall telemetry failed", exc_info=True)
+
+
 def _recall_unavailable(reason: str) -> dict:
     """Explicit "recall is broken/unavailable" payload.
 
@@ -113,10 +153,12 @@ class _RoutingMixin:
 
         # Use retriever if available (reuses shared MemRL components)
         if self._retriever is not None:
-            return self._recall_via_retriever(query, limit)
-
-        # Legacy fallback: create fresh instances
-        return self._recall_legacy(query, limit)
+            out = self._recall_via_retriever(query, limit)
+        else:
+            # Legacy fallback: create fresh instances
+            out = self._recall_legacy(query, limit)
+        _emit_recall_telemetry("recall", getattr(self, "role", ""), query, out)
+        return out
 
     def _recall_via_retriever(self, query: str, limit: int = 5) -> str:
         """Recall using shared TwoPhaseRetriever (fast, Q-value aware)."""
@@ -337,6 +379,12 @@ class _RoutingMixin:
         return self._maybe_wrap_tool_output(output)
 
     def _route_advice(self, task_description: str) -> str:
+        """Telemetry wrapper (M-20, default off) around :meth:`_route_advice_impl`."""
+        out = self._route_advice_impl(task_description)
+        _emit_recall_telemetry("route_advice", getattr(self, "role", ""), task_description, out)
+        return out
+
+    def _route_advice_impl(self, task_description: str) -> str:
         """Get MemRL-informed routing advice for a task.
 
         Args:

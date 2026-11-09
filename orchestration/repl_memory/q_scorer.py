@@ -1804,6 +1804,7 @@ class QScorer:
                     "task_type": task_started.data.get("task_type"),
                     "objective": task_started.data.get("objective"),
                     "priority": task_started.data.get("priority"),
+                    "request_source": task_started.data.get("request_source"),
                 }
 
                 # Without find-or-update this branch writes directly, so its
@@ -1860,6 +1861,16 @@ class QScorer:
                     task_type=task_context.get("task_type"),
                     priority=task_context.get("priority"),
                     source="progress_log",
+                    # M-27d.1 (default off): stamp the request source label
+                    # (interactive/autopilot/benchmark/...) in `extra`, which is
+                    # excluded from the embedding, so interactive and autopilot
+                    # rows can be separated without a retrieval-side change.
+                    extra=(
+                        {"request_source": task_context["request_source"]}
+                        if os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1"
+                        and task_context.get("request_source")
+                        else None
+                    ),
                     answer=work.get("answer"),
                     tool_calls=work.get("tool_calls"),
                     repl_steps=work.get("repl_steps"),

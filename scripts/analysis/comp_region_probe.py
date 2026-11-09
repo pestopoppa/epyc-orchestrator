@@ -93,8 +93,30 @@ def _auc(scores: np.ndarray, labels: np.ndarray) -> Optional[float]:
     return float((sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
 
 
-def load_snapshot(snap_dir: Path, log=print):
-    """Load the episodic.db routing rows + the full reconstructed vector matrix."""
+def resolve_rows_via_id_map(rows_with_id, id_map):
+    """Map (memory_id, action, outcome, context) rows to faiss rows through ``id_map``.
+
+    ``id_map[r]`` is the memory id stored at faiss row ``r`` (the authoritative mapping; the
+    ``memories.embedding_idx`` column is only a cache of it). Returns ``(rows, stats)`` where
+    rows are ``(faiss_row, action, outcome, context)`` and stats counts ``unmapped`` ids.
+    """
+    pos = {str(mid): r for r, mid in enumerate(id_map)}
+    out, unmapped = [], 0
+    for mid, action, outcome, ctx in rows_with_id:
+        r = pos.get(str(mid))
+        if r is None:
+            unmapped += 1
+            continue
+        out.append((r, action, outcome, ctx))
+    return out, {"unmapped": unmapped, "mapped": len(out)}
+
+
+def load_snapshot(snap_dir: Path, log=print, resolve_id_map: bool = False):
+    """Load the episodic.db routing rows + the full reconstructed vector matrix.
+
+    ``resolve_id_map`` (default off, historical behaviour) resolves each row's vector through
+    ``id_map.npy`` instead of trusting ``memories.embedding_idx`` (M-15).
+    """
     import faiss
 
     db = snap_dir / "episodic.db"
@@ -110,11 +132,25 @@ def load_snapshot(snap_dir: Path, log=print):
     log(f"[load] reconstructed matrix {vecs.shape} ({time.time()-t:.1f}s)")
 
     con = sqlite3.connect(str(db))
-    cur = con.execute(
-        "SELECT embedding_idx, action, outcome, context FROM memories WHERE action_type='routing'"
-    )
-    rows = cur.fetchall()
-    con.close()
+    if resolve_id_map:
+        id_map = np.load(str(snap_dir / "id_map.npy"), allow_pickle=True).tolist()
+        raw = con.execute(
+            "SELECT id, embedding_idx, action, outcome, context FROM memories "
+            "WHERE action_type='routing'"
+        ).fetchall()
+        con.close()
+        rows, st = resolve_rows_via_id_map([(r[0], r[2], r[3], r[4]) for r in raw], id_map)
+        pos = {str(m): i for i, m in enumerate(id_map)}
+        disagree = sum(1 for r in raw if pos.get(str(r[0])) is not None and pos[str(r[0])] != r[1])
+        log(f"[load] id_map resolution: mapped={st['mapped']} unmapped={st['unmapped']} "
+            f"embedding_idx_disagree={disagree}")
+    else:
+        cur = con.execute(
+            "SELECT embedding_idx, action, outcome, context FROM memories "
+            "WHERE action_type='routing'"
+        )
+        rows = cur.fetchall()
+        con.close()
     log(f"[load] routing rows: {len(rows)}")
     return vecs, rows, ntotal
 
@@ -333,6 +369,8 @@ def main():
     ap.add_argument("--min-role-rows", type=int, default=1,
                     help="min rows for a (objective,role) instance to be evaluated")
     ap.add_argument("--block", type=int, default=512)
+    ap.add_argument("--resolve-id-map", action="store_true",
+                    help="resolve vectors through id_map.npy, not memories.embedding_idx (M-15)")
     ap.add_argument("--row-level", action="store_true",
                     help="also run the decision-level (row-level) robustness variant")
     args = ap.parse_args()
@@ -340,7 +378,7 @@ def main():
     snap = Path(args.snapshot_dir)
     prov = (snap / "PROVENANCE.txt").read_text() if (snap / "PROVENANCE.txt").exists() else ""
 
-    vecs, rows, ntotal = load_snapshot(snap)
+    vecs, rows, ntotal = load_snapshot(snap, resolve_id_map=args.resolve_id_map)
     obj_ids, obj_index, e_obj, obj_role_out, role_bank, role_excl = build(vecs, rows, ntotal)
     n_obj = len(obj_ids)
 
