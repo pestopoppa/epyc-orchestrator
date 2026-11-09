@@ -446,9 +446,9 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("mode", choices=["pilot", "run", "catalog", "verify"])
-    ap.add_argument("--index-dir", default=str(_REPO / "data" / "kb_rag" / "index-qd-v1"))
+    ap.add_argument("--index-dir", default=str(_REPO / "data" / "kb_rag" / "index-qd-v2"))
     ap.add_argument("--config", default=str(DEFAULT_CONFIG))
-    ap.add_argument("--manifest", default=str(_REPO / "data" / "kb_rag" / ".manifest-qd-v1.json"))
+    ap.add_argument("--manifest", default=str(_REPO / "data" / "kb_rag" / ".manifest-qd-v2.json"))
     ap.add_argument("--rechunk", action="store_true")
     ap.add_argument("--workers", type=int, default=160)
     ap.add_argument("--onnx-threads", type=int, default=1)
