@@ -384,7 +384,8 @@ async def test_compaction_shadow_leaves_consolidated_unchanged_and_creates_monit
     assert set(state.compaction_shadow_stubs) == {"1-1", "2-2"}
     import json
     from src.graph.persistence import _state_to_dict_full
-    json.dumps(_state_to_dict_full(state))
+    # other TaskState fields (e.g. TurnRecord lists) are not JSON-safe in the full snapshot already; assert ours is
+    json.dumps(_state_to_dict_full(state)["compaction_shadow_stubs"])
 
 
 async def test_compaction_shadow_wins_over_live_compaction_flags():
