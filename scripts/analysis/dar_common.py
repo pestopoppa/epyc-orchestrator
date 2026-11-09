@@ -36,7 +36,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import numpy as np
+try:  # numpy only needed by the embedding helpers; row/stat helpers run without it
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None
 
 SNAPSHOT_DIR = Path(os.environ.get("DAR_SNAPSHOT_DIR", "/mnt/raid0/llm/tmp/dar_snapshot"))
 EPISODIC_DB = SNAPSHOT_DIR / "episodic.db"
