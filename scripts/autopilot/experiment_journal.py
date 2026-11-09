@@ -604,11 +604,133 @@ LINEAGE_PARENT_RULE = "latest_committed_baseline_promotion_same_species"
 LINEAGE_HEURISTIC_RULE = "latest_same_species_row"
 
 
+SELECTION_MENU_SCHEMA_VERSION = 1
+SELECTION_MENU_ENV = "AUTOPILOT_SELECTOR_MENU_CAPTURE"
+SELECTION_MENU_HOLDOUT_ENV = "AUTOPILOT_SELECTOR_HOLDOUT_ID"
+SELECTION_MENU_HOLDOUT_DECLARED_ENV = "AUTOPILOT_SELECTOR_HOLDOUT_DECLARED_AT"
+# The planner-side decoding settings an operator can DECLARE through the environment. A
+# trial's own decoding settings are not otherwise visible at selection time, so the id is
+# a digest of what was declared (and says so), never a value reconstructed on read.
+_DECODING_ENV_KEYS = (
+    "AUTOPILOT_CODEX_MODEL",
+    "AUTOPILOT_CODEX_EFFORT",
+    "AUTOPILOT_CODEX_CRITIC_MODEL",
+    "AUTOPILOT_CODEX_CRITIC_EFFORT",
+    "AUTOPILOT_LOCAL_PLANNER_ROLE",
+    "AUTOPILOT_LOCAL_PLANNER_MODEL",
+    "AUTOPILOT_LOCAL_PLANNER_TEMPERATURE",
+    "AUTOPILOT_LOCAL_PLANNER_TOP_P",
+    "AUTOPILOT_LOCAL_PLANNER_TOP_K",
+    "AUTOPILOT_LOCAL_PLANNER_SEED",
+    "AUTOPILOT_LOCAL_PLANNER_MAX_TOKENS",
+)
+
+
+def selection_menu_capture_enabled(environ: Any = None) -> bool:
+    """AP-DGM-PROV option A: observe-only selector-menu capture, default OFF."""
+    env = os.environ if environ is None else environ
+    return str(env.get(SELECTION_MENU_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def declared_decoding_identity(environ: Any = None) -> dict[str, Any]:
+    """Digest of the decoding/model settings declared in the environment (may be unresolved)."""
+    env = os.environ if environ is None else environ
+    settings = {k: str(env[k]) for k in _DECODING_ENV_KEYS if str(env.get(k, "")).strip()}
+    if not settings:
+        return {"decoding_id": None, "status": "unresolved", "settings": {}}
+    digest = hashlib.sha256(
+        json.dumps(settings, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "decoding_id": "dec-" + digest[:16],
+        "status": "env_declared",
+        "settings": settings,
+    }
+
+
+def declared_holdout_marker(environ: Any = None) -> dict[str, Any]:
+    """The predeclared holdout id, if the operator declared one; never inferred."""
+    env = os.environ if environ is None else environ
+    holdout_id = str(env.get(SELECTION_MENU_HOLDOUT_ENV, "")).strip()
+    if not holdout_id:
+        return {"declared": False, "holdout_id": None, "declared_at": None}
+    return {
+        "declared": True,
+        "holdout_id": holdout_id,
+        "declared_at": str(env.get(SELECTION_MENU_HOLDOUT_DECLARED_ENV, "")).strip() or None,
+    }
+
+
+def capture_selection_menu(
+    journal: "ExperimentJournal",
+    species: str,
+    *,
+    before_trial_id: int,
+    environ: Any = None,
+) -> dict[str, Any]:
+    """Record the parent set ``select_lineage_parent`` implicitly ranks (observe-only).
+
+    The menu is DERIVED, not a real choice: every committed baseline promotion of the same
+    species before ``before_trial_id`` whose row is not bug-corrupted, newest promotion first
+    -- exactly the candidates the live rule walks, in the order it walks them. It reads the
+    journal and decides nothing (the rule's own loop is untouched). The shape follows the
+    fields ``scripts/research/selector_replay.py`` reports as missing:
+    eligible_candidates, selector_revision, decoding_id, eligibility_tie_break, holdout.
+    """
+    before = int(before_trial_id)
+    entries = {
+        e.trial_id: e
+        for e in journal.entries_with_supersessions()
+        if e.trial_id < before
+    }
+    eligible: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    excluded = {"malformed_source": 0, "unknown_or_later_row": 0, "other_species": 0,
+                "bug_corrupted": 0, "duplicate_promotion": 0}
+    for event in reversed(journal.baseline_promotion_events()):
+        try:
+            source = int(event.get("source_trial_id"))
+        except (TypeError, ValueError):
+            excluded["malformed_source"] += 1
+            continue
+        row = entries.get(source)
+        if row is None:
+            excluded["unknown_or_later_row"] += 1
+        elif row.species != species:
+            excluded["other_species"] += 1
+        elif row.bug_corrupted_by:
+            excluded["bug_corrupted"] += 1
+        elif source in seen:
+            excluded["duplicate_promotion"] += 1
+        else:
+            seen.add(source)
+            eligible.append({
+                "trial_id": source,
+                "promotion_timestamp": str(event.get("timestamp") or ""),
+            })
+    decoding = declared_decoding_identity(environ)
+    return {
+        "schema_version": SELECTION_MENU_SCHEMA_VERSION,
+        "menu_kind": "derived_same_species_committed_promotions",
+        "observe_only": True,
+        "species": species,
+        "before_trial_id": before,
+        "eligible_candidates": eligible,
+        "excluded_counts": excluded,
+        "selector_revision": f"{LINEAGE_PARENT_RULE}/v{LINEAGE_SCHEMA_VERSION}",
+        "eligibility_tie_break": "newest_baseline_promotion_event_first",
+        "decoding_id": decoding["decoding_id"],
+        "decoding_identity": decoding,
+        "holdout": declared_holdout_marker(environ),
+    }
+
+
 def select_lineage_parent(
     journal: "ExperimentJournal",
     species: str,
     *,
     before_trial_id: int,
+    capture_menu: bool = False,
 ) -> dict[str, Any]:
     """Select a trial's parent explicitly and say which rule chose it (AP-63(a)).
 
@@ -647,7 +769,7 @@ def select_lineage_parent(
         accepted = source
         promotion_ts = str(event.get("timestamp") or "")
         break
-    return {
+    result = {
         "schema_version": LINEAGE_SCHEMA_VERSION,
         "rule": LINEAGE_PARENT_RULE,
         "species": species,
@@ -656,6 +778,16 @@ def select_lineage_parent(
         "heuristic_rule": LINEAGE_HEURISTIC_RULE,
         "heuristic_parent_trial_id": heuristic,
     }
+    if capture_menu:
+        # AP-DGM-PROV option A: observe-only. Added AFTER the choice is final and fail-open;
+        # nothing above reads it, so the selection is identical with capture on or off.
+        try:
+            result["selection_menu"] = capture_selection_menu(
+                journal, species, before_trial_id=before
+            )
+        except Exception as exc:  # noqa: BLE001 - provenance must never lose a trial
+            result["selection_menu_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return result
 
 
 def measurement_tuple(entry: "JournalEntry", *, locator: str = "") -> dict[str, Any]:
