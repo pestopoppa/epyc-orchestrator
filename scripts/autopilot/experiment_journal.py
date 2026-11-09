@@ -626,6 +626,47 @@ _DECODING_ENV_KEYS = (
 )
 
 
+PROPOSAL_MENU_ENV = "AUTOPILOT_SELECTOR_PLANNER_PROPOSAL_MENU"  # AP-DGM-PROV option C
+
+
+def planner_proposal_menu_enabled(environ: Any = None) -> bool:
+    """AP-DGM-PROV option C: attach the planner-proposal menu to the lineage record; default OFF."""
+    env = os.environ if environ is None else environ
+    return str(env.get(PROPOSAL_MENU_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def capture_planner_proposal_menu(
+    proposal_menu: Any,
+    *,
+    dispatched_action: Any = None,
+) -> dict[str, Any] | None:
+    """Return the planner-proposal menu for the lineage row, or None when there is none.
+
+    Observe-only. ``proposal_menu`` is the dict ``planner_coordinator.build_proposal_menu``
+    produced for this trial's planning cycle. The dispatched action (which can differ from the
+    planner's final action after meta/quota/blacklist substitution) is linked by digest;
+    ``dispatched_stage`` is ``None`` when no proposal produced it. Nothing here selects a parent.
+    """
+    if not isinstance(proposal_menu, dict):
+        return None
+    out = json.loads(json.dumps(proposal_menu, default=str))  # detached copy; never aliases planner state
+    digest = None
+    stage = None
+    if isinstance(dispatched_action, dict):
+        blob = json.dumps(dispatched_action, sort_keys=True, separators=(",", ":"), default=str)
+        digest = "act-" + hashlib.sha256(blob.encode()).hexdigest()[:16]
+        stage = next(
+            (p.get("stage") for p in out.get("proposals", []) if p.get("action_digest") == digest),
+            None,
+        )
+    out["dispatched_action_digest"] = digest
+    out["dispatched_stage"] = stage
+    out["selector_revision"] = f"{LINEAGE_PARENT_RULE}/v{LINEAGE_SCHEMA_VERSION}"
+    out["decoding_id"] = declared_decoding_identity()["decoding_id"]
+    out["holdout"] = declared_holdout_marker()
+    return out
+
+
 def selection_menu_capture_enabled(environ: Any = None) -> bool:
     """AP-DGM-PROV option A: observe-only selector-menu capture, default OFF."""
     env = os.environ if environ is None else environ
@@ -731,6 +772,8 @@ def select_lineage_parent(
     *,
     before_trial_id: int,
     capture_menu: bool = False,
+    proposal_menu: dict[str, Any] | None = None,
+    dispatched_action: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Select a trial's parent explicitly and say which rule chose it (AP-63(a)).
 
@@ -787,6 +830,18 @@ def select_lineage_parent(
             )
         except Exception as exc:  # noqa: BLE001 - provenance must never lose a trial
             result["selection_menu_error"] = f"{type(exc).__name__}: {exc}"[:200]
+    if proposal_menu is not None:
+        # AP-DGM-PROV option C: observe-only planner-proposal menu. The caller passes it only
+        # when AUTOPILOT_SELECTOR_PLANNER_PROPOSAL_MENU is set; same ordering and fail-open
+        # contract as option A -- added after the choice is final, read by nothing above.
+        try:
+            captured = capture_planner_proposal_menu(
+                proposal_menu, dispatched_action=dispatched_action
+            )
+            if captured is not None:
+                result["planner_proposal_menu"] = captured
+        except Exception as exc:  # noqa: BLE001
+            result["planner_proposal_menu_error"] = f"{type(exc).__name__}: {exc}"[:200]
     return result
 
 

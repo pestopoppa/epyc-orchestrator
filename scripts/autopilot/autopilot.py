@@ -87,6 +87,7 @@ from experiment_journal import (
     build_error_scope,
     scrub_legacy_scale_text,
     select_lineage_parent,
+    planner_proposal_menu_enabled,
     selection_menu_capture_enabled,
 )
 from planner_roster import PlannerRosterError, validate_active_environment
@@ -11418,6 +11419,14 @@ def _run_loop_inner(
                 # AP-DGM-PROV option A: observe-only menu/decoding_id/holdout capture,
                 # default off (AUTOPILOT_SELECTOR_MENU_CAPTURE=1); never changes the choice.
                 capture_menu=selection_menu_capture_enabled(),
+                # AP-DGM-PROV option C: observe-only planner-proposal menu, default off
+                # (AUTOPILOT_SELECTOR_PLANNER_PROPOSAL_MENU=1); never changes the choice.
+                proposal_menu=(
+                    getattr(planner_decision, "proposal_menu", None)
+                    if planner_proposal_menu_enabled()
+                    else None
+                ),
+                dispatched_action=effective_action,
             )
         except Exception as exc:  # noqa: BLE001
             trial_lineage = {"selection_error": f"{type(exc).__name__}: {exc}"[:200]}
