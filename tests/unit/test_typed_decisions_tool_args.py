@@ -373,3 +373,39 @@ class TestRunnerToAssembly:
             assemble_arguments(mapping.questions, decisions, parameters)
 
         assert any("schema validation failed" in reason for reason in excinfo.value.reasons)
+
+
+# --- TD-29.M2 validate-first -------------------------------------------------
+
+def test_m2_valid_kwargs_need_no_repair():
+    from src.typed_decisions.tool_args import validate_original_kwargs
+
+    v = validate_original_kwargs(_TOOL_PARAMETERS, {"mode": "fast", "retries": 2})
+    assert v.status == "valid" and v.reasons == []
+
+
+def test_m2_unknown_key_with_additional_properties_false_is_repair_eligible():
+    from src.typed_decisions.tool_args import validate_original_kwargs
+
+    v = validate_original_kwargs(_TOOL_PARAMETERS, {"mode": "fast", "bogus": 1})
+    assert v.status == "repair_eligible" and any("bogus" in r for r in v.reasons)
+
+
+def test_m2_out_of_enum_closed_set_is_repair_eligible():
+    from src.typed_decisions.tool_args import validate_original_kwargs
+
+    v = validate_original_kwargs(_TOOL_PARAMETERS, {"mode": "turbo"})
+    assert v.status == "repair_eligible"
+
+
+def test_m2_dropped_constraint_is_refused_not_dropped():
+    from src.typed_decisions.tool_args import validate_original_kwargs
+
+    schema = {
+        "type": "object",
+        "properties": {"mode": {"type": "string", "enum": ["a", "b"]},
+                       "ticket": {"type": "string", "pattern": "^T-[0-9]+$"}},
+    }
+    v = validate_original_kwargs(schema, {"mode": "a", "ticket": "nope"})
+    assert v.status == "refused_unsupported"
+    assert any("pattern" in u for u in v.unsupported_constraints)
