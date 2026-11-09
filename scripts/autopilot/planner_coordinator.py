@@ -200,6 +200,81 @@ class PlannerDecision:
     action_repair_calls: int = 0
     rationale_parse_status: str = "parsed"
     rationale_repair_calls: int = 0
+    # AP-DGM-PROV option C: observe-only record of the proposals this planning cycle produced
+    # (primary draft, failover draft, critic-revised action) and which one became `action`.
+    # None unless AUTOPILOT_SELECTOR_PLANNER_PROPOSAL_MENU is set; never read by dispatch.
+    proposal_menu: dict[str, Any] | None = None
+
+
+# --- AP-DGM-PROV option C: planner proposals as the selector menu (observe-only) -------------
+PROPOSAL_MENU_ENV = "AUTOPILOT_SELECTOR_PLANNER_PROPOSAL_MENU"
+PROPOSAL_MENU_SCHEMA_VERSION = 1
+
+
+def proposal_menu_capture_enabled(environ: Any = None) -> bool:
+    """Option C capture is default OFF; only an explicit truthy value enables it."""
+    env = os.environ if environ is None else environ
+    return str(env.get(PROPOSAL_MENU_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _proposal_action_digest(action: Any) -> str:
+    blob = json.dumps(action, sort_keys=True, separators=(",", ":"), default=str)
+    return "act-" + hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _menu_add(
+    menu: list[dict[str, Any]] | None,
+    stage: str,
+    provider: str,
+    action: Any,
+    *,
+    unusable_reason: str = "",
+) -> None:
+    """Append one proposal to the option-C menu. No-op when capture is off; never raises."""
+    if menu is None or not isinstance(action, dict):
+        return
+    try:
+        menu.append({
+            "stage": stage,
+            "provider": str(provider or ""),
+            "action_type": str(action.get("type", "")),
+            "action_digest": _proposal_action_digest(action),
+            "action": json.loads(json.dumps(action, default=str)),
+            "usable": not unusable_reason,
+            "unusable_reason": _clip(unusable_reason),
+        })
+    except Exception:  # noqa: BLE001 - observability must never fail a planning cycle
+        log.debug("proposal menu entry skipped", exc_info=True)
+
+
+def build_proposal_menu(
+    menu: list[dict[str, Any]] | None,
+    *,
+    final_action: Any,
+    critique: "PlannerCritique | None" = None,
+) -> dict[str, Any] | None:
+    """Wrap the collected proposals with the final-choice link. None when capture is off.
+
+    ``final_action_stage`` is the first proposal whose digest equals the final action's, or
+    ``None`` when the final action is a substitute that no proposal produced (a critic-reject
+    fallback or a deterministic block): the menu never claims a choice it did not observe.
+    """
+    if menu is None:
+        return None
+    try:
+        final_digest = _proposal_action_digest(final_action) if isinstance(final_action, dict) else None
+        stage = next((p["stage"] for p in menu if p["action_digest"] == final_digest), None)
+        return {
+            "schema_version": PROPOSAL_MENU_SCHEMA_VERSION,
+            "menu_kind": "planner_proposals",
+            "observe_only": True,
+            "proposals": list(menu),
+            "final_action_digest": final_digest,
+            "final_action_stage": stage,
+            "critic_decision": critique.decision if critique is not None else None,
+        }
+    except Exception:  # noqa: BLE001
+        return None
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -396,6 +471,8 @@ def plan_with_providers(
     # drafted bad content" (keep the seed_batch default). (2026-06-12)
     any_response_ok = bool(draft.ok)
     provider_trace: list[dict[str, Any]] = []
+    # AP-DGM-PROV option C (default off): None means capture is disabled and every _menu_add no-ops.
+    proposal_menu: list[dict[str, Any]] | None = [] if proposal_menu_capture_enabled() else None
 
     # TD-21.2/.3: the completer is only BUILT here (no network call yet -- it
     # only fires if `extract_action`/`extract_rationale` misses and a repair
@@ -416,6 +493,8 @@ def plan_with_providers(
     )
     if _is_deterministic_action_block_reason(draft_unusable):
         deterministic_block_reason = draft_unusable
+    _menu_add(proposal_menu, "draft_primary", draft.provider, action,
+              unusable_reason=draft_unusable)
     provider_trace.append(
         _draft_provider_event(
             stage="draft_primary",
@@ -455,6 +534,8 @@ def plan_with_providers(
             )
             if _is_deterministic_action_block_reason(fallback_unusable):
                 deterministic_block_reason = fallback_unusable
+            _menu_add(proposal_menu, "draft_fallback", fallback.provider, fallback_action,
+                      unusable_reason=fallback_unusable)
             provider_trace.append(
                 _draft_provider_event(
                     stage="draft_fallback",
@@ -526,6 +607,7 @@ def plan_with_providers(
             rationale_parse_status=rationale_parse_status,
             rationale_repair_calls=rationale_repair_calls,
         )
+        decision.proposal_menu = build_proposal_menu(proposal_menu, final_action=None)
         _archive_decision(decision, planner_state, trial_id=trial_id,
                           vidya_kvq_context=vidya_kvq_context,
                           belief_context=belief_context)
@@ -770,6 +852,11 @@ def plan_with_providers(
             if not decision.fallback_reason
             else f"{decision.fallback_reason}; {guard_reason}"
         )
+    if critique is not None and isinstance(critique.revised_action, dict):
+        _menu_add(proposal_menu, "critic_revised", critique.provider, critique.revised_action)
+    decision.proposal_menu = build_proposal_menu(
+        proposal_menu, final_action=decision.action, critique=critique
+    )
     counterfactual = None
     if decision.action is not None and decision.draft_action == decision.action:
         # Only an unsubstituted draft carries its own premises (same rule as `_archive_decision`).
