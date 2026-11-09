@@ -489,6 +489,8 @@ def run_calibration_study(
     dry_run: bool = False,
     input_binding: Mapping[str, Any] | None = None,
     decision_backend: Mapping[str, Any] | None = None,
+    receipt_upgrade: bool = False,
+    model_pin: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Calibrate the local confidence statistic against labeled outcomes.
 
@@ -530,6 +532,8 @@ def run_calibration_study(
         dry_run=dry_run,
         input_binding=validated_binding,
         decision_backend=decision_backend,
+        receipt_upgrade=receipt_upgrade,
+        model_pin=model_pin,
     )
 
 
@@ -545,6 +549,8 @@ def _run_calibration_study(
     dry_run: bool,
     input_binding: Mapping[str, Any] | None,
     decision_backend: Mapping[str, Any] | None = None,
+    receipt_upgrade: bool = False,
+    model_pin: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Internal calibration runner; CLI passes binding from its one-read buffers."""
     questions = list(questions)
@@ -676,6 +682,13 @@ def _run_calibration_study(
     }
     if decision_backend_pin is not None:
         receipt["decision_backend_pin"] = decision_backend_pin
+    if receipt_upgrade:
+        # TD-18, default off: noise floor, clustered CI, selective metrics, NLL/T
+        # sensitivity, endpoints, OOF temperature, model pin. Pure post-processing.
+        from src.typed_decisions.calibration_receipt import build_receipt_upgrade
+
+        pin = model_pin if model_pin is not None else decision_backend_pin
+        receipt["results"]["upgrade"] = build_receipt_upgrade(scored_rows, model_pin=pin)
     _write_receipt(receipt, receipt_path=receipt_path, artifacts_dir=artifacts_dir)
     return receipt
 

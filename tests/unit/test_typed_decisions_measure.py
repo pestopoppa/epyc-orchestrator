@@ -413,6 +413,19 @@ def _calibration_input_binding() -> dict:
 
 
 class TestCalibrationStudy:
+    def test_receipt_upgrade_is_default_off_and_opt_in_adds_block(self, tmp_path: Path):
+        def run(**extra):
+            return run_calibration_study(
+                _FakePrimitives(lambda prompt, **kwargs: _calibration_response()),
+                state=STATE, questions=CALIBRATION_QUESTIONS, labels=CALIBRATION_LABELS,
+                role=ROLE, receipt_path=tmp_path / f"c{len(extra)}.json", **extra,
+            )
+
+        assert "upgrade" not in run()["results"]
+        up = run(receipt_upgrade=True, model_pin={"gguf_sha256": "x"})["results"]["upgrade"]
+        assert up["schema"] == "typed_decisions.calibration_receipt_upgrade.v1"
+        assert up["model_pin"] == {"gguf_sha256": "x"} and up["per_kind"]
+
     def test_exact_ece_brier_and_reliability_bins(self, tmp_path: Path):
         primitives = _FakePrimitives(lambda prompt, **kwargs: _calibration_response())
         receipt_path = tmp_path / "calibration.json"
