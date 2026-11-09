@@ -6,8 +6,10 @@ and propose targeted prompt mutations on hot-swappable .md files.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 import time  # noqa: F401 - kept as ``prompt_forge.time`` (tests patch time.monotonic through it)
@@ -447,6 +449,38 @@ class CodeMutation:
     effect_reason: str = ""
     # RTG-55 MHS-4: the ANTI-OVERRIDE prior weight of ``effect``.
     effect_risk: float = 1.0
+    # MHS-8: digest binding the screened content to the effect the static screen assigned.
+    # Stamped by ``propose_code_mutation`` after screening and the risk gate; empty on a
+    # hand-constructed mutation. Enforced at apply only under AUTOPILOT_MUTATION_REQUIRE_SCREEN=1.
+    screen_stamp: str = ""
+
+
+MUTATION_REQUIRE_SCREEN_ENV = "AUTOPILOT_MUTATION_REQUIRE_SCREEN"
+
+
+def mutation_require_screen(environ: Any = None) -> bool:
+    """MHS-8: apply only mutations that came through ``propose_code_mutation`` (default off)."""
+    env = os.environ if environ is None else environ
+    return str(env.get(MUTATION_REQUIRE_SCREEN_ENV, "")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def code_mutation_screen_stamp(mutation: "CodeMutation") -> str:
+    """Digest of exactly what the static screen judged: target, both contents, its verdict."""
+    payload = json.dumps(
+        [
+            mutation.file,
+            mutation.mutation_type,
+            mutation.original_content,
+            mutation.mutated_content,
+            MutationEffect.normalize(mutation.effect).value,
+            bool(mutation.syntax_valid),
+            bool(mutation.safety_valid),
+        ],
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _resolve_code_mutation_target(target_file: str) -> Path:
@@ -1249,6 +1283,11 @@ class PromptForge:
         gate_reason = mutation_risk_gate_reason(mutation.effect)
         if gate_reason is not None:
             return {"status": "rejected", "reason": gate_reason}
+        # MHS-8: "only screened effects apply". A hand-constructed mutation (or one edited after
+        # screening) carries no stamp matching its content and verdict, so its effect label is a
+        # claim nobody checked. Default off; the screened path is unchanged when it is on.
+        if mutation_require_screen() and mutation.screen_stamp != code_mutation_screen_stamp(mutation):
+            return {"status": "rejected", "reason": "unscreened_mutation"}
 
         try:
             abs_path = _resolve_code_mutation_target(mutation.file)
@@ -1429,6 +1468,8 @@ class PromptForge:
                 mutation.safety_reason = gate_reason
                 mutation.mutated_content = original
 
+        # MHS-8: stamp what the screen judged, after every edit the proposal path makes.
+        mutation.screen_stamp = code_mutation_screen_stamp(mutation)
         return mutation
 
     def apply_code_mutation(self, mutation: CodeMutation) -> dict[str, Any]:
