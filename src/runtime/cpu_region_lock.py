@@ -533,6 +533,48 @@ def _try_flock(fd: int, lock_type: int) -> bool:
         raise
 
 
+# P1-8 (INF-45): observation-only wait accounting. Seconds spent BLOCKED on a
+# region flock, keyed by the holder's role as recorded in the lock payload
+# ("unknown" when no payload). Process-local, never read by any placement or
+# acquisition decision; the lock path does not depend on it.
+_WAIT_S_BY_HOLDER: dict[str, float] = {}
+_WAIT_COUNT_BY_HOLDER: dict[str, int] = {}
+_WAIT_STATS_LOCK = threading.Lock()
+
+
+def _record_region_lock_wait(holder: str, waited_s: float) -> None:
+    try:
+        with _WAIT_STATS_LOCK:
+            _WAIT_S_BY_HOLDER[holder] = _WAIT_S_BY_HOLDER.get(holder, 0.0) + max(0.0, waited_s)
+            _WAIT_COUNT_BY_HOLDER[holder] = _WAIT_COUNT_BY_HOLDER.get(holder, 0) + 1
+    except Exception:  # noqa: BLE001 - telemetry must never affect locking
+        pass
+
+
+def _blocking_holder_role(lock_file: Path) -> str:
+    try:
+        payload = read_region_lock_payload(lock_file)
+        role = (payload or {}).get("role")
+        return str(role) if role else "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def region_lock_wait_s_by_holder() -> dict[str, dict[str, float]]:
+    """Snapshot ``{holder_role: {"wait_s": total, "waits": n}}`` for this process."""
+    with _WAIT_STATS_LOCK:
+        return {
+            h: {"wait_s": round(v, 6), "waits": float(_WAIT_COUNT_BY_HOLDER.get(h, 0))}
+            for h, v in _WAIT_S_BY_HOLDER.items()
+        }
+
+
+def reset_region_lock_wait_stats_for_tests() -> None:
+    with _WAIT_STATS_LOCK:
+        _WAIT_S_BY_HOLDER.clear()
+        _WAIT_COUNT_BY_HOLDER.clear()
+
+
 def _acquire_one_with_timeout(
     fh: IO[bytes],
     *,
@@ -555,44 +597,51 @@ def _acquire_one_with_timeout(
     last_holders_logged: tuple[str, ...] | None = None
     abs_deadline = None if timeout_s <= 0 else (start + timeout_s)
 
-    while True:
-        if _try_flock(fh.fileno(), lock_type):
-            return time.perf_counter() - start
-        if cancel_check is not None and cancel_check():
-            raise CpuRegionLockTimeout(
-                f"region lock cancelled before acquire (role={role}, region={region}, "
-                f"tag={request_tag})"
-            )
-        if deadline_s is not None and time.perf_counter() >= deadline_s:
-            raise CpuRegionLockTimeout(
-                f"region lock deadline exceeded (role={role}, region={region}, tag={request_tag})"
-            )
-        now = time.perf_counter()
-        if abs_deadline is not None and now >= abs_deadline:
-            raise CpuRegionLockTimeout(
-                f"region lock timeout after {timeout_s:.1f}s "
-                f"(role={role}, region={region}, tag={request_tag})"
-            )
-        observer = _WAIT_OBSERVER
-        if observer is not None:
-            try:
-                observer(region, role, Path(fh.name), now - start, request_tag)
-            except Exception:  # noqa: BLE001 - diagnostics only
-                pass
-        if now - last_log >= log_every_s:
-            holders = _current_lock_owner_pids(Path(fh.name))
-            holder_tuple = tuple(holders)
-            if holder_tuple != last_holders_logged:
-                logger.info(
-                    "still waiting for region lock role=%s region=%s elapsed=%.1fs holders=%s",
-                    role,
-                    region,
-                    now - start,
-                    ",".join(holders) or "(unknown)",
+    blocked_holder: Optional[str] = None
+    try:
+        while True:
+            if _try_flock(fh.fileno(), lock_type):
+                return time.perf_counter() - start
+            if cancel_check is not None and cancel_check():
+                raise CpuRegionLockTimeout(
+                    f"region lock cancelled before acquire (role={role}, region={region}, "
+                    f"tag={request_tag})"
                 )
-                last_holders_logged = holder_tuple
-            last_log = now
-        time.sleep(poll_s)
+            if deadline_s is not None and time.perf_counter() >= deadline_s:
+                raise CpuRegionLockTimeout(
+                    f"region lock deadline exceeded (role={role}, region={region}, tag={request_tag})"
+                )
+            now = time.perf_counter()
+            if abs_deadline is not None and now >= abs_deadline:
+                raise CpuRegionLockTimeout(
+                    f"region lock timeout after {timeout_s:.1f}s "
+                    f"(role={role}, region={region}, tag={request_tag})"
+                )
+            if blocked_holder is None:
+                blocked_holder = _blocking_holder_role(Path(fh.name))
+            observer = _WAIT_OBSERVER
+            if observer is not None:
+                try:
+                    observer(region, role, Path(fh.name), now - start, request_tag)
+                except Exception:  # noqa: BLE001 - diagnostics only
+                    pass
+            if now - last_log >= log_every_s:
+                holders = _current_lock_owner_pids(Path(fh.name))
+                holder_tuple = tuple(holders)
+                if holder_tuple != last_holders_logged:
+                    logger.info(
+                        "still waiting for region lock role=%s region=%s elapsed=%.1fs holders=%s",
+                        role,
+                        region,
+                        now - start,
+                        ",".join(holders) or "(unknown)",
+                    )
+                    last_holders_logged = holder_tuple
+                last_log = now
+            time.sleep(poll_s)
+    finally:
+        if blocked_holder is not None:
+            _record_region_lock_wait(blocked_holder, time.perf_counter() - start)
 
 
 def _current_lock_owner_pids(lock_file: Path) -> list[str]:
