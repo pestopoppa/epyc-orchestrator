@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -875,6 +876,8 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     )
 
     class FakeSwarm:
+        reported = None
+
         def suggest_trial(self, surface):
             assert surface == "monitor"
             return {
@@ -883,7 +886,7 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
                 "params": {"ORCHESTRATOR_MONITOR_THRESHOLD": 0.42},
             }
 
-        def report_result(self, surface, trial_number, objectives):
+        def report_result(self, surface, trial_number, objectives, **kwargs):
             self.reported = (surface, trial_number, objectives)
 
     class FakeTower:
@@ -906,9 +909,10 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
 
     action = {"type": "numeric_trial", "surface": "monitor", "params": {}}
     swarm = FakeSwarm()
+    state: dict = {}
     result, species = actions._action_numeric_trial(
         action,
-        _ctx(swarm=swarm, tower=FakeTower(), state={}),
+        _ctx(swarm=swarm, tower=FakeTower(), state=state),
     )
 
     assert species == "numeric_swarm"
@@ -921,7 +925,15 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
     # correctly fed questions/hour, so asserting the property would have flagged the
     # right behaviour as a regression.
     expected_objectives = tier_specs.objectives_from(result)
+    # Sampler completion belongs AFTER the main-loop safety verdict (464f1290): the action
+    # only leaves the trial marker in state; `finalize_numeric_trial` tells the sampler.
+    assert swarm.reported is None
+    assert state["_current_optuna_trial"] == {"surface": "monitor", "trial_number": 7}
+    result.quality_measured = True
+    result.details.update(cost_tier_observed_count=1, reliability_observed_count=1)
+    actions.finalize_numeric_trial(state, swarm, result, True, object())
     assert swarm.reported == ("monitor", 7, expected_objectives)
+    assert "_current_optuna_trial" not in state
     assert expected_objectives[1] == pytest.approx(
         tier_specs.seq_task_rate_qph_from(result)
     )
@@ -930,7 +942,7 @@ def test_numeric_trial_records_applied_optuna_params(monkeypatch) -> None:
 def test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it(
     monkeypatch,
 ) -> None:
-    """An aborted batch must FAIL its Optuna trial, never raise out of the action.
+    """An aborted batch must FAIL its Optuna trial (at finalize), never raise out of the action.
 
     `objectives_from` raises `UnmeasuredObjectiveError` when the rate axis is
     unmeasured — here an `eval_wall_s` below the s/question validity floor, the
@@ -989,10 +1001,17 @@ def test_numeric_trial_unmeasured_rate_fails_the_trial_instead_of_killing_it(
 
     assert species == "numeric_swarm"
     assert result is unmeasured
+    # The action no longer completes the trial (464f1290): it leaves the marker, and the
+    # main loop's `finalize_numeric_trial` closes it out after the safety verdict.
+    assert swarm.reported is None and swarm.failed is None
+    assert state["_current_optuna_trial"] == {"surface": "monitor", "trial_number": 11}
+    unmeasured.quality_measured = True
+    unmeasured.details.update(cost_tier_observed_count=1, reliability_observed_count=1)
+    actions.finalize_numeric_trial(state, swarm, unmeasured, True, object())
     assert swarm.reported is None, "must not fabricate an objective for an unmeasured axis"
     assert swarm.failed is not None, "the Optuna trial must be closed out, not stranded"
     assert swarm.failed[0] == "monitor" and swarm.failed[1] == 11
-    assert "unmeasured" in swarm.failed[2]
+    assert "unavailable" in swarm.failed[2]
     # The trial is consumed exactly once either way.
     assert "_current_optuna_trial" not in state
 
@@ -3994,6 +4013,12 @@ def test_model_gate_advisory_renders_latest_next_actions(tmp_path) -> None:
             }
         )
     )
+
+    # `_latest_model_gate_report_path` picks the newest by mtime. Two files written back to
+    # back can share one mtime tick (max() then returns the first = the older one), so
+    # pin the ordering instead of relying on write order.
+    os.utime(older, (1_000_000, 1_000_000))
+    os.utime(report, (2_000_000, 2_000_000))
 
     text = autopilot._build_model_gate_advisory(reports_dir=tmp_path, limit=3)
 
