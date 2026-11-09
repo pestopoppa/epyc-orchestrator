@@ -1,0 +1,256 @@
+{
+  "globs": [
+    "/mnt/raid0/llm/worktrees/apr2-second-pass-root-20261109/handoffs/active/*.md",
+    "/mnt/raid0/llm/worktrees/apr2-second-pass-root-20261109/wiki/*.md",
+    "/mnt/raid0/llm/worktrees/apr2-second-pass-root-20261109/docs/reference/*.md"
+  ],
+  "guards": {
+    "anomaly_loop": {
+      "100": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9387755102040817
+      },
+      "1000": {
+        "docs": 91,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.720440881763527
+      },
+      "20": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 1.0
+      },
+      "200": {
+        "docs": 134,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9191919191919192
+      },
+      "2000": {
+        "docs": 76,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.7862862862862863
+      },
+      "50": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9583333333333334
+      },
+      "500": {
+        "docs": 109,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.8092369477911646
+      },
+      "5000": {
+        "docs": 60,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.42396958783513405
+      }
+    },
+    "quality_detector": {
+      "100": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9387755102040817
+      },
+      "1000": {
+        "docs": 91,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.720440881763527
+      },
+      "20": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 1.0
+      },
+      "200": {
+        "docs": 134,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9191919191919192
+      },
+      "2000": {
+        "docs": 76,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.7862862862862863
+      },
+      "50": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9583333333333334
+      },
+      "500": {
+        "docs": 109,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.8092369477911646
+      },
+      "5000": {
+        "docs": 60,
+        "false_positive_rate": 0.016666666666666666,
+        "flagged": 1,
+        "flagged_docs": [
+          "/mnt/raid0/llm/worktrees/apr2-second-pass-root-20261109/docs/reference/tmp-loss-handoff-diffs-proposed-2026-10-25.md"
+        ],
+        "min_trigram_unique_ratio": 0.42396958783513405
+      }
+    },
+    "quality_detector_trigram": {
+      "100": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9387755102040817
+      },
+      "1000": {
+        "docs": 91,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.720440881763527
+      },
+      "20": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 1.0
+      },
+      "200": {
+        "docs": 134,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9191919191919192
+      },
+      "2000": {
+        "docs": 76,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.7862862862862863
+      },
+      "50": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9583333333333334
+      },
+      "500": {
+        "docs": 109,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.8092369477911646
+      },
+      "5000": {
+        "docs": 60,
+        "false_positive_rate": 0.016666666666666666,
+        "flagged": 1,
+        "flagged_docs": [
+          "/mnt/raid0/llm/worktrees/apr2-second-pass-root-20261109/docs/reference/tmp-loss-handoff-diffs-proposed-2026-10-25.md"
+        ],
+        "min_trigram_unique_ratio": 0.42396958783513405
+      }
+    },
+    "streaming": {
+      "100": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9387755102040817
+      },
+      "1000": {
+        "docs": 91,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.720440881763527
+      },
+      "20": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 1.0
+      },
+      "200": {
+        "docs": 134,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9191919191919192
+      },
+      "2000": {
+        "docs": 76,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.7862862862862863
+      },
+      "50": {
+        "docs": 156,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.9583333333333334
+      },
+      "500": {
+        "docs": 109,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.8092369477911646
+      },
+      "5000": {
+        "docs": 60,
+        "false_positive_rate": 0.0,
+        "flagged": 0,
+        "flagged_docs": [],
+        "min_trigram_unique_ratio": 0.42396958783513405
+      }
+    }
+  },
+  "lengths": [
+    20,
+    50,
+    100,
+    200,
+    500,
+    1000,
+    2000,
+    5000
+  ],
+  "n_docs": 156
+}

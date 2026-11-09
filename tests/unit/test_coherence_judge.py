@@ -450,3 +450,56 @@ def test_in_band_role_parked_sentinel_is_a_refusal(store, log_path):
         judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "role_parked" and exc.value.retry_after_s == 300
     assert _log(log_path)[0]["outcome"] == "refused"
+
+
+# -- TD-30c: embedding-based excerpt option ------------------------------------------
+
+
+def _bag_embed(texts):
+    """Deterministic fake embedder: character-bucket histogram (no model, no network)."""
+    out = []
+    for t in texts:
+        v = [0.0] * 8
+        for ch in t:
+            v[ord(ch) % 8] += 1.0
+        out.append(v)
+    return out
+
+
+def _long_pair():
+    chunk = cj.EMBED_CHUNK_CHARS
+    same = "abcdefgh" * (chunk // 8)
+    other = "zzzzqqqq" * (chunk // 8)
+    base = same * 10
+    cand = same * 4 + other + same * 5  # chunk 4 diverges
+    return base, cand
+
+
+def test_embedding_excerpt_picks_the_divergent_aligned_chunk_and_records_it():
+    base, cand = _long_pair()
+    req = cj.JudgeRequest(prompt="p", base_output=base, candidate_output=cand,
+                          max_judged_tokens=64, excerpt_method="embedding")
+    state, truncated, excerpt = cj.build_state(req, embed_fn=_bag_embed)
+    assert excerpt["method"] == "embedding" and truncated["candidate_output"]
+    chosen = [c["index"] for c in excerpt["candidate_output"]["chosen_chunks"]]
+    assert 4 in chosen and chosen == [c["index"] for c in excerpt["base_output"]["chosen_chunks"]]
+    assert "zzzzqqqq" in state and excerpt["judged_tokens"] <= 2 * 64 + cj.EMBED_CHUNK_CHARS
+
+
+def test_default_method_is_positional_and_unchanged():
+    base, cand = _long_pair()
+    req = cj.JudgeRequest(prompt="p", base_output=base, candidate_output=cand, max_judged_tokens=64)
+    _, _, excerpt = cj.build_state(req)
+    assert "method" not in excerpt and req.excerpt_method == "positional"
+
+
+def test_embedding_method_needs_embedder_and_valid_name_and_short_pairs_skip_it():
+    base, cand = _long_pair()
+    with pytest.raises(ValueError):
+        cj.build_state(cj.JudgeRequest(prompt="p", base_output=base, candidate_output=cand,
+                                       excerpt_method="embedding"))
+    with pytest.raises(ValueError):
+        cj.JudgeRequest(prompt="p", base_output="a", candidate_output="b", excerpt_method="nope").validate()
+    short = cj.JudgeRequest(prompt="p", base_output="a", candidate_output="b", excerpt_method="embedding")
+    _, _, ex = cj.build_state(short, embed_fn=_bag_embed)
+    assert ex["excerpted"] is False and "method" not in ex
