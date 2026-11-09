@@ -268,6 +268,11 @@ class StackChangePipelineConfig:
     numa_mode: str | None = None
     # Deliberate offline use: skip the research-registry-vs-origin/main check.
     allow_stale_research_registry: bool = False
+    # RTG-DUR-1: freshness of orchestration/derived/duration_baselines_by_role.json against
+    # the compiled lineup. "off" (default) adds no step; "warn" reports stale roles without
+    # failing; "enforce" fails the run. NEVER regenerates: a regeneration changes the reward
+    # and is an era decision (see _duration_baselines_step).
+    duration_baselines: Literal["off", "warn", "enforce"] = "off"
 
 
 @dataclass
@@ -1342,6 +1347,50 @@ def _q_scorer_prior_sources_step(
     )
 
 
+DURATION_BASELINE_REFRESH_COMMAND = (
+    "python scripts/analysis/derive_duration_baselines.py "
+    "[--role-since ROLE=<model-swap-time-UTC> ...]"
+)
+
+
+def _duration_baselines_step(config: StackChangePipelineConfig) -> PipelineStep:
+    """RTG-DUR-1: is the duration baseline still true of the lineup just compiled?
+
+    Read-only in BOTH modes. The compile step does not regenerate the artifact: doing so
+    changes the reward, which is an era decision for the operator
+    (`instrument_eras.yaml` is human-amendment-only), and a stack-change `update` runs
+    BEFORE the new lineup has served any traffic to derive a baseline from. It reports
+    which roles are stale and the exact command to run after the era decision and after
+    post-lineup traffic exists.
+    """
+    from src.registry.duration_baseline_freshness import check_files
+
+    root = config.repo_root
+    report = check_files(
+        root / "orchestration" / "derived" / "duration_baselines_by_role.json",
+        config.stack_priors,
+        root / "orchestration" / "instrument_eras.yaml",
+    )
+    if report.ok:
+        return PipelineStep(
+            name="duration_baselines",
+            status="ok",
+            details=[
+                f"duration baselines fresh for {len(report.usable_roles)} role(s) "
+                f"(era floor {report.era_floor_id})"
+            ],
+        )
+    lines = report.lines()
+    details = [f"refresh after the era decision and post-lineup traffic: {DURATION_BASELINE_REFRESH_COMMAND}"]
+    if config.duration_baselines == "enforce":
+        return PipelineStep(
+            name="duration_baselines", status="failed", errors=lines, details=details
+        )
+    return PipelineStep(
+        name="duration_baselines", status="warning", warnings=lines, details=details
+    )
+
+
 def _runtime_attestation_step(*, prior_ok: bool) -> PipelineStep:
     if not prior_ok:
         return PipelineStep(
@@ -1693,6 +1742,8 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
     report.steps.append(_serving_shape_capacity_step(config))
     report.steps.append(_stack_manifest_registry_step(config, prior_ok=report.ok))
     report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))
+    if config.duration_baselines != "off":
+        report.steps.append(_duration_baselines_step(config))
     report.steps.append(_runtime_attestation_step(prior_ok=report.ok))
     report.steps.append(_declared_env_attestation_step())
     report.steps.append(
@@ -1787,6 +1838,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--duration-baselines",
+        choices=("off", "warn", "enforce"),
+        default="off",
+        help=(
+            "RTG-DUR-1: check orchestration/derived/duration_baselines_by_role.json "
+            "against the compiled lineup and era boundaries. Read-only: never "
+            "regenerates (that changes the reward and is an era decision)"
+        ),
+    )
+    parser.add_argument(
         "--allow-stale-research-registry",
         action="store_true",
         help=(
@@ -1874,6 +1935,7 @@ def main(argv: list[str] | None = None) -> int:
         run_promotion_gate=args.run_promotion_gate,
         numa_mode=args.numa_mode,
         allow_stale_research_registry=args.allow_stale_research_registry,
+        duration_baselines=args.duration_baselines,
     )
     # NIB2-102: the guard's retired-role derivation reads the SAME master as every
     # other step of this run (origin/main by default), not its own clone default.
