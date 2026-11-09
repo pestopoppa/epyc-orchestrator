@@ -25,6 +25,8 @@ PAIR = dict(
     base_output="2 + 2 = 4.",
     candidate_output="The sum is 4.",
 )
+#: The production-role backend, pinned (the request default is now ``auto``).
+LOCAL = dict(PAIR, backend="local")
 
 
 def _result(value: str | None, mode: str, *, failures=(), probs=None) -> DecisionResult:
@@ -92,9 +94,28 @@ def _judge(store, log_path, *, run=None, holds=(), primitives=None, registry=Non
         cloud_registry_fn=lambda: registry or {},
         cloud_run_fn=cloud_run,
         served_model_fn=lambda p, role: "Qwen3.6-35B-A3B-Q4_K_M.gguf",
+        served_build_fn=lambda p, role: None,
+        token_counter_fn=lambda p, role: None,
+        sidecar_probe_fn=lambda: _sidecar_status(reachable=False),
+        sidecar_primitives_fn=lambda url: pytest.fail("sidecar must not be used"),
         typed_run_fn=run,
         log_path=log_path,
     ), prims
+
+
+def _sidecar_status(*, reachable=True, champion=True, build="b10308-90c12df42"):
+    from src.typed_decisions.coherence_judge_sidecar import SidecarStatus
+
+    return SidecarStatus(
+        url="http://127.0.0.1:8199",
+        reachable=reachable,
+        champion=reachable and champion,
+        reason="test",
+        build_info=build if reachable else None,
+        expected_commit="90c12df42",
+        served_model="Qwen3.6-35B-A3B-MTP-Q8_0.gguf" if reachable else None,
+        launch_command="bash /mnt/raid0/llm/tmp/champion-sidecar/launch_champion_sidecar.sh start",
+    )
 
 
 def _calibrate(store, *, backend="local", model="worker_general", mode="native", served="Qwen3.6-35B-A3B-Q4_K_M.gguf", passed=True):
@@ -118,7 +139,7 @@ def test_native_verdict_carries_logprob_confidence_and_calibration(store, log_pa
     run = FakeRun({"native": _result("DEGRADED", "native")})
     judge, prims = _judge(store, log_path, run=run)
 
-    verdict = judge.judge(cj.JudgeRequest(**PAIR))
+    verdict = judge.judge(cj.JudgeRequest(**LOCAL))
 
     assert verdict.verdict == "DEGRADED" and not verdict.passed
     assert verdict.confidence == pytest.approx(0.7)
@@ -138,7 +159,7 @@ def test_native_verdict_carries_logprob_confidence_and_calibration(store, log_pa
 def test_call_log_hashes_inputs_never_stores_text(store, log_path):
     _calibrate(store)
     judge, _ = _judge(store, log_path, run=FakeRun({"native": _result(cj.PASS_VERDICT, "native")}))
-    verdict = judge.judge(cj.JudgeRequest(**PAIR, caller="ak:ds41"))
+    verdict = judge.judge(cj.JudgeRequest(**LOCAL, caller="ak:ds41"))
     (record,) = _log(log_path)
     assert record["schema"] == cj.CALL_SCHEMA
     assert record["outcome"] == "verdict" and record["call_id"] == verdict.call_id
@@ -159,7 +180,7 @@ def test_auto_falls_back_to_json_without_confidence(store, log_path):
         }
     )
     judge, _ = _judge(store, log_path, run=run)
-    verdict = judge.judge(cj.JudgeRequest(**PAIR))
+    verdict = judge.judge(cj.JudgeRequest(**LOCAL))
     assert [c["mode"] for c in run.calls] == ["native", "json"]
     assert verdict.verdict == "INCOHERENT" and verdict.scoring_mode == "json"
     assert verdict.confidence is None and verdict.probability_source == "verbalized_json"
@@ -177,7 +198,7 @@ def test_auto_fallback_to_uncalibrated_mode_is_withheld(store, log_path):
     )
     judge, _ = _judge(store, log_path, run=run)
     with pytest.raises(cj.JudgeRefused) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "judge_uncalibrated" and exc.value.status_code == 409
     (record,) = _log(log_path)
     assert record["outcome"] == "refused" and record["verdict"]["verdict"] == "DEGRADED"
@@ -188,7 +209,7 @@ def test_explicit_native_failure_does_not_fall_back(store, log_path):
     run = FakeRun({"native": _result(None, "native", failures=[("native_unknown_candidate", "x")])})
     judge, _ = _judge(store, log_path, run=run)
     with pytest.raises(cj.JudgeFailed) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR, scoring="native"))
+        judge.judge(cj.JudgeRequest(**LOCAL, scoring="native"))
     assert exc.value.kind == "judge_unresolved"
     assert len(run.calls) == 1
 
@@ -198,7 +219,7 @@ def test_transport_error_is_failure_not_verdict(store, log_path):
     run = FakeRun({"native": _result(None, "native", failures=[("transport_error", "[ERROR: down]")])})
     judge, _ = _judge(store, log_path, run=run)
     with pytest.raises(cj.JudgeFailed) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "transport_error"
     assert _log(log_path)[0]["outcome"] == "failed"
 
@@ -213,7 +234,7 @@ def test_role_parked_is_a_refusal(store, log_path):
 
     judge, _ = _judge(store, log_path, run=parked)
     with pytest.raises(cj.JudgeRefused) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "role_parked" and exc.value.status_code == 503
 
 
@@ -224,14 +245,14 @@ def test_uncalibrated_judge_refused_before_inference(store, log_path):
     run = FakeRun({"native": _result("DEGRADED", "native")})
     judge, _ = _judge(store, log_path, run=run)
     with pytest.raises(cj.JudgeRefused) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "judge_uncalibrated"
     assert run.calls == []
 
 
 def test_allow_uncalibrated_returns_null_calibration(store, log_path):
     judge, _ = _judge(store, log_path, run=FakeRun({"native": _result("OFF_TASK", "native")}))
-    verdict = judge.judge(cj.JudgeRequest(**PAIR, allow_uncalibrated=True))
+    verdict = judge.judge(cj.JudgeRequest(**LOCAL, allow_uncalibrated=True))
     assert verdict.verdict == "OFF_TASK"
     assert verdict.calibration_id is None and verdict.to_dict()["calibrated"] is False
 
@@ -240,14 +261,14 @@ def test_failed_calibration_record_is_not_used(store, log_path):
     _calibrate(store, passed=False)
     judge, _ = _judge(store, log_path, run=FakeRun({"native": _result("DEGRADED", "native")}))
     with pytest.raises(cj.JudgeRefused):
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
 
 
 def test_calibration_bound_to_served_model(store, log_path):
     _calibrate(store, served="some-other-model.gguf")
     judge, _ = _judge(store, log_path, run=FakeRun({"native": _result("DEGRADED", "native")}))
     with pytest.raises(cj.JudgeRefused) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "judge_uncalibrated"
 
 
@@ -268,7 +289,7 @@ def test_local_refused_while_window_held_no_inference(store, log_path):
     hold = WindowHold("cpu", "/x/cpu-window.json", "autokernel cpu window held", 60)
     judge, _ = _judge(store, log_path, run=run, holds=[hold])
     with pytest.raises(cj.JudgeRefused) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR, allow_uncalibrated=True))
+        judge.judge(cj.JudgeRequest(**LOCAL, allow_uncalibrated=True))
     assert exc.value.kind == "measurement_window_held"
     assert exc.value.status_code == 503 and exc.value.retry_after_s == 60
     assert run.calls == []
@@ -338,11 +359,13 @@ def test_clip_keeps_head_and_tail():
 
 
 def test_state_marks_truncation_and_rubric():
-    state, truncated = cj.build_state(
+    state, truncated, excerpt = cj.build_state(
         cj.JudgeRequest(prompt="p", base_output="b", candidate_output="c" * 20_000, rubric="must cite file")
     )
     assert truncated == {"prompt": False, "base_output": False, "candidate_output": True}
-    assert "EXTRA CRITERIA FROM THE CALLER:\nmust cite file" in state
+    assert excerpt["excerpted"] is True and excerpt["candidate_output"]["excerpted"] is True
+    # The caller rubric sits in the fixed head, before the per-call texts.
+    assert state.index("EXTRA CRITERIA FROM THE CALLER:\nmust cite file") < state.index("PROMPT:\n<<<")
 
 
 def test_prompt_template_sha_is_stable():
@@ -404,7 +427,7 @@ def test_real_native_runner_rekeys_verdicts_and_reads_probs(store, log_path):
         tokenize_fn=tok,
         log_path=log_path,
     )
-    verdict = judge.judge(cj.JudgeRequest(**PAIR, scoring="native"))
+    verdict = judge.judge(cj.JudgeRequest(**LOCAL, scoring="native"))
     assert verdict.verdict == "DEGRADED"
     assert verdict.confidence == pytest.approx(0.6)
     assert verdict.probabilities["COHERENT_EQUIVALENT"] == pytest.approx(0.3)
@@ -424,6 +447,6 @@ def test_in_band_role_parked_sentinel_is_a_refusal(store, log_path):
     run = FakeRun({"native": _result(None, "native", failures=[("transport_error", sentinel)])})
     judge, _ = _judge(store, log_path, run=run)
     with pytest.raises(cj.JudgeRefused) as exc:
-        judge.judge(cj.JudgeRequest(**PAIR))
+        judge.judge(cj.JudgeRequest(**LOCAL))
     assert exc.value.kind == "role_parked" and exc.value.retry_after_s == 300
     assert _log(log_path)[0]["outcome"] == "refused"

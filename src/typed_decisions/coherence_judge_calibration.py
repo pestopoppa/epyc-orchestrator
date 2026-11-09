@@ -42,15 +42,29 @@ store (``coherence_judge.seal_calibration_record``). The record passes when:
 A judge that lets obvious garbage through is the failure that matters. The 4-way
 accuracy is recorded alongside.
 
-Local runs go through the live endpoint (``--url``) because the orchestrator owns the
-primitives. Each call passes ``allow_uncalibrated``, since this run IS the calibration,
-and pins ``--scoring native`` (TD-29) or ``json``. A ``measurement_window_held`` or
-``role_parked`` refusal aborts the run: rows are kept, nothing is sealed. Cloud runs can
-use ``--in-process``. Rows are written per item as they arrive.
+Production-role runs (``--backend local``) go through the live endpoint (``--url``)
+because the orchestrator owns those primitives. Each call passes ``allow_uncalibrated``,
+since this run IS the calibration, and pins ``--scoring native`` (TD-29) or ``json``. A
+``measurement_window_held``, ``role_parked``, ``sidecar_unavailable`` or
+``sidecar_not_champion`` refusal aborts the run: rows are kept, nothing is sealed. Cloud
+runs and champion-sidecar runs can use ``--in-process`` (the sidecar backend builds its
+own primitives; the window guard still applies). Rows are written per item as they arrive.
+
+A calibration is bound to (backend, model, served model, BUILD, scoring mode) through the
+judge key. ``--backend auto`` is refused (a calibration must pin one identity), and a row
+whose verdict came back on another backend or scoring mode than requested is not scored
+(``identity_mismatch``), so a JSON-scored run can never validate native scoring or the
+reverse, nor a production-role run the champion sidecar.
+
+The summary and every sealed record carry ``serving_rollup``: per-call prefill telemetry
+(``prompt_ms``, ``prompt_n``, ``cache_n``, the prefix reuse rate) and ``judged_tokens`` /
+excerpt counts, rolled up over the run.
 
     python -m src.typed_decisions.coherence_judge_calibration build
     python -m src.typed_decisions.coherence_judge_calibration run --set <set.jsonl> \
-        --backend local --model worker_general --scoring native [--dry-run]
+        --backend local --model worker_general --scoring json [--dry-run]
+    python -m src.typed_decisions.coherence_judge_calibration run --set <set.jsonl> \
+        --backend local:champion_sidecar --scoring native --in-process
 """
 
 from __future__ import annotations
@@ -70,8 +84,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from src.typed_decisions.coherence_judge import (
+    AUTO_BACKEND,
     JUDGE_VERSION,
     PASS_VERDICT,
+    SIDECAR_BACKEND,
     CalibrationStore,
     prompt_template_sha256,
     seal_calibration_record,
@@ -314,7 +330,7 @@ def read_set(path: Path) -> tuple[list[dict[str, Any]], str]:
 
 #: item -> (http_status, body); body is the verdict object or {"error": {...}}.
 JudgeCall = Callable[[Mapping[str, Any]], tuple[int, dict[str, Any]]]
-_ABORT_KINDS = ("measurement_window_held", "role_parked")
+_ABORT_KINDS = ("measurement_window_held", "role_parked", "sidecar_unavailable", "sidecar_not_champion")
 
 
 def _request_body(item: Mapping[str, Any], *, backend: str, model: str | None, scoring: str, set_id: str) -> dict[str, Any]:
@@ -363,6 +379,45 @@ def in_process_judge_call(*, backend: str, model: str | None, scoring: str, set_
         return 200, verdict.to_dict()
 
     return call
+
+
+def _median(values: Sequence[float]) -> float | None:
+    ordered = sorted(values)
+    if not ordered:
+        return None
+    mid = len(ordered) // 2
+    return float(ordered[mid]) if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _is_num(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def serving_rollup(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Prefill telemetry + judged-length totals over the scored rows (server's numbers)."""
+    verdicts = [r["verdict"] for r in rows if r.get("verdict")]
+    serving = [v.get("serving") or {} for v in verdicts]
+
+    def nums(key: str) -> list[float]:
+        return [float(x[key]) for x in serving if _is_num(x.get(key))]
+
+    prompt_ms, prompt_n, cache_n = nums("prompt_ms"), nums("prompt_n"), nums("cache_n")
+    judged = [float((v.get("excerpt") or {})["judged_tokens"]) for v in verdicts
+              if _is_num((v.get("excerpt") or {}).get("judged_tokens"))]
+    total_prompt = sum(prompt_n) + sum(cache_n)
+    return {
+        "n_calls": len(verdicts),
+        "n_with_prefill_telemetry": len(prompt_n),
+        "prompt_ms_total": round(sum(prompt_ms), 3) if prompt_ms else None,
+        "prompt_ms_mean": round(sum(prompt_ms) / len(prompt_ms), 3) if prompt_ms else None,
+        "prompt_ms_median": round(_median(prompt_ms), 3) if prompt_ms else None,
+        "prompt_n_total": int(sum(prompt_n)) if prompt_n else None,
+        "cache_n_total": int(sum(cache_n)) if cache_n else None,
+        "prefix_reuse_rate": round(sum(cache_n) / total_prompt, 4) if total_prompt else None,
+        "judged_tokens_total": int(sum(judged)) if judged else None,
+        "judged_tokens_mean": round(sum(judged) / len(judged), 1) if judged else None,
+        "n_excerpted": sum(1 for v in verdicts if (v.get("excerpt") or {}).get("excerpted")),
+    }
 
 
 def score_rows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -414,6 +469,8 @@ def run_calibration(
     scoring: str,
 ) -> dict[str, Any]:
     """Score every item once and persist each row; seal one record per judge_key."""
+    if backend == AUTO_BACKEND:
+        raise ValueError("a calibration must pin one backend; 'auto' resolves per call")
     out_dir.mkdir(parents=True, exist_ok=True)
     rows_path = out_dir / "rows.jsonl"
     rows: list[dict[str, Any]] = []
@@ -422,6 +479,12 @@ def run_calibration(
         for item in items:
             status, body = call(item)
             error = body.get("error") if isinstance(body, dict) else None
+            if status == 200 and not error and isinstance(body, dict):
+                got = (body.get("backend"), body.get("scoring_mode"))
+                if got != (backend, scoring):
+                    # e.g. an auto native->json fallback: never sealed under the wrong identity.
+                    error = {"type": "identity_mismatch",
+                             "message": f"verdict on backend={got[0]} scoring={got[1]}, requested {backend}/{scoring}"}
             row = {
                 "id": item["id"],
                 "category": item["category"],
@@ -429,6 +492,7 @@ def run_calibration(
                 "label_strength": item.get("label_strength", "strong"),
                 "status": status,
                 "verdict": body if status == 200 and not error else None,
+                "returned": body if error and error.get("type") == "identity_mismatch" else None,
                 "error": error,
             }
             rows.append(row)
@@ -437,7 +501,8 @@ def run_calibration(
             if isinstance(error, dict) and error.get("type") in _ABORT_KINDS:
                 aborted = error
                 break
-    summary: dict[str, Any] = {"set_id": set_id, "set_sha256": set_sha256, "rows_path": str(rows_path), "aborted": aborted, "records": []}
+    summary: dict[str, Any] = {"set_id": set_id, "set_sha256": set_sha256, "rows_path": str(rows_path), "aborted": aborted,
+                               "serving_rollup": serving_rollup(rows), "records": []}
     if aborted:
         return summary  # a partial run is never sealed
     by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -459,12 +524,14 @@ def run_calibration(
                     "backend": sample.get("backend"),
                     "model": sample.get("model"),
                     "served_model": sample.get("served_model"),
+                    "build": sample.get("build"),
                     "scoring_mode": sample.get("scoring_mode"),
                 },
                 "requested": {"backend": backend, "model": model, "scoring": scoring},
                 "set": {"set_id": set_id, "sha256": set_sha256, "n": len(items)},
                 "rule": {"min_pass_fail_accuracy": MIN_PASS_FAIL_ACCURACY, "no_garbage_pass": list(GARBAGE_CATEGORIES)},
                 **result,
+                "serving_rollup": serving_rollup(key_rows),
                 "rows_path": str(rows_path),
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
@@ -474,6 +541,8 @@ def run_calibration(
             {
                 "calibration_id": record["calibration_id"],
                 "judge_key": key,
+                "build": sample.get("build"),
+                "scoring_mode": sample.get("scoring_mode"),
                 "passed": record["passed"],
                 "accuracy_pass_fail": record["metrics"]["accuracy_pass_fail"],
                 "path": str(path),
@@ -497,11 +566,11 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--out-dir", type=Path, default=DEFAULT_SET_DIR)
     r = sub.add_parser("run", help="score the judge once and seal the calibration record")
     r.add_argument("--set", type=Path, required=True)
-    r.add_argument("--backend", default="local")
+    r.add_argument("--backend", default="local", help=f"local | {SIDECAR_BACKEND} | cloud:<name> (not auto)")
     r.add_argument("--model", default=None)
     r.add_argument("--scoring", choices=("native", "json"), default="native")
     r.add_argument("--url", default="http://127.0.0.1:8000")
-    r.add_argument("--in-process", action="store_true", help="cloud backends only")
+    r.add_argument("--in-process", action="store_true", help=f"cloud backends and {SIDECAR_BACKEND} only")
     r.add_argument("--out-dir", type=Path, default=None)
     r.add_argument("--dry-run", action="store_true")
     return parser
@@ -516,14 +585,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     items, set_sha = read_set(args.set)
     set_id = args.set.stem
-    if args.in_process and not args.backend.startswith("cloud:"):
-        print("--in-process is for cloud backends; local runs go through the live endpoint", file=sys.stderr)
+    if args.backend == AUTO_BACKEND:
+        print("--backend auto is refused: a calibration must pin one judge identity", file=sys.stderr)
+        return 2
+    if args.in_process and not (args.backend.startswith("cloud:") or args.backend == SIDECAR_BACKEND):
+        print(f"--in-process is for cloud backends and {SIDECAR_BACKEND}; production-role runs go "
+              "through the live endpoint", file=sys.stderr)
         return 2
     if args.dry_run:
-        print(json.dumps({"dry_run": True, "set_id": set_id, "set_sha256": set_sha, "n": len(items),
-                          "categories": dict(Counter(i["category"] for i in items)), "backend": args.backend,
-                          "model": args.model, "scoring": args.scoring, "judge_version": JUDGE_VERSION,
-                          "prompt_template_sha256": prompt_template_sha256()}, indent=2))
+        out = {"dry_run": True, "set_id": set_id, "set_sha256": set_sha, "n": len(items),
+               "categories": dict(Counter(i["category"] for i in items)), "backend": args.backend,
+               "model": args.model, "scoring": args.scoring, "judge_version": JUDGE_VERSION,
+               "prompt_template_sha256": prompt_template_sha256()}
+        if args.backend == SIDECAR_BACKEND:  # /health + /props only, no inference
+            from src.typed_decisions.coherence_judge_sidecar import probe_sidecar
+
+            out["sidecar"] = probe_sidecar().to_dict()
+        print(json.dumps(out, indent=2))
         return 0
     out_dir = args.out_dir or DEFAULT_RUN_DIR / f"{set_id}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
     kwargs = dict(backend=args.backend, model=args.model, scoring=args.scoring, set_id=set_id)
