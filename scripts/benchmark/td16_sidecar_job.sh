@@ -95,7 +95,9 @@ done
   exit 7
 }
 
-WINDOW_CONFIRMED=1 "$PY" "$HERE/td16_label_word_bias.py" --fixture "$FIXTURE" --role "$ROLE" \
+SMOKE_FLAG=""
+{ [ "${FILLER_SMOKE:-0}" = 1 ] || [ "${FILLER_DRYRUN:-0}" = 1 ]; } && SMOKE_FLAG="--smoke"
+WINDOW_CONFIRMED=1 "$PY" "$HERE/td16_label_word_bias.py" $SMOKE_FLAG --fixture "$FIXTURE" --role "$ROLE" \
   --server-url "$ROLE=http://127.0.0.1:$PORT" --results "$RESULTS_JSONL" --out "$OUT/RESULT.json" \
   --stop-file "$FILLER_STOPFILE" --deadline-epoch "$FILLER_DEADLINE"
 rc=$?

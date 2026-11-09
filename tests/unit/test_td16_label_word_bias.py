@@ -134,3 +134,28 @@ def test_live_mode_refuses_without_window_and_url(tmp_path, monkeypatch, capsys)
     assert T.main(base) == 2 and "WINDOW_CONFIRMED" in capsys.readouterr().err
     monkeypatch.setenv("WINDOW_CONFIRMED", "1")
     assert T.main(base) == 2 and "--server-url" in capsys.readouterr().err
+
+
+def test_smoke_units_are_quarantined_by_a_live_run(tmp_path):
+    its = _items(8)
+    fx = tmp_path / "fx.jsonl"; fx.write_text("\n".join(json.dumps(i) for i in its) + "\n")
+    prim = _Prim({i["id"]: i for i in its})
+    base = ["--fixture", str(fx), "--no-sha-check", "--batch", "4", "--boot-b", "20", "--results", str(tmp_path / "u.jsonl"),
+            "--out", str(tmp_path / "r.json"), "--arms", "N"]
+    stop = tmp_path / "STOP"
+    # smoke: runs one unit then is stopped by the keeper's stop file
+    calls = {"n": 0}
+    stub = _stub()
+
+    def once(*a, **k):
+        calls["n"] += 1
+        stop.write_text("")
+        return stub(*a, **k)
+    assert T.main(base + ["--smoke", "--stop-file", str(stop)], primitives=prim, run_fn=once) == 75
+    assert json.loads((tmp_path / "u.jsonl").read_text().splitlines()[0])["smoke"] is True
+    stop.unlink()
+    # live: the smoke unit is NOT reused, it is moved aside; all units are re-run live
+    assert T.main(base, primitives=prim, run_fn=stub) == 0
+    live = [json.loads(x) for x in (tmp_path / "u.jsonl").read_text().splitlines()]
+    assert len(live) == 2 and not any(u.get("smoke") for u in live)
+    assert list(tmp_path.glob("u.jsonl.smoke-*.jsonl"))

@@ -223,13 +223,25 @@ def server_props_model(url: str) -> str | None:
         return None
 
 
-def read_units(path: Path) -> dict[str, dict]:
+def read_units(path: Path, smoke: bool = False) -> dict[str, dict]:
+    """Resume units. A keeper smoke tags its units ``smoke: true``; a LIVE run never counts them (a smoke's output is not the job):
+    they are moved to ``<results>.smoke-<epoch>.jsonl`` and the live file keeps only live units."""
     units: dict[str, dict] = {}
+    quarantined: list[str] = []
+    keep: list[str] = []
     if path.exists():
         for line in path.read_text().splitlines():
-            if line.strip():
-                u = json.loads(line)
-                units[u["unit_id"]] = u
+            if not line.strip():
+                continue
+            u = json.loads(line)
+            if u.get("smoke") and not smoke:
+                quarantined.append(line)
+                continue
+            keep.append(line)
+            units[u["unit_id"]] = u
+    if quarantined:
+        path.with_name(path.name + f".smoke-{int(time.time())}.jsonl").write_text("\n".join(quarantined) + "\n")
+        path.write_text("".join(x + "\n" for x in keep))
     return units
 
 
@@ -260,6 +272,7 @@ def main(argv=None, primitives=None, run_fn=None) -> int:
     ap.add_argument("--stop-file")
     ap.add_argument("--deadline-epoch", type=float)
     ap.add_argument("--boot-b", type=int, default=BOOT_B)
+    ap.add_argument("--smoke", action="store_true", help="tag units smoke:true (set by the job when FILLER_SMOKE/FILLER_DRYRUN is 1)")
     a = ap.parse_args(argv)
 
     arms = a.arms.split(",")
@@ -289,7 +302,7 @@ def main(argv=None, primitives=None, run_fn=None) -> int:
 
     results = Path(a.results)
     results.parent.mkdir(parents=True, exist_ok=True)
-    units = read_units(results)
+    units = read_units(results, smoke=a.smoke)
     stopped, t0 = None, time.time()
 
     def should_stop():
@@ -314,6 +327,8 @@ def main(argv=None, primitives=None, run_fn=None) -> int:
                 break
             rows, meta = run_batch(primitives, arm, batch, a.role, run_fn)
             u = {"unit_id": uid, "arm": arm, "batch": bi, "ok": all(r["p_yes"] is not None for r in rows), "rows": rows, **meta}
+            if a.smoke:
+                u["smoke"] = True
             units[uid] = u
             with results.open("a") as f:
                 f.write(json.dumps(u) + "\n")
