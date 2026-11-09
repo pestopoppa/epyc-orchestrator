@@ -67,7 +67,10 @@ def test_real_fixture_builds_every_arm():
     q = T.make_question(items[0], "C_BA")
     assert q.options == ("A", "B") and q.option_descriptions[0] == items[0]["check"]["no_if"]
     assert T.yes_key("C_BA") == "B" and T.yes_key("C_AB") == "A" and T.yes_key("N") is None
-    assert not T.make_question(items[0], "Nq").criteria and len(T.make_question(items[0], "N").criteria) == 2
+    # the conditions ride in the text (native rendering drops Question.criteria); N differs from Nq in the rendered prompt
+    assert items[0]["check"]["yes_if"] in T.make_question(items[0], "N").text
+    assert items[0]["check"]["yes_if"] not in T.make_question(items[0], "Nq").text
+    assert T.check_arm_prompts(T.ARMS, T.batches(items, 8)[0]) == []
 
 
 @needs_fixture
@@ -159,3 +162,38 @@ def test_smoke_units_are_quarantined_by_a_live_run(tmp_path):
     live = [json.loads(x) for x in (tmp_path / "u.jsonl").read_text().splitlines()]
     assert len(live) == 2 and not any(u.get("smoke") for u in live)
     assert list(tmp_path.glob("u.jsonl.smoke-*.jsonl"))
+
+
+# ---- 2026-11-09 rerun fixes: N and Nq were byte-identical because native rendering drops Question.criteria
+def test_native_arms_render_different_prompts_and_conditions_are_visible():
+    items = _items(8)
+    pn, pnq = T.render_arm_prompt("N", items), T.render_arm_prompt("Nq", items)
+    assert pn != pnq
+    assert all("YES if: changed value" in pn and "NO if: same value" in pn for _ in [0])
+    assert "changed value" not in pnq and "same value" not in pnq
+    assert "changed value" not in T.render_arm_prompt("Cq_AB", items)
+    assert "changed value" in T.render_arm_prompt("C_AB", items)
+    assert "changed value" in T.render_arm_prompt("J", items)
+    assert T.check_arm_prompts(T.ARMS, items) == []
+
+
+def test_guard_flags_a_renderer_that_drops_conditions(monkeypatch):
+    import src.typed_decisions.native as nat
+    real = nat.build_native_prompt
+
+    def dropping(state, questions):  # simulates a renderer that ignores the conditions entirely
+        out = real(state, questions)
+        return "\n".join(l for l in out.splitlines() if "YES if:" not in l and "NO if:" not in l)
+    monkeypatch.setattr(nat, "build_native_prompt", dropping)
+    probs = T.check_arm_prompts(("N", "Nq"), _items(8))
+    assert any("N: yes_if/no_if conditions missing" in p for p in probs)
+    assert any("N and Nq render byte-identical" in p for p in probs)
+
+
+def test_main_refuses_when_arms_render_identically(monkeypatch, tmp_path):
+    monkeypatch.setattr(T, "check_arm_prompts", lambda arms, batch: ["N and Nq render byte-identical prompts"])
+    fx = tmp_path / "f.jsonl"
+    fx.write_text("\n".join(json.dumps(i) for i in _items(8)) + "\n")
+    rc = T.main(["--fixture", str(fx), "--no-sha-check", "--results", str(tmp_path / "r.jsonl"), "--out", str(tmp_path / "o.json")],
+                primitives={}, run_fn=lambda *a, **k: None)
+    assert rc == 2

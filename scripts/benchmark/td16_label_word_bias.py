@@ -7,7 +7,7 @@ text, both orders) does not? The item set is hunch's 240 look-alike pairs frozen
 ``research/fixtures/td16-hunch-20261102/td16-lookalikes.jsonl`` (sha256 pinned below; 80 positive / 160 negative).
 
 Arms (each over all 240 items; the SAME catalogue batches in every arm so the arms are paired):
-  N      native noul, yes_if / no_if as criteria            (the readout as run today)
+  N      native noul, yes_if / no_if appended to the question text (native renders text, not Question.criteria)
   Nq     native noul, question + context only               (question-only variant, no conditions)
   C_AB   native 2-option choice, keys A,B, A = yes condition, B = no condition
   C_BA   same, order swapped (A = no condition, B = yes condition)
@@ -75,12 +75,22 @@ def _body(item: dict) -> str:
     return f"{item['check']['question']}\n{ctx}"
 
 
+def _body_with_conditions(item: dict) -> str:
+    """Question body plus the yes/no conditions IN THE QUESTION TEXT.
+
+    The native prompt builder (``native.build_native_prompt``) renders ``question.text``, candidates and option
+    descriptions but NOT ``Question.criteria`` (only the JSON-mode catalogue does). The first live run put the conditions in
+    ``criteria``, so N was byte-identical to Nq (same prompt_sha256 in all 30 batches): the arms differed in name only.
+    """
+    chk = item["check"]
+    return f"{_body(item)}\nYES if: {chk['yes_if']}\nNO if: {chk['no_if']}"
+
+
 def make_question(item: dict, arm: str):
     from src.typed_decisions.types import Question, QuestionKind
     chk = item["check"]
     if arm in ("N", "J"):
-        return Question(id=item["id"], kind=QuestionKind.NOUL, text=_body(item),
-                        criteria=(f"YES if: {chk['yes_if']}", f"NO if: {chk['no_if']}"))
+        return Question(id=item["id"], kind=QuestionKind.NOUL, text=_body_with_conditions(item))
     if arm == "Nq":
         return Question(id=item["id"], kind=QuestionKind.NOUL, text=_body(item))
     swapped = arm.endswith("_BA")
@@ -90,6 +100,38 @@ def make_question(item: dict, arm: str):
         yes_t, no_t = chk["yes_if"], chk["no_if"]
     descs = (no_t, yes_t) if swapped else (yes_t, no_t)
     return Question(id=item["id"], kind=QuestionKind.CHOICE, text=_body(item), options=("A", "B"), option_descriptions=descs)
+
+
+def render_arm_prompt(arm: str, batch: list[dict]) -> str:
+    """The exact catalogue text the model sees for ``arm`` (pure: no model). Native arms: native prompt; J: JSON catalogue."""
+    qs = [make_question(i, arm) for i in batch]
+    if arm == "J":
+        from src.typed_decisions.runner import _build_catalog
+        return _build_catalog(qs)
+    from src.typed_decisions.native import build_native_prompt
+    return build_native_prompt(STATE, qs)
+
+
+def check_arm_prompts(arms, batch: list[dict]) -> list[str]:
+    """Pre-run guard (no model): every arm's rendered prompt must carry what the arm claims to vary. Returns problems.
+
+    Condition arms (N, J, C_AB, C_BA) must contain each item's yes_if and no_if text; question-only arms (Nq, Cq_*) must
+    contain neither; and no two arms may render identical prompts. Catches a field the renderer silently drops."""
+    problems: list[str] = []
+    prompts = {a: render_arm_prompt(a, batch) for a in arms}
+    for a, p in prompts.items():
+        has = [i["check"]["yes_if"] in p and i["check"]["no_if"] in p for i in batch]
+        none = [i["check"]["yes_if"] not in p and i["check"]["no_if"] not in p for i in batch]
+        if a in ("N", "J", "C_AB", "C_BA") and not all(has):
+            problems.append(f"{a}: yes_if/no_if conditions missing from the rendered prompt (renderer drops the field?)")
+        if a in ("Nq", "Cq_AB", "Cq_BA") and not all(none):
+            problems.append(f"{a}: question-only arm renders the yes/no conditions")
+    names = list(prompts)
+    for x in range(len(names)):
+        for y in range(x + 1, len(names)):
+            if prompts[names[x]] == prompts[names[y]]:
+                problems.append(f"{names[x]} and {names[y]} render byte-identical prompts")
+    return problems
 
 
 def yes_key(arm: str) -> str | None:
@@ -288,6 +330,10 @@ def main(argv=None, primitives=None, run_fn=None) -> int:
         if not (r and u.startswith("http://127.0.0.1:")):
             sys.exit(f"--server-url must be ROLE=http://127.0.0.1:PORT, got {spec!r}")
         overrides[r] = u.rstrip("/")
+    problems = check_arm_prompts(arms, plan[0])
+    if problems:
+        print("refusing: arm prompts are not what the arms claim:\n  " + "\n  ".join(problems), file=sys.stderr)
+        return 2
     if primitives is None:
         if os.environ.get("WINDOW_CONFIRMED") != "1":
             print("refusing: live mode runs inference. Set WINDOW_CONFIRMED=1 inside a granted window.", file=sys.stderr)
