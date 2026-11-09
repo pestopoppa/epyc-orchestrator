@@ -280,7 +280,17 @@ def main() -> int:
     p.add_argument("--from", dest="date_from", type=parse_date, help="Start of range (YYYY-MM-DD).")
     p.add_argument("--to", dest="date_to", type=parse_date, help="End of range (YYYY-MM-DD).")
     p.add_argument("--json", action="store_true", help="Emit machine-readable JSON instead of human text.")
+    p.add_argument(
+        "--log-root",
+        type=Path,
+        help="Read <root>/*.log* and <root>/progress/<day>.jsonl instead of the repo logs/ "
+        "(the SX-6 sentinel driver writes its own root).",
+    )
     args = p.parse_args()
+    if args.log_root:
+        global LOG_DIR, SERVER_LOG_DIR
+        SERVER_LOG_DIR = args.log_root
+        LOG_DIR = args.log_root / "progress"
 
     if args.date:
         start = end = args.date
