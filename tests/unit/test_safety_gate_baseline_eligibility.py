@@ -17,6 +17,24 @@ import pytest
 from safety_gate import EvalResult, SafetyGate  # type: ignore[import-not-found]
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_guard_archive(monkeypatch):
+    """Pin the promotion-guard archive to an empty legacy-scope archive.
+
+    ``SafetyGate._select_promotion_rule`` reads ``_promotion_guard_view()``, which without a
+    live provider builds a legacy archive from the LIVE journal (gitignored, absent in a fresh
+    worktree). On a host with no journal the view is "unavailable" and a first-time promotion
+    takes the seed rule, skipping the archive-max / reproduction checks these tests exercise
+    (they only stub ``_archive_best_quality`` / ``_archive_frontier_entry``). An empty
+    ParetoArchive reproduces the legacy-scope view without the host's journal; gate logic
+    is untouched.
+    """
+    import safety_gate as sg  # type: ignore[import-not-found]
+    from scripts.autopilot.pareto_archive import ParetoArchive
+
+    monkeypatch.setattr(sg, "_pareto_archive_for_safety_guard", lambda: ParetoArchive())
+
+
 def _result(speed_metric_mode: str = "aggregate_batch_tps") -> EvalResult:
     # quality/per-suite must stay within the 0-3 scale; the loader + update_baseline
     # now reject out-of-scale values (see test_baseline_scale_guard.py).

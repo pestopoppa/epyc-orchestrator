@@ -51,7 +51,7 @@ ACCOUNTED_ELSEWHERE = {
     "api/routes/chat_pipeline/stages.py::_quality_escalate": "request.prompt neutralised by ChatRequest",
     "api/routes/chat_pipeline/stages.py::_execute_react": "build_root_lm_prompt neutralises its inputs",
     "api/routes/chat_pipeline/stream_adapter.py::_stream_repl": "build_root_lm_prompt/build_escalation_prompt neutralise",
-    "api/routes/chat_pipeline/proactive_stage.py::_execute_proactive": "build_task_decomposition_prompt neutralises",
+    "api/routes/chat_pipeline/proactive_stage.py::_request_plan_steps": "plan_prompt comes from build_task_decomposition_prompt (called in _execute_proactive), which neutralises",
     "api/routes/openai_compat.py::openai_chat_completions": "OpenAIChatRequest messages neutralised (CT-12.3a)",
     "api/routes/openai_compat.py::_run_client_tool_completion": "messages come from OpenAIChatRequest (content + tool_calls neutralised, CT-12.3a)",
     "api/routes/openai_compat.py::generate_stream": "OpenAIChatRequest messages neutralised (CT-12.3a)",
