@@ -99,3 +99,52 @@ def test_belief_missing_gguf_is_recorded_not_raised(tmp_path):
     st = M.belief_capture(r, out, [("mock_role", None, None)], {}, M.fx_mod.build_fixture(), "rid",
                           "/mnt/raid0/llm/worktrees/root-pbe-3c4ca599")
     assert st["written"] is None and "no GGUF" in (st["error"] or "")
+
+
+def test_rows_retain_reply_and_result_is_valid(tmp_path):
+    out, cells = tmp_path / "r.json", tmp_path / "cells"
+    assert M.main(["--mock", "--n", "4", "--no-belief", "--cell-dir", str(cells), "--out", str(out)]) == 0
+    r = json.loads(out.read_text())
+    assert r["valid"] is True and r["void_cells"] == []
+    for rows in r["rows"].values():
+        assert all("FINAL(" in x["reply"] for x in rows)
+    first = json.loads((cells / "mock_role__current.jsonl").read_text().splitlines()[0])
+    assert "reply" in first
+
+
+def test_void_guard_stops_early_and_is_invalid(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "mock_reply", lambda rendering, i: "no code and no number here")
+    out, cells = tmp_path / "r.json", tmp_path / "cells"
+    assert M.main(["--mock", "--n", "10", "--no-belief", "--cell-dir", str(cells), "--out", str(out)]) == 3
+    r = json.loads(out.read_text())
+    assert r["valid"] is False and r["complete"] is False and r["stopped"] == "invalid-cell"
+    assert r["void_cells"] == ["mock_role|current"]
+    # no_answer > 20% of n=10 is 3 samples; the run stops there and never reaches the other renderings
+    assert r["counts"]["mock_role|current"]["no_answer"] == 3 and len(r["counts"]) == 1
+
+
+def test_void_boundary_is_strictly_above_20_percent():
+    assert not M.cell_voided(6, 30) and M.cell_voided(7, 30)
+    assert not M.cell_voided(2, 10) and M.cell_voided(3, 10)
+
+
+def test_replay_shows_cause(tmp_path, capsys):
+    cf = tmp_path / "c.jsonl"
+    cf.write_text("\n".join(json.dumps(x) for x in (
+        {"i": 0, "answer": None, "how": "bad_final", "reply": "```python\nFINAL([1,2])\n```"},
+        {"i": 1, "answer": None, "how": "code_error"},
+    )) + "\n")
+    assert M.main(["--replay", str(cf)]) == 0
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert lines[0]["replay_how"] == "bad_final" and "no retained reply" in lines[1]["error"]
+
+
+def test_listening_pid_without_ss():
+    import os
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1)
+    try:
+        assert M.listening_pid(s.getsockname()[1]) == os.getpid()
+        assert M.prove_port_ownership(f"http://127.0.0.1:{s.getsockname()[1]}", os.getpid(), set()) == s.getsockname()[1]
+    finally:
+        s.close()

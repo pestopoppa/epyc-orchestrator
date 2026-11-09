@@ -41,6 +41,10 @@ RENDERINGS = ("current", "bounded_k3", "half_first25")
 DEFAULT_N = 30
 DEFAULT_TEMP = 0.7
 DEFAULT_MAX_TOKENS = 700
+# D-RI-PREVIEW-1.1(b): a cell whose no_answer share exceeds this is a driver/prompt failure, not a model result. The cell is
+# voided (the run is invalid, no tally is a finding). Same 20% the belief adapter enforces, predeclared in PREDECLARED.md.
+MAX_NO_ANSWER_SHARE = 0.20
+REPLY_KEEP_CHARS = 4000  # D-RI-PREVIEW-1.1(a): raw reply text kept in every cell row (replayable through run_reply)
 # production stack ports (frontdoor/architect/ingest...): a private server must never be one of these
 DEFAULT_DENY_PORTS = "8070,8071,8072,8080,8081,8082,8083,8090,8180,8181,8182,8000,8100"
 
@@ -149,9 +153,15 @@ def belief_capture(res: dict, out: Path, roles, role_gguf: dict, fx: dict, run_i
 
 
 def listening_pid(port: int):
-    out = subprocess.run(["ss", "-H", "-ltnp", f"sport = :{port}"], capture_output=True, text=True).stdout
-    m = re.search(r"pid=(\d+)", out)
-    return int(m.group(1)) if m else None
+    """pid whose fd table holds the LISTEN socket on ``port`` (/proc, no `ss`: the keeper's job env has no iproute2)."""
+    ops = importlib.util.spec_from_file_location("own_port_proof", ROOT / "scripts" / "benchmark" / "own_port_proof.py")
+    m = importlib.util.module_from_spec(ops)
+    ops.loader.exec_module(m)
+    inodes = m.listen_inodes(port)
+    for d in os.listdir("/proc"):
+        if d.isdigit() and inodes & m.pid_socket_inodes(int(d)):
+            return int(d)
+    return None
 
 
 def prove_port_ownership(url: str, pid: int, deny: set[int]) -> int:
@@ -184,6 +194,11 @@ def mock_reply(rendering: str, i: int) -> str:
     return "```python\nFINAL(sum(x['qty'] for x in batch[:3]))\n```"
 
 
+def cell_voided(no_answer: int, n: int) -> bool:
+    """True when no_answer exceeds MAX_NO_ANSWER_SHARE of the cell's planned n (integer test, no float edge)."""
+    return no_answer * 1000 > int(round(MAX_NO_ANSWER_SHARE * 1000)) * n
+
+
 def tally(fx: dict, cells: dict) -> dict:
     out = {}
     for key, rows in cells.items():
@@ -194,6 +209,27 @@ def tally(fx: dict, cells: dict) -> dict:
         n = len(rows)
         out[key] = {"n": n, **c, "correct_rate": round(c["correct"] / n, 4) if n else None}
     return out
+
+
+def replay_cell(path: Path, k: int) -> int:
+    """D-RI-PREVIEW-1.1(a): re-run the first k retained replies of a cell file; shows WHY a cell is no_answer (FINAL missing,
+    non-scalar FINAL, non-python block, code error). Rows from before the repair carry no reply and are reported as such."""
+    fx = fx_mod.build_fixture()
+    shown = 0
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if "reply" not in row:
+            print(json.dumps({"i": row.get("i"), "error": "no retained reply (pre-repair row)"}))
+        else:
+            ans, how = run_reply(row["reply"], fx["batch"])
+            print(json.dumps({"i": row.get("i"), "stored_how": row.get("how"), "replay_how": how, "replay_answer": ans,
+                              "reply_head": row["reply"][:300]}))
+        shown += 1
+        if shown >= k:
+            break
+    return 0 if shown else 1
 
 
 def main(argv=None) -> int:
@@ -208,12 +244,18 @@ def main(argv=None) -> int:
     ap.add_argument("--cell-dir", help="persist every sample to <dir>/<role>__<rendering>.jsonl and RESUME from it (filler use)")
     ap.add_argument("--stop-file", help="checked between samples: stop cleanly when it exists")
     ap.add_argument("--deadline-epoch", type=float, help="checked between samples: no new sample after this epoch second")
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--replay", help="diagnose a cell file: replay the first --replay-k retained replies through run_reply, print how/answer/reply head, exit")
+    ap.add_argument("--replay-k", type=int, default=3)
+    ap.add_argument("--out")
     ap.add_argument("--role-gguf", action="append", default=[], help="NAME=/path/model.gguf (default: the server's /props model_path)")
     ap.add_argument("--run-id", default=None, help="belief-sidecar run id (default dripreview-<UTC>)")
     ap.add_argument("--epyc-root", default=None, help="root checkout holding scripts/vidya/adapters")
     ap.add_argument("--no-belief", action="store_true", help="do not write repl_preview.beliefs.jsonl")
     a = ap.parse_args(argv)
+    if a.replay:
+        return replay_cell(Path(a.replay), a.replay_k)
+    if not a.out:
+        ap.error("--out is required")
 
     fx = fx_mod.build_fixture()
     renderings = a.renderings.split(",")
@@ -260,23 +302,36 @@ def main(argv=None) -> int:
                     break
                 text = mock_reply(rendering, i) if a.mock else chat(url, prompt, a.temperature, a.max_tokens, seed=1000 + i)
                 ans, how = run_reply(text, fx["batch"])
-                rows.append({"i": i, "answer": ans, "how": how})
+                rows.append({"i": i, "answer": ans, "how": how, "reply": text[:REPLY_KEEP_CHARS]})
                 if cf is not None:
                     with cf.open("a") as f:
                         f.write(json.dumps(rows[-1]) + "\n")
+                # futility: once no_answer exceeds the share of the FULL n it cannot recover; stop spending samples
+                if cell_voided(sum(1 for r in rows if r["answer"] is None), a.n):
+                    stopped = "invalid-cell"
+                    break
             cells[f"{name}|{rendering}"] = rows
             if stopped:
                 break
         if stopped:
             break
     complete = all(len(r) == a.n for r in cells.values()) and len(cells) == len(roles) * len(renderings)
+    counts = tally(fx, cells)
+    # also catches a voided cell already sitting in a resumed --cell-dir
+    voided = sorted(k for k, v in counts.items() if cell_voided(v["no_answer"], a.n))
+    valid = bool(complete and not voided)
     res = {"schema": "epyc.repl_preview_result.v1", "mock": a.mock, "n_per_cell": a.n, "temperature": a.temperature,
            "roles": [r[0] for r in roles], "renderings": renderings, "fixture_expected": fx["expected"],
            "predeclared": "artifacts/queue-builders-3-20261021/dripreview1/PREDECLARED.md (root repo)",
-           "complete": complete, "stopped": stopped, "counts": tally(fx, cells), "rows": cells, "wall_s": round(time.time() - t0, 1),
+           "complete": complete, "valid": valid, "void_cells": voided, "max_no_answer_share": MAX_NO_ANSWER_SHARE,
+           "stopped": stopped, "counts": counts, "rows": cells, "wall_s": round(time.time() - t0, 1),
            "note": "a mock result is plumbing only and must never be cited as a finding" if a.mock else ""}
     Path(a.out).write_text(json.dumps(res, indent=1) + "\n")
     print(json.dumps(res["counts"], indent=1))
+    if voided:
+        print("INVALID: no_answer share above %.0f%% in %s; a driver/prompt failure, not a model result" % (
+            MAX_NO_ANSWER_SHARE * 100, voided))
+        return 3     # 3 = voided cell(s): no belief capture, no finding. Replay out/cells/*.jsonl `reply` through run_reply
     if not a.no_belief:
         rg = dict(x.partition("=")[::2] for x in a.role_gguf)
         st = belief_capture(res, Path(a.out).resolve(), roles, rg, fx,
