@@ -335,7 +335,7 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                     # Count each segment once across turns.
                     to_compact = [
                         seg for seg in to_compact
-                        if seg.turn_range not in state.compaction_shadow_stubs
+                        if f"{seg.turn_range[0]}-{seg.turn_range[1]}" not in state.compaction_shadow_stubs
                         and not seg.consolidated.startswith("[Compacted]")
                     ]
 
@@ -344,7 +344,7 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                         first_sentence = seg.consolidated.split(". ")[0] + "."
                         stub = f"[Compacted] {first_sentence}"
                         if shadow:
-                            state.compaction_shadow_stubs[seg.turn_range] = stub
+                            state.compaction_shadow_stubs[f"{seg.turn_range[0]}-{seg.turn_range[1]}"] = stub
                         else:
                             seg.consolidated = stub
 
@@ -365,7 +365,7 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
         )
         if current_ids:
             for seg in state.consolidated_segments:
-                if shadow_stub := state.compaction_shadow_stubs.get(seg.turn_range):
+                if shadow_stub := state.compaction_shadow_stubs.get(f"{seg.turn_range[0]}-{seg.turn_range[1]}"):
                     surviving = shadow_stub
                 elif seg.consolidated.startswith("[Compacted]"):
                     surviving = seg.consolidated

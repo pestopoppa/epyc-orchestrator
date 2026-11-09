@@ -381,7 +381,10 @@ async def test_compaction_shadow_leaves_consolidated_unchanged_and_creates_monit
     monitor = state.compaction_quality_monitor
     assert monitor is not None
     assert monitor.segments_compacted == 2
-    assert set(state.compaction_shadow_stubs) == {(1, 1), (2, 2)}
+    assert set(state.compaction_shadow_stubs) == {"1-1", "2-2"}
+    import json
+    from src.graph.persistence import _state_to_dict_full
+    json.dumps(_state_to_dict_full(state))
 
 
 async def test_compaction_shadow_wins_over_live_compaction_flags():
@@ -425,7 +428,7 @@ async def test_compaction_shadow_counts_hypothetical_reference_miss_against_stub
             pending_granular_blocks=["now editing helper.py"],
             pending_granular_start_turn=1,
             compaction_quality_monitor=monitor,
-            compaction_shadow_stubs={(1, 1): "[Compacted] full text."},
+            compaction_shadow_stubs={"1-1": "[Compacted] full text."},
         )
         deps = TaskDeps(primitives=None, config=GraphConfig())
         with (

@@ -153,7 +153,7 @@ class TaskState:
 
     # Compaction quality monitor (CF Phase 3b)
     compaction_quality_monitor: Any = None  # CompactionQualityMonitor instance
-    # compaction_shadow: would-be "[Compacted]" stubs keyed by turn_range; never rendered.
+    # compaction_shadow: would-be "[Compacted]" stubs keyed by "start-end" string (JSON-safe); never rendered.
     compaction_shadow_stubs: dict = field(default_factory=dict)
 
     # Budget controls (Fast-RLM)
