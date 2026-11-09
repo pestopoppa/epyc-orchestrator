@@ -118,6 +118,7 @@ _probe_cache: dict[str, str] = {}
 _spec_cache: dict[str, Any] = {"roots": None, "mode": None, "path": None}
 _roots_file_cache: dict[str, Any] = {}
 _last_cache_eviction_at: float | None = None  # monotonic clock, guarded by _lock
+_last_hit_touch: dict[str, float] = {}  # path -> monotonic time of last mtime refresh, guarded by _lock
 
 
 # ── probing ──────────────────────────────────────────────────────────────
@@ -187,6 +188,7 @@ def reset_caches() -> None:
         _probe_cache.clear()
         _spec_cache.update(roots=None, mode=None, path=None)
         _roots_file_cache.clear()
+        _last_hit_touch.clear()
         _last_cache_eviction_at = None
 
 
@@ -311,12 +313,38 @@ def build_landlock_rules(fenced: set[str], root: str = "/", special: dict[str, i
     return rules
 
 
+def _touch_in_memory_hit(path: str) -> bool:
+    """Refresh ``path``'s mtime on an in-memory cache hit; False if the file is gone.
+
+    The in-memory hit paths (``spec_path_for`` / ``hook_roots_file``) never reach
+    ``_write_cached``'s own hit-refresh, so a heavily used file would age out at
+    ``EPYC_EVAL_FENCE_CACHE_MAX_AGE_S`` and a sweep could unlink it between
+    ``python_fence_launch`` and child start. Rate-limited to once per hour per
+    path (the first hit after process start always refreshes). A file that
+    vanished (swept by another process) reports False so the caller rebuilds it.
+    """
+    now = time.monotonic()
+    with _lock:
+        last = _last_hit_touch.get(path)
+        if last is not None and now - last < _CACHE_EVICTION_INTERVAL_S:
+            return True
+    try:
+        os.utime(path, None)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True  # exists but not refreshable (permissions): keep the hit, retry next call
+    with _lock:
+        _last_hit_touch[path] = now
+    return True
+
+
 def spec_path_for(roots: Any, mode: str) -> str:
     """The cached spec file for ``roots`` (rebuilt only when the roots change)."""
     with _lock:
-        if _spec_cache["roots"] is roots and _spec_cache["mode"] == mode and _spec_cache["path"] \
-                and os.path.exists(_spec_cache["path"]):
-            return _spec_cache["path"]
+        cached = _spec_cache["path"] if _spec_cache["roots"] is roots and _spec_cache["mode"] == mode else None
+    if cached and os.path.exists(cached) and _touch_in_memory_hit(cached):
+        return cached
     fenced = kernel_fenced_paths(roots)
     spec: dict[str, Any] = {"mode": mode, "fenced": sorted(fenced)}
     if mode == LANDLOCK:
@@ -331,8 +359,9 @@ def spec_path_for(roots: Any, mode: str) -> str:
 def hook_roots_file(roots: Any) -> str:
     """The audit hook's roots config as a cached file (rebuilt only when roots change)."""
     with _lock:
-        if _roots_file_cache.get("roots") is roots and os.path.exists(_roots_file_cache.get("path", "")):
-            return _roots_file_cache["path"]
+        cached = _roots_file_cache.get("path") if _roots_file_cache.get("roots") is roots else None
+    if cached and os.path.exists(cached) and _touch_in_memory_hit(cached):
+        return cached
     payload = json.dumps(roots.as_config(), sort_keys=True)
     path = _write_cached(payload, "hook-roots")
     with _lock:

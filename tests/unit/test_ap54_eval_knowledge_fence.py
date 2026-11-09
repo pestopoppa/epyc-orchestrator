@@ -1386,3 +1386,59 @@ def test_evicted_cache_path_is_rebuilt(tmp_path: Path, monkeypatch) -> None:
 
     assert path2 == path1
     assert Path(path2).is_file()
+
+
+# ── in-memory cache hits refresh mtime (heavily used files must not age out) ──
+
+
+def _age(path: str, days: float = 4) -> float:
+    import os as _os
+    import time as _time
+
+    old = _time.time() - days * 86400
+    _os.utime(path, (old, old))
+    return old
+
+
+@pytest.mark.parametrize("which", ["spec", "hook_roots"])
+def test_in_memory_hit_refreshes_mtime_and_survives_sweep(tmp_path: Path, monkeypatch, which: str) -> None:
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    roots = kf.fence_roots()
+    get = (lambda: fk.spec_path_for(roots, fk.HOOK_ONLY)) if which == "spec" else (lambda: fk.hook_roots_file(roots))
+    path = get()
+    old = _age(path)
+
+    assert get() == path  # in-memory hit
+    assert Path(path).stat().st_mtime > old + 86400  # refreshed
+
+    # A sweep (forced past the per-process rate limit) now keeps the recently hit file.
+    monkeypatch.setattr(fk, "_last_cache_eviction_at", None)
+    fk._maybe_evict_stale_cache_entries(Path(path).parent)
+    assert Path(path).exists()
+
+
+@pytest.mark.parametrize("which", ["spec", "hook_roots"])
+def test_in_memory_hit_refresh_is_rate_limited(tmp_path: Path, monkeypatch, which: str) -> None:
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    roots = kf.fence_roots()
+    get = (lambda: fk.spec_path_for(roots, fk.HOOK_ONLY)) if which == "spec" else (lambda: fk.hook_roots_file(roots))
+    path = get()
+    old = _age(path)
+    get()  # first hit refreshes
+    refreshed = Path(path).stat().st_mtime
+    assert refreshed > old
+    _age(path)  # age it again inside the rate-limit window
+    get()
+    assert Path(path).stat().st_mtime < refreshed  # not touched again within the hour
+
+
+def test_in_memory_hit_tolerates_file_vanishing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(fk, "SCRATCH_ROOT", str(tmp_path))
+    fk.reset_caches()
+    roots = kf.fence_roots()
+    path = fk.hook_roots_file(roots)
+    Path(path).unlink()
+    assert fk.hook_roots_file(roots) == path and Path(path).is_file()  # rebuilt, no raise
+    assert fk._touch_in_memory_hit(str(tmp_path / "nope.json")) is False
