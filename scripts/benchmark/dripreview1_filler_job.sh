@@ -62,7 +62,8 @@ if [ -z "${SKIP_LINKAGE:-}" ]; then
     exit 5
     ;;
   esac
-  unit "{\"unit_id\": \"binary-proof\", \"ok\": true, \"sha256\": \"$GOT_SHA\", \"real_path\": \"$REAL_BIN\"}"
+  # NOT a results.jsonl unit: the row's first-progress signal must be server-ready (a smoke has to cover the model load)
+  printf '{"sha256": "%s", "real_path": "%s", "version": "%s"}\n' "$GOT_SHA" "$REAL_BIN" "$(echo "$VER" | tr '\n' ' ')" >"$OUT/binary-proof.json"
 fi
 ss -ltn "sport = :$PORT" | grep -q LISTEN && {
   echo "port $PORT already listening: not ours, refusing"
