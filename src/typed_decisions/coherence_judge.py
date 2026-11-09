@@ -350,6 +350,10 @@ class JudgeRequest:
     divergence_offset: int | None = None
     #: Per-output judged-token cap override (see DEFAULT_MAX_JUDGED_TOKENS).
     max_judged_tokens: int | None = None
+    #: TD-30c: how an over-cap pair is excerpted. "positional" (default, unchanged) is
+    #: head + divergence window + tail; "embedding" judges the most semantically
+    #: divergent aligned chunks and needs an ``embed_fn`` passed to ``build_state``.
+    excerpt_method: str = "positional"
 
     def backend_parts(self) -> tuple[str, str | None]:
         """("auto"|"local"|"sidecar", None) or ("cloud", <name>); ValueError otherwise."""
@@ -384,6 +388,8 @@ class JudgeRequest:
             or self.max_judged_tokens < 64
         ):
             raise ValueError("max_judged_tokens must be an integer >= 64")
+        if self.excerpt_method not in EXCERPT_METHODS:
+            raise ValueError(f"excerpt_method {self.excerpt_method!r} not in {EXCERPT_METHODS}")
         kind, _ = self.backend_parts()
         if kind == "sidecar" and self.model not in (None, "", sidecar.SIDECAR_ROLE):
             raise ValueError(
@@ -561,10 +567,91 @@ def excerpt_output(
     return _render(text, merged), info
 
 
+#: TD-30c excerpt methods.
+EXCERPT_METHODS = ("positional", "embedding")
+#: Chunk size for the embedding excerpt, in characters (aligned chunk i of base vs candidate).
+EMBED_CHUNK_CHARS = 600
+
+#: texts -> one vector per text (e.g. the served BGE-M3 / bge-large embedder).
+EmbedFn = Callable[[Sequence[str]], "Sequence[Sequence[float]]"]
+
+
+def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    return dot / (na * nb) if na > 0 and nb > 0 else 0.0
+
+
+def semantic_excerpt_pair(
+    base_text: str,
+    cand_text: str,
+    *,
+    cap: int,
+    embed_fn: EmbedFn,
+    count_fn: CountTokensFn | None,
+    chunk_chars: int = EMBED_CHUNK_CHARS,
+) -> tuple[str, dict[str, Any], str, dict[str, Any]]:
+    """Judge the most semantically divergent ALIGNED chunks of an over-cap pair.
+
+    Base and candidate are cut into ``chunk_chars`` chunks; chunk i of each is a pair.
+    Divergence = 1 - cosine(embed(base_i), embed(cand_i)); a chunk with no counterpart
+    (the longer output's extra tail) scores 1.0. Pairs are taken in descending
+    divergence (ties by position) until each output's judged-token cap is full, and the
+    SAME chunk indices are shown for both outputs so the judge compares like with like.
+    The info dicts match ``excerpt_output``'s shape plus ``method``, ``chunk_chars`` and
+    ``chosen_chunks`` (index, divergence). An embedder error or malformed vectors
+    raises: the caller decides whether to fall back to the positional excerpt.
+    """
+    out_info: list[dict[str, Any]] = []
+    tokens = []
+    for text in (base_text, cand_text):
+        t, src = _count(text, count_fn)
+        tokens.append(t)
+        out_info.append({"chars": len(text), "tokens": t, "token_count_source": src})
+    if tokens[0] <= cap and tokens[1] <= cap:
+        raise ValueError("semantic excerpt requested for a pair that fits the cap")
+
+    def chunks(text: str) -> list[tuple[int, int]]:
+        return [(i, min(i + chunk_chars, len(text))) for i in range(0, len(text), chunk_chars)]
+
+    bc, cc = chunks(base_text), chunks(cand_text)
+    n_common = min(len(bc), len(cc))
+    vecs: list[Sequence[float]] = []
+    if n_common:
+        texts = [base_text[a:b] for a, b in bc[:n_common]] + [cand_text[a:b] for a, b in cc[:n_common]]
+        vecs = list(embed_fn(texts))
+        if len(vecs) != len(texts):
+            raise ValueError("embedder returned a different number of vectors than texts")
+    scores = [1.0 - _cosine(vecs[i], vecs[n_common + i]) for i in range(n_common)]
+    scores += [1.0] * (max(len(bc), len(cc)) - n_common)
+    # Per-output budget in chunks, from the larger output's chars-per-token.
+    per_chunk_tokens = max(1, int(chunk_chars * max(t / max(1, len(x)) for t, x in zip(tokens, (base_text, cand_text)))))
+    n_keep = max(1, cap // per_chunk_tokens)
+    chosen = sorted(sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:n_keep])
+    rendered, infos = [], []
+    for text, spans_all, info, tok in zip((base_text, cand_text), (bc, cc), out_info, tokens):
+        spans = _merge([spans_all[i] for i in chosen if i < len(spans_all)], len(text))
+        judged = sum(b - a for a, b in spans)
+        if tok <= cap and judged == 0:
+            spans = [(0, len(text))]
+            judged = len(text)
+        info.update(
+            excerpted=judged < len(text), method="embedding", chunk_chars=chunk_chars,
+            spans=[[a, b] for a, b in spans], judged_chars=judged,
+            judged_tokens=int(round(tok * judged / max(1, len(text)))),
+            chosen_chunks=[{"index": i, "divergence": round(scores[i], 6)} for i in chosen],
+        )
+        rendered.append(_render(text, spans) if judged < len(text) else text)
+        infos.append(info)
+    return rendered[0], infos[0], rendered[1], infos[1]
+
+
 def build_state(
     request: JudgeRequest,
     *,
     count_tokens: CountTokensFn | None = None,
+    embed_fn: EmbedFn | None = None,
 ) -> tuple[str, dict[str, bool], dict[str, Any]]:
     """(state, truncated, excerpt). Layout = reuse order (see ``_STATE_HEAD``).
 
@@ -582,11 +669,22 @@ def build_state(
         div_byte, div_source = first_divergence_byte(base_text, cand_text), "computed"
     base_div = _byte_to_char(base_text, div_byte) if div_byte is not None else None
     cand_div = _byte_to_char(cand_text, div_byte) if div_byte is not None else None
-    base, base_info = excerpt_output(base_text, cap=cap, div_char=None, count_fn=count_tokens)
-    candidate, cand_info = excerpt_output(cand_text, cap=cap, div_char=cand_div, count_fn=count_tokens)
+    semantic = False
+    if request.excerpt_method == "embedding":
+        if embed_fn is None:
+            raise ValueError("excerpt_method='embedding' needs an embed_fn")
+        over = any(_count(t, count_tokens)[0] > cap for t in (base_text, cand_text))
+        if over:
+            base, base_info, candidate, cand_info = semantic_excerpt_pair(
+                base_text, cand_text, cap=cap, embed_fn=embed_fn, count_fn=count_tokens
+            )
+            semantic = True
+    if not semantic:
+        base, base_info = excerpt_output(base_text, cap=cap, div_char=None, count_fn=count_tokens)
+        candidate, cand_info = excerpt_output(cand_text, cap=cap, div_char=cand_div, count_fn=count_tokens)
     base_window = ""
     base_info["divergence_window"] = None
-    if base_info["excerpted"] and base_div is not None and base_div < len(base_text):
+    if not semantic and base_info["excerpted"] and base_div is not None and base_div < len(base_text):
         inside = any(a <= base_div < b for a, b in base_info["spans"])
         if not inside:
             size = max(1, int(base_info["chars"] * cap / max(1, base_info["tokens"]) * _SHARES_DIV[1]))
@@ -617,6 +715,8 @@ def build_state(
         "candidate_output": cand_info,
         "judged_tokens": base_info["judged_tokens"] + cand_info["judged_tokens"],
     }
+    if semantic:
+        excerpt["method"] = "embedding"  # absent for the positional default (byte-compatible)
     truncated = {
         "prompt": cut_p,
         "base_output": bool(base_info["excerpted"]),
@@ -1039,7 +1139,9 @@ class CoherenceJudge:
         sidecar_probe_fn: Callable[[], sidecar.SidecarStatus] | None = None,
         sidecar_primitives_fn: Callable[[str], Any] | None = None,
         token_counter_fn: Callable[[Any, str], Any] | None = None,
+        embed_fn: EmbedFn | None = None,
     ) -> None:
+        self._embed_fn = embed_fn  # TD-30c; only used when request.excerpt_method == 'embedding'
         self._primitives_fn = primitives_fn or (lambda: None)
         self._holds_fn = holds_fn or measurement_windows.local_inference_holds
         self._store = store or CalibrationStore()
@@ -1257,7 +1359,9 @@ class CoherenceJudge:
             raise self._refuse(record, self._uncalibrated(keys), started)
         tokenizer = self._tokenize_fn or self._token_counter_fn(primitives, role)
         try:
-            state, truncated, excerpt = build_state(request, count_tokens=_as_counter(tokenizer))
+            state, truncated, excerpt = build_state(
+                request, count_tokens=_as_counter(tokenizer), embed_fn=self._embed_fn
+            )
         finally:
             closer = getattr(tokenizer, "close", None) if tokenizer is not self._tokenize_fn else None
             if callable(closer):
@@ -1382,7 +1486,7 @@ class CoherenceJudge:
         )
         if calibration_id is None and not request.allow_uncalibrated:
             raise self._refuse(record, self._uncalibrated({CLOUD_SCORING_MODE: key}), started)
-        state, truncated, excerpt = build_state(request)
+        state, truncated, excerpt = build_state(request, embed_fn=self._embed_fn)
         record["excerpt"] = excerpt
         record["judged_tokens"] = excerpt["judged_tokens"]
         try:
@@ -1477,6 +1581,8 @@ __all__ = [
     "build_state",
     "clip",
     "excerpt_output",
+    "semantic_excerpt_pair",
+    "EXCERPT_METHODS",
     "first_divergence_byte",
     "serving_telemetry",
     "judge_key",
