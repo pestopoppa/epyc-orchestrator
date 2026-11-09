@@ -72,6 +72,13 @@ class DecisionReceipt:
     validator_id: str | None = None
     validator_version: str | None = None
     conclusion_valid_until_ns: int | None = None
+    # TD-29 joint tool+argument shadow fields. Emitted only when ``joint_status`` is set.
+    joint_status: str | None = None
+    joint_reason: str | None = None
+    proposed_tool: str | None = None
+    executed_tool: str | None = None
+    operation_differs: bool | None = None
+    ignored_unused_failures: Sequence[str] | None = None
 
 
 # UFH-TE-2: serving-identity keys compared at dispatch.  ``process_start_ns`` is
@@ -202,6 +209,12 @@ def make_receipt(
     validator_id: str | None = None,
     validator_version: str | None = None,
     conclusion_valid_until_ns: int | None = None,
+    joint_status: str | None = None,
+    joint_reason: str | None = None,
+    proposed_tool: str | None = None,
+    executed_tool: str | None = None,
+    operation_differs: bool | None = None,
+    ignored_unused_failures: Sequence[str] | None = None,
 ) -> DecisionReceipt:
     return DecisionReceipt(
         schema_version=SCHEMA_VERSION,
@@ -228,6 +241,14 @@ def make_receipt(
         validator_id=validator_id,
         validator_version=validator_version,
         conclusion_valid_until_ns=conclusion_valid_until_ns,
+        joint_status=joint_status,
+        joint_reason=joint_reason,
+        proposed_tool=proposed_tool,
+        executed_tool=executed_tool,
+        operation_differs=operation_differs,
+        ignored_unused_failures=(
+            list(ignored_unused_failures) if ignored_unused_failures is not None else None
+        ),
     )
 
 
@@ -249,6 +270,13 @@ def append_receipt(path: Path, receipt: DecisionReceipt) -> None:
     # do not use them stay byte-identical to pre-TE-1 receipts.
     for key in ("validator_id", "validator_version", "conclusion_valid_until_ns"):
         if row.get(key) is None:
+            row.pop(key, None)
+    # TD-29 joint fields: emitted only when ``joint_status`` is set (old rows unchanged).
+    if receipt.joint_status is None:
+        for key in (
+            "joint_status", "joint_reason", "proposed_tool", "executed_tool",
+            "operation_differs", "ignored_unused_failures",
+        ):
             row.pop(key, None)
     payload = (json.dumps(row, sort_keys=True, allow_nan=False) + "\n").encode()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)

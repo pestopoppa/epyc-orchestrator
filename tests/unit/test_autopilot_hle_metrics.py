@@ -48,7 +48,7 @@ def test_hle_payload_computes_observe_only_axes_from_trial_evidence() -> None:
     metrics = payload["harness_metrics"]
     axes = metrics["axes"]
 
-    assert payload["metric_schema_version"] == 1
+    assert payload["metric_schema_version"] == 2
     assert metrics["observe_only"] is True
     assert axes["execution_fidelity"]["score"] > 0.7
     assert axes["execution_fidelity"]["evidence_event_ids"] == []

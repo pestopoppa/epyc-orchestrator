@@ -1,0 +1,362 @@
+{
+ "arm_permutations": {
+  "aime_2024-II-15@9": [
+   "prune_pointer",
+   "pointer_only",
+   "summary_only"
+  ],
+  "bcb_BigCodeBench/0@2": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "bfcl_007@2": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "bfcl_007@5": [
+   "pointer_only",
+   "prune_pointer",
+   "summary_only"
+  ],
+  "bfcl_007@9": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "bfcl_030@4": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "cruxeval_input_0156@8": [
+   "summary_only",
+   "prune_pointer",
+   "pointer_only"
+  ],
+  "debugbench_queries-on-number-of-points-inside-a-circle_cpp@4": [
+   "summary_only",
+   "pointer_only",
+   "prune_pointer"
+  ],
+  "gpqa_diamond_cot_64d1b920ee51@7": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "hellaswag_38608@7": [
+   "prune_pointer",
+   "pointer_only",
+   "summary_only"
+  ],
+  "humaneval_HumanEval_52@3": [
+   "prune_pointer",
+   "pointer_only",
+   "summary_only"
+  ],
+  "humaneval_HumanEval_52@4": [
+   "prune_pointer",
+   "pointer_only",
+   "summary_only"
+  ],
+  "ifeval_2801@7": [
+   "prune_pointer",
+   "pointer_only",
+   "summary_only"
+  ],
+  "leetcode_flip-equivalent-binary-trees@3": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "longbench_671b3fa1bb02136c067d5353@2": [
+   "summary_only",
+   "pointer_only",
+   "prune_pointer"
+  ],
+  "longcot_mini_18@9": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "ma_iter_013@2": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "ma_multi_006@6": [
+   "summary_only",
+   "pointer_only",
+   "prune_pointer"
+  ],
+  "math500_Precalculus_00068@3": [
+   "pointer_only",
+   "prune_pointer",
+   "summary_only"
+  ],
+  "mmlu_professional_accounting_10382@4": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "needle_023@8": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "olympiadbench_combinatorics_2431@9": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "phybench_electricity_55@6": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "physreason_cal_problem_00292_sq1@6": [
+   "summary_only",
+   "prune_pointer",
+   "pointer_only"
+  ],
+  "ruler_niah_4096_25@2": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "simpleqa_general_02965@3": [
+   "summary_only",
+   "pointer_only",
+   "prune_pointer"
+  ],
+  "simpleqa_general_02965@6": [
+   "summary_only",
+   "pointer_only",
+   "prune_pointer"
+  ],
+  "sv_MBPP-R+_Mbpp/425::sol4@2": [
+   "prune_pointer",
+   "summary_only",
+   "pointer_only"
+  ],
+  "sv_MBPP-R+_Mbpp/425::sol4@9": [
+   "pointer_only",
+   "summary_only",
+   "prune_pointer"
+  ],
+  "wr_multi_006@5": [
+   "summary_only",
+   "prune_pointer",
+   "pointer_only"
+  ]
+ },
+ "arms": [
+  "summary_only",
+  "pointer_only",
+  "prune_pointer"
+ ],
+ "points": [
+  {
+   "boundary_turn": 2,
+   "point_id": "longbench_671b3fa1bb02136c067d5353@2",
+   "stratum": "early",
+   "task_id": "longbench_671b3fa1bb02136c067d5353"
+  },
+  {
+   "boundary_turn": 2,
+   "point_id": "sv_MBPP-R+_Mbpp/425::sol4@2",
+   "stratum": "early",
+   "task_id": "sv_MBPP-R+_Mbpp/425::sol4"
+  },
+  {
+   "boundary_turn": 2,
+   "point_id": "bfcl_007@2",
+   "stratum": "early",
+   "task_id": "bfcl_007"
+  },
+  {
+   "boundary_turn": 3,
+   "point_id": "math500_Precalculus_00068@3",
+   "stratum": "early",
+   "task_id": "math500_Precalculus_00068"
+  },
+  {
+   "boundary_turn": 2,
+   "point_id": "ma_iter_013@2",
+   "stratum": "early",
+   "task_id": "ma_iter_013"
+  },
+  {
+   "boundary_turn": 2,
+   "point_id": "bcb_BigCodeBench/0@2",
+   "stratum": "early",
+   "task_id": "bcb_BigCodeBench/0"
+  },
+  {
+   "boundary_turn": 3,
+   "point_id": "humaneval_HumanEval_52@3",
+   "stratum": "early",
+   "task_id": "humaneval_HumanEval_52"
+  },
+  {
+   "boundary_turn": 2,
+   "point_id": "ruler_niah_4096_25@2",
+   "stratum": "early",
+   "task_id": "ruler_niah_4096_25"
+  },
+  {
+   "boundary_turn": 3,
+   "point_id": "leetcode_flip-equivalent-binary-trees@3",
+   "stratum": "early",
+   "task_id": "leetcode_flip-equivalent-binary-trees"
+  },
+  {
+   "boundary_turn": 3,
+   "point_id": "simpleqa_general_02965@3",
+   "stratum": "early",
+   "task_id": "simpleqa_general_02965"
+  },
+  {
+   "boundary_turn": 5,
+   "point_id": "bfcl_007@5",
+   "stratum": "middle",
+   "task_id": "bfcl_007"
+  },
+  {
+   "boundary_turn": 4,
+   "point_id": "humaneval_HumanEval_52@4",
+   "stratum": "middle",
+   "task_id": "humaneval_HumanEval_52"
+  },
+  {
+   "boundary_turn": 6,
+   "point_id": "ma_multi_006@6",
+   "stratum": "middle",
+   "task_id": "ma_multi_006"
+  },
+  {
+   "boundary_turn": 6,
+   "point_id": "simpleqa_general_02965@6",
+   "stratum": "middle",
+   "task_id": "simpleqa_general_02965"
+  },
+  {
+   "boundary_turn": 6,
+   "point_id": "phybench_electricity_55@6",
+   "stratum": "middle",
+   "task_id": "phybench_electricity_55"
+  },
+  {
+   "boundary_turn": 4,
+   "point_id": "bfcl_030@4",
+   "stratum": "middle",
+   "task_id": "bfcl_030"
+  },
+  {
+   "boundary_turn": 6,
+   "point_id": "physreason_cal_problem_00292_sq1@6",
+   "stratum": "middle",
+   "task_id": "physreason_cal_problem_00292_sq1"
+  },
+  {
+   "boundary_turn": 4,
+   "point_id": "debugbench_queries-on-number-of-points-inside-a-circle_cpp@4",
+   "stratum": "middle",
+   "task_id": "debugbench_queries-on-number-of-points-inside-a-circle_cpp"
+  },
+  {
+   "boundary_turn": 5,
+   "point_id": "wr_multi_006@5",
+   "stratum": "middle",
+   "task_id": "wr_multi_006"
+  },
+  {
+   "boundary_turn": 4,
+   "point_id": "mmlu_professional_accounting_10382@4",
+   "stratum": "middle",
+   "task_id": "mmlu_professional_accounting_10382"
+  },
+  {
+   "boundary_turn": 8,
+   "point_id": "needle_023@8",
+   "stratum": "late",
+   "task_id": "needle_023"
+  },
+  {
+   "boundary_turn": 7,
+   "point_id": "gpqa_diamond_cot_64d1b920ee51@7",
+   "stratum": "late",
+   "task_id": "gpqa_diamond_cot_64d1b920ee51"
+  },
+  {
+   "boundary_turn": 7,
+   "point_id": "ifeval_2801@7",
+   "stratum": "late",
+   "task_id": "ifeval_2801"
+  },
+  {
+   "boundary_turn": 7,
+   "point_id": "hellaswag_38608@7",
+   "stratum": "late",
+   "task_id": "hellaswag_38608"
+  },
+  {
+   "boundary_turn": 8,
+   "point_id": "cruxeval_input_0156@8",
+   "stratum": "late",
+   "task_id": "cruxeval_input_0156"
+  },
+  {
+   "boundary_turn": 9,
+   "point_id": "bfcl_007@9",
+   "stratum": "late",
+   "task_id": "bfcl_007"
+  },
+  {
+   "boundary_turn": 9,
+   "point_id": "olympiadbench_combinatorics_2431@9",
+   "stratum": "late",
+   "task_id": "olympiadbench_combinatorics_2431"
+  },
+  {
+   "boundary_turn": 9,
+   "point_id": "longcot_mini_18@9",
+   "stratum": "late",
+   "task_id": "longcot_mini_18"
+  },
+  {
+   "boundary_turn": 9,
+   "point_id": "sv_MBPP-R+_Mbpp/425::sol4@9",
+   "stratum": "late",
+   "task_id": "sv_MBPP-R+_Mbpp/425::sol4"
+  },
+  {
+   "boundary_turn": 9,
+   "point_id": "aime_2024-II-15@9",
+   "stratum": "late",
+   "task_id": "aime_2024-II-15"
+  }
+ ],
+ "points_sha256": "9de7e3bad1714675d1550421aa920840dc7ab7ff2ccb22dded16b853bad2655a",
+ "pool_size": 50,
+ "pool_source": "benchmarks/prompts/core_v2.jsonl",
+ "preregistration": "docs/design/toc-cmp-4-preregistration-20261109.md",
+ "seed": 20261109,
+ "strata_turn_bands": {
+  "early": [
+   2,
+   3
+  ],
+  "late": [
+   7,
+   8,
+   9
+  ],
+  "middle": [
+   4,
+   5,
+   6
+  ]
+ }
+}

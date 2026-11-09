@@ -12,7 +12,8 @@ import os
 import re
 from typing import Any
 
-METRIC_SCHEMA_VERSION = 1
+# v2 (AP-29b(b), 2026-11-09): eval_details gains per_role_tokens / per_role_elapsed_s / baseline_tps.
+METRIC_SCHEMA_VERSION = 2
 HARNESS_METRIC_VERSION = "hle-1-rule-v1"
 ORACLE_METRIC_VERSION = "hle-2-oracle-defaults-v1"
 CONTROL_ATTESTATION_VERSION = "w5-control-pair-report-v1"

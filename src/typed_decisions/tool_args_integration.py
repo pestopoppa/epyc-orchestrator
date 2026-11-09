@@ -295,6 +295,7 @@ def submit_tool_argument_shadow(
     outcome: Mapping[str, str],
     receipt_path: Path,
     mode: str = "json",
+    joint_proposal: Any = None,
 ) -> bool:
     """Queue the Q4 observer; never wait for it or change executed arguments."""
     full_schema = registry_parameters_to_full_schema(getattr(tool, "parameters", None))
@@ -315,6 +316,7 @@ def submit_tool_argument_shadow(
         request_trace_keys=copy.deepcopy(getattr(primitives, "_request_trace_keys", {})),
         receipt_path=Path(receipt_path),
         mode=mode,
+        joint_proposal=joint_proposal,
     )
 
 
@@ -333,6 +335,7 @@ def _run_tool_argument_shadow(
     request_trace_keys: Mapping[str, Any],
     receipt_path: Path,
     mode: str,
+    joint_proposal: Any = None,
 ) -> None:
     """Run after foreground completion with isolated usage and one receipt."""
     started = time.perf_counter()
@@ -380,6 +383,14 @@ def _run_tool_argument_shadow(
     except Exception as exc:
         logger.warning("tool argument shadow failed", exc_info=True)
         proposal = ShadowArgumentProposal("abstained", None, f"{type(exc).__name__}: {exc}")
+    receipt_fields: dict[str, Any] = {"proposed_arguments": proposal.proposed}
+    if joint_proposal is not None:
+        # TD-29 joint tool+argument fields, written beside the executed tool; the joint
+        # proposal's arguments take the proposed_arguments slot. Only reachable when a
+        # caller supplies a proposal (default None keeps receipts byte-identical).
+        from src.typed_decisions.tool_choice_args import shadow_receipt_fields
+
+        receipt_fields.update(shadow_receipt_fields(joint_proposal, tool_name))
     receipt = make_receipt(
         prepared,
         validation,
@@ -387,12 +398,12 @@ def _run_tool_argument_shadow(
         component_timing_ms={"selection": (time.perf_counter() - started) * 1000.0},
         total_timing_ms=(time.perf_counter() - started) * 1000.0,
         observed_downstream_outcome=outcome,
-        proposed_arguments=proposal.proposed,
         executed_arguments=original_kwargs,
         selector_status=proposal.status,
         selector_reason=proposal.reason,
         selector_calls=proposal.calls,
         shadow_mode=mode,
+        **receipt_fields,
     )
     try:
         append_receipt(receipt_path, receipt)
@@ -400,7 +411,31 @@ def _run_tool_argument_shadow(
         logger.warning("tool argument shadow receipt write failed", exc_info=True)
 
 
-__all__ = ["maybe_typed_arguments", "registry_parameters_to_schema"]
+# TD-29.M3 (operator-approved 2026-11-09): tools whose arguments must be exact, so closed-set
+# argument questions are kept for them in the trimmed JSON-mode output. Names are
+# ``orchestration/tool_registry.yaml`` keys; a unit test fails loudly on any rename.
+EXACTNESS_CRITICAL_TOOLS: frozenset[str] = frozenset(
+    {
+        "write_file",
+        "run_shell",
+        "python_eval",
+        "sql_query",
+        "task_update",
+        "budget_override",
+        "user_conclude",
+        "http_post",
+        "solve_ode",
+        "matrix_solve",
+        "symbolic_solve",
+        "calculate",
+    }
+)
+
+__all__ = [
+    "EXACTNESS_CRITICAL_TOOLS",
+    "maybe_typed_arguments",
+    "registry_parameters_to_schema",
+]
 
 # Native failures that mean "this catalogue cannot use native mode", not
 # "native mode produced a wrong answer"; only these trigger the JSON rerun.

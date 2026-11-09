@@ -1143,3 +1143,50 @@ def test_real_primitives_usage_ledger_isolated_during_shadow(enabled, monkeypatc
     assert primitives.get_request_usage()["prompt_tokens"] == 99
     assert primitives.total_calls == 1
     assert primitives.get_last_inference_meta()["prompt_n"] == 99
+
+
+def test_exactness_critical_tools_exist_in_registry():
+    """TD-29.M3: a registry rename must fail loudly, not silently drop a tool from the set."""
+    from pathlib import Path
+
+    import yaml
+
+    from src.typed_decisions.tool_args_integration import EXACTNESS_CRITICAL_TOOLS
+
+    registry = Path(__file__).resolve().parents[2] / "orchestration" / "tool_registry.yaml"
+    names = set(yaml.safe_load(registry.read_text())["tools"])
+    assert len(EXACTNESS_CRITICAL_TOOLS) == 12
+    assert EXACTNESS_CRITICAL_TOOLS <= names, sorted(EXACTNESS_CRITICAL_TOOLS - names)
+
+
+def test_joint_proposal_fields_reach_receipt_only_when_supplied(tmp_path):
+    """TD-29 receipt seam at the one caller: default None keeps rows free of joint keys."""
+    import json as _json
+
+    from src.typed_decisions.prepared_action import ValidationResult, prepare_action
+    from src.typed_decisions.tool_args_integration import _run_tool_argument_shadow
+    from src.typed_decisions.tool_choice_args import JointProposal
+
+    prepared = prepare_action(
+        task_revision="r", catalog={"t": {}}, read_set={"k": "v"}, expires_at_ns=1,
+        requested_model="m", resolved_model="m",
+    )
+    validation = ValidationResult("rejected", None, "incumbent_fallback")
+    base = dict(
+        primitives=object(), tool_name="deploy", tool=object(), original_kwargs={"a": 1},
+        full_schema=None, state="s", role="worker", prepared=prepared, validation=validation,
+        outcome={}, request_trace_keys={}, mode="json",
+    )
+    plain, joint = tmp_path / "plain.jsonl", tmp_path / "joint.jsonl"
+    _run_tool_argument_shadow(receipt_path=plain, **base)
+    _run_tool_argument_shadow(
+        receipt_path=joint,
+        joint_proposal=JointProposal("proposed", "other", {"x": 2}, None, True, ("u",)),
+        **base,
+    )
+    row = _json.loads(plain.read_text())
+    assert "joint_status" not in row and "proposed_tool" not in row
+    row = _json.loads(joint.read_text())
+    assert row["joint_status"] == "proposed" and row["proposed_tool"] == "other"
+    assert row["executed_tool"] == "deploy" and row["operation_differs"] is True
+    assert row["proposed_arguments"] == {"x": 2} and row["ignored_unused_failures"] == ["u"]
