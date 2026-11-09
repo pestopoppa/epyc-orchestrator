@@ -193,6 +193,31 @@ def _reliability_floor() -> float:
     return val
 
 
+SPEED_PHYSICAL_CEILING_ENV = "AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS"
+
+
+def _speed_physical_ceiling() -> float | None:
+    """AP-72: the operator-declared physical bound on a trial's reported speed (tokens/s).
+
+    Default OFF (unset -> None). A malformed or non-positive value is ignored with a warning,
+    which leaves the bound off; it can never loosen another gate. The bound must be derived from
+    the surface's roofline (bandwidth / bytes per token, summed over the eval's concurrency) by
+    whoever sets it; this module does not guess a hardware number.
+    """
+    raw = os.environ.get(SPEED_PHYSICAL_CEILING_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        val = float(raw)
+    except ValueError:
+        log.warning("Ignoring non-numeric %s=%r (physicality bound stays off)", SPEED_PHYSICAL_CEILING_ENV, raw)
+        return None
+    if not math.isfinite(val) or val <= 0.0:
+        log.warning("Ignoring non-positive %s=%r (physicality bound stays off)", SPEED_PHYSICAL_CEILING_ENV, raw)
+        return None
+    return val
+
+
 def _warn_matrix_pre_expiry() -> None:
     """Read-only heads-up (B8/SG-0): warn when the contention matrix is within
     PRE_EXPIRY_WARN_DAYS of the MATRIX_STALENESS_DAYS wall, past which it goes STALE and
@@ -1763,6 +1788,25 @@ def reliability_floor_leg(reliability: float, floor: float) -> GateLeg:
     return GateLeg()
 
 
+def speed_physicality_leg(speed: float, ceiling: float | None) -> GateLeg:
+    """AP-72: a reported speed above the declared physical bound is an invalid metric event.
+
+    Never a keep: the number is not a measurement of what the hardware can do (a harness that
+    counts tokens it did not generate, or a request set the proposer could edit, produces
+    exactly this). Inert when no ceiling is declared. Speed is a throughput leg elsewhere; this
+    one only catches the physically impossible, so it is independent of reliability suppression.
+    """
+    if ceiling is None or not math.isfinite(speed) or speed <= ceiling:
+        return GateLeg()
+    return GateLeg(
+        violations=(
+            f"Reported speed {speed:.1f} t/s exceeds the physical bound {ceiling:.1f} t/s — "
+            "metric event is not physical (AP-72); trial invalid, not a keep",
+        ),
+        categories=("speed_above_physical_bound",),
+    )
+
+
 def quality_rebaseline_hold_leg(resident_era: str, active_era: str | None) -> GateLeg:
     """Defect #3: the eval-instrument re-baseline hold's warning (the legs it suppresses
     are skipped by the caller)."""
@@ -2097,6 +2141,7 @@ class GateEvidence:
     proxy_per_suite: Mapping[str, float] = field(default_factory=dict)
     mad_window: tuple[float, ...] = ()
     reliability_floor: float | None = None  # None: resolve as check() does (env-overridable)
+    speed_physical_ceiling: float | None = None  # None: resolve as check() does (env; default off)
     quality_rebaseline_hold: bool = False
     resident_quality_era: str = ""
     active_quality_era: str | None = None
@@ -2146,6 +2191,17 @@ def verdict_from_evidence(result: Any, evidence: GateEvidence) -> SafetyVerdict:
     reliability = reliability_floor_leg(result.reliability, floor)
     reliability_blocked = bool(reliability.violations)
     _add(reliability, violations, warnings, categories)
+    _add(
+        speed_physicality_leg(
+            result.speed,
+            evidence.speed_physical_ceiling
+            if evidence.speed_physical_ceiling is not None
+            else _speed_physical_ceiling(),
+        ),
+        violations,
+        warnings,
+        categories,
+    )
     hold = not reliability_blocked and not quality_unmeasured and evidence.quality_rebaseline_hold
     if hold:
         _add(
@@ -2811,6 +2867,15 @@ class SafetyGate:
         reliability_leg = reliability_floor_leg(result.reliability, _reliability_floor())
         reliability_blocked = bool(reliability_leg.violations)
         _add(reliability_leg, violations, warnings, categories)
+
+        # AP-72: a speed above the declared physical bound is an invalid metric event
+        # (inert unless AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS is set).
+        _add(
+            speed_physicality_leg(result.speed, _speed_physical_ceiling()),
+            violations,
+            warnings,
+            categories,
+        )
 
         # Defect #3: eval-instrument re-baseline hold. With an active eval_quality era and a
         # resident baseline from another era, SUPPRESS the baseline-comparison legs
