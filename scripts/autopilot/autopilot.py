@@ -87,6 +87,7 @@ from experiment_journal import (
     build_error_scope,
     scrub_legacy_scale_text,
     select_lineage_parent,
+    selection_menu_capture_enabled,
 )
 from planner_roster import PlannerRosterError, validate_active_environment
 from pareto_archive import (
@@ -11413,7 +11414,10 @@ def _run_loop_inner(
         # to an error record: lineage is provenance and must never lose a trial.
         try:
             trial_lineage = select_lineage_parent(
-                journal, species_name, before_trial_id=trial_counter
+                journal, species_name, before_trial_id=trial_counter,
+                # AP-DGM-PROV option A: observe-only menu/decoding_id/holdout capture,
+                # default off (AUTOPILOT_SELECTOR_MENU_CAPTURE=1); never changes the choice.
+                capture_menu=selection_menu_capture_enabled(),
             )
         except Exception as exc:  # noqa: BLE001
             trial_lineage = {"selection_error": f"{type(exc).__name__}: {exc}"[:200]}

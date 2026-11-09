@@ -683,3 +683,28 @@ def test_audit_archive_authority_accepts_invalidated_snapshot_with_full_replay(
     )
 
     assert _MOD.audit_archive_authority() is True
+
+
+def test_jsonl_paths_delegate_to_canonical_journal_shards(tmp_path: Path) -> None:
+    """JRN-5: the preflight reader walks shards via journal_shards.py, not its own loop."""
+    from scripts.autopilot import journal_shards as shards_mod
+
+    assert _MOD.journal_shards is shards_mod.journal_shards
+    assert _MOD.resolve_journal_paths is shards_mod.resolve_journal_paths
+
+
+def test_load_jsonl_is_gap_tolerant_and_ignores_sidecars(tmp_path: Path) -> None:
+    """JRN-7: a missing _2 does not hide _3; .corrupt-* sidecars and .tsv are not shards."""
+    for name, trial in (
+        ("autopilot_journal.jsonl", 0),
+        ("autopilot_journal_1.jsonl", 1),
+        ("autopilot_journal_3.jsonl", 3),
+        ("autopilot_journal_10.jsonl", 10),
+        ("autopilot_journal.corrupt-20261101.jsonl", 77),
+    ):
+        (tmp_path / name).write_text(json.dumps({"trial_id": trial}) + "\n", encoding="utf-8")
+    (tmp_path / "autopilot_journal_2.tsv").write_text("x\n", encoding="utf-8")
+
+    expected = [0, 1, 3, 10]
+    assert [r["trial_id"] for r in _MOD._load_jsonl(tmp_path / "autopilot_journal.jsonl")] == expected
+    assert [r["trial_id"] for r in _MOD._load_jsonl(tmp_path)] == expected

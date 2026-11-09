@@ -307,6 +307,77 @@ class NumericSwarm:
             "anchor_queued": True})
         self._flush_pending(study)
 
+    def record_planner_trial(self, surface: str, params: dict[str, Any],
+                             objectives: tuple[float, float, float, float], *,
+                             normalized_overages: list[float] | None = None,
+                             overage_cap_pairs: list[tuple[float, float]] | None = None,
+                             outcome_class: str | None = None,
+                             cost_tier_observed_count: int,
+                             reliability_observed_count: int) -> dict[str, Any]:
+        """AP-67: tell the surface study about a COMPLETED planner-authored trial.
+
+        The explicit-params branch applies and evaluates without ``study.ask``/``tell``, so NSGA-II
+        never saw LLM trials. A finished one is added as a COMPLETE trial tagged ``source=planner``
+        with the same native-qualified provenance and constraint attributes ``report_result``
+        writes. Only a FULL-vector, in-bounds, correctly typed trial is added: a partial vector
+        would shrink the sampler's intersection search space, and an out-of-bounds value is not
+        representable in the study. Anything else returns ``{"status": "skipped", ...}`` and the
+        study is untouched. Failures are never injected here (infeasible/failed planner trials
+        stay out until separately decided).
+        """
+        if surface not in SURFACES:
+            return {"status": "skipped", "reason": f"unknown surface: {surface}"}
+        if len(objectives) != 4 or not all(math.isfinite(v) for v in objectives):
+            return {"status": "skipped", "reason": "objectives must contain four finite values"}
+        if (type(cost_tier_observed_count) is not int or cost_tier_observed_count <= 0
+                or type(reliability_observed_count) is not int or reliability_observed_count <= 0
+                or cost_tier_observed_count > reliability_observed_count):
+            return {"status": "skipped", "reason": "qualified cost-tier and reliability counts are required"}
+        overages = list(normalized_overages or [])
+        if any(not math.isfinite(x) or x < 0 for x in overages):
+            return {"status": "skipped", "reason": "normalized overages must be finite and nonnegative"}
+        specs = {spec.name: spec for spec in SURFACES[surface]}
+        if set(params) != set(specs):
+            return {"status": "skipped",
+                    "reason": f"partial_or_foreign_params: have {sorted(params)}, need {sorted(specs)}"}
+        distributions: dict[str, Any] = {}
+        values: dict[str, Any] = {}
+        for name, spec in specs.items():
+            raw = params[name]
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw):
+                return {"status": "skipped", "reason": f"non-numeric value for {name}"}
+            if spec.param_type == "int":
+                if float(raw) != int(raw):
+                    return {"status": "skipped", "reason": f"non-integer value for {name}"}
+                value: Any = int(raw)
+                distributions[name] = self._optuna.distributions.IntDistribution(int(spec.low), int(spec.high))
+            else:
+                value = float(raw)
+                distributions[name] = self._optuna.distributions.FloatDistribution(
+                    spec.low, spec.high, log=spec.log_scale)
+            if not (spec.low <= value <= spec.high):
+                return {"status": "skipped", "reason": f"{name}={value} outside [{spec.low}, {spec.high}]"}
+            values[name] = value
+        total = sum(overages)
+        violation = 1.0 - 1.0 / (1.0 + total) if total else 0.0
+        if outcome_class == "slo_miss" and violation == 0:
+            violation = math.nextafter(0.0, 1.0)
+        violation = min(violation, math.nextafter(1.0, 0.0))
+        study = self._get_study(surface)
+        trial = self._optuna.trial.create_trial(
+            params=values, distributions=distributions, values=list(objectives),
+            user_attrs={
+                "source": "planner", "objective_source": "native_qualified",
+                "constraint_violation": violation, "normalized_overages": overages,
+                "overage_cap_pairs": overage_cap_pairs or [],
+                "cost_tier_observed_count": cost_tier_observed_count,
+                "reliability_observed_count": reliability_observed_count,
+                "cost_source": "reported_cost_tier_estimate",
+                "outcome_class": outcome_class or ("slo_miss" if total else "ok")},
+        )
+        study.add_trial(trial)
+        return {"status": "recorded", "surface": surface, "trial_number": len(study.trials) - 1}
+
     def mark_failed(self, surface: str, trial_number: int, reason: str = "") -> None:
         """Terminate a non-answer without presenting it as optimizer evidence."""
         from optuna.trial import TrialState

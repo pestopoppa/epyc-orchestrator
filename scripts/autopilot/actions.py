@@ -861,6 +861,7 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
 
 
 def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
+    ctx.state.pop(PLANNER_NUMERIC_STATE_KEY, None)  # AP-67: never inherit an aborted trial's marker
     surface = action.get("surface", "memrl_retrieval")
     explicit_params = _normalize_numeric_trial_params(surface, action.get("params", {}) or {})
     suppressed_surfaces = _planner_convention_bindings(ctx, species="numeric_swarm")
@@ -926,6 +927,10 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
         action["params"] = dict(explicit_params)
         if preimage is not None:
             action["_multitier_restore_preimage"] = preimage
+        if planner_numeric_tell_enabled():
+            # AP-67: remember this applied planner trial so its outcome can reach the sampler.
+            ctx.state[PLANNER_NUMERIC_STATE_KEY] = {
+                "surface": surface, "params": dict(explicit_params)}
     else:
         # Let Optuna suggest
         trial = ctx.swarm.suggest_trial(surface)
@@ -1015,8 +1020,17 @@ def _action_numeric_trial(action: dict[str, Any], ctx: _ActionContext):
     return eval_result, "numeric_swarm"
 
 
+PLANNER_NUMERIC_TELL_ENV = "AUTOPILOT_PLANNER_NUMERIC_TELL"
+PLANNER_NUMERIC_STATE_KEY = "_current_planner_numeric_trial"
+
+
+def planner_numeric_tell_enabled() -> bool:
+    """AP-67: feed completed planner-authored numeric trials to the sampler (default off)."""
+    return os.environ.get(PLANNER_NUMERIC_TELL_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def run_numeric_gate_check(state: dict[str, Any], gate: Any, result: Any, **kwargs: Any) -> tuple[Any, Any]:
-    if "_current_optuna_trial" in state:
+    if "_current_optuna_trial" in state or PLANNER_NUMERIC_STATE_KEY in state:
         return gate.check_with_constraint_observation(result, **kwargs)
     return gate.check(result, **kwargs), None
 
@@ -1027,6 +1041,8 @@ def finalize_numeric_trial(state: dict[str, Any], swarm: Any, result: Any,
     """Finish a sampled numeric trial using the actual evaluation and gate verdict."""
     t = state.pop("_current_optuna_trial", None)
     if not t:
+        _finalize_planner_numeric_trial(state, swarm, result, verdict,
+                                        excluded=excluded, observation=observation)
         return
     surface, number = t["surface"], t["trial_number"]
     if excluded or getattr(result, "infra_failed_count", 0) or getattr(result, "scoring_failed_count", 0):
@@ -1076,6 +1092,59 @@ def finalize_numeric_trial(state: dict[str, Any], swarm: Any, result: Any,
                         overage_cap_pairs=overages, outcome_class="slo_miss",
                         cost_tier_observed_count=cost_count,
                         reliability_observed_count=reliability_count)
+
+
+def _finalize_planner_numeric_trial(state: dict[str, Any], swarm: Any, result: Any,
+                                    verdict: Any, *, excluded: bool = False,
+                                    observation: Any = None) -> None:
+    """AP-67: record a COMPLETED planner-authored numeric trial into the surface study.
+
+    Bound to the result by value: the marker's params must equal the params the action stamped
+    on this result, so a stale marker (an aborted trial) can never be told against another
+    trial's outcome. Excluded / unqualified / retry / unrepresentable outcomes are dropped, not
+    injected as failures. Never raises into the loop.
+    """
+    marker = state.pop(PLANNER_NUMERIC_STATE_KEY, None)
+    if not marker:
+        return
+    try:
+        details = getattr(result, "details", None)
+        if not isinstance(details, dict) or details.get("numeric_trial_applied_params") != marker.get("params"):
+            return
+        if excluded or getattr(result, "infra_failed_count", 0) or getattr(result, "scoring_failed_count", 0):
+            return
+        if getattr(result, "quality_measured", None) is not True:
+            return
+        cost_count = details.get("cost_tier_observed_count")
+        reliability_count = details.get("reliability_observed_count")
+        if (type(cost_count) is not int or cost_count <= 0
+                or type(reliability_count) is not int or reliability_count <= 0
+                or cost_count > reliability_count):
+            return
+        objectives = objectives_from(result)
+        if not all(math.isfinite(value) for value in objectives):
+            return
+        if getattr(verdict, "retry_not_revert", False):
+            return
+        kwargs: dict[str, Any] = {
+            "cost_tier_observed_count": cost_count,
+            "reliability_observed_count": reliability_count,
+        }
+        if not verdict:
+            overages = observation
+            if not overages or any(cap <= 0 or overage <= 0 for _, overage, cap in overages):
+                return
+            normalized = [overage / cap for _, overage, cap in overages]
+            if not all(math.isfinite(value) for value in normalized):
+                return
+            kwargs.update(normalized_overages=normalized, overage_cap_pairs=overages,
+                          outcome_class="slo_miss")
+        outcome = swarm.record_planner_trial(marker["surface"], dict(marker["params"]),
+                                             objectives, **kwargs)
+        if outcome.get("status") != "recorded":
+            log.info("Planner numeric trial not told to the sampler: %s", outcome.get("reason"))
+    except Exception as exc:  # noqa: BLE001 - sampler feedback must never lose the trial
+        log.warning("Planner numeric trial feedback failed: %s", type(exc).__name__)
 
 
 def _verdict_detail(verdict: Any) -> str:

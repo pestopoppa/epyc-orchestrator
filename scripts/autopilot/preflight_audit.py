@@ -26,6 +26,7 @@ from src.registry.stack_priors import (
     stack_prior_primary_port,
     stack_prior_serving,
 )
+from scripts.autopilot.journal_shards import journal_shards, resolve_journal_paths
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
     fold_supersession_events,
@@ -182,33 +183,16 @@ def _gate_success_detail(output: str) -> str:
     return "; ".join(selected) or "passed"
 
 
-def _jsonl_batch_key(path: Path) -> tuple[int, str]:
-    stem = path.stem
-    if stem == "autopilot_journal":
-        return (0, path.name)
-    prefix = "autopilot_journal_"
-    if stem.startswith(prefix):
-        try:
-            return (int(stem.removeprefix(prefix)), path.name)
-        except ValueError:
-            pass
-    return (10**9, path.name)
-
-
 def _jsonl_paths(path: Path) -> list[Path]:
+    """Expand a journal path to its rotated shards via the canonical iterator (JRN-5/6/7).
+
+    A directory yields every ``autopilot_journal[_N].jsonl`` shard, numerically sorted and
+    gap-tolerant; the base shard path expands to all shards beside it; any other explicit
+    path keeps its single-file meaning.
+    """
     if path.is_dir():
-        return sorted(path.glob("autopilot_journal*.jsonl"), key=_jsonl_batch_key)
-    if path.name != "autopilot_journal.jsonl":
-        return [path]
-    paths = [path]
-    batch = 1
-    while True:
-        batch_path = path.with_name(f"autopilot_journal_{batch}.jsonl")
-        if not batch_path.exists():
-            break
-        paths.append(batch_path)
-        batch += 1
-    return paths
+        return journal_shards(path)
+    return resolve_journal_paths(path)
 
 
 def _load_jsonl(path: Path) -> list[dict]:

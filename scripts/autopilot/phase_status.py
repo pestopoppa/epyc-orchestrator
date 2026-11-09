@@ -529,8 +529,13 @@ def _env_enabled(value: str | None) -> bool | None:
 
 
 def _journal_shards(journal_dir: Path) -> list[Path]:
+    """Numeric-sorted, gap-tolerant shard list from the canonical iterator (JRN-5/6/7)."""
     try:
-        return sorted(path for path in journal_dir.glob("autopilot_journal*.jsonl") if path.is_file())
+        from scripts.autopilot.journal_shards import journal_shards
+    except ImportError:  # run as a script from scripts/autopilot without the repo root on sys.path
+        from journal_shards import journal_shards
+    try:
+        return journal_shards(journal_dir)
     except OSError:
         return []
 
