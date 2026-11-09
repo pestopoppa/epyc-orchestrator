@@ -62,7 +62,14 @@ fi
 }
 
 # own process group; the PID is captured and registered, and is the ONLY thing ever signalled
-LD_LIBRARY_PATH="$BUILD_DIR" setsid taskset -c "$FILLER_CPUS" nice -n 19 "$REAL_BIN" -m "$MODEL" -t "$THREADS" -np 1 -c 8192 \
+# Qwen3.x defaults to thinking ON: the J (JSON-mode, chat path) arm then spends its token budget on reasoning and returns an EMPTY
+# content (td16-label-word-bias-20261109: J answered 0 of 56, "Empty generation after ~40 s"). `--reasoning off` sets the server's
+# default enable_thinking=false; native arms (/completion, grammar) are unaffected. Override with REASONING_ARGS="" to test.
+if [ -z "${REASONING_ARGS+x}" ]; then
+  case "$(basename -- "$MODEL" | tr 'A-Z' 'a-z')" in *qwen3*) REASONING_ARGS="--reasoning off" ;; *) REASONING_ARGS="" ;; esac
+fi
+# shellcheck disable=SC2086
+LD_LIBRARY_PATH="$BUILD_DIR" setsid taskset -c "$FILLER_CPUS" nice -n 19 "$REAL_BIN" -m "$MODEL" -t "$THREADS" -np 1 -c 8192 $REASONING_ARGS \
   --jinja --host 127.0.0.1 --port "$PORT" --no-webui -ngl 0 --spec-type draft-mtp --spec-draft-n-max 4 >"$OUT/server.log" 2>&1 &
 SPID=$!
 echo "$SPID" >>"$FILLER_PIDFILE"
@@ -94,6 +101,19 @@ done
   echo "own-pid proof failed"
   exit 7
 }
+
+# first-reply preflight on the chat path J uses: content non-empty, no reasoning_content (else the J arm would void again)
+if [ -n "$REASONING_ARGS" ]; then
+  curl -s --max-time 180 "http://127.0.0.1:$PORT/v1/chat/completions" -H 'Content-Type: application/json' \
+    -d '{"messages":[{"role":"user","content":"Reply with OK."}],"max_tokens":16,"temperature":0}' |
+    /usr/bin/python3 -I -c '
+import json, sys
+m = json.load(sys.stdin)["choices"][0]["message"]
+sys.exit(0 if (m.get("content") or "").strip() and not (m.get("reasoning_content") or "").strip() else 9)' || {
+    echo "first-reply preflight FAIL: thinking still on or empty content"
+    exit 9
+  }
+fi
 
 SMOKE_FLAG=""
 { [ "${FILLER_SMOKE:-0}" = 1 ] || [ "${FILLER_DRYRUN:-0}" = 1 ]; } && SMOKE_FLAG="--smoke"
