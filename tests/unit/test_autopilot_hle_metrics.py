@@ -49,6 +49,9 @@ def test_hle_payload_computes_observe_only_axes_from_trial_evidence() -> None:
     axes = metrics["axes"]
 
     assert payload["metric_schema_version"] == 2
+    # Only the metric version is bumped; component payload schemas stay at 1.
+    assert metrics["schema_version"] == 1
+    assert payload["oracle_adequacy"]["schema_version"] == 1
     assert metrics["observe_only"] is True
     assert axes["execution_fidelity"]["score"] > 0.7
     assert axes["execution_fidelity"]["evidence_event_ids"] == []

@@ -342,6 +342,734 @@
  "pool_size": 50,
  "pool_source": "benchmarks/prompts/core_v2.jsonl",
  "preregistration": "docs/design/toc-cmp-4-preregistration-20261109.md",
+ "reserves": {
+  "early": [
+   {
+    "boundary_turn": 3,
+    "point_id": "real_suite_v1_0026@3",
+    "stratum": "early",
+    "task_id": "real_suite_v1_0026"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "physreason_cal_problem_00292_sq1@3",
+    "stratum": "early",
+    "task_id": "physreason_cal_problem_00292_sq1"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "wr_multi_006@2",
+    "stratum": "early",
+    "task_id": "wr_multi_006"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "hellaswag_38608@3",
+    "stratum": "early",
+    "task_id": "hellaswag_38608"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "hotpot_comparison_5a87868c5542996e4f308828@2",
+    "stratum": "early",
+    "task_id": "hotpot_comparison_5a87868c5542996e4f308828"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "omniscience_Economics_0066@3",
+    "stratum": "early",
+    "task_id": "omniscience_Economics_0066"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "olympiadbench_combinatorics_2431@2",
+    "stratum": "early",
+    "task_id": "olympiadbench_combinatorics_2431"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "leetcode_dungeon-game@2",
+    "stratum": "early",
+    "task_id": "leetcode_dungeon-game"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "hotpot_bridge_5a75e06155429976ec32bc60@3",
+    "stratum": "early",
+    "task_id": "hotpot_bridge_5a75e06155429976ec32bc60"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "leval_legal_contract_qa_439@3",
+    "stratum": "early",
+    "task_id": "leval_legal_contract_qa_439"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "mbpp_0106@3",
+    "stratum": "early",
+    "task_id": "mbpp_0106"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "debugbench_queries-on-number-of-points-inside-a-circle_cpp@3",
+    "stratum": "early",
+    "task_id": "debugbench_queries-on-number-of-points-inside-a-circle_cpp"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "cruxeval_output_0590@2",
+    "stratum": "early",
+    "task_id": "cruxeval_output_0590"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "aime25_2025-II-12@3",
+    "stratum": "early",
+    "task_id": "aime25_2025-II-12"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "mmlu_professional_accounting_10382@3",
+    "stratum": "early",
+    "task_id": "mmlu_professional_accounting_10382"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "aime_2024-II-15@2",
+    "stratum": "early",
+    "task_id": "aime_2024-II-15"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "vl_chart_test_0758@3",
+    "stratum": "early",
+    "task_id": "vl_chart_test_0758"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "zeroscrolls_space_digest_460@2",
+    "stratum": "early",
+    "task_id": "zeroscrolls_space_digest_460"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "ma_multi_006@3",
+    "stratum": "early",
+    "task_id": "ma_multi_006"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "cruxeval_input_0156@2",
+    "stratum": "early",
+    "task_id": "cruxeval_input_0156"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "phybench_electricity_55@3",
+    "stratum": "early",
+    "task_id": "phybench_electricity_55"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "gpqa_diamond_2305aa77f736@3",
+    "stratum": "early",
+    "task_id": "gpqa_diamond_2305aa77f736"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "simpleqa_general_03966@3",
+    "stratum": "early",
+    "task_id": "simpleqa_general_03966"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "mmlu_abstract_algebra_00028@3",
+    "stratum": "early",
+    "task_id": "mmlu_abstract_algebra_00028"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "gpqa_Chemistry (general)_0329@2",
+    "stratum": "early",
+    "task_id": "gpqa_Chemistry (general)_0329"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "mmlu_pro_health_06250@3",
+    "stratum": "early",
+    "task_id": "mmlu_pro_health_06250"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "aime_2024-II-1@2",
+    "stratum": "early",
+    "task_id": "aime_2024-II-1"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "ma_hard_code_011@3",
+    "stratum": "early",
+    "task_id": "ma_hard_code_011"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "st_plan_math_003@3",
+    "stratum": "early",
+    "task_id": "st_plan_math_003"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "bfcl_030@2",
+    "stratum": "early",
+    "task_id": "bfcl_030"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "needle_16384_0.50@3",
+    "stratum": "early",
+    "task_id": "needle_16384_0.50"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "usaco_silver_836_silver_multiplayer_moo@2",
+    "stratum": "early",
+    "task_id": "usaco_silver_836_silver_multiplayer_moo"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "needle_023@3",
+    "stratum": "early",
+    "task_id": "needle_023"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "ifeval_2801@2",
+    "stratum": "early",
+    "task_id": "ifeval_2801"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "mmlu_pro_chemistry_04051@2",
+    "stratum": "early",
+    "task_id": "mmlu_pro_chemistry_04051"
+   },
+   {
+    "boundary_turn": 3,
+    "point_id": "gpqa_diamond_cot_64d1b920ee51@3",
+    "stratum": "early",
+    "task_id": "gpqa_diamond_cot_64d1b920ee51"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "debugbench_number-of-atoms_java@2",
+    "stratum": "early",
+    "task_id": "debugbench_number-of-atoms_java"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "longcot_mini_18@2",
+    "stratum": "early",
+    "task_id": "longcot_mini_18"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "gsm8k_01110@2",
+    "stratum": "early",
+    "task_id": "gsm8k_01110"
+   },
+   {
+    "boundary_turn": 2,
+    "point_id": "gpqa_Organic Chemistry_0308@2",
+    "stratum": "early",
+    "task_id": "gpqa_Organic Chemistry_0308"
+   }
+  ],
+  "late": [
+   {
+    "boundary_turn": 8,
+    "point_id": "needle_16384_0.50@8",
+    "stratum": "late",
+    "task_id": "needle_16384_0.50"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "aime_2024-II-1@8",
+    "stratum": "late",
+    "task_id": "aime_2024-II-1"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "simpleqa_general_03966@9",
+    "stratum": "late",
+    "task_id": "simpleqa_general_03966"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "usaco_silver_836_silver_multiplayer_moo@7",
+    "stratum": "late",
+    "task_id": "usaco_silver_836_silver_multiplayer_moo"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "mmlu_abstract_algebra_00028@9",
+    "stratum": "late",
+    "task_id": "mmlu_abstract_algebra_00028"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "ruler_niah_4096_25@9",
+    "stratum": "late",
+    "task_id": "ruler_niah_4096_25"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "mbpp_0106@9",
+    "stratum": "late",
+    "task_id": "mbpp_0106"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "physreason_cal_problem_00292_sq1@8",
+    "stratum": "late",
+    "task_id": "physreason_cal_problem_00292_sq1"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "mmlu_pro_chemistry_04051@7",
+    "stratum": "late",
+    "task_id": "mmlu_pro_chemistry_04051"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "mmlu_professional_accounting_10382@9",
+    "stratum": "late",
+    "task_id": "mmlu_professional_accounting_10382"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "wr_multi_006@7",
+    "stratum": "late",
+    "task_id": "wr_multi_006"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "hotpot_comparison_5a87868c5542996e4f308828@8",
+    "stratum": "late",
+    "task_id": "hotpot_comparison_5a87868c5542996e4f308828"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "zeroscrolls_space_digest_460@8",
+    "stratum": "late",
+    "task_id": "zeroscrolls_space_digest_460"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "vl_chart_test_0758@9",
+    "stratum": "late",
+    "task_id": "vl_chart_test_0758"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "aime25_2025-II-12@8",
+    "stratum": "late",
+    "task_id": "aime25_2025-II-12"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "leetcode_flip-equivalent-binary-trees@9",
+    "stratum": "late",
+    "task_id": "leetcode_flip-equivalent-binary-trees"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "gpqa_Chemistry (general)_0329@9",
+    "stratum": "late",
+    "task_id": "gpqa_Chemistry (general)_0329"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "ma_multi_006@7",
+    "stratum": "late",
+    "task_id": "ma_multi_006"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "leetcode_dungeon-game@9",
+    "stratum": "late",
+    "task_id": "leetcode_dungeon-game"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "ma_hard_code_011@8",
+    "stratum": "late",
+    "task_id": "ma_hard_code_011"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "leval_legal_contract_qa_439@7",
+    "stratum": "late",
+    "task_id": "leval_legal_contract_qa_439"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "bfcl_030@9",
+    "stratum": "late",
+    "task_id": "bfcl_030"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "real_suite_v1_0026@8",
+    "stratum": "late",
+    "task_id": "real_suite_v1_0026"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "omniscience_Economics_0066@9",
+    "stratum": "late",
+    "task_id": "omniscience_Economics_0066"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "gpqa_Organic Chemistry_0308@9",
+    "stratum": "late",
+    "task_id": "gpqa_Organic Chemistry_0308"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "mmlu_pro_health_06250@9",
+    "stratum": "late",
+    "task_id": "mmlu_pro_health_06250"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "gpqa_diamond_2305aa77f736@7",
+    "stratum": "late",
+    "task_id": "gpqa_diamond_2305aa77f736"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "simpleqa_general_02965@7",
+    "stratum": "late",
+    "task_id": "simpleqa_general_02965"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "st_plan_math_003@8",
+    "stratum": "late",
+    "task_id": "st_plan_math_003"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "debugbench_number-of-atoms_java@9",
+    "stratum": "late",
+    "task_id": "debugbench_number-of-atoms_java"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "humaneval_HumanEval_52@8",
+    "stratum": "late",
+    "task_id": "humaneval_HumanEval_52"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "bcb_BigCodeBench/0@8",
+    "stratum": "late",
+    "task_id": "bcb_BigCodeBench/0"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "longbench_671b3fa1bb02136c067d5353@7",
+    "stratum": "late",
+    "task_id": "longbench_671b3fa1bb02136c067d5353"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "phybench_electricity_55@9",
+    "stratum": "late",
+    "task_id": "phybench_electricity_55"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "gsm8k_01110@9",
+    "stratum": "late",
+    "task_id": "gsm8k_01110"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "ma_iter_013@8",
+    "stratum": "late",
+    "task_id": "ma_iter_013"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "debugbench_queries-on-number-of-points-inside-a-circle_cpp@8",
+    "stratum": "late",
+    "task_id": "debugbench_queries-on-number-of-points-inside-a-circle_cpp"
+   },
+   {
+    "boundary_turn": 8,
+    "point_id": "cruxeval_output_0590@8",
+    "stratum": "late",
+    "task_id": "cruxeval_output_0590"
+   },
+   {
+    "boundary_turn": 9,
+    "point_id": "math500_Precalculus_00068@9",
+    "stratum": "late",
+    "task_id": "math500_Precalculus_00068"
+   },
+   {
+    "boundary_turn": 7,
+    "point_id": "hotpot_bridge_5a75e06155429976ec32bc60@7",
+    "stratum": "late",
+    "task_id": "hotpot_bridge_5a75e06155429976ec32bc60"
+   }
+  ],
+  "middle": [
+   {
+    "boundary_turn": 4,
+    "point_id": "math500_Precalculus_00068@4",
+    "stratum": "middle",
+    "task_id": "math500_Precalculus_00068"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "hotpot_comparison_5a87868c5542996e4f308828@6",
+    "stratum": "middle",
+    "task_id": "hotpot_comparison_5a87868c5542996e4f308828"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "cruxeval_input_0156@5",
+    "stratum": "middle",
+    "task_id": "cruxeval_input_0156"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "gpqa_Organic Chemistry_0308@6",
+    "stratum": "middle",
+    "task_id": "gpqa_Organic Chemistry_0308"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "simpleqa_general_03966@4",
+    "stratum": "middle",
+    "task_id": "simpleqa_general_03966"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "aime25_2025-II-12@4",
+    "stratum": "middle",
+    "task_id": "aime25_2025-II-12"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "ifeval_2801@4",
+    "stratum": "middle",
+    "task_id": "ifeval_2801"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "bcb_BigCodeBench/0@6",
+    "stratum": "middle",
+    "task_id": "bcb_BigCodeBench/0"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "omniscience_Economics_0066@4",
+    "stratum": "middle",
+    "task_id": "omniscience_Economics_0066"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "hotpot_bridge_5a75e06155429976ec32bc60@4",
+    "stratum": "middle",
+    "task_id": "hotpot_bridge_5a75e06155429976ec32bc60"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "ruler_niah_4096_25@6",
+    "stratum": "middle",
+    "task_id": "ruler_niah_4096_25"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "needle_023@6",
+    "stratum": "middle",
+    "task_id": "needle_023"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "zeroscrolls_space_digest_460@5",
+    "stratum": "middle",
+    "task_id": "zeroscrolls_space_digest_460"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "leetcode_dungeon-game@5",
+    "stratum": "middle",
+    "task_id": "leetcode_dungeon-game"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "gpqa_diamond_cot_64d1b920ee51@4",
+    "stratum": "middle",
+    "task_id": "gpqa_diamond_cot_64d1b920ee51"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "usaco_silver_836_silver_multiplayer_moo@6",
+    "stratum": "middle",
+    "task_id": "usaco_silver_836_silver_multiplayer_moo"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "mmlu_abstract_algebra_00028@4",
+    "stratum": "middle",
+    "task_id": "mmlu_abstract_algebra_00028"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "mbpp_0106@5",
+    "stratum": "middle",
+    "task_id": "mbpp_0106"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "ma_iter_013@6",
+    "stratum": "middle",
+    "task_id": "ma_iter_013"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "gpqa_Chemistry (general)_0329@4",
+    "stratum": "middle",
+    "task_id": "gpqa_Chemistry (general)_0329"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "st_plan_math_003@4",
+    "stratum": "middle",
+    "task_id": "st_plan_math_003"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "vl_chart_test_0758@4",
+    "stratum": "middle",
+    "task_id": "vl_chart_test_0758"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "leetcode_flip-equivalent-binary-trees@5",
+    "stratum": "middle",
+    "task_id": "leetcode_flip-equivalent-binary-trees"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "longbench_671b3fa1bb02136c067d5353@4",
+    "stratum": "middle",
+    "task_id": "longbench_671b3fa1bb02136c067d5353"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "real_suite_v1_0026@6",
+    "stratum": "middle",
+    "task_id": "real_suite_v1_0026"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "hellaswag_38608@6",
+    "stratum": "middle",
+    "task_id": "hellaswag_38608"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "sv_MBPP-R+_Mbpp/425::sol4@4",
+    "stratum": "middle",
+    "task_id": "sv_MBPP-R+_Mbpp/425::sol4"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "longcot_mini_18@4",
+    "stratum": "middle",
+    "task_id": "longcot_mini_18"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "debugbench_number-of-atoms_java@5",
+    "stratum": "middle",
+    "task_id": "debugbench_number-of-atoms_java"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "aime_2024-II-15@4",
+    "stratum": "middle",
+    "task_id": "aime_2024-II-15"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "needle_16384_0.50@4",
+    "stratum": "middle",
+    "task_id": "needle_16384_0.50"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "ma_hard_code_011@4",
+    "stratum": "middle",
+    "task_id": "ma_hard_code_011"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "mmlu_pro_chemistry_04051@5",
+    "stratum": "middle",
+    "task_id": "mmlu_pro_chemistry_04051"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "mmlu_pro_health_06250@5",
+    "stratum": "middle",
+    "task_id": "mmlu_pro_health_06250"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "gsm8k_01110@5",
+    "stratum": "middle",
+    "task_id": "gsm8k_01110"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "leval_legal_contract_qa_439@6",
+    "stratum": "middle",
+    "task_id": "leval_legal_contract_qa_439"
+   },
+   {
+    "boundary_turn": 5,
+    "point_id": "aime_2024-II-1@5",
+    "stratum": "middle",
+    "task_id": "aime_2024-II-1"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "olympiadbench_combinatorics_2431@6",
+    "stratum": "middle",
+    "task_id": "olympiadbench_combinatorics_2431"
+   },
+   {
+    "boundary_turn": 6,
+    "point_id": "cruxeval_output_0590@6",
+    "stratum": "middle",
+    "task_id": "cruxeval_output_0590"
+   },
+   {
+    "boundary_turn": 4,
+    "point_id": "gpqa_diamond_2305aa77f736@4",
+    "stratum": "middle",
+    "task_id": "gpqa_diamond_2305aa77f736"
+   }
+  ]
+ },
  "seed": 20261109,
  "strata_turn_bands": {
   "early": [

@@ -1189,4 +1189,67 @@ def test_joint_proposal_fields_reach_receipt_only_when_supplied(tmp_path):
     row = _json.loads(joint.read_text())
     assert row["joint_status"] == "proposed" and row["proposed_tool"] == "other"
     assert row["executed_tool"] == "deploy" and row["operation_differs"] is True
-    assert row["proposed_arguments"] == {"x": 2} and row["ignored_unused_failures"] == ["u"]
+    assert row["joint_arguments"] == {"x": 2} and row["ignored_unused_failures"] == ["u"]
+    assert row["proposed_arguments"] is None  # the Q4 proposal slot is never overwritten
+
+
+def test_malformed_joint_proposal_keeps_receipt(tmp_path):
+    import json as _json
+
+    from src.typed_decisions.prepared_action import ValidationResult, prepare_action
+    from src.typed_decisions.tool_args_integration import _run_tool_argument_shadow
+
+    prepared = prepare_action(
+        task_revision="r", catalog={"t": {}}, read_set={"k": "v"}, expires_at_ns=1,
+        requested_model="m", resolved_model="m",
+    )
+    path = tmp_path / "bad.jsonl"
+    _run_tool_argument_shadow(
+        primitives=object(), tool_name="deploy", tool=object(), original_kwargs={"a": 1},
+        full_schema=None, state="s", role="worker", prepared=prepared,
+        validation=ValidationResult("rejected", None, "incumbent_fallback"), outcome={},
+        request_trace_keys={}, mode="json", receipt_path=path, joint_proposal=object(),
+    )
+    row = _json.loads(path.read_text())
+    assert row["joint_status"] == "abstained" and row["joint_reason"].startswith("receipt_fields_error")
+    assert row["executed_arguments"] == {"a": 1}
+
+
+def test_joint_source_called_in_shadow_only_behind_its_flag(tmp_path, monkeypatch):
+    import json as _json
+
+    from src.typed_decisions import tool_args_integration as m
+    from src.typed_decisions import tool_choice_args as tc
+    from src.typed_decisions.prepared_action import ValidationResult, prepare_action
+
+    prepared = prepare_action(
+        task_revision="r", catalog={"t": {}}, read_set={"k": "v"}, expires_at_ns=1,
+        requested_model="m", resolved_model="m",
+    )
+    seen = []
+    monkeypatch.setattr(
+        m, "propose_shadow_typed_arguments",
+        lambda **kw: m.ShadowArgumentProposal("proposed", {"q": 1}, None),
+    )
+
+    def fake(**kw):
+        seen.append(kw["executed_tool"])
+        return tc.JointProposal("proposed", "other", {"x": 2}, None, True)
+
+    monkeypatch.setattr(tc, "propose_joint_tool_call", fake)
+    kw = dict(
+        primitives=type("P", (), {})(), tool_name="deploy", tool=object(), original_kwargs={"a": 1},
+        full_schema=None, state="s", role="worker", prepared=prepared,
+        validation=ValidationResult("accepted", "deploy", None), outcome={},
+        request_trace_keys={}, mode="json", joint_tools={"deploy": {}, "other": {}},
+    )
+    monkeypatch.delenv(tc.ENV_FLAG, raising=False)
+    off = tmp_path / "off.jsonl"
+    m._run_tool_argument_shadow(receipt_path=off, **kw)
+    assert seen == [] and "joint_status" not in _json.loads(off.read_text())
+    monkeypatch.setenv(tc.ENV_FLAG, "1")
+    on = tmp_path / "on.jsonl"
+    m._run_tool_argument_shadow(receipt_path=on, **kw)
+    row = _json.loads(on.read_text())
+    assert seen == ["deploy"] and row["proposed_tool"] == "other"
+    assert row["proposed_arguments"] == {"q": 1} and row["joint_arguments"] == {"x": 2}

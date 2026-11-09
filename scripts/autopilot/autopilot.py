@@ -11599,10 +11599,7 @@ def _run_loop_inner(
             failure_analysis=failure_analysis,
             eval_result=eval_result,
         )
-        from role_cost_capture import (  # type: ignore
-            load_baseline_tps_by_role,
-            role_cost_capture,
-        )
+        from role_cost_capture import safe_role_cost_capture as _safe_role_cost_capture  # type: ignore
 
         metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
         harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
@@ -11637,15 +11634,9 @@ def _run_loop_inner(
             "rlvr_reward": rlvr_reward_from_result(eval_result).as_dict(),
             "metric_schema_version": metric_schema_version,
             # AP-29b(b): per-role tokens/elapsed + baseline_tps, from metric_schema_version 2.
-            # Older-version results (recovered/replayed rows) keep their v1 shape.
-            **(
-                role_cost_capture(
-                    list(getattr(eval_result, "question_results", []) or []),
-                    load_baseline_tps_by_role(),
-                )
-                if int(metric_schema_version or 1) >= 2
-                else {}
-            ),
+            # Older-version results (recovered/replayed rows) keep their v1 shape. A capture
+            # failure is recorded, never allowed to abort the journal write.
+            **_safe_role_cost_capture(eval_result, metric_schema_version),
             "harness_metrics": harness_metrics,
             "oracle_adequacy": oracle_adequacy,
             "bsv_observe": bsv_payload,  # J11/BSV-2 observe-only diff ({} unless AUTOPILOT_BSV_OBSERVE=1)

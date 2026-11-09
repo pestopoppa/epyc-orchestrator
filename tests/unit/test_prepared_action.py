@@ -171,7 +171,7 @@ def test_validator_fields_optional_and_emitted_when_set(tmp_path):
 
 _JOINT_KEYS = (
     "joint_status", "joint_reason", "proposed_tool", "executed_tool",
-    "operation_differs", "ignored_unused_failures",
+    "operation_differs", "ignored_unused_failures", "joint_arguments",
 )
 
 

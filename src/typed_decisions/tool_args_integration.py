@@ -296,6 +296,7 @@ def submit_tool_argument_shadow(
     receipt_path: Path,
     mode: str = "json",
     joint_proposal: Any = None,
+    joint_tools: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> bool:
     """Queue the Q4 observer; never wait for it or change executed arguments."""
     full_schema = registry_parameters_to_full_schema(getattr(tool, "parameters", None))
@@ -317,6 +318,7 @@ def submit_tool_argument_shadow(
         receipt_path=Path(receipt_path),
         mode=mode,
         joint_proposal=joint_proposal,
+        joint_tools=copy.deepcopy(dict(joint_tools)) if joint_tools else None,
     )
 
 
@@ -336,6 +338,7 @@ def _run_tool_argument_shadow(
     receipt_path: Path,
     mode: str,
     joint_proposal: Any = None,
+    joint_tools: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
     """Run after foreground completion with isolated usage and one receipt."""
     started = time.perf_counter()
@@ -376,6 +379,24 @@ def _run_tool_argument_shadow(
                     mode=mode,
                     tool=tool,
                 )
+                if joint_proposal is None and joint_tools:
+                    # TD-12 joint source: one typed call over the tool catalogue, shadow only.
+                    # Attached only when its own default-off flag is on, so receipts of the
+                    # Q4-only path stay unchanged.
+                    from src.typed_decisions.tool_choice_args import (
+                        propose_joint_tool_call,
+                        tool_choice_enabled,
+                    )
+
+                    if tool_choice_enabled():
+                        joint_proposal = propose_joint_tool_call(
+                            tools=joint_tools,
+                            primitives=shadow_primitives,
+                            state=state,
+                            role=role,
+                            executed_tool=tool_name,
+                            mode=mode,
+                        )
         else:
             proposal = ShadowArgumentProposal("abstained", None, f"host_{validation.status}")
     except _ShadowInstanceOverride:
@@ -385,12 +406,22 @@ def _run_tool_argument_shadow(
         proposal = ShadowArgumentProposal("abstained", None, f"{type(exc).__name__}: {exc}")
     receipt_fields: dict[str, Any] = {"proposed_arguments": proposal.proposed}
     if joint_proposal is not None:
-        # TD-29 joint tool+argument fields, written beside the executed tool; the joint
-        # proposal's arguments take the proposed_arguments slot. Only reachable when a
-        # caller supplies a proposal (default None keeps receipts byte-identical).
-        from src.typed_decisions.tool_choice_args import shadow_receipt_fields
+        # TD-29 joint tool+argument fields, written beside the executed tool. The joint
+        # arguments go under their own key: they never overwrite the Q4 proposal. A malformed
+        # joint proposal must not lose the receipt.
+        try:
+            from src.typed_decisions.tool_choice_args import shadow_receipt_fields
 
-        receipt_fields.update(shadow_receipt_fields(joint_proposal, tool_name))
+            joint = dict(shadow_receipt_fields(joint_proposal, tool_name))
+            joint["joint_arguments"] = joint.pop("proposed_arguments", None)
+            receipt_fields.update(joint)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("joint receipt fields failed", exc_info=True)
+            receipt_fields.update(
+                joint_status="abstained",
+                joint_reason=f"receipt_fields_error: {type(exc).__name__}"[:120],
+                executed_tool=tool_name,
+            )
     receipt = make_receipt(
         prepared,
         validation,

@@ -58,8 +58,8 @@ def test_invalid_run_policy_and_resume(tmp_path):
 
     ledger = tmp_path / "l.jsonl"
     counts = r.run_schedule(rows, submit, ledger)
-    assert counts == {"ok": 2, "rerun": 2, "dropped": 1, "skipped_done": 0}
-    assert r.run_schedule(rows, submit, ledger)["skipped_done"] == 3
+    assert (counts["ok"], counts["rerun"], counts["dropped"], counts["skipped_done"]) == (2, 2, 1, 0)
+    assert r.run_schedule(rows, submit, ledger)["skipped_done"] == 3  # resume
     assert len(ledger.read_text().splitlines()) == 3
 
 
@@ -74,3 +74,29 @@ def test_cli_draw_and_plan(tmp_path):
     d["points"][0]["boundary_turn"] = 99
     pts.write_text(json.dumps(d))
     assert r.main(["plan", "--points", str(pts), "--out", str(sched)]) == 3
+
+
+def test_void_when_boundary_not_reached_replaced_from_seeded_reserve(tmp_path):
+    pts = r.draw_points(POOL)
+    reserves = r.draw_reserves(POOL)
+    assert all(len(v) == 40 for v in reserves.values())
+    assert not {p["point_id"] for p in pts} & {q["point_id"] for v in reserves.values() for q in v if q["task_id"] in {p["task_id"] for p in pts if p["stratum"] == q["stratum"]}}
+    victim = pts[0]
+    first_reserve = reserves[victim["stratum"]][0]
+
+    def submit(row):
+        res = {"pins": {k: "x" for k in r.REQUIRED_PINS}}
+        if row["point_id"] == victim["point_id"] and row["arm"] == row["arm"]:
+            res["boundary_reached"] = False
+        return res
+
+    ledger = tmp_path / "l.jsonl"
+    counts = r.run_schedule(r.build_schedule([victim], repeats=2), submit, ledger, reserves=reserves, repeats=2)
+    assert counts["voided_points"] == [victim["point_id"]]
+    assert counts["replacements"] == [{"void": victim["point_id"], "replacement": first_reserve["point_id"]}]
+    assert counts["ok"] == 6 and counts["reserve_exhausted"] == 0  # replacement: 3 arms x 2 repeats
+    recs = [json.loads(x) for x in ledger.read_text().splitlines()]
+    assert sum(x["status"] == "void_point" for x in recs) == 1
+    # resume: voided point stays voided, nothing re-run
+    again = r.run_schedule(r.build_schedule([victim], repeats=2), submit, ledger, reserves=reserves, repeats=2)
+    assert again["ok"] == 0

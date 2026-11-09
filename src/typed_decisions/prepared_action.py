@@ -79,6 +79,7 @@ class DecisionReceipt:
     executed_tool: str | None = None
     operation_differs: bool | None = None
     ignored_unused_failures: Sequence[str] | None = None
+    joint_arguments: Mapping[str, Any] | None = None
 
 
 # UFH-TE-2: serving-identity keys compared at dispatch.  ``process_start_ns`` is
@@ -215,6 +216,7 @@ def make_receipt(
     executed_tool: str | None = None,
     operation_differs: bool | None = None,
     ignored_unused_failures: Sequence[str] | None = None,
+    joint_arguments: Mapping[str, Any] | None = None,
 ) -> DecisionReceipt:
     return DecisionReceipt(
         schema_version=SCHEMA_VERSION,
@@ -249,6 +251,7 @@ def make_receipt(
         ignored_unused_failures=(
             list(ignored_unused_failures) if ignored_unused_failures is not None else None
         ),
+        joint_arguments=dict(joint_arguments) if joint_arguments is not None else None,
     )
 
 
@@ -275,7 +278,7 @@ def append_receipt(path: Path, receipt: DecisionReceipt) -> None:
     if receipt.joint_status is None:
         for key in (
             "joint_status", "joint_reason", "proposed_tool", "executed_tool",
-            "operation_differs", "ignored_unused_failures",
+            "operation_differs", "ignored_unused_failures", "joint_arguments",
         ):
             row.pop(key, None)
     payload = (json.dumps(row, sort_keys=True, allow_nan=False) + "\n").encode()

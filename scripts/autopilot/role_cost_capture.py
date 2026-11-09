@@ -47,3 +47,18 @@ def load_baseline_tps_by_role() -> dict[str, float]:
         return dict(registry_baseline_tps_by_role())
     except Exception:  # noqa: BLE001 - observe-only; never break the journal write
         return {}
+
+
+def safe_role_cost_capture(eval_result: Any, metric_schema_version: Any) -> dict[str, Any]:
+    """Capture for ``eval_details`` when the version is >= 2; never raises.
+
+    A malformed value (non-numeric tokens/latency) yields ``role_cost_capture_error`` instead of the
+    three fields, so one bad row cannot abort a trial's journal write."""
+    try:
+        if int(metric_schema_version or 1) < 2:
+            return {}
+        return role_cost_capture(
+            list(getattr(eval_result, "question_results", []) or []), load_baseline_tps_by_role()
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"role_cost_capture_error": f"{type(exc).__name__}: {exc}"[:200]}

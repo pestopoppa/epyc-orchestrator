@@ -58,6 +58,30 @@ def draw_points(
     return points
 
 
+def draw_reserves(
+    pool_ids: Iterable[str],
+    *,
+    seed: int = DEFAULT_SEED,
+    per_stratum: int = POINTS_PER_STRATUM,
+    strata: Mapping[str, Sequence[int]] = STRATA,
+) -> dict[str, list[dict[str, Any]]]:
+    """Replacement points per stratum: the SAME seeded order, continuing after the frozen draw."""
+    ids = sorted(set(pool_ids))
+    out: dict[str, list[dict[str, Any]]] = {}
+    for stratum, turns in strata.items():
+        rest = sorted(ids, key=lambda t: _h(seed, "task", stratum, t))[per_stratum:]
+        out[stratum] = [
+            {
+                "point_id": f"{t}@{sorted(turns)[int(_h(seed, 'turn', stratum, t), 16) % len(turns)]}",
+                "task_id": t,
+                "boundary_turn": sorted(turns)[int(_h(seed, "turn", stratum, t), 16) % len(turns)],
+                "stratum": stratum,
+            }
+            for t in rest
+        ]
+    return out
+
+
 def points_sha256(points: Sequence[Mapping[str, Any]]) -> str:
     return hashlib.sha256(json.dumps(list(points), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -114,15 +138,50 @@ def run_schedule(
     schedule: Sequence[Mapping[str, Any]],
     submit: Callable[[Mapping[str, Any]], Mapping[str, Any]],
     ledger_path: Path,
-) -> dict[str, int]:
-    """Run rows not yet in the ledger. Invalid-run policy (pre-reg section 7): a transport failure
-    or missing pin is re-run once with the same seed; a second failure drops the row and is counted."""
+    *,
+    reserves: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    repeats: int = REPEATS,
+    seed: int = DEFAULT_SEED,
+) -> dict[str, Any]:
+    """Run rows not yet in the ledger.
+
+    Invalid-run policy (pre-reg section 7): a transport failure or missing pin is re-run once with
+    the same seed; a second failure drops that row and is counted.
+
+    Validity rule (pre-reg section 7a): a result with ``boundary_reached`` False is VOIDED. Because
+    arms are paired by point, the whole point is voided (its ledger rows are kept, marked void) and
+    replaced by the next reserve point of the same stratum, in the seeded order. Voids are returned
+    in ``voided_points`` and written to the ledger; an exhausted reserve is counted, not hidden."""
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    done = set()
-    if ledger_path.exists():
-        done = {json.loads(l)["run_id"] for l in ledger_path.read_text().splitlines() if l.strip()}
-    counts = {"ok": 0, "rerun": 0, "dropped": 0, "skipped_done": 0}
-    for row in schedule:
+    records = (
+        [json.loads(l) for l in ledger_path.read_text().splitlines() if l.strip()]
+        if ledger_path.exists() else []
+    )
+    done = {r["run_id"] for r in records if "run_id" in r}
+    voided = {r["point_id"] for r in records if r.get("status") == "void_point"}
+    queue = [dict(r) for r in schedule]
+    reserve_next = {k: list(v) for k, v in (reserves or {}).items()}
+    # Resume: replacements recorded by an earlier session are consumed from the reserve and requeued.
+    for rec in records:
+        if rec.get("status") == "replacement":
+            pool = reserve_next.get(rec["stratum"], [])
+            new = next((q for q in pool if q["point_id"] == rec["replacement"]), None)
+            if new is not None:
+                pool.remove(new)
+                queue.extend(build_schedule([new], repeats=repeats, seed=seed))
+    counts: dict[str, Any] = {"ok": 0, "rerun": 0, "dropped": 0, "skipped_done": 0,
+                              "voided_points": [], "replacements": [], "reserve_exhausted": 0}
+
+    def _append(rec: Mapping[str, Any]) -> None:
+        with ledger_path.open("a") as fh:
+            fh.write(json.dumps(rec, sort_keys=True) + "\n")
+
+    i = 0
+    while i < len(queue):
+        row = queue[i]
+        i += 1
+        if row["point_id"] in voided:
+            continue
         if row["run_id"] in done:
             counts["skipped_done"] += 1
             continue
@@ -139,10 +198,26 @@ def run_schedule(
                 result = {"invalid_reason": f"{type(exc).__name__}: {exc}"}
             if attempts == 1:
                 counts["rerun"] += 1
+        if status == "ok" and result.get("boundary_reached") is False:
+            voided.add(row["point_id"])
+            counts["voided_points"].append(row["point_id"])
+            _append({"point_id": row["point_id"], "run_id": row["run_id"], "status": "void_point",
+                     "reason": "boundary_not_reached"})
+            pool = reserve_next.get(row["stratum"], [])
+            if pool:
+                new = pool.pop(0)
+                _append({"status": "replacement", "void": row["point_id"],
+                         "replacement": new["point_id"], "stratum": row["stratum"]})
+                counts["replacements"].append({"void": row["point_id"], "replacement": new["point_id"]})
+                queue.extend(build_schedule([new], repeats=repeats, seed=seed,
+                                            budget_tokens=int(row["env"]["ORCHESTRATOR_CONTEXT_BUDGET_TOKENS"]),
+                                            trigger_fraction=float(row["env"]["ORCHESTRATOR_CONTEXT_TRIGGER_FRACTION"])))
+            else:
+                counts["reserve_exhausted"] += 1
+            continue
         counts["ok" if status == "ok" else "dropped"] += 1
-        with ledger_path.open("a") as fh:
-            fh.write(json.dumps({"run_id": row["run_id"], "status": status, "attempts": attempts,
-                                 "result": result}, sort_keys=True) + "\n")
+        _append({"run_id": row["run_id"], "point_id": row["point_id"], "status": status,
+                 "attempts": attempts, "result": result})
     return counts
 
 
@@ -172,6 +247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "seed": a.seed, "arms": list(ARMS_A), "strata_turn_bands": {k: list(v) for k, v in STRATA.items()},
             "pool_size": len(set(pool)), "pool_source": str(a.pool_jsonl),
             "points_sha256": points_sha256(points), "points": points,
+            "reserves": draw_reserves(pool, seed=a.seed),
             "arm_permutations": {q["point_id"]: arm_permutation(q["point_id"], seed=a.seed) for q in points},
         }
         a.out.write_text(json.dumps(receipt, indent=1, sort_keys=True) + "\n")
