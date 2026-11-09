@@ -305,8 +305,11 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
         state.pending_granular_blocks = []
         state.pending_granular_start_turn = 0
 
+        # compaction_shadow: compute everything below but never write
+        # seg.consolidated (would-be stubs go to state.compaction_shadow_stubs).
+        shadow = _get_features().compaction_shadow
         if (
-            _get_features().role_aware_compaction
+            (_get_features().role_aware_compaction or shadow)
             and len(state.consolidated_segments) > 4
         ):
             from src.graph.session_log import (
@@ -320,7 +323,7 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
             n_free = max(1, int(len(state.consolidated_segments) * profile.free_zone_ratio))
             compactable = state.consolidated_segments[:-n_free]
 
-            if compactable and _get_features().helpfulness_scoring:
+            if compactable and (_get_features().helpfulness_scoring or shadow):
                 recent_text = "\n".join(state.pending_granular_blocks[-3:])
                 to_compact = []
                 for seg in compactable:
@@ -328,10 +331,22 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                     if score < profile.preserve_threshold:
                         to_compact.append(seg)
 
+                if shadow:
+                    # Count each segment once across turns.
+                    to_compact = [
+                        seg for seg in to_compact
+                        if f"{seg.turn_range[0]}-{seg.turn_range[1]}" not in state.compaction_shadow_stubs
+                        and not seg.consolidated.startswith("[Compacted]")
+                    ]
+
                 if to_compact:
                     for seg in to_compact:
                         first_sentence = seg.consolidated.split(". ")[0] + "."
-                        seg.consolidated = f"[Compacted] {first_sentence}"
+                        stub = f"[Compacted] {first_sentence}"
+                        if shadow:
+                            state.compaction_shadow_stubs[f"{seg.turn_range[0]}-{seg.turn_range[1]}"] = stub
+                        else:
+                            seg.consolidated = stub
 
                     if state.compaction_quality_monitor is None:
                         state.compaction_quality_monitor = CompactionQualityMonitor()
@@ -350,28 +365,33 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
         )
         if current_ids:
             for seg in state.consolidated_segments:
-                if seg.consolidated.startswith("[Compacted]"):
-                    # A reference miss is the current turn needing an identifier
-                    # that compaction DESTROYED — i.e. present in the pre-compaction
-                    # granular blocks but absent from the surviving stub. Comparing
-                    # against seg.consolidated alone inverts the metric: that only
-                    # matches identifiers compaction KEPT, so it can never fire for
-                    # the loss it exists to detect. granular_blocks is retained for
-                    # exactly this audit (see ConsolidatedSegment).
-                    lost_ids = extract_identifiers(
-                        " ".join(seg.granular_blocks)
-                    ) - extract_identifiers(seg.consolidated)
-                    overlap = current_ids & lost_ids
-                    if overlap:
-                        state.compaction_quality_monitor.record_reference_miss()
-                        log.info(
-                            "CF-3c quality monitor: compacted segment referenced "
-                            "(turn_range=%s, overlap=%s, miss_rate=%.1f%%)",
-                            seg.turn_range,
-                            list(overlap)[:3],
-                            state.compaction_quality_monitor.miss_rate * 100,
-                        )
-                        break  # Count once per turn
+                if shadow_stub := state.compaction_shadow_stubs.get(f"{seg.turn_range[0]}-{seg.turn_range[1]}"):
+                    surviving = shadow_stub
+                elif seg.consolidated.startswith("[Compacted]"):
+                    surviving = seg.consolidated
+                else:
+                    continue
+                # A reference miss is the current turn needing an identifier
+                # that compaction DESTROYED — i.e. present in the pre-compaction
+                # granular blocks but absent from the surviving stub. Comparing
+                # against seg.consolidated alone inverts the metric: that only
+                # matches identifiers compaction KEPT, so it can never fire for
+                # the loss it exists to detect. granular_blocks is retained for
+                # exactly this audit (see ConsolidatedSegment).
+                lost_ids = extract_identifiers(
+                    " ".join(seg.granular_blocks)
+                ) - extract_identifiers(surviving)
+                overlap = current_ids & lost_ids
+                if overlap:
+                    state.compaction_quality_monitor.record_reference_miss()
+                    log.info(
+                        "CF-3c quality monitor: compacted segment referenced "
+                        "(turn_range=%s, overlap=%s, miss_rate=%.1f%%)",
+                        seg.turn_range,
+                        list(overlap)[:3],
+                        state.compaction_quality_monitor.miss_rate * 100,
+                    )
+                    break  # Count once per turn
 
     parts = ["[Session History — Two-Level]"]
     for seg in state.consolidated_segments:

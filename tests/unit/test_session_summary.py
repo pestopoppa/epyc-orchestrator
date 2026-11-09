@@ -332,3 +332,112 @@ async def test_reference_miss_ignores_identifiers_compaction_preserved():
     )
     assert monitor.post_compaction_references == 0
     assert monitor.miss_rate == 0.0
+
+
+# --- RTG-08 option C: compaction_shadow (non-mutating) ---------------------
+
+async def _run_compaction(features: Features):
+    set_features(features)
+    try:
+        state = _state(
+            task_id="task-shadow",
+            turns=9,
+            current_role="architect",
+            session_log_records=[_record(1, "worker"), _record(2, "architect")],
+            consolidated_segments=[
+                ConsolidatedSegment((1, 1), ["loaded helper.py"], "old one. extra", "boundary"),
+                ConsolidatedSegment((2, 2), ["b"], "old two. extra", "boundary"),
+                ConsolidatedSegment((3, 3), ["c"], "keep three. extra", "boundary"),
+                ConsolidatedSegment((4, 4), ["d"], "keep four. extra", "boundary"),
+                ConsolidatedSegment((5, 5), ["e"], "free zone. extra", "boundary"),
+            ],
+            pending_granular_blocks=["recent one", "now editing helper.py"],
+            pending_granular_start_turn=1,
+        )
+        deps = TaskDeps(primitives=None, config=GraphConfig())
+        fake_profile = SimpleNamespace(free_zone_ratio=0.2, preserve_threshold=0.5)
+        with (
+            patch("src.graph.session_log.build_granular_summary", return_value="newest granular"),
+            patch("src.graph.session_log.should_consolidate", return_value="boundary"),
+            patch("src.graph.session_log.get_compaction_profile", return_value=fake_profile),
+            patch(
+                "src.graph.session_log.segment_helpfulness",
+                side_effect=lambda seg, turns, text: (
+                    0.1 if seg.consolidated.startswith("old") else 0.9
+                ),
+            ),
+        ):
+            await _refresh_two_level_summary(state, deps)
+        return state
+    finally:
+        reset_features()
+
+
+async def test_compaction_shadow_leaves_consolidated_unchanged_and_creates_monitor():
+    state = await _run_compaction(Features(two_level_condensation=True, compaction_shadow=True))
+    assert state.consolidated_segments[0].consolidated == "old one. extra"
+    assert state.consolidated_segments[1].consolidated == "old two. extra"
+    assert "[Compacted]" not in state.session_summary_cache
+    monitor = state.compaction_quality_monitor
+    assert monitor is not None
+    assert monitor.segments_compacted == 2
+    assert set(state.compaction_shadow_stubs) == {"1-1", "2-2"}
+    import json
+    from src.graph.persistence import _state_to_dict_full
+    # other TaskState fields (e.g. TurnRecord lists) are not JSON-safe in the full snapshot already; assert ours is
+    json.dumps(_state_to_dict_full(state)["compaction_shadow_stubs"])
+
+
+async def test_compaction_shadow_wins_over_live_compaction_flags():
+    state = await _run_compaction(
+        Features(
+            two_level_condensation=True,
+            compaction_shadow=True,
+            role_aware_compaction=True,
+            helpfulness_scoring=True,
+        )
+    )
+    assert state.consolidated_segments[0].consolidated == "old one. extra"
+    assert state.compaction_quality_monitor is not None
+
+
+async def test_compaction_shadow_off_is_todays_behaviour():
+    state = await _run_compaction(Features(two_level_condensation=True))
+    assert state.consolidated_segments[0].consolidated == "old one. extra"
+    assert state.compaction_quality_monitor is None
+    assert state.compaction_shadow_stubs == {}
+    state = await _run_compaction(
+        Features(two_level_condensation=True, role_aware_compaction=True, helpfulness_scoring=True)
+    )
+    assert state.consolidated_segments[0].consolidated.startswith("[Compacted] old one.")
+    assert state.compaction_shadow_stubs == {}
+
+
+async def test_compaction_shadow_counts_hypothetical_reference_miss_against_stub():
+    from src.graph.session_log import CompactionQualityMonitor
+
+    set_features(Features(two_level_condensation=True, compaction_shadow=True))
+    try:
+        monitor = CompactionQualityMonitor()
+        state = _state(
+            task_id="task-shadow-miss",
+            turns=6,
+            session_log_records=[_record(1, "worker")],
+            consolidated_segments=[
+                ConsolidatedSegment((1, 1), ["loaded helper.py"], "full text. helper.py", "boundary"),
+            ],
+            pending_granular_blocks=["now editing helper.py"],
+            pending_granular_start_turn=1,
+            compaction_quality_monitor=monitor,
+            compaction_shadow_stubs={"1-1": "[Compacted] full text."},
+        )
+        deps = TaskDeps(primitives=None, config=GraphConfig())
+        with (
+            patch("src.graph.session_log.build_granular_summary", return_value="g"),
+            patch("src.graph.session_log.should_consolidate", return_value=None),
+        ):
+            await _refresh_two_level_summary(state, deps)
+        assert monitor.post_compaction_references == 1
+        assert state.consolidated_segments[0].consolidated == "full text. helper.py"
+    finally:
+        reset_features()
