@@ -430,6 +430,12 @@ def _collect_kb_rag_excerpts(
         "catalog_path": str(catalog_path.resolve(strict=False)),
         "record": dependency_record,
     }
+    try:
+        kb_rag.check_index_convention(index_dir)
+    except kb_rag.IndexConventionError as exc:
+        # kb_rag.query fails closed with [] here, which would be recorded as
+        # "no results" and silently strip the context. Refuse instead.
+        raise LabRunnerError(f"KB-RAG index unreadable at {index_dir}: {exc}") from exc
     queries = _kb_rag_queries(input_spec)
     if not queries:
         return (

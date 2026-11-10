@@ -324,18 +324,48 @@ def _stamp_meta(conn: sqlite3.Connection, convention: str) -> None:
     )
 
 
+class IndexConventionError(ValueError):
+    """The index was stamped under a prefix convention this code refuses.
+
+    Structural, not transient: every later query or update against the same
+    index fails the same way. Callers that must not degrade silently (lab
+    context collection, health checks) catch this type, not a bare ValueError.
+    """
+
+
 def _roles_for_convention(convention: str) -> tuple[str, str]:
     """Map a stored convention to the (query_role, document_role) to encode with."""
     if convention == colbert_encoder.PREFIX_CONVENTION:
         return colbert_encoder.ROLE_QUERY, colbert_encoder.ROLE_DOCUMENT
     if convention == colbert_encoder.LEGACY_CONVENTION:
         return colbert_encoder.ROLE_NONE, colbert_encoder.ROLE_NONE
-    raise ValueError(
+    raise IndexConventionError(
         f"index was built under unknown prefix convention {convention!r}; "
         f"this code understands {colbert_encoder.PREFIX_CONVENTION!r} and "
         f"{colbert_encoder.LEGACY_CONVENTION!r}. Migrate by building a FRESH index "
         f"dir and pointing readers at it (KB_RAG_INDEX_DIR); never re-stamp in place"
     )
+
+
+def check_index_convention(index_dir: Path | str = DEFAULT_INDEX_DIR) -> str | None:
+    """Return the index's prefix convention, or raise IndexConventionError.
+
+    ``query`` fails closed (returns ``[]``) on an unreadable convention, which a
+    caller cannot tell apart from "no hits". Call this first when a convention
+    mismatch must be loud. Read-only; returns None when no catalog exists or the
+    catalog is empty and unstamped. Loads no encoder.
+    """
+    catalog_path = Path(index_dir) / "catalog.sqlite"
+    if not catalog_path.exists():
+        return None
+    conn = sqlite3.connect(f"file:{catalog_path}?mode=ro", uri=True)
+    try:
+        convention = _index_convention(conn)
+    finally:
+        conn.close()
+    if convention is not None:
+        _roles_for_convention(convention)
+    return convention
 
 
 def _writer_convention(conn: sqlite3.Connection) -> str:

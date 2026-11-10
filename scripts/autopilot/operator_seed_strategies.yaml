@@ -64,8 +64,11 @@
   description: kb rag retrieval weights in numeric_swarm
   insight: Tune kb-rag recency_w in [0.1, 0.3], rerank_w, and the FTS5 lexical weight to optimize recall@10; recency_w=0.3_s90 remains the zero-miss baseline.
   evidence_trial_ids: []
-  source_handoff: internal-kb-rag
-  seeded_reason: Preserve the retrieval-weight sweep for NumericSwarm
+  source_handoff: knowledge-pipelines
+  seeded_reason: 'Preserve the retrieval-weight sweep for NumericSwarm. UNBOUND: kb_rag_retrieval
+    is a planned NumericSwarm surface that was never built (no SURFACES entry, no KB retrieval-quality
+    eval wired into Autopilot; the K7 pool lives in data/kb_rag/eval). Flip to live only once both
+    exist (PIP04-KB-SEED-UNBOUND).'
   confidence: medium
   bind_status: future
   bind_identifiers:

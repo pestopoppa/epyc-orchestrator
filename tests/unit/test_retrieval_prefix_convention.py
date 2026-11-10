@@ -106,7 +106,10 @@ def test_query_and_document_roles_produce_different_embeddings() -> None:
     assert q is not None and d is not None and n is not None
     assert q.shape[0] == n.shape[0] + 1, "the prefix must occupy one real token"
     assert not np.allclose(q[1:], n, atol=1e-4), "[Q] did not change the encoding"
-    assert not np.allclose(q, d, atol=1e-4), "[Q] and [D] encode identically"
+    # qd-v2 prunes document punctuation (7d92b1a8), so [D] may be shorter than [Q];
+    # compare the shared leading positions ([CLS], marker, first word tokens).
+    k = min(q.shape[0], d.shape[0])
+    assert not np.allclose(q[:k], d[:k], atol=1e-4), "[Q] and [D] encode identically"
 
 
 # ─── index-declares-the-convention invariant ─────────────────────────────────
@@ -274,6 +277,24 @@ def test_unknown_stored_convention_fails_closed(
     rows, seen = _query(index_dir)
     assert rows == []
     assert seen == [], "no vector should be encoded under an unreadable convention"
+
+
+def test_check_index_convention_is_loud_where_query_fails_closed(
+    tmp_path: Path, declared_encoder_metadata,
+) -> None:
+    """PIP04-KB-INDEX-BREAK: query() returns [] on a refused convention, which is
+    indistinguishable from "no hits"; check_index_convention() must raise."""
+    assert kb_rag.check_index_convention(tmp_path / "missing") is None
+    cfg, index_dir = _tiny_corpus(tmp_path)
+    _build(cfg, index_dir)
+    assert kb_rag.check_index_convention(index_dir) == colbert_encoder.PREFIX_CONVENTION
+    conn = sqlite3.connect(str(index_dir / "catalog.sqlite"))
+    conn.execute("UPDATE index_meta SET value='qd-v1' WHERE key='prefix_convention'")
+    conn.commit()
+    conn.close()
+    with pytest.raises(kb_rag.IndexConventionError, match="FRESH index dir"):
+        kb_rag.check_index_convention(index_dir)
+    assert issubclass(kb_rag.IndexConventionError, ValueError)
 
 
 def test_rollback_lever_is_wired(tmp_path: Path) -> None:

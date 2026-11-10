@@ -489,6 +489,35 @@ def test_legacy_kb_catalog_has_unknown_dependency_at_collection_time(
     }
 
 
+def test_refused_kb_index_convention_is_loud_not_a_query_miss(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """PIP04-KB-INDEX-BREAK: a qd-v1 store made kb_rag.query fail closed with [],
+    which the lab recorded as kb_rag_no_results and silently ran without context."""
+    index_dir = tmp_path / "kb-index"
+    _write_legacy_catalog(index_dir)
+    with sqlite3.connect(index_dir / "catalog.sqlite") as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS index_meta (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute(
+            "INSERT OR REPLACE INTO index_meta(key, value) VALUES ('prefix_convention', 'qd-v1')"
+        )
+
+    def forbidden_query(*args, **kwargs):
+        raise AssertionError("query must not run on a refused convention")
+
+    monkeypatch.setattr(run_job.kb_rag, "query", forbidden_query)
+    with pytest.raises(run_job.LabRunnerError, match="KB-RAG index unreadable"):
+        run_job.collect_context(
+            {
+                "context_modes": ["kb_rag"],
+                "kb_queries": ["fixture query"],
+                "kb_index_dir": str(index_dir),
+            },
+            {},
+            max_context_chars=100,
+        )
+
+
 def test_collect_context_keeps_two_value_return_shape(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(run_job.kb_rag, "query", lambda *args, **kwargs: [])
 

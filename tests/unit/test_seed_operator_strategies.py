@@ -99,6 +99,24 @@ def test_audit_identifiers_blocks_implicit_missing_live_binding(monkeypatch):
     } == {"missing_live_hot_swap_feature", "missing_live_numeric_surface"}
 
 
+def test_kb_rag_retrieval_seed_is_documented_unbound_not_live():
+    """PIP04-KB-SEED-UNBOUND: no NumericSwarm surface defines kb_rag_retrieval, so
+    the seed must stay a documented future binding pointing at the live handoff."""
+    rows = seeds.load_seed_rows(seeds.SCRIPT_DIR / "operator_seed_strategies.yaml")
+    kb_rows = [row for row in rows if "kb_rag_retrieval" in row.bind_identifiers]
+    assert [row.slug for row in kb_rows] == ["kbrag-retrieval-weights"]
+    row = kb_rows[0]
+    assert row.bind_status == "future"
+    assert row.source_handoff == "knowledge-pipelines"
+    assert "UNBOUND" in row.seeded_reason
+    surfaces = seeds._known_numeric_surfaces()
+    assert "kb_rag_retrieval" not in surfaces, (
+        "kb_rag_retrieval is now a real surface: flip this seed to bind_status: live"
+    )
+    audit = seeds.audit_identifiers(kb_rows)
+    assert audit["ok"] is True
+
+
 def test_parse_args_accepts_explicit_dry_run():
     args = seeds._parse_args(["--dry-run", "--json"])
 
@@ -125,7 +143,7 @@ def test_seed_rows_preserves_empty_operator_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(
         seeds,
         "StrategyStore",
-        lambda *, path: original_store(path=path, embedder=_DeterministicEmbedder()),
+        lambda *, path, **kwargs: original_store(path=path, embedder=_DeterministicEmbedder(), **kwargs),
     )
     strategy_path = tmp_path / "strategies"
     row = _row(
