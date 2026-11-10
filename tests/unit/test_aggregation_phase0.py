@@ -190,3 +190,162 @@ def test_small_corpus_path_builds_no_l2_l4_index(on):
     d = planner.plan("q", planner.PlannerFacts(st.corpus_tokens("small"), 1))
     assert d.path == "whole_doc" and not d.llm_called
     assert st.built_layers("small") == set()
+
+
+# ----------------------------------------------------------------------------------------------
+# AGG Phase 0 rerun fixes (2026-11-10): canonical facts, question scope in the planner.
+def _fact(fid, doc, field, period, value, extractor, conf="high", unit="USD_millions", page=1,
+          audit="unaudited"):
+    return {"fact_id": fid, "doc_hash": f"h:{doc}", "doc_id": doc, "entity": doc.title(), "period": period,
+            "field": field, "value": value, "unit": unit, "quote": f"{field} {value}",
+            "quote_start": 0, "quote_end": 1, "chunk_id": None, "table_id": None, "page": page,
+            "line_start": 1, "line_end": 1, "confidence": conf, "extractor": extractor,
+            "audit_status": audit}
+
+
+def _canon_store(facts):
+    st = CorpusStore(":memory:")
+    for d in sorted({f["doc_id"] for f in facts}):
+        st.conn.execute("INSERT INTO documents (doc_hash, corpus_id, doc_id, entity, n_tokens_est) "
+                        "VALUES (?,?,?,?,?)", [f"h:{d}", "c", d, d.title(), 1000])
+    st.write_facts(facts)
+    return st
+
+
+def test_canonical_one_fact_per_entity_field_period(on):
+    # General Mills-style: one doc, one field, FY2022 five L4 rows (3 agree, 2 conflict) + L3 '2022'
+    facts = [
+        _fact("a1", "gm", "revenue", "FY2022", 18992.8, "l4_llm.v1", page=83),
+        _fact("a2", "gm", "revenue", "FY2022", 18992.8, "l4_llm.v1", page=20),
+        _fact("a3", "gm", "revenue", "FY2022", 11572.0, "l4_llm.v1", page=21),
+        _fact("a4", "gm", "revenue", "FY2022", 2134.3, "l4_llm.v1", page=55),
+        _fact("a5", "gm", "revenue", "FY2022", 18992.8, "l4_llm.v1", page=42),
+        _fact("b1", "gm", "revenue", "2022", 18992.8, "l3_textrow.v1", page=45),
+        _fact("b2", "gm", "revenue", "2021", 18127.0, "l3_textrow.v1", page=45),
+        _fact("c1", "vz", "revenue", "FY2022", 136835.0, "l4_llm.v1", page=102),
+        _fact("c2", "vz", "revenue", "FY2022", 134578.0, "l4_llm.v1", page=101),
+        _fact("c3", "vz", "revenue", "FY2022", 136835.0, "l4_llm.v1", page=54),
+    ]
+    st = _canon_store(facts)
+    stats = st.refresh_canonical("c")
+    rows = st.canonical_facts("c")
+    keys = [(r["doc_id"], r["field"], r["period"]) for r in rows]
+    assert len(keys) == len(set(keys)) == 3  # gm 2021, gm 2022, vz 2022: one each
+    gm22 = next(r for r in rows if r["doc_id"] == "gm" and r["period"] == "2022")
+    assert gm22["fact_id"] == "b1" and gm22["extractor"] == "l3_textrow.v1"  # tier beats L4
+    assert gm22["n_candidates"] == 6 and gm22["n_conflicts"] == 2
+    vz = next(r for r in rows if r["doc_id"] == "vz")
+    assert vz["value"] == 136835.0 and vz["n_conflicts"] == 1
+    log = st.conflicts("c")
+    assert {r["kind"] for r in log} == {"conflict", "duplicate"}  # logged, never silently dropped
+    assert stats["n_conflicts"] == 3 and stats["n_duplicates"] == 4
+    assert stats["n_canonical"] == 3 and stats["n_candidates"] == len(facts)
+    # the raw evidence table is untouched
+    assert len(st.facts("c")) == len(facts)
+    # SUM over the canonical table counts each entity once; over raw facts it does not
+    total = st.conn.execute("SELECT SUM(value) FROM facts_canonical WHERE field = 'revenue' "
+                            "AND period = '2022'").fetchone()[0]
+    assert total == pytest.approx(18992.8 + 136835.0)
+    raw = st.conn.execute("SELECT SUM(value) FROM facts WHERE field = 'revenue' AND period = 'FY2022'"
+                          ).fetchone()[0]
+    assert raw != pytest.approx(total)
+    # idempotent rebuild
+    assert st.refresh_canonical("c") == stats and len(st.canonical_facts("c")) == 3
+
+
+def test_canonical_selection_order_is_total_and_documented():
+    from src.aggregation.store import CANONICAL_RULE, select_canonical
+    base = dict(doc_id="d", field="capex", period="2022")
+    f = lambda fid, **k: {**_fact(fid, "d", "capex", "2022", 100.0, "l3_textrow.v1"), **k}  # noqa: E731
+    # tier: table > textrow > l4 > regex
+    pick = lambda *fs: select_canonical([{**x, "corpus_id": "c"} for x in fs])[0][0]["fact_id"]  # noqa: E731
+    assert pick(f("z", extractor="l4_llm.v1"), f("y"), f("x", extractor="l3_table.v1")) == "x"
+    assert pick(f("z", extractor="l3_regex.v1", confidence="high"), f("y", extractor="l4_llm.v1")) == "y"
+    # confidence next, then audit, then magnitude (consolidated total), then page, then fact_id
+    assert pick(f("a", confidence="medium", value=900.0), f("b", confidence="high", value=1.0)) == "b"
+    assert pick(f("a", audit_status="disputed"), f("b", audit_status="audited_ok")) == "b"
+    assert pick(f("a", value=10.0), f("b", value=-500.0)) == "b"
+    assert pick(f("a", page=9), f("b", page=3)) == "b"
+    assert pick(f("b", page=3), f("a", page=3)) == "a"
+    # order of arrival never matters
+    assert pick(f("a", value=1.0), f("b", value=2.0)) == pick(f("b", value=2.0), f("a", value=1.0))
+    assert CANONICAL_RULE.startswith("canonical.v1")
+    assert base  # keys documented above
+
+
+def test_canonical_normalises_period_and_unit():
+    from src.aggregation.store import canonical_period, select_canonical
+    assert canonical_period("FY2022") == canonical_period("2022") == canonical_period("Dec 31, 2022") == "2022"
+    assert canonical_period(None) is None and canonical_period("None") is None
+    rows, _ = select_canonical([{**_fact("k", "d", "revenue", "FY2022", 3_000_000.0, "l4_llm.v1",
+                                         unit="USD_thousands"), "corpus_id": "c"}])
+    assert rows[0]["value"] == pytest.approx(3000.0) and rows[0]["unit"] == "USD_millions"
+
+
+def test_canonical_outflow_fields_are_positive():
+    from src.aggregation.store import select_canonical
+    rows, _ = select_canonical([
+        {**_fact("a", "d", "capex", "2022", -4551.0, "l3_textrow.v1"), "corpus_id": "c"},
+        {**_fact("b", "d", "net_income", "2022", -546.0, "l3_textrow.v1"), "corpus_id": "c"}])
+    by = {r["field"]: r["value"] for r in rows}
+    assert by == {"capex": 4551.0, "net_income": -546.0}  # a net loss keeps its sign
+
+
+def test_sql_grammar_queries_canonical_table(on):
+    st = _canon_store([_fact("a", "d", "revenue", "FY2022", 5.0, "l4_llm.v1"),
+                       _fact("b", "d", "revenue", "2022", 5.0, "l3_textrow.v1")])
+    st.refresh_canonical("c")
+    cat = sql_grammar.catalog_from_canonical(st.canonical_facts("c"))
+    assert cat.table == "facts_canonical" and cat.fields == ("revenue",)
+    ok, _ = sql_grammar.validate_sql("SELECT SUM(value) FROM facts_canonical WHERE field = 'revenue'", cat)
+    assert ok
+    bad, why = sql_grammar.validate_sql("SELECT SUM(value) FROM facts WHERE field = 'revenue'", cat)
+    assert not bad and "table" in why  # the raw evidence table is not queryable on this path
+    assert "facts_canonical" in sql_grammar.build_sql_gbnf(cat)
+
+
+_DOCS = [
+    {"doc_id": "AES_2022_10K", "entity": "AES Corporation", "n_tokens_est": 231_844},
+    {"doc_id": "COCACOLA_2022_10K", "entity": "Coca-Cola", "n_tokens_est": 171_908},
+    {"doc_id": "CORNING_2022_10K", "entity": "Corning", "n_tokens_est": 120_830},
+    {"doc_id": "JPMORGAN_2022_10K", "entity": "JPMorgan", "n_tokens_est": 390_496},
+    {"doc_id": "PAYPAL_2022_10K", "entity": "Paypal", "n_tokens_est": 129_382},
+]
+
+
+def test_planner_scope_single_document_follows_size_rules(on):
+    # Corpus >= 1M tokens: before the fix every question took the sql path.
+    big = [dict(d, n_tokens_est=d["n_tokens_est"] * 4 if d["doc_id"] != "CORNING_2022_10K"
+                else d["n_tokens_est"]) for d in _DOCS]
+    assert sum(d["n_tokens_est"] for d in big) >= planner.LARGE_C
+    f, why = planner.scoped_facts("Does Corning have positive working capital based on FY2022 data?",
+                                  big, sql_fields_present=True)
+    assert why == "single_entity" and f.scope_doc == "CORNING_2022_10K" and f.n_docs == 1
+    assert f.corpus_tokens == 120_830 and f.sql_fields_present is False
+    assert planner.plan("q", f).path == "whole_doc"                       # <= 200k at Q = 1
+    f2, _ = planner.scoped_facts("Does Corning have positive working capital?", _DOCS, questions_so_far=2)
+    assert planner.plan("q", f2).path == "repl_nav"                       # <= 200k at Q > 1
+    f3, _ = planner.scoped_facts("What is AES's FY2022 return on assets?", _DOCS)
+    assert f3.corpus_tokens == 231_844 and planner.plan("q", f3).path == "retrieval"  # > 200k
+
+
+def test_planner_scope_aggregation_and_ambiguous_stay_corpus_wide(on):
+    for q, why in [("Which company in the corpus reported the highest FY2022 total revenue?", "aggregation_cue"),
+                   ("What were total dividends paid by companies other than JPMorgan?", "aggregation_cue"),
+                   ("How many of them had positive working capital?", "aggregation_cue"),
+                   ("Is Corning larger than Paypal by revenue?", "multi_entity"),
+                   ("What is the highest margin?", "no_entity"),
+                   ("What happened to the diseases business?", "no_entity")]:
+        f, reason = planner.scoped_facts(q, _DOCS * 3, sql_fields_present=True)
+        assert reason == why and f.scope_doc is None and f.n_docs == len(_DOCS) * 3, q
+    big = [dict(d, n_tokens_est=300_000) for d in _DOCS * 3]
+    f, _ = planner.scoped_facts("Which company had the highest revenue?", big, sql_fields_present=True)
+    assert planner.plan("q", f).path == "sql"  # aggregation over a >= 1M corpus still goes to sql
+
+
+def test_mentions_entity_is_token_exact():
+    assert planner.mentions_entity("What is Coca Cola's payout?", "Coca-Cola")
+    assert planner.mentions_entity("Coca-Cola dividends", "Coca-Cola")
+    assert planner.mentions_entity("Does AES have debt?", "AES Corporation")
+    assert not planner.mentions_entity("Tropical diseases", "AES Corporation")
+    assert planner.mentions_entity("American Water Works liquidity", "American Water Works")

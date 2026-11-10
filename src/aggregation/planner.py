@@ -22,9 +22,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 from src.aggregation import require_enabled
 from src.typed_decisions.types import Question, QuestionKind
@@ -73,6 +74,7 @@ class PlannerFacts:
     questions_so_far: int = 1
     available_layers: tuple[str, ...] = ()
     sql_fields_present: bool = False
+    scope_doc: str | None = None  # set by :func:`scoped_facts` when the question targets ONE document
 
 
 @dataclass
@@ -102,6 +104,75 @@ def size_default(f: PlannerFacts) -> str:
 def in_ambiguous_band(f: PlannerFacts) -> bool:
     """Question type can change the path only above the small-corpus threshold."""
     return f.corpus_tokens > SMALL_C and size_default(f) != "sql"
+
+
+# ------------------------------------------------------------------ question scope
+# A question that names exactly ONE corpus entity and carries no corpus-wide cue is a
+# single-document question: the size rules apply to THAT document, not to the corpus it sits
+# in. Without this, every question over a >= 1M-token corpus took the ``sql`` path, including
+# single-fact lookups that no fact table row can answer (AGG Phase 0 first run: 10 of 10
+# single-fact questions routed to ``sql``, 0 rows). Deterministic, no model call.
+_AGG_CUES = re.compile(
+    r"\b(companies|corpus|combined|across|collectively|all|each|every|which company|"
+    r"how many|in total|total of)\b", re.I)
+_LEGAL = frozenset({"inc", "corp", "corporation", "company", "co", "plc", "ltd", "llc", "the"})
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _entity_key(name: str) -> str:
+    return "".join(t for t in _tokens(name) if t not in _LEGAL)
+
+
+def mentions_entity(question: str, entity: str) -> bool:
+    """True iff the entity's compact name equals 1-5 consecutive question tokens joined
+    ('Coca Cola' and 'Coca-Cola' both match 'cocacola'; 'aes' never matches 'diseases')."""
+    key = _entity_key(entity)
+    qt = _tokens(question)
+    if not key:
+        return False
+    for i in range(len(qt)):
+        acc = ""
+        for j in range(i, min(i + 5, len(qt))):
+            acc += qt[j]
+            if acc == key:
+                return True
+            if not key.startswith(acc):
+                break
+    return False
+
+
+def resolve_scope(question: str, docs: Sequence[Mapping[str, object]]
+                  ) -> tuple[Mapping[str, object] | None, str]:
+    """``(doc, reason)``: the one document the question is about, else ``(None, reason)``.
+
+    ``docs`` carry ``doc_id``, ``entity``, ``n_tokens_est``. Reasons: ``single_entity``,
+    ``aggregation_cue``, ``no_entity``, ``multi_entity``.
+    """
+    if _AGG_CUES.search(question):
+        return None, "aggregation_cue"
+    hit = [d for d in docs if d.get("entity") and mentions_entity(question, str(d["entity"]))]
+    if len(hit) == 1:
+        return hit[0], "single_entity"
+    return None, "multi_entity" if hit else "no_entity"
+
+
+def scoped_facts(question: str, docs: Sequence[Mapping[str, object]], *, questions_so_far: int = 1,
+                 available_layers: tuple[str, ...] = (), sql_fields_present: bool = False
+                 ) -> tuple[PlannerFacts, str]:
+    """PlannerFacts for ``question`` over ``docs``: the target document's size when scoped to
+    one document (never ``sql``: ``sql_fields_present`` is cleared), else the corpus' size."""
+    doc, reason = resolve_scope(question, docs)
+    if doc is not None:
+        return PlannerFacts(corpus_tokens=int(doc.get("n_tokens_est") or 0), n_docs=1,
+                            questions_so_far=questions_so_far, available_layers=available_layers,
+                            sql_fields_present=False, scope_doc=str(doc["doc_id"])), reason
+    return PlannerFacts(corpus_tokens=sum(int(d.get("n_tokens_est") or 0) for d in docs),
+                        n_docs=len(docs), questions_so_far=questions_so_far,
+                        available_layers=available_layers,
+                        sql_fields_present=sql_fields_present), reason
 
 
 def _state(question: str, f: PlannerFacts) -> str:

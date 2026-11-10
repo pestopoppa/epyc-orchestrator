@@ -29,6 +29,18 @@ def catalog_from_facts(facts: Sequence[dict], columns: Sequence[str] = (
     return Catalog(tuple(columns), tuple(sorted({f["field"] for f in facts if f.get("field")})))
 
 
+def catalog_from_canonical(rows: Sequence[dict], columns: Sequence[str] = (
+        "entity", "doc_id", "period", "field", "value", "unit", "quote", "page")) -> Catalog:
+    """Catalog over ``facts_canonical`` (one fact per doc, field and fiscal year).
+
+    The SQL path queries this table, never the raw ``facts`` evidence table, so SUM / COUNT /
+    top-k see each (entity, field, period) once. ``period`` is the 4-digit fiscal year and
+    ``value`` is USD millions for money fields (``store.select_canonical``).
+    """
+    return Catalog(tuple(columns), tuple(sorted({r["field"] for r in rows if r.get("field")})),
+                   table="facts_canonical")
+
+
 def _alt(items: Sequence[str]) -> str:
     return " | ".join('"' + i.replace("\\", "\\\\").replace('"', '\\"') + '"' for i in items)
 
