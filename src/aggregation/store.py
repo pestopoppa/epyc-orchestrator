@@ -212,6 +212,19 @@ class CorpusStore:
     def corpus_tokens(self, corpus_id: str) -> int:
         return sum(d["n_tokens_est"] or 0 for d in self.corpus_docs(corpus_id))
 
+    def document_pages(self, corpus_id: str) -> list[dict[str, Any]]:
+        """Per-page OCR text of each document (from the stored result), for L3 text rows."""
+        out = []
+        for doc_hash, doc_id, entity, rj in self.conn.execute(
+            "SELECT doc_hash, doc_id, entity, result_json FROM documents WHERE corpus_id = ? "
+            "ORDER BY doc_id", [corpus_id]).fetchall():
+            data = json.loads(rj) if rj else {}
+            pages = [(p["page"], p.get("text") or "")
+                     for p in ((data.get("ocr_result") or {}).get("pages") or [])]
+            out.append({"doc_hash": doc_hash, "doc_id": doc_id, "entity": entity,
+                        "pages": pages})
+        return out
+
     def chunks(self, corpus_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT c.chunk_id, c.doc_hash, d.doc_id, c.ordinal, c.section_id, c.title, "
