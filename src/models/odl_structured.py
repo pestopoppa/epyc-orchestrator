@@ -135,6 +135,9 @@ class ODLStructuredDocument:
     figures: list[FigureContext] = field(default_factory=list)
     tables: list[TableContext] = field(default_factory=list)
     raw_json: dict[str, Any] | None = None  # untrusted; provided for debugging
+    # 1-indexed page -> text of that page, in reading order (ODL ``kids``
+    # schema only). Empty when the payload carries no per-page content.
+    page_texts: dict[int, str] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, payload: dict[str, Any]) -> "ODLStructuredDocument":
@@ -143,9 +146,17 @@ class ODLStructuredDocument:
         Tolerates missing keys (returns empty collections) — ODL JSON
         schema has varied across versions and we do not want to bind
         tightly to a single version.
+
+        Two shapes are accepted: the real opendataloader-pdf 2.x document
+        (``"number of pages"`` + a ``"kids"`` element tree whose nodes carry
+        ``"type"``, ``"page number"``, ``"bounding box"``, ``"content"``;
+        tables as ``rows[].cells[].kids``), and the legacy flat shape
+        (top-level ``page_count``/``headings``/``figures``/``tables``).
         """
         if not isinstance(payload, dict):
             return cls()
+        if isinstance(payload.get("kids"), list):
+            return cls._from_odl_kids(payload)
 
         page_count = int(payload.get("page_count") or len(payload.get("pages") or []) or 0)
 
@@ -185,6 +196,122 @@ class ODLStructuredDocument:
             tables=tables,
             raw_json=payload,
         )
+
+    @classmethod
+    def _from_odl_kids(cls, payload: dict[str, Any]) -> "ODLStructuredDocument":
+        """Walk the real ODL element tree (``kids``) in reading order."""
+        headings: list[HeadingNode] = []
+        figures: list[FigureContext] = []
+        tables: list[TableContext] = []
+        page_parts: dict[int, list[str]] = {}
+
+        def _page(node: dict[str, Any]) -> int:
+            try:
+                return max(int(node.get("page number") or 1), 1)
+            except (TypeError, ValueError):
+                return 1
+
+        def _emit(node: dict[str, Any], text: str) -> None:
+            if text.strip():
+                page_parts.setdefault(_page(node), []).append(text.strip())
+
+        def _walk(nodes: list[Any]) -> None:
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                kind = str(node.get("type") or "").lower()
+                content = str(node.get("content") or "")
+                if kind in {"header", "footer"}:
+                    continue
+                if kind == "heading":
+                    try:
+                        level = int(node.get("heading level") or 1)
+                    except (TypeError, ValueError):
+                        level = 1
+                    headings.append(HeadingNode(
+                        level=level, text=content.strip(),
+                        bbox=ODLBoundingBox.from_dict(node)))
+                    _emit(node, f"{'#' * max(1, min(level, 6))} {content.strip()}")
+                elif kind == "table":
+                    rows = _odl_table_rows(node)
+                    md = _rows_to_markdown(rows)
+                    tables.append(TableContext(
+                        table_index=len(tables) + 1, bbox=ODLBoundingBox.from_dict(node),
+                        rows=rows, markdown_form=md, caption=str(node.get("caption") or "")))
+                    _emit(node, md)
+                elif kind in {"image", "picture", "figure", "chart"}:
+                    figures.append(FigureContext.from_dict(
+                        {**node, "caption": node.get("caption") or node.get("alt") or ""},
+                        len(figures) + 1))
+                elif kind == "list":
+                    _walk(node.get("list items") or [])
+                else:
+                    _emit(node, content)
+                    _walk(node.get("kids") or [])
+
+        _walk(payload.get("kids") or [])
+        try:
+            page_count = int(payload.get("number of pages") or 0)
+        except (TypeError, ValueError):
+            page_count = 0
+        page_count = max([page_count, *page_parts.keys()]) if page_parts else page_count
+        return cls(
+            page_count=page_count,
+            headings=headings,
+            figures=figures,
+            tables=tables,
+            raw_json=payload,
+            page_texts={p: "\n\n".join(parts) for p, parts in sorted(page_parts.items())},
+        )
+
+
+def _odl_cell_text(cell: Any) -> str:
+    if not isinstance(cell, dict):
+        return str(cell or "")
+    if cell.get("content"):
+        return str(cell["content"]).strip()
+    parts: list[str] = []
+    for kid in cell.get("kids") or []:
+        text = _odl_cell_text(kid)
+        if text:
+            parts.append(text)
+    for item in cell.get("list items") or []:
+        text = _odl_cell_text(item)
+        if text:
+            parts.append(text)
+    return " ".join(parts).strip()
+
+
+def _odl_table_rows(table: dict[str, Any]) -> list[list[str]]:
+    """ODL ``rows[].cells[]`` -> list of string rows, placed by column number."""
+    out: list[list[str]] = []
+    for row in table.get("rows") or []:
+        cells = row.get("cells") if isinstance(row, dict) else row
+        if not isinstance(cells, list):
+            continue
+        placed: dict[int, str] = {}
+        for i, cell in enumerate(cells):
+            col = i + 1
+            if isinstance(cell, dict):
+                try:
+                    col = int(cell.get("column number") or col)
+                except (TypeError, ValueError):
+                    pass
+            placed[col] = _odl_cell_text(cell)
+        width = max(placed) if placed else 0
+        out.append([placed.get(c, "") for c in range(1, width + 1)])
+    return out
+
+
+def _rows_to_markdown(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    width = max(len(r) for r in rows)
+    norm = [[c.replace("|", "\\|").replace("\n", " ") for c in r] + [""] * (width - len(r))
+            for r in rows]
+    lines = ["| " + " | ".join(norm[0]) + " |", "|" + "---|" * width]
+    lines += ["| " + " | ".join(r) + " |" for r in norm[1:]]
+    return "\n".join(lines)
 
 
 def coerce_structured_document(payload: object | None) -> ODLStructuredDocument | None:

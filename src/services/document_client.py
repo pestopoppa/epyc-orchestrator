@@ -68,7 +68,18 @@ def _ocr_result_from_pdf_extraction(result: object) -> OCRResult:
     """Adapt PDF extraction output into the OCRResult shape used downstream."""
     figures = list(getattr(result, "figures", []) or [])
     max_figure_page = max((int(getattr(figure.bbox, "page", 1) or 1) for figure in figures), default=1)
-    page_count = max(int(getattr(result, "page_count", 0) or 0), max_figure_page, 1)
+    structured = getattr(result, "structured_data", None)
+    # Per-page text from the ODL element tree. Without it every page's text
+    # lands on page 1 and the page count falls back to PyMuPDF, which is not
+    # installed in the orchestrator venv: one flat page per document.
+    page_texts: dict[int, str] = dict(getattr(structured, "page_texts", None) or {})
+    page_count = max(
+        int(getattr(result, "page_count", 0) or 0),
+        int(getattr(structured, "page_count", 0) or 0),
+        max(page_texts, default=1),
+        max_figure_page,
+        1,
+    )
     bboxes_by_page: dict[int, list[BoundingBox]] = {page: [] for page in range(1, page_count + 1)}
 
     for figure in figures:
@@ -89,7 +100,11 @@ def _ocr_result_from_pdf_extraction(result: object) -> OCRResult:
     pages = [
         PageOCRResult(
             page=page,
-            text=getattr(result, "text", "") if page == 1 else "",
+            text=(
+                page_texts.get(page, "")
+                if page_texts
+                else (getattr(result, "text", "") if page == 1 else "")
+            ),
             bboxes=bboxes_by_page.get(page, []),
         )
         for page in range(1, page_count + 1)

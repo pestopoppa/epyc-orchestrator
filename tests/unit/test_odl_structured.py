@@ -478,3 +478,74 @@ async def test_analyze_figures_uses_matching_figure_context_prompt(tmp_path: Pat
     assert "chart" in prompt
     assert "Figure 1: accuracy" in prompt
     assert "improves accuracy" in prompt
+
+
+# ─── Real opendataloader-pdf 2.x JSON (``kids`` element tree) ────────────────
+# Shape copied from opendataloader-pdf 2.5 output (TableSerializer /
+# TableRowSerializer / TableCellSerializer / HeadingSerializer). Before the fix
+# from_json only read top-level ``headings``/``tables``/``page_count`` keys that
+# ODL never emits, so every real document parsed to zero tables and one page.
+
+_ODL_KIDS_PAYLOAD = {
+    "file name": "x.pdf",
+    "number of pages": 3,
+    "kids": [
+        {"type": "header", "page number": 1, "bounding box": [0, 0, 1, 1], "content": "HDR"},
+        {"type": "heading", "page number": 1, "bounding box": [20, 700, 300, 720],
+         "heading level": 1, "content": "Consolidated Balance Sheets"},
+        {"type": "paragraph", "page number": 1, "bounding box": [20, 600, 300, 690],
+         "content": "In millions"},
+        {"type": "table", "page number": 2, "bounding box": [20, 100, 580, 700],
+         "number of rows": 2, "number of columns": 3, "rows": [
+             {"type": "table row", "row number": 1, "cells": [
+                 {"type": "table cell", "page number": 2, "row number": 1, "column number": 2,
+                  "kids": [{"type": "paragraph", "page number": 2, "content": "2022"}]},
+                 {"type": "table cell", "page number": 2, "row number": 1, "column number": 3,
+                  "kids": [{"type": "paragraph", "page number": 2, "content": "2021"}]}]},
+             {"type": "table row", "row number": 2, "cells": [
+                 {"type": "table cell", "row number": 2, "column number": 1,
+                  "kids": [{"type": "paragraph", "content": "Total assets"}]},
+                 {"type": "table cell", "row number": 2, "column number": 2,
+                  "kids": [{"type": "paragraph", "content": "27,787"}]},
+                 {"type": "table cell", "row number": 2, "column number": 3,
+                  "kids": [{"type": "paragraph", "content": "26,075"}]}]}]},
+        {"type": "list", "page number": 3, "list items": [
+            {"type": "list item", "page number": 3, "content": "item one"}]},
+    ],
+}
+
+
+def test_odl_kids_schema_parses_headings_tables_pages() -> None:
+    doc = ODLStructuredDocument.from_json(_ODL_KIDS_PAYLOAD)
+    assert doc.page_count == 3
+    assert [h.text for h in doc.headings] == ["Consolidated Balance Sheets"]
+    assert doc.headings[0].bbox is not None and doc.headings[0].bbox.page == 1
+    assert len(doc.tables) == 1
+    table = doc.tables[0]
+    assert table.bbox.page == 2
+    assert table.rows == [["", "2022", "2021"], ["Total assets", "27,787", "26,075"]]
+    assert "| Total assets | 27,787 | 26,075 |" in table.markdown_form
+    assert set(doc.page_texts) == {1, 2, 3}
+    assert "HDR" not in doc.page_texts[1]
+    assert doc.page_texts[1].startswith("# Consolidated Balance Sheets")
+    assert "| Total assets |" in doc.page_texts[2]
+    assert doc.page_texts[3] == "item one"
+
+
+def test_ocr_adapter_keeps_odl_pages_and_tables_end_to_end() -> None:
+    from src.services.document_client import _ocr_result_from_pdf_extraction
+
+    structured = ODLStructuredDocument.from_json(_ODL_KIDS_PAYLOAD)
+    extraction = PDFExtractionResult(
+        text="flat markdown", figures=[], page_count=0,  # PyMuPDF absent -> 0
+        method="opendataloader_structured", structured_data=structured,
+    )
+    ocr = _ocr_result_from_pdf_extraction(extraction)
+    assert ocr.total_pages == 3
+    assert [p.page for p in ocr.pages] == [1, 2, 3]
+    assert "Total assets" in ocr.pages[1].text and "Total assets" not in ocr.pages[0].text
+
+    result = DocumentChunker().process(ocr, "x.pdf", structured_doc=structured)
+    assert result.total_pages == 3
+    assert len(result.tables) == 1 and result.tables[0].page == 2
+    assert result.tables[0].rows[1] == ["Total assets", "27,787", "26,075"]
