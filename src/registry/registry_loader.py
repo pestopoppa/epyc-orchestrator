@@ -590,8 +590,29 @@ class RegistryLoader:
         if isinstance(sm, dict):
             ctk = sm.get("chat_template_kwargs")
             if isinstance(ctk, dict) and ctk:
-                return ctk
+                return self._with_preserve_thinking(role_name, ctk)
         return None
+
+    def _with_preserve_thinking(self, role_name: str, ctk: dict[str, Any]) -> dict[str, Any]:
+        """INF-86: keep older turns' reasoning in the rendered history.
+
+        A thinking-capable role (declares ``enable_thinking``) whose serving host does
+        NOT pin ``chat_template_file`` runs the GGUF-embedded template, which strips
+        reasoning from every turn before the last user query. A replayed assistant turn
+        then renders differently from the tokens the server cached when it generated it
+        (prefix-cache break). The pinned terse template defaults
+        ``_preserve_thinking=true``; send the same value to unpinned hosts. A template
+        that does not read the variable ignores it. Explicit registry value wins; the
+        cached registry dict is never mutated.
+        """
+        if "enable_thinking" not in ctk or "preserve_thinking" in ctk:
+            return ctk
+        server_mode = self._raw.get("server_mode") or {}
+        host = serving_host_by_role(server_mode).get(role_name, role_name)
+        host_row = server_mode.get(host)
+        if isinstance(host_row, dict) and not host_row.get("chat_template_file"):
+            return {**ctk, "preserve_thinking": True}
+        return ctk
 
     @property
     def escalation_chains(self) -> dict[str, EscalationChain]:

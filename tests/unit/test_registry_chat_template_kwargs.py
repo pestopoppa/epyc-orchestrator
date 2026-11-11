@@ -25,7 +25,11 @@ def test_chat_template_kwargs_for_role_reads_server_mode():
     assert rl.chat_template_kwargs_for_role("frontdoor") == {"enable_thinking": False}
     assert rl.chat_template_kwargs_for_role("coder_escalation") == _ARCHITECT_THINKING
     assert rl.chat_template_kwargs_for_role("architect_critic") == _ARCHITECT_THINKING
-    assert rl.chat_template_kwargs_for_role("architect_general") == {"enable_thinking": False}
+    # INF-86: unpinned (GGUF-embedded template) thinking host gets preserve_thinking.
+    assert rl.chat_template_kwargs_for_role("architect_general") == {
+        "enable_thinking": False,
+        "preserve_thinking": True,
+    }
 
 
 def test_chat_template_kwargs_ingest_stays_thinking_on():
@@ -69,3 +73,36 @@ def test_alias_thinking_kwarg_agrees_with_its_host():
                 f"{host_ctk['enable_thinking']}"
             )
     assert checked, "no alias with a thinking kwarg found: the guard would be vacuous"
+
+
+def test_preserve_thinking_only_on_unpinned_thinking_hosts():
+    """INF-86: roles served by the terse-pinned template are untouched; unpinned
+    thinking-capable hosts get preserve_thinking=true; no registry dict is mutated."""
+    loader = rl.RegistryLoader(validate_paths=False)
+    sm = loader._raw["server_mode"]
+    by_host = rl.serving_host_by_role(sm)
+    seen_pinned = seen_unpinned = 0
+    for role, cfg in sm.items():
+        raw = cfg.get("chat_template_kwargs") if isinstance(cfg, dict) else None
+        if not raw or "enable_thinking" not in raw:
+            continue
+        pinned = bool(sm[by_host.get(role, role)].get("chat_template_file"))
+        got = loader.get_role_chat_template_kwargs(role)
+        if pinned:
+            seen_pinned += 1
+            assert "preserve_thinking" not in got, role
+        else:
+            seen_unpinned += 1
+            assert got["preserve_thinking"] is True, role
+        assert "preserve_thinking" not in raw, "registry dict mutated"
+    assert seen_pinned and seen_unpinned
+
+
+def test_explicit_preserve_thinking_wins():
+    loader = rl.RegistryLoader(validate_paths=False)
+    loader._raw = {"server_mode": {"r": {"chat_template_kwargs": {"enable_thinking": True, "preserve_thinking": False}}}}
+    assert loader.get_role_chat_template_kwargs("r")["preserve_thinking"] is False
+    loader._raw = {"server_mode": {"r": {"chat_template_kwargs": {"enable_thinking": True}}}}
+    assert loader.get_role_chat_template_kwargs("r") == {"enable_thinking": True, "preserve_thinking": True}
+    loader._raw = {"server_mode": {"r": {"chat_template_file": "x.jinja", "chat_template_kwargs": {"enable_thinking": True}}}}
+    assert loader.get_role_chat_template_kwargs("r") == {"enable_thinking": True}
