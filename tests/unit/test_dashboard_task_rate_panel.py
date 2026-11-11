@@ -16,8 +16,6 @@ from src.autopilot_core.tier_specs import (
     seq_task_rate_qph_from_row,
 )
 
-DASHBOARD_HTML = Path(dash.__file__).with_name("dashboard.html")
-
 
 def _row(tid, q, s, ts="2026-07-27T12:00:00+00:00", *, tier=1, cost=0.5, rel=1.0,
          n_questions=None, eval_wall_s=None, details=None, eval_concurrency=None,
@@ -268,17 +266,3 @@ def test_all_eras_is_explicitly_non_decision_grade_legacy_comparator(tmp_path, m
     assert d["objective_policy_context"] == "historical_legacy_comparator"
     assert d["decision_grade"] is False
     assert d["objective_axes"][1]["label"] == "median request t/s (historical comparator)"
-
-
-def test_dashboard_html_ships_dual_report_ui():
-    html = DASHBOARD_HTML.read_text()
-    # Policy-aware banner and descriptive comparison controls.
-    assert 'id="pareto-dual-report-banner"' in html
-    assert 'id="pareto-speed-axis-toggle"' in html
-    assert "archive objective" in html
-    assert "certified task-rate telemetry" in html
-    assert 'id="pareto-divergence-badge"' in html
-    assert 'id="pareto-task-rate-note"' in html
-    assert "setParetoSpeedAxis" in html
-    assert "W3 flip decision live" not in html
-    assert "objective comparison" in html

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""HEAD-probe every CDN URL referenced from src/api/routes/dashboard.html.
+"""HEAD-probe every CDN URL referenced from the hub machine page
+(epyc-root dashboard/static/machine.html; the orchestrator dashboard.html was
+removed when /dashboard became a redirect to the hub).
 
 Reports any URL that returns a non-2xx status, so we catch CDN drift before
 users hit a silent-degradation banner. Runnable standalone (no external
@@ -28,7 +30,7 @@ from typing import NamedTuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_HTML = REPO_ROOT / "src" / "api" / "routes" / "dashboard.html"
+DEFAULT_HTML = Path("/workspace/dashboard/static/machine.html")
 
 # Match `src="https://..."` and `href="https://..."` in <script> / <link> tags.
 _URL_RE = re.compile(r'''(?:src|href)\s*=\s*["'](https?://[^"']+)["']''')
@@ -85,7 +87,7 @@ def _format_probe(p: Probe) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--html", type=Path, default=DEFAULT_HTML,
-                    help=f"path to HTML file (default: {DEFAULT_HTML.relative_to(REPO_ROOT)})")
+                    help=f"path to HTML file (default: {DEFAULT_HTML})")
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable JSON instead of text")
     ap.add_argument("--timeout", type=float, default=5.0,

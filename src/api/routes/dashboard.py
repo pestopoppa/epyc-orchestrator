@@ -36,7 +36,7 @@ from urllib.parse import quote
 import httpx
 import yaml
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from src.roles import Role
 from src.api.routes.dashboard_machine_frame import project_machine_frame
@@ -3249,9 +3249,8 @@ async def node_detail(port: int) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-# Dashboard source paths used by the /version endpoint below to surface
-# build state to the browser, so users can tell when a hard-reload is needed.
-_DASHBOARD_HTML_FOR_VERSION = Path(__file__).parent / "dashboard.html"
+# Dashboard source path used by the /version endpoint below to surface build
+# state to the hub page. The page itself now lives on the hub (:8100/machine).
 _DASHBOARD_PY_FOR_VERSION = Path(__file__)
 _REPO_ROOT_FOR_VERSION = Path(__file__).resolve().parents[3]
 _NO_STORE_HEADERS = {
@@ -6081,13 +6080,12 @@ async def _autopilot_snapshot_impl(scope: str = "current") -> JSONResponse:
 async def version() -> JSONResponse:
     """Return current build state for the hard-reload-needed indicator.
 
-    The browser polls this every ~30s. If the returned `dashboard_html_mtime`
+    The browser polls this every ~30s. If the returned `dashboard_py_mtime`
     or `git_sha` differs from what was captured at page load, the dashboard
     shows a "new build — hard-reload" badge.
 
     Returns:
         git_sha: short SHA of the orchestrator repo HEAD (or None if read fails)
-        dashboard_html_mtime: float epoch seconds; bumps on every save
         dashboard_py_mtime: float epoch seconds; bumps when route handlers
             change (would require an orchestrator API reload to take effect,
             but useful to surface in case the file changed without restart)
@@ -6105,7 +6103,6 @@ async def version() -> JSONResponse:
         _stamp(
             {
                 "git_sha": _read_git_short_sha(),
-                "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
                 "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
                 "server_started_at": _SERVER_STARTED_AT,
                 "server_launch_git_sha": _SERVER_LAUNCH_GIT_SHA,
@@ -8226,40 +8223,21 @@ async def gepa_status() -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Single-page HTML (extracted to dashboard.html; re-read on each request).
-#
-# The HTML is read fresh from disk on every /dashboard hit instead of cached
-# at module load, so edits to dashboard.html take effect after a browser
-# reload — no orchestrator API restart needed. Cost: one ~43 KB file read
-# per page hit (Linux page cache makes repeat reads essentially free).
-# Use this path for HTML/CSS/JS hotfixes; Python route handlers still
-# require `orchestrator_stack reload orchestrator`.
+# Dashboard page moved to the hub (:8100/machine). This route only redirects;
+# the /dashboard/api/* and /dashboard/events/* data surfaces stay here.
 # ---------------------------------------------------------------------------
 
-_DASHBOARD_HTML_PATH = Path(__file__).parent / "dashboard.html"
-
-
-def _read_dashboard_html() -> str:
-    """Read the dashboard HTML file fresh from disk."""
-    return _DASHBOARD_HTML_PATH.read_text()
-
-
-# Backwards-compat: tests + external readers historically check
-# `_DASHBOARD_HTML` as a module attribute. Module-level __getattr__ resolves
-# it lazily on each access by re-reading the file.
-def __getattr__(name: str) -> str:
-    if name == "_DASHBOARD_HTML":
-        return _read_dashboard_html()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+_HUB_PORT = 8100
 
 
 @router.get("/dashboard")
-async def dashboard_page() -> HTMLResponse:
-    """Serve the single-page dashboard (HTML re-read from disk per request)."""
-    return HTMLResponse(
-        _read_dashboard_html(),
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-        },
+async def dashboard_page(request: Request) -> RedirectResponse:
+    """Redirect to the hub machine page on the same host the client used."""
+    host = request.url.hostname or "127.0.0.1"
+    if ":" in host and not host.startswith("["):  # bare IPv6 literal
+        host = f"[{host}]"
+    return RedirectResponse(
+        f"http://{host}:{_HUB_PORT}/machine",
+        status_code=307,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )

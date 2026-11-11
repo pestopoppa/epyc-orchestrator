@@ -102,7 +102,6 @@ def test_source_guard_covers_learned_routing_instrument() -> None:
         "orchestration/derived/stack_priors.yaml",
     } <= guarded
     assert "src/api/routes/dashboard.py" not in guarded
-    assert "src/api/routes/dashboard.html" not in guarded
 
 
 def test_api_worker_roster_comes_from_uvicorn_process_tree(monkeypatch) -> None:

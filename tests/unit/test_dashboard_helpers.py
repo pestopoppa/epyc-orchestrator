@@ -2544,45 +2544,6 @@ def test_dashboard_module_router_still_exported() -> None:
     assert dashboard.router is not None
 
 
-def test_dashboard_module_html_loads_from_file() -> None:
-    """The 918-line HTML block is now loaded from dashboard.html — verify length."""
-    from src.api.routes import dashboard
-    assert len(dashboard._DASHBOARD_HTML) > 40_000
-    assert "<!doctype html>" in dashboard._DASHBOARD_HTML
-    assert "</body></html>" in dashboard._DASHBOARD_HTML
-
-
-def test_dashboard_html_surfaces_autopilot_phase_health() -> None:
-    from src.api.routes import dashboard
-
-    html = dashboard._DASHBOARD_HTML
-    assert "autopilot_phase_health" in html
-    assert "phase health" in html
-
-
-def test_dashboard_html_surfaces_autopilot_outcome_health() -> None:
-    from src.api.routes import dashboard
-
-    html = dashboard._DASHBOARD_HTML
-    assert "autopilot_outcome_progress" in html
-    assert "_autopilotOutcomeProgressLabel" in html
-    assert "autopilot-health-chip" in html
-
-
-def test_dashboard_html_repaints_topology_after_region_lock_refresh() -> None:
-    """Live inference/topology/CPU-lock panels should share one lock-cache frame."""
-    from src.api.routes import dashboard
-
-    html = dashboard._DASHBOARD_HTML
-    assert "const overlayInflight = snapshotSeq != null" in html
-    assert "updateTopologyInflight(overlayInflight, snapshotSeq);" in html
-    assert "Single-writer coherence" in html
-    assert "requestCoherentDashboardSnapshot('region_locks_refresh')" in html
-    assert "t/s hist" in html
-    assert "idle, not an active-holder signal" in html
-    assert "last <span class=\"stat-stale\">${formatTopologyActivityAge(age)}</span>" in html
-
-
 def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
     rows = [
         {
