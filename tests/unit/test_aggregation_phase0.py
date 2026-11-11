@@ -70,6 +70,57 @@ def test_registry_l1_l3_share_store_and_manifest(on):
         reg.get_or_build("c", "l2_dense")
 
 
+def _long_doc():
+    """Three stored chunks, the middle one long, with a balance-sheet row deep inside it (AGG-1.5 shape)."""
+    head = "Funding. We make contributions to pension trusts.\n" * 40
+    row = "Total Current Assets 21,539 20,000\n"
+    body = head + "Cash and cash equivalents 4,954 5,596\n" + row + "Total Assets 92,187 92,187\n" + head
+    secs = [Section(id="s1", title="Overview", level=1, content="Intro text about the business.\n",
+                    page_start=1, page_end=1),
+            Section(id="s2", title="Funding", level=1, content=body, page_start=2, page_end=2),
+            Section(id="s3", title="Tail", level=1, content="Signatures and exhibits.\n", page_start=3, page_end=3)]
+    return DocumentPreprocessResult(original_path="/x/b.pdf", sections=secs, figures=[], total_pages=3, tables=[])
+
+
+def test_l1_passage_index_matches_context_search_and_is_built_once(on):
+    from src.aggregation.registry import CORPUS_TEXT_SEP, PassageHandle  # noqa: PLC0415
+    from src.repl_environment.context_bundle import ContextBundle, Section  # noqa: PLC0415
+
+    st = CorpusStore()
+    st.ingest(_long_doc(), corpus_id="c", doc_id="LONG_2022_10K", entity="LONG")
+    reg = IndexRegistry(st)
+    h = reg.get_or_build("c", "l1_passage_bm25")
+    assert isinstance(h, PassageHandle) and reg.get_or_build("c", "l1_passage_bm25") is h  # built once
+    assert st.built_layers("c") == {"L1"}  # an L1 builder: no L2/L3/L4 row
+    chunks = st.chunks("c")
+    text = CORPUS_TEXT_SEP.join(c["text"] or "" for c in chunks)
+    assert h.text == text
+    bundle = ContextBundle([Section("c", text, "text", False, "x")], search_enabled=True)
+    bundle.set_embedder(None)
+    for q in ("Total Current Assets", "pension trusts contributions", "signatures exhibits", "no_such_token_zzz"):
+        b = bundle.search(q, 8)
+        p = h.search(q, 8)
+        assert [(x["start"], x["end"], x["line"]) for x in p] == [(x["start"], x["end"], x["line"]) for x in b], q
+        assert [round(x["score"], 12) for x in p] == [round(x["score"], 12) for x in b]
+        for x in p:  # provenance: the stored chunk the passage starts in
+            c = next(c for c in chunks if c["chunk_id"] == x["chunk_id"])
+            assert h.span(x["start"], x["end"]).split("\n")[0] in text
+            assert x["end"] - x["start"] <= 800
+            assert text.find(c["text"] or "") <= x["start"]
+
+
+def test_l1_passage_hit_shows_the_matching_text_not_the_chunk_head(on):
+    st = CorpusStore()
+    st.ingest(_long_doc(), corpus_id="c", doc_id="LONG_2022_10K", entity="LONG")
+    h = IndexRegistry(st).get_or_build("c", "l1_passage_bm25")
+    top = h.search("Total Current Assets", 3)[0]
+    assert "Total Current Assets 21,539" in h.span(top["start"], top["end"])
+    stored = next(c for c in st.chunks("c") if c["chunk_id"] == top["chunk_id"])
+    assert "Total Current Assets" not in (stored["text"] or "")[:200]  # the whole-chunk snippet would miss it
+    with pytest.raises(ValueError):
+        h.search("   ")
+
+
 def test_l3_table_and_regex_facts_with_provenance(on):
     st = CorpusStore()
     st.ingest(_doc(), corpus_id="c", doc_id="ACME_2022_10K", entity="ACME")

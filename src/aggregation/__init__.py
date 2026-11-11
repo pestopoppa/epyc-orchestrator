@@ -11,7 +11,9 @@ Flag: ``ORCHESTRATOR_FEATURE_AGG_LAYER=1`` (preferred) or the legacy
 
 Layers:
     L0 chunks       ``store.CorpusStore`` (content-hashed per doc and chunk)
-    L1 lexical      ``registry.IndexRegistry`` builder ``l1_bm25`` (reuses ``BM25Index``)
+    L1 lexical      ``registry.IndexRegistry`` builder ``l1_bm25`` (reuses ``BM25Index``, one document per stored
+                    chunk) or ``l1_passage_bm25`` (the ``context.search`` engine at 800-character passage
+                    granularity over the corpus text, built once per corpus content hash)
     L2 dense        not built in Phase 0 here (no embedding); registry key reserved
     L3 facts-det    ``facts_det`` (parsed tables + regex spans, provenance kept)
     L4 facts-llm    ``facts_llm`` (grammar-constrained, injected backend; never
