@@ -615,6 +615,9 @@ _RUNTIME_FIELD_CHECKS: dict[str, tuple[str, tuple[str, ...], str]] = {
     # behaviour, and the flag appears at that role's next ordinary reload.
     # RATIFY-CTXCKPT-HYBRID-20261024.
     "runtime.flags.ctx_checkpoints": ("dedicated", (), ""),
+    # Min token spacing between checkpoints (INF-86): resolved like ctx_checkpoints (last flag,
+    # else the v10 default 8192) -- see the dedicated block.
+    "runtime.flags.checkpoint_min_step": ("dedicated", (), ""),
     # Per-role chat template file: a string token on the cmdline, same emission
     # rule as `-ngl all` (the launcher additionally refuses at build time when the
     # declared path is missing, so a live server always matches its declaration).
@@ -943,6 +946,8 @@ def _live_cache_idle_slots(cmdline: list[str]) -> bool:
 # (common/common.h:633 at ffc1bac82). Re-read it at every kernel promotion.
 SERVER_DEFAULT_CTX_CHECKPOINTS = 32
 _CTX_CHECKPOINTS_FLAGS: tuple[str, ...] = ("-ctxcp", "--ctx-checkpoints", "--swa-checkpoints")
+SERVER_DEFAULT_CHECKPOINT_MIN_STEP = 8192  # common/common.h:634 at ffc1bac82
+_CHECKPOINT_MIN_STEP_FLAGS: tuple[str, ...] = ("-cms", "--checkpoint-min-step")
 
 
 def _live_ctx_checkpoints(cmdline: list[str]) -> int | None:
@@ -956,6 +961,17 @@ def _live_ctx_checkpoints(cmdline: list[str]) -> int | None:
     value = _last_cmdline_flag_value(cmdline, *_CTX_CHECKPOINTS_FLAGS)
     if value is None:
         return SERVER_DEFAULT_CTX_CHECKPOINTS
+    try:
+        return int(value.strip())
+    except ValueError:
+        return None
+
+
+def _live_checkpoint_min_step(cmdline: list[str]) -> int | None:
+    """What llama-server resolved ``--checkpoint-min-step`` to (last spelling wins; else 8192)."""
+    value = _last_cmdline_flag_value(cmdline, *_CHECKPOINT_MIN_STEP_FLAGS)
+    if value is None:
+        return SERVER_DEFAULT_CHECKPOINT_MIN_STEP
     try:
         return int(value.strip())
     except ValueError:
@@ -1109,6 +1125,14 @@ def _runtime_attestation_warnings(
         if actual_ckpt != expected_ckpt:
             warnings.append(_runtime_value_warning(
                 name, info, "ctx_checkpoints", expected_ckpt, actual_ckpt
+            ))
+
+    expected_cms = flags.get("checkpoint_min_step")
+    if isinstance(expected_cms, int) and not isinstance(expected_cms, bool):
+        actual_cms = _live_checkpoint_min_step(cmdline)
+        if actual_cms != expected_cms:
+            warnings.append(_runtime_value_warning(
+                name, info, "checkpoint_min_step", expected_cms, actual_cms
             ))
 
     slot_save_path = cache.get("slot_save_path")

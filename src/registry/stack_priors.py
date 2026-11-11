@@ -2490,6 +2490,9 @@ def _launch_runtime_record(
     # minimum=0. Compiled ONLY when declared, so every other role's record is
     # byte-identical. RATIFY-CTXCKPT-HYBRID-20261024.
     ctx_checkpoints = _runtime_flag_int_prior(server_cfg, role_cfg, key="ctx_checkpoints")
+    # `--checkpoint-min-step N` (-cms; v10 default 8192, 0 = no minimum). Declared as
+    # `server_mode.<role>.checkpoint_min_step`; compiled ONLY when declared. INF-86.
+    checkpoint_min_step = _runtime_flag_int_prior(server_cfg, role_cfg, key="checkpoint_min_step")
     # A default-mode server may DECLARE its -ub/-b (serving_shape.ubatch / .batch).
     # Undeclared -> DEFAULT_UBATCH_TOKENS and no -b, exactly as before; the declared
     # batch is compiled ONLY when declared. STACKCHG-8083BATCH-20261004 part B.
@@ -2615,6 +2618,7 @@ def _launch_runtime_record(
             # Context checkpoints per slot (`--ctx-checkpoints`). Present only when
             # declared. RATIFY-CTXCKPT-HYBRID-20261024.
             **({"ctx_checkpoints": ctx_checkpoints} if ctx_checkpoints is not None else {}),
+            **({"checkpoint_min_step": checkpoint_min_step} if checkpoint_min_step is not None else {}),
             # Per-role chat template FILE (llama-server --chat-template-file).
             # Declared as `server_mode.<role>.chat_template_file` (absolute path
             # string); role-local server/serving/launch sub-mappings work too via

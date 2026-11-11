@@ -225,3 +225,15 @@ def test_this_trees_hybrid_host_servers_declare_32_and_nothing_else_does() -> No
             assert "ctx_checkpoints" not in flags, (role, arch)
     if seen_hybrid:
         assert {"frontdoor", "architect_critic", "architect_general"} <= seen_hybrid
+
+
+@pytest.mark.parametrize("declared", [512, 0])
+def test_declared_checkpoint_min_step_is_compiled_verbatim(declared: int) -> None:
+    """INF-86: 0 is a DECLARED value (no minimum), not an absent one."""
+    runtime = _record({"cache_ram": 32768, "ctx_checkpoints": 32, "checkpoint_min_step": declared})
+    assert runtime["flags"]["checkpoint_min_step"] == declared
+    assert runtime["flags"]["ctx_checkpoints"] == 32
+
+
+def test_undeclared_checkpoint_min_step_is_absent() -> None:
+    assert "checkpoint_min_step" not in _record({"ctx_checkpoints": 32})["flags"]

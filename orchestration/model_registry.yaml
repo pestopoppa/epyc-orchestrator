@@ -3,7 +3,7 @@
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/worktrees/epyc-orchestrator-inf86-cms512/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-10-31T12:41:01+00:00
-# Cache key:   379ce531da87caf7...
+# Compiled at: 2026-11-11T14:12:26+00:00
+# Cache key:   24dc711c38dad8c4...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -526,6 +526,20 @@ dflash_drafters:
     format: safetensors
     status: downloaded
 deprecated_models:
+- model: DeepSeek-V4.1-Flash-DSpark (Sept DSpark drafter)
+  path_was: /mnt/raid0/llm/models/deepseek-ai/DeepSeek-V4.1-Flash-DSpark.gguf
+  size_gb: 10.0
+  reason: 'DELETED (file found gone 2026-11-09; deletion approved by operator 2026-11-02, decisions-batch2-4-20261102, DS41-W7.2; queue item OP-DSPARK-RM re-approved 2026-11-11). The Sept 3-block DSpark
+    drafter (10,004,008,256 B) for DeepSeek-V4.1-Flash; no longer needed since DS41-W6.2 was cancelled 2026-10-22. Unmapped, no live references (checked 2026-10-22). Catalogue-only: no roles.*/server_mode.*
+    row, no serving-stack change. The -1017-DSpark.gguf sibling is untouched.'
+  deleted: 2026-11-09
+- model: Qwen_Qwen3.6-35B-A3B-Q8_0.gguf (plain non-MTP)
+  path_was: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+  size_gb: 37
+  reason: 'DELETED 2026-11-04 by operator order to free disk. The plain non-MTP Qwen3.6-35B-A3B Q8_0 (different weights from the MTP artifact; ~37 GB, re-downloadable from HF Qwen/Qwen3.6-35B-A3B / bartowski
+    Qwen_Qwen3.6-35B-A3B-GGUF). Row qwen36_q8_0 (catalogue family row, never the launched artifact since 2026-09-22) repointed to the MTP file that frontdoor actually launches (Qwen3.6-35B-A3B-MTP-Q8_0.gguf).
+    No serving-stack change: launch argv, topology and recipes untouched.'
+  deleted: 2026-11-04
 - model: cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M
   path_was: /mnt/raid0/llm/models/bartowski/cerebras_Qwen3-Coder-REAP-25B-A3B-GGUF/cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf
   size_gb: 15.2
@@ -1158,6 +1172,20 @@ deprecated_models:
   reason: Superseded by DS41-1017 MXFP4 9-shard trunk (research ada2bf38a); W5 correctness passed 2026-10-21. Operator approved at DS41-W2 on 2026-10-20 and reconfirmed 2026-10-21 after W5 passed. 518,596,067,328
     B (size_gb is GiB). Moved to trash and purged 2026-10-21T19:00:05Z; assert_not_mapped.sh PASS at 18:59Z (10 processes unreadable by this user).
   deleted: 2026-10-21
+- model: Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf
+  path_was: /mnt/raid0/llm/models/lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF/Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf
+  size_gb: 19.9
+  reason: 'Operator-approved 2026-11-02 disk reclaim. Former coder_escalation model (swapped 2026-05-06); no live role bound. roles.qwen25_coder_32b_q4km, roles.ingest_qwen2_5_coder_32b and server_mode.qwen25_coder_32b_q4km
+    deprecated in the same commit. Supersedes the "KEPT" note on the Q8_0 sibling row above. Stale tooling (benchmark scripts, not serving): bench_all_spec_sweeps.sh, bench_coder_192t.sh, bench_kv_cache_quant.sh,
+    bench_kv_hadamard.sh, bench_largek_speculation.sh, bench_numa_coder_quant_sweep.sh, bench_sweep_coder_spec_params.sh, bench_sweep_spec_params.sh, bench_tree_speculation_server.sh, profile_verification_cost.sh,
+    scripts/benchmark/deprecated/*, the AA-omniscience measurement commands/manifest under docs/ (historical measurement record).'
+  deleted: 2026-11-02
+- model: Qwen3-4B-Thinking-2507-Q8_0.gguf
+  path_was: /mnt/raid0/llm/models/Qwen3-4B-Thinking-2507-GGUF/Qwen3-4B-Thinking-2507-Q8_0.gguf
+  size_gb: 4.0
+  reason: Operator-approved 2026-11-09 disk reclaim (NIB2-65 safe set). Catalogue-only candidate, no live role bound; roles.qwen3_4b_thinking_2507_local_q8 and roles.thinking_qwen3_4b_thinking_2507 deprecated
+    in the same change.
+  deleted: 2026-11-09
 observations:
   slot_admission_alignment_2026_02_20:
     title: 'Slot/admission alignment: eliminated 50% KV cache waste across all backends'
@@ -1825,6 +1853,7 @@ server_mode:
     slots: 4
     cache_ram: 32768
     ctx_checkpoints: 32
+    checkpoint_min_step: 512
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
@@ -1890,7 +1919,7 @@ server_mode:
     model_role: qwen38_27b_q8_local
     description: 'Coding escalation — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0). 2026-08-20: artifact swapped from Qwen3.6-27B-MTP-Q8_0. 2026-07-31: MOVED off frontdoor''s :8070 shared 35B process onto
       architect_general''s :8083 GPU process; alias, launches no server of its own. 2026-09-27 ARCHSWAP: the :8083 host role is now architect_critic (same process, same model). Quality on this model NOT
-      yet measured for the coder suite. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
+      yet measured for the coder suite. Former Qwen2.5-Coder-32B-Q4 was preserved as qwen25_coder_32b_q4km (deprecated, GGUF deleted 2026-11-02).'
     alias_of: architect_critic
     benchmark_date: null
     benchmark_score: null
@@ -1994,6 +2023,7 @@ server_mode:
     cache_ram: 65536
     cache_idle_slots: false
     ctx_checkpoints: 32
+    checkpoint_min_step: 512
     serving_shape:
       n_ctx: 393216
       batch: 512
@@ -2065,6 +2095,7 @@ server_mode:
     slots: 1
     cache_ram: 32768
     ctx_checkpoints: 32
+    checkpoint_min_step: 512
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
@@ -2107,12 +2138,11 @@ server_mode:
       recipe_id: qwen38-flash-next-cpu-mtp
       module: epyc-inference-research/scripts/lib/qwen38_flash_next_recipe.py
       surface: cpu-decode
-      threads: 48
-      cpu_shape: NUMA_FULL_T48
+      threads: 96
+      cpu_shape: NUMA_FULL
       no_mmap: true
       flash_attn: true
       env:
-        GGML_NOHUGEPAGE_PROCESS: '1'
         GGML_FA_SPLIT_KV: '0'
       measured_at_context: 8192
       measured_on_kernel: ef81196d5 / build 10241 (llama.cpp-experimental champion)
@@ -2238,7 +2268,7 @@ roles:
     tier: B
     description: 'Coding escalation — Qwen3.8-27B dense Q8 MTP on MI210 (ROCm0). E-7 2026-08-22 at terse template 1443ea9ab4bb: math 85.0%, mmlu_pro 27.5%, gpqa_diamond 47.5%, cruxeval 22.5% (alias on architect_general''s
       :8083; same stamps). 2026-07-31: MOVED off frontdoor. Alias on architect_general''s :8083 process; NO LONGER the same model as frontdoor and no longer shares its GGUF mmap. Absorbs the eliminated
-      architect_coding role. Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.'
+      architect_coding role. Former Qwen2.5-Coder-32B-Q4 was preserved as qwen25_coder_32b_q4km (deprecated, GGUF deleted 2026-11-02).'
     model:
       name: Qwen3.8-27B-Q8_0
       path: /mnt/raid0/llm/models/Qwen3.8-27B-Q8_0.gguf
@@ -3236,8 +3266,8 @@ roles:
   qwen36_35b_a3b_mtp_q8_local:
     tier: C
     description: 'Qwen3.6-35B-A3B MTP Q8_0 exact local artifact. This is the file frontdoor (and its worker_summarize alias) actually launches — note server_mode.frontdoor.model_role points at `qwen36_q8_0`,
-      whose path is the NON-MTP /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf. THIS row is the deployed artifact; qwen36_q8_0 is the family row. 2026-07-31 (Directive 3): coder_escalation REMOVED
-      — it moved to Qwen3.6-27B-MTP-Q8_0 (qwen36_27b_mtp_q8_local) on :8083.
+      whose path was the NON-MTP Qwen_Qwen3.6-35B-A3B-Q8_0.gguf (deleted 2026-11-04; qwen36_q8_0 now points at this same MTP file). THIS row is the deployed artifact; qwen36_q8_0 is the family row. 2026-07-31
+      (Directive 3): coder_escalation REMOVED — it moved to Qwen3.6-27B-MTP-Q8_0 (qwen36_27b_mtp_q8_local) on :8083.
 
       '
     model:
