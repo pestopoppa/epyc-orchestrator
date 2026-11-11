@@ -7,7 +7,11 @@ only (DuckDB is a pending dependency decision), so the store uses stdlib
 The DDL is the common subset of both dialects.
 
 Ingest is idempotent per doc content hash: re-ingesting an unchanged document is
-a no-op, a changed one replaces its rows (incremental re-ingest).
+a no-op, a changed one replaces its rows (incremental re-ingest). The rows a replace
+removes are not lost silently: their facts are copied to ``facts_superseded`` and the
+document to ``documents_superseded`` (``superseded_by`` = the new content hash) before
+the live tables drop them, so "marked superseded" and "absent from every read path"
+both hold.
 """
 
 from __future__ import annotations
@@ -53,6 +57,18 @@ DDL = (
         corpus_id TEXT NOT NULL, doc_id TEXT NOT NULL, field TEXT NOT NULL, period TEXT NOT NULL,
         chosen_fact_id TEXT, other_fact_id TEXT, chosen_value DOUBLE, other_value DOUBLE,
         other_extractor TEXT, kind TEXT, rule TEXT)""",
+    """CREATE TABLE IF NOT EXISTS documents_superseded (
+        doc_hash TEXT NOT NULL, corpus_id TEXT NOT NULL, doc_id TEXT NOT NULL, entity TEXT,
+        total_pages INTEGER, n_tokens_est INTEGER, n_chunks INTEGER, n_tables INTEGER, n_facts INTEGER,
+        n_canonical INTEGER, superseded_by TEXT NOT NULL, superseded_at DOUBLE NOT NULL,
+        PRIMARY KEY (doc_hash, superseded_by))""",
+    """CREATE TABLE IF NOT EXISTS facts_superseded (
+        fact_id TEXT NOT NULL, doc_hash TEXT NOT NULL, doc_id TEXT, entity TEXT,
+        period TEXT, field TEXT, value DOUBLE, unit TEXT, quote TEXT,
+        quote_start INTEGER, quote_end INTEGER, chunk_id TEXT, table_id TEXT,
+        page INTEGER, line_start INTEGER, line_end INTEGER, confidence TEXT,
+        extractor TEXT, audit_status TEXT, corpus_id TEXT, superseded_by TEXT NOT NULL,
+        superseded_at DOUBLE NOT NULL, PRIMARY KEY (fact_id, doc_hash, superseded_by))""",
     """CREATE TABLE IF NOT EXISTS index_manifest (
         corpus_id TEXT NOT NULL, content_hash TEXT NOT NULL, builder TEXT NOT NULL,
         model_id TEXT NOT NULL, layer TEXT, n_items INTEGER, built_at DOUBLE,
@@ -210,6 +226,7 @@ class IngestReceipt:
     n_chunks: int
     n_tables: int
     n_tokens_est: int
+    superseded: tuple[str, ...] = ()  # content hashes this ingest replaced (their rows are in ``*_superseded``)
 
 
 def _connect(path: str | Path, engine: str):
@@ -274,6 +291,7 @@ class CorpusStore:
             ).fetchone()[0]
             return IngestReceipt(doc_id, doc_hash, "unchanged", n_chunks, n_tables, tok)
         for (old_hash,) in prior:
+            self._supersede_doc(old_hash, doc_hash, corpus_id)
             self._delete_doc(old_hash)
 
         section_chunk: dict[str, str] = {}
@@ -308,6 +326,7 @@ class CorpusStore:
         return IngestReceipt(
             doc_id, doc_hash, "replaced" if prior else "ingested",
             len(result.sections), len(result.tables), n_tok,
+            tuple(r[0] for r in prior),
         )
 
     @staticmethod
@@ -318,6 +337,29 @@ class CorpusStore:
             if s.page_start <= page <= s.page_end:
                 return section_chunk.get(s.id)
         return None
+
+    def _supersede_doc(self, old_hash: str, new_hash: str, corpus_id: str) -> None:
+        """Record what a replace is about to delete: the old document's facts go to ``facts_superseded`` and one
+        ``documents_superseded`` row keeps its counts, both tagged with ``superseded_by`` = the new content hash.
+        Idempotent (primary keys), and a no-op for a hash the store does not hold."""
+        row = self.conn.execute(
+            "SELECT doc_id, entity, total_pages, n_tokens_est FROM documents WHERE doc_hash = ?",
+            [old_hash]).fetchone()
+        if row is None:
+            return
+        now = time.time()
+        cols = ", ".join(FACT_COLUMNS)
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO facts_superseded ({cols}, corpus_id, superseded_by, superseded_at) "
+            f"SELECT {cols}, ?, ?, ? FROM facts WHERE doc_hash = ?", [corpus_id, new_hash, now, old_hash])
+        n = {t: self.conn.execute(f"SELECT COUNT(*) FROM {t} WHERE doc_hash = ?", [old_hash]).fetchone()[0]
+             for t in ("chunks", "tables_", "facts", CANONICAL_TABLE)}
+        self.conn.execute(
+            "INSERT OR REPLACE INTO documents_superseded (doc_hash, corpus_id, doc_id, entity, total_pages, "
+            "n_tokens_est, n_chunks, n_tables, n_facts, n_canonical, superseded_by, superseded_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [old_hash, corpus_id, row[0], row[1], row[2], row[3], n["chunks"], n["tables_"], n["facts"],
+             n[CANONICAL_TABLE], new_hash, now])
 
     def _delete_doc(self, doc_hash: str) -> None:
         for table in ("chunks", "tables_", "facts", CANONICAL_TABLE, "documents"):
@@ -379,6 +421,32 @@ class CorpusStore:
             rec["rows"] = json.loads(r[8] or "[]")
             out.append(rec)
         return out
+
+    def superseded_documents(self, corpus_id: str | None = None) -> list[dict[str, Any]]:
+        """Documents a replace removed from the live tables, newest first (never part of any read path above)."""
+        keys = ("doc_hash", "corpus_id", "doc_id", "entity", "total_pages", "n_tokens_est", "n_chunks",
+                "n_tables", "n_facts", "n_canonical", "superseded_by", "superseded_at")
+        sql = f"SELECT {', '.join(keys)} FROM documents_superseded"
+        params: list[Any] = []
+        if corpus_id is not None:
+            sql += " WHERE corpus_id = ?"
+            params.append(corpus_id)
+        sql += " ORDER BY superseded_at DESC, doc_hash"
+        return [dict(zip(keys, r)) for r in self.conn.execute(sql, params).fetchall()]
+
+    def superseded_facts(self, corpus_id: str | None = None, *, doc_hash: str | None = None) -> list[dict[str, Any]]:
+        """The ledger rows of ``facts_superseded`` (``FACT_COLUMNS`` + ``superseded_by``)."""
+        cols = FACT_COLUMNS + ("superseded_by",)
+        sql = f"SELECT {', '.join(cols)} FROM facts_superseded WHERE 1 = 1"
+        params: list[Any] = []
+        if corpus_id is not None:
+            sql += " AND corpus_id = ?"
+            params.append(corpus_id)
+        if doc_hash is not None:
+            sql += " AND doc_hash = ?"
+            params.append(doc_hash)
+        sql += " ORDER BY doc_hash, fact_id"
+        return [dict(zip(cols, r)) for r in self.conn.execute(sql, params).fetchall()]
 
     # ------------------------------------------------------------------- facts
     def write_facts(self, facts: Iterable[dict[str, Any]]) -> int:

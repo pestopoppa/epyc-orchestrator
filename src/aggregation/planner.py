@@ -15,6 +15,14 @@ size default; in between -> the model's Choice.
 
 The current token-count rule (``routing_decision.py``) remains the fallback and
 is not touched; nothing in the request path calls this module yet.
+
+``sql(+backfill)``: :func:`question_fields` names, deterministically and without a
+model, the canonical fields a question needs; :func:`backfill_plan` compares them with
+the canonical catalog and lists, per field, the documents with no row for the asked
+period. When any is missing the ``sql`` path is a ``sql+backfill`` path: ``plan(...,
+backfill=...)`` puts that plan in the ``decision_receipt.v1`` (``receipt["backfill"]``)
+so the trigger is on the record. Building the missing L4 units stays the caller's
+(``LazyFieldBackfill``) job; this module never calls a model.
 """
 
 from __future__ import annotations
@@ -84,6 +92,7 @@ class PlanDecision:
     llm_called: bool
     decided_by: str  # "size_rule" | "deterministic_default_stub" | "typed_threshold" | "typed_choice"
     receipt: dict = field(default_factory=dict)
+    backfill: dict = field(default_factory=dict)  # the ``backfill_plan`` when the ``sql`` path must backfill
 
 
 DecideFn = Callable[[str, tuple[Question, ...]], Mapping[str, object]]
@@ -175,6 +184,72 @@ def scoped_facts(question: str, docs: Sequence[Mapping[str, object]], *, questio
                         sql_fields_present=sql_fields_present), reason
 
 
+# ------------------------------------------------------------------ backfill trigger
+# Which canonical fields does a question need? A phrase table, not a model: every label of
+# ``facts_det.FIELD_ALIASES`` (longest first) plus the field names themselves, matched as whole-word
+# sequences on alphanumeric tokens ('long-term debt' and 'long term debt' are one phrase).
+_YEAR_Q = re.compile(r"(?<!\d)((?:19[89]|20[0-4])\d)(?!\d)")
+
+
+def _phrase(text: str) -> str:
+    return " ".join(_tokens(text))
+
+
+def _field_phrases() -> list[tuple[str, str]]:
+    from src.aggregation.facts_det import FIELD_ALIASES  # noqa: PLC0415 - keeps the planner import-light
+
+    table = {_phrase(label): fld for label, fld in FIELD_ALIASES}
+    for fld in {f for _l, f in FIELD_ALIASES}:
+        table.setdefault(_phrase(fld.replace("_", " ")), fld)
+    return sorted(table.items(), key=lambda kv: (-len(kv[0]), kv[0]))
+
+
+def question_fields(question: str) -> list[str]:
+    """Canonical fields named by ``question``, in order of first mention; a longer phrase hides the shorter ones
+    inside it ('net income attributable to' is ``net_income_attributable`` only, not also ``net_income``)."""
+    text = f" {_phrase(question)} "
+    hits: list[tuple[int, str]] = []
+    for phrase, fld in _field_phrases():
+        at = text.find(f" {phrase} ")
+        if at < 0:
+            continue
+        hits.append((at, fld))
+        text = text[:at] + " " * (len(phrase) + 2) + text[at + len(phrase) + 2:]
+    out: list[str] = []
+    for _at, fld in sorted(hits):
+        if fld not in out:
+            out.append(fld)
+    return out
+
+
+def question_period(question: str) -> str | None:
+    """The fiscal year a question asks about ('FY2022', '2022'), or None."""
+    m = _YEAR_Q.search(question)
+    return m.group(1) if m else None
+
+
+def backfill_plan(question: str, canonical: Sequence[Mapping[str, object]], docs: Sequence[Mapping[str, object]],
+                  *, period: str | None = None, fields: Sequence[str] | None = None) -> dict:
+    """The lazy-backfill trigger: for every field the question needs, the documents with no canonical row for
+    ``period`` (all periods when None). ``canonical`` rows carry ``doc_id``, ``field``, ``period`` (as
+    ``CorpusStore.canonical_facts`` or ``select_canonical`` return them); ``docs`` carry ``doc_id``.
+    Pure and deterministic: no store write, no model."""
+    needed = list(fields) if fields is not None else question_fields(question)
+    if period is None:
+        period = question_period(question)
+    doc_ids = sorted(str(d["doc_id"]) for d in docs)
+    per: dict[str, dict] = {}
+    for fld in needed:
+        have = {str(r["doc_id"]) for r in canonical
+                if r.get("field") == fld and (period is None or str(r.get("period")) == str(period))}
+        missing = [d for d in doc_ids if d not in have]
+        per[fld] = {"n_present": len(doc_ids) - len(missing), "n_missing": len(missing), "missing_docs": missing}
+    to_fill = [f for f in needed if per[f]["n_missing"]]
+    return {"schema": "backfill_plan.v1", "trigger": bool(to_fill), "needed_fields": needed, "fields": to_fill,
+            "period": period, "n_docs": len(doc_ids),
+            "missing_docs": sorted({d for f in to_fill for d in per[f]["missing_docs"]}), "per_field": per}
+
+
 def _state(question: str, f: PlannerFacts) -> str:
     return json.dumps({"question": question, "facts": asdict(f)}, sort_keys=True)
 
@@ -186,6 +261,7 @@ def plan(
     decide_fn: DecideFn | None = None,
     lo: int = DEFAULT_LO,
     hi: int = DEFAULT_HI,
+    backfill: Mapping | None = None,
 ) -> PlanDecision:
     require_enabled()
     t0 = time.monotonic()
@@ -216,6 +292,16 @@ def plan(
         else:
             path = choice if choice in PATHS else default
             dec = PlanDecision(path, LAYERS[path], True, "typed_choice")
+    if backfill is not None:
+        # Only the ``sql`` path reads L4; on any other path the trigger is recorded as not applicable.
+        if dec.path == "sql" and backfill.get("trigger"):
+            dec.backfill = dict(backfill)
+            receipt["backfill"] = dec.backfill
+            receipt["path_label"] = "sql+backfill"
+        else:
+            receipt["backfill"] = {**dict(backfill), "trigger": False,
+                                   "reason": "path " + dec.path + " does not read L4"
+                                   if dec.path != "sql" else "no needed field is missing"}
     receipt.update(path=dec.path, layers=list(dec.layers), llm_called=dec.llm_called,
                    decided_by=dec.decided_by, elapsed_ms=(time.monotonic() - t0) * 1000)
     dec.receipt = receipt
