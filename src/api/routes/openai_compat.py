@@ -676,6 +676,17 @@ def _client_mode_messages(messages: list[OpenAIMessage]) -> list[dict[str, Any]]
             data["tool_call_id"] = message.tool_call_id
         if message.name:
             data["name"] = message.name
+        # INF-86: an assistant turn the client replays WITH its split-off reasoning
+        # must reach the template with it. Dropping it re-renders the turn as an
+        # empty <think></think> block and diverges from the tokens llama-server
+        # cached when it generated the turn (hybrid-SSM prefix reuse then
+        # re-prefills from that turn's start).
+        if (
+            message.role == "assistant"
+            and isinstance(message.reasoning_content, str)
+            and message.reasoning_content
+        ):
+            data["reasoning_content"] = message.reasoning_content
         out.append(data)
     return out
 
