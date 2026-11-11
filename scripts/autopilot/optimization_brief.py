@@ -737,6 +737,15 @@ def _narrative(
 # --------------------------------------------------------------------------- #
 # Top-level
 # --------------------------------------------------------------------------- #
+def _lock_wait_section(path: Path | None) -> dict[str, Any]:
+    try:
+        from scripts.autopilot.lock_wait_reader import read_region_lock_wait
+
+        return read_region_lock_wait(path)
+    except Exception as exc:  # noqa: BLE001 - brief stays read-only and total
+        return {"read_only": True, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def build_optimization_brief(
     *,
     state_path: Path | None = None,
@@ -745,6 +754,7 @@ def build_optimization_brief(
     digest_dir: Path | None = None,
     digest_text: str | None = None,
     alarm_window: int = 30,
+    dispatch_log_path: Path | None = None,
 ) -> dict[str, Any]:
     """Assemble the full operator optimization brief (read-only)."""
     state_path = state_path or DEFAULT_STATE_PATH
@@ -809,6 +819,9 @@ def build_optimization_brief(
         # Task C twin: the GEPA no-op provenance window, so brief consumers see
         # the same caveat window the gepa panel renders.
         "gepa_provenance_windows": GEPA_PROVENANCE_WINDOWS,
+        # INF-45 P1-8: region-lock wait by holder role (observation only; scorable,
+        # not a routing knob).
+        "region_lock_wait": _lock_wait_section(dispatch_log_path),
     }
 
 
