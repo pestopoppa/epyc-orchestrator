@@ -56,6 +56,7 @@ DDL = (
     """CREATE TABLE IF NOT EXISTS index_manifest (
         corpus_id TEXT NOT NULL, content_hash TEXT NOT NULL, builder TEXT NOT NULL,
         model_id TEXT NOT NULL, layer TEXT, n_items INTEGER, built_at DOUBLE,
+        origin TEXT, n_built INTEGER, n_loaded INTEGER,
         PRIMARY KEY (corpus_id, content_hash, builder, model_id))""",
 )
 
@@ -233,11 +234,19 @@ class CorpusStore:
         self.conn = _connect(path, engine)
         for stmt in DDL:
             self.conn.execute(stmt)
+        self._migrate_manifest()
         self.conn.execute(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
             ["schema_version", SCHEMA_VERSION],
         )
         self.conn.commit()
+
+    def _migrate_manifest(self) -> None:
+        """Add the ``origin`` / ``n_built`` / ``n_loaded`` columns to a manifest created before they existed."""
+        have = {d[0] for d in self.conn.execute("SELECT * FROM index_manifest LIMIT 0").description}
+        for col, typ in (("origin", "TEXT"), ("n_built", "INTEGER"), ("n_loaded", "INTEGER")):
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE index_manifest ADD COLUMN {col} {typ}")
 
     # ------------------------------------------------------------------ ingest
     def ingest(
@@ -448,21 +457,45 @@ class CorpusStore:
     # ---------------------------------------------------------------- manifest
     def record_index(
         self, corpus_id: str, content_hash: str, builder: str, model_id: str,
-        layer: str, n_items: int,
+        layer: str, n_items: int, origin: str = "built",
     ) -> None:
-        self.conn.execute(
-            "INSERT OR REPLACE INTO index_manifest VALUES (?,?,?,?,?,?,?)",
-            [corpus_id, content_hash, builder, model_id, layer, n_items, time.time()],
-        )
+        """Record that an index for this key now exists in a process: ``origin`` is ``'built'`` (computed) or
+        ``'loaded'`` (read back from its persisted file). ``n_built`` / ``n_loaded`` count both over the row's life;
+        a load keeps the original ``built_at``. A row written before the counters existed counts as one build."""
+        if origin not in ("built", "loaded"):
+            raise ValueError(f"origin must be 'built' or 'loaded', got {origin!r}")
+        key = [corpus_id, content_hash, builder, model_id]
+        row = self.conn.execute(
+            "SELECT n_built, n_loaded FROM index_manifest "
+            "WHERE corpus_id = ? AND content_hash = ? AND builder = ? AND model_id = ?", key).fetchone()
+        n_built = (row[0] if row[0] is not None else 1) if row else 0
+        n_loaded = (row[1] or 0) if row else 0
+        if origin == "built":
+            n_built += 1
+        else:
+            n_loaded += 1
+        if row and origin == "loaded":
+            self.conn.execute(
+                "UPDATE index_manifest SET origin = ?, n_built = ?, n_loaded = ?, n_items = ? "
+                "WHERE corpus_id = ? AND content_hash = ? AND builder = ? AND model_id = ?",
+                [origin, n_built, n_loaded, n_items, *key])
+        else:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO index_manifest "
+                "(corpus_id, content_hash, builder, model_id, layer, n_items, built_at, origin, n_built, n_loaded) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [*key, layer, n_items, time.time(), origin, n_built, n_loaded])
         self.conn.commit()
 
     def manifest(self, corpus_id: str | None = None) -> list[dict[str, Any]]:
-        sql = "SELECT corpus_id, content_hash, builder, model_id, layer, n_items FROM index_manifest"
+        sql = ("SELECT corpus_id, content_hash, builder, model_id, layer, n_items, "
+               "COALESCE(origin, 'built'), COALESCE(n_built, 1), COALESCE(n_loaded, 0) FROM index_manifest")
         params: Sequence[Any] = []
         if corpus_id is not None:
             sql += " WHERE corpus_id = ?"
             params = [corpus_id]
-        keys = ("corpus_id", "content_hash", "builder", "model_id", "layer", "n_items")
+        keys = ("corpus_id", "content_hash", "builder", "model_id", "layer", "n_items",
+                "origin", "n_built", "n_loaded")
         return [dict(zip(keys, r)) for r in self.conn.execute(sql, params).fetchall()]
 
     def built_layers(self, corpus_id: str) -> set[str]:
