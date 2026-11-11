@@ -1133,6 +1133,13 @@ class Baseline:
     # hold. Stamped by update_baseline() whenever a promotion actually refreshes
     # frontdoor_speed, and by an operator reseed.
     autopilot_speed_era: str = ""
+    # Cost-instrument era this baseline's ``cost`` was captured under (INF-45 W2). Exact
+    # analogue of ``eval_quality_era`` / ``autopilot_speed_era`` on the COST axis. Before this
+    # existed ``cost`` was a bare 0.5 with no provenance. Empty on a legacy baseline, which
+    # the gate treats as a pre-boundary stamp. Stamped by update_baseline() whenever a
+    # promotion refreshes ``cost``; only emitted/decoded when known, so state stays
+    # byte-identical until a cost era is configured.
+    cost_era: str = ""
     # Path this baseline was loaded from. save() writes back here by default so a
     # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
     # NEVER clobber the production orchestration/autopilot_baseline.yaml. Excluded
@@ -1494,6 +1501,9 @@ class Baseline:
         speed_era = state.get("autopilot_speed_era")
         if isinstance(speed_era, str) and speed_era.strip():
             self.autopilot_speed_era = speed_era.strip()
+        cost_era = state.get("cost_era")
+        if isinstance(cost_era, str) and cost_era.strip():
+            self.cost_era = cost_era.strip()
 
     def quality_for_tier(self, tier: int, *, strict: bool = False) -> float | None:
         """Return same-tier quality baseline; lenient mode falls back to legacy `quality`."""
@@ -1682,6 +1692,9 @@ class Baseline:
         # the pre-boundary default.
         if self.autopilot_speed_era:
             payload["autopilot_speed_era"] = self.autopilot_speed_era
+        # Same contract on the cost axis (INF-45 W2): emit only when known.
+        if self.cost_era:
+            payload["cost_era"] = self.cost_era
         # Only emit when known — a pre-2026-09-16 payload stays byte-identical.
         if self.frontdoor_task_rate_qph is not None:
             payload["frontdoor_task_rate_qph"] = self.frontdoor_task_rate_qph
@@ -2310,6 +2323,7 @@ class SafetyGate:
         quality_history_provenance_by_tier: dict[str | int, list[Any]] | None = None,
         eval_quality_era: str | None = None,
         autopilot_speed_era: str | None = None,
+        cost_era: str | None = None,
         quality_exclude_before_ts: float | None = None,
     ):
         self.baseline = Baseline.load(baseline_path, state=baseline_state)
@@ -2335,6 +2349,10 @@ class SafetyGate:
         # (single-era world / pre-existing tests) and every new branch below is inert, so
         # the gate is byte-identical to the pre-fence version.
         self._autopilot_speed_era = (autopilot_speed_era or "").strip() or None
+        # Active COST-instrument era fence (INF-45 W2). Exact analogue of the two fields
+        # above; sourced from active_instrument_eras.cost. None => the cost axis runs
+        # unfenced and every cost-era branch is inert (byte-identical to pre-W2).
+        self._cost_era = (cost_era or "").strip() or None
         # AP-57: provenance of the most recent speed-axis reseed (see _reseed_speed_axis_if_held).
         self._last_speed_reseed: dict[str, Any] = {}
         self._quality_exclude_before_ts = quality_exclude_before_ts
@@ -2382,6 +2400,17 @@ class SafetyGate:
         if not self._eval_quality_era:
             return False
         return (self.baseline.eval_quality_era or "") != self._eval_quality_era
+
+    @property
+    def cost_rebaseline_required(self) -> bool:
+        """True when the resident baseline's ``cost`` predates the active cost era.
+
+        COST-axis analogue of :attr:`quality_rebaseline_required` (INF-45 W2). Inert
+        (always False) when no active ``cost`` era is set.
+        """
+        if not self._cost_era:
+            return False
+        return (self.baseline.cost_era or "") != self._cost_era
 
     def _log_rebaseline_hold_once(self, result: EvalResult) -> None:
         """Emit the re-baseline hold at ERROR exactly once per gate instance (loud, not spammy)."""
@@ -3725,6 +3754,10 @@ class SafetyGate:
             and promotion_result.speed > 0
         ):
             self.baseline.autopilot_speed_era = self._autopilot_speed_era
+        # INF-45 W2: stamp the COST era under the same condition update_tier() rewrites
+        # ``cost`` (frontier tier). Inert when no cost era is active.
+        if self._cost_era and int(promotion_result.tier) == DEFAULT_FRONTIER_TIER:
+            self.baseline.cost_era = self._cost_era
         log.info(
             "Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
             reason,

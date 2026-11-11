@@ -8138,6 +8138,16 @@ def _archive_epoch_params_from_state(
     return deinflate_before_ts, deinflate_factor, exclude_before_ts
 
 
+def _cost_era_from_state(state: dict[str, Any]) -> str | None:
+    """Active ``cost`` instrument era (INF-45 W2); None when unset (cost axis unfenced)."""
+    eras = state.get("active_instrument_eras")
+    if isinstance(eras, dict):
+        value = eras.get("cost")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _numeric_swarm_epoch_label_from_state(state: dict[str, Any]) -> str | None:
     """Return the persistent NumericSwarm study era for the live speed instrument."""
     eras = state.get("active_instrument_eras")
@@ -9074,6 +9084,7 @@ def _run_loop_inner(
         # charged against a floor derived from a pre-v8 frontdoor_speed and nothing recorded
         # would ever reveal it.
         autopilot_speed_era=_numeric_swarm_epoch_label_from_state(state),
+        cost_era=_cost_era_from_state(state),
         quality_exclude_before_ts=quality_exclude_before_ts,
     )
     tower = EvalTower(
