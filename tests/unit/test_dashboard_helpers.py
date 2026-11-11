@@ -3549,6 +3549,8 @@ def test_poll_all_slots_empty_ports_meta() -> None:
         # caller can mark their roles' occupancy as a lower bound instead of
         # letting an unmeasured port read as an idle one.
         "unanswered_ports": [],
+        "unanswered_reasons": {},
+        "unanswered_reason_counts": {},
     }
 
 

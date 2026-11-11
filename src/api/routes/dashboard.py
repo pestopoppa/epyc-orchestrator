@@ -20,6 +20,7 @@ open http://localhost:8000/dashboard.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -6806,8 +6807,29 @@ async def topology() -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+def _classify_slot_poll_failure(exc: BaseException) -> str:
+    """Map a /slots poll exception to refused|timeout|malformed|other."""
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, (httpx.ConnectError, ConnectionRefusedError)):
+        return "refused"
+    if isinstance(exc, (ValueError, json.JSONDecodeError)):
+        return "malformed"
+    return "other"
+
+
+# Per-fan-out failure-reason sink; set inside each poll task (tasks copy the
+# context at creation, so overlapping fan-outs do not share a dict).
+_SLOT_REASONS: contextvars.ContextVar[dict[int, str] | None] = contextvars.ContextVar(
+    "_SLOT_REASONS", default=None)
+
+
 async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any]] | None:
     """Fetch /slots from a single llama-server.
+
+    A failure's class (refused, timeout, http_<code>, malformed, other) is
+    recorded in the active ``_SLOT_REASONS`` sink when one is set; the return
+    value is unchanged.
 
     Returns None on ANY failure (timeout, non-200, malformed body) — NOT [].
     The distinction is load-bearing: [] means "this server answered and has no
@@ -6819,6 +6841,7 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
     (Observed 2026-08-04: port 8182 timed out on nearly every poll while
     generating, and `slots_poll_meta` still reported answered=18, timed_out=0.)
     """
+    reasons = _SLOT_REASONS.get()
     try:
         # Split connect budget out of the 1.5s total: a SYN-blackholed port
         # must not consume the whole per-request budget before first byte.
@@ -6839,12 +6862,18 @@ async def _poll_slot(client: httpx.AsyncClient, port: int) -> list[dict[str, Any
             timeout=httpx.Timeout(8.0, connect=0.5),
         )
         if resp.status_code != 200:
+            if reasons is not None:
+                reasons[port] = f"http_{resp.status_code}"
             return None
         data = resp.json()
         if not isinstance(data, list):
+            if reasons is not None:
+                reasons[port] = "malformed"
             return None
         return data
-    except Exception:
+    except Exception as exc:
+        if reasons is not None:
+            reasons[port] = _classify_slot_poll_failure(exc)
         return None
 
 
@@ -6862,6 +6891,34 @@ _SLOTS_FANOUT_DEADLINE_S = 10.0
 # a long prefill (the tap itself is silent until the first token).
 _LAST_SLOTS: dict[str, Any] = {"ts": 0.0, "by_port": {}}
 _SLOT_PROGRESS_FRESH_S = 15.0
+# Cross-worker copy of the last good sample: uvicorn runs several workers and
+# each has its own _LAST_SLOTS, so a worker that never polled would miss.
+_SLOTS_CACHE_PATH = ORCHESTRATOR_LOG_DIR / "dashboard_slots_last.json"
+
+
+def _write_slots_cache(ts: float, by_port: dict[int, list[dict[str, Any]]]) -> None:
+    """Atomically persist the last good sample (tmp + rename); best effort."""
+    try:
+        _SLOTS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _SLOTS_CACHE_PATH.with_name(
+            f"{_SLOTS_CACHE_PATH.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(
+            {"ts": ts, "by_port": {str(p): v for p, v in by_port.items()}}))
+        os.replace(tmp, _SLOTS_CACHE_PATH)
+    except Exception:
+        logger.debug("slots cache write failed", exc_info=True)
+
+
+def _read_slots_cache() -> tuple[float, dict[int, list[dict[str, Any]]]]:
+    """Read the cross-worker sample; (0.0, {}) when absent or unreadable."""
+    try:
+        raw = json.loads(_SLOTS_CACHE_PATH.read_text())
+        ts = float(raw.get("ts") or 0.0)
+        by_port = {int(p): v for p, v in (raw.get("by_port") or {}).items()
+                   if isinstance(v, list)}
+        return ts, by_port
+    except Exception:
+        return 0.0, {}
 
 
 def _attach_slot_progress(
@@ -6889,6 +6946,10 @@ def _attach_slot_progress(
     if slots_by_port is None:
         sampled_at = float(_LAST_SLOTS.get("ts") or 0.0)
         slots_by_port = _LAST_SLOTS.get("by_port") or {}
+        if (now - sampled_at) > _SLOT_PROGRESS_FRESH_S:
+            file_ts, file_by_port = _read_slots_cache()
+            if file_ts > sampled_at:
+                sampled_at, slots_by_port = file_ts, file_by_port
     else:
         sampled_at = now if sampled_at is None else sampled_at
     if not slots_by_port or (now - sampled_at) > _SLOT_PROGRESS_FRESH_S:
@@ -6937,6 +6998,13 @@ def _attach_slot_progress(
     return out_reqs
 
 
+def _count_values(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, Any]]:
     """Concurrently poll /slots on every discovered llama-server port.
 
@@ -6962,10 +7030,17 @@ async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, 
             "timed_out": 0,
             "duration_s": 0.0,
             "unanswered_ports": [],
+            "unanswered_reasons": {},
+            "unanswered_reason_counts": {},
         }
     unanswered: list[int] = []
+    reasons: dict[int, str] = {}
     async with httpx.AsyncClient() as client:
-        tasks = {port: asyncio.ensure_future(_poll_slot(client, port)) for port in ports}
+        async def _poll_with_reasons(port: int) -> list[dict[str, Any]] | None:
+            _SLOT_REASONS.set(reasons)
+            return await _poll_slot(client, port)
+
+        tasks = {port: asyncio.ensure_future(_poll_with_reasons(port)) for port in ports}
         await asyncio.wait(tasks.values(), timeout=_SLOTS_FANOUT_DEADLINE_S)
         answered = 0
         for port, task in tasks.items():
@@ -6974,7 +7049,9 @@ async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, 
                 result = task.result()
             else:
                 task.cancel()
+                reasons.setdefault(port, "timeout")
             if result is None:
+                reasons.setdefault(port, "other")
                 # Could not measure: deadline miss, per-request timeout,
                 # non-200, or malformed body. NOT "answered with 0 slots".
                 out[port] = []
@@ -6988,12 +7065,16 @@ async def _poll_all_slots() -> tuple[dict[int, list[dict[str, Any]]], dict[str, 
         "timed_out": len(ports) - answered,
         "duration_s": round(time.time() - started, 3),
         "unanswered_ports": sorted(unanswered),
+        "unanswered_reasons": {str(p): reasons[p] for p in sorted(unanswered)},
+        "unanswered_reason_counts": _count_values([reasons[p] for p in unanswered]),
     }
     # Keep the last sample warm for the synchronous tap funnel (slot_progress).
     # Updated even on a poor fan-out: unanswered ports carry [], which attaches
     # nothing — equivalent to stale, without pinning yesterday's numbers.
     if answered:
-        _LAST_SLOTS.update({"ts": time.time(), "by_port": out})
+        ts_now = time.time()
+        _LAST_SLOTS.update({"ts": ts_now, "by_port": out})
+        _write_slots_cache(ts_now, out)
     return out, meta
 
 

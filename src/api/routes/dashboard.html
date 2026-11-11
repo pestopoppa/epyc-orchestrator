@@ -2102,8 +2102,9 @@ function renderAutopilotRunStrip() {
     // from idle unless we say so.
     const pollMeta = snap.slots_poll_meta || {};
     const pollTimedOut = Number(pollMeta.timed_out || 0);
+    const pollReasonText = slotsReasonText(pollMeta);
     const pollNote = pollTimedOut > 0
-        ? ` · <span style="color:var(--warn)">${pollTimedOut}/${pollMeta.ports} port(s) did not answer — occupancy is a LOWER BOUND</span>`
+        ? ` · <span style="color:var(--warn)">${pollTimedOut}/${pollMeta.ports} port(s) did not answer${pollReasonText ? ' (' + pollReasonText + ')' : ''} — occupancy is a LOWER BOUND</span>`
         : '';
     const loadClass = stalled ? 'bad'
         : (pollTimedOut > 0 ? 'warn'
@@ -2352,7 +2353,8 @@ function generatingNowLabel() {
     });
     const meta = snap.slots_poll_meta || {};
     const timedOut = Number(meta.timed_out || 0);
-    const warn = timedOut > 0 ? ` · ${timedOut} port(s) unreachable` : '';
+    const warnReasons = slotsReasonText(meta);
+    const warn = timedOut > 0 ? ` · ${timedOut} port(s) unreachable${warnReasons ? ' (' + warnReasons + ')' : ''}` : '';
     if (!busy.length) {
         // Distinguish "measured nothing running" from "could not measure".
         if (meta.ports != null && Number(meta.answered || 0) === 0) {
@@ -2361,6 +2363,14 @@ function generatingNowLabel() {
         return { text: `generating: none${warn}`, good: false };
     }
     return { text: `generating now: ${busy.join(', ')}${warn}`, good: true };
+}
+
+// "3 refused, 2 timed out" from slots_poll_meta.unanswered_reason_counts.
+function slotsReasonText(meta) {
+    const labels = { refused: 'refused', timeout: 'timed out', malformed: 'malformed', other: 'failed' };
+    const counts = (meta && meta.unanswered_reason_counts) || {};
+    return Object.entries(counts).map(([k, n]) =>
+        `${n} ${labels[k] || k.replace(/^http_/, 'HTTP ')}`).join(', ');
 }
 
 // Context for the "no CPU region lock is held" case.
