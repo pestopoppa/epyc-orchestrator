@@ -3513,3 +3513,92 @@ def test_shipped_priors_and_descriptors_carry_no_checkout_absolute_pins() -> Non
         else:
             assert (root / path).is_file(), label
     assert not Path(priors["precedence_spec"]).is_absolute()
+
+
+# --- INF-45 W6: remaining fail-open guards in the launch-view / alignment path ---
+
+
+def test_realized_numa_mode_failure_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken realized-fleet probe used to become None -> silent env fallback."""
+
+    def _boom() -> str | None:
+        raise RuntimeError("fleet probe broke")
+
+    monkeypatch.setattr(stack_change_guard, "_realized_launch_numa_mode", _boom)
+    _targets, errors = stack_change_guard._launch_manifest_targets_or_error()
+
+    assert any("realized-fleet NUMA mode could not be derived" in e for e in _could_not_check(errors))
+
+
+def test_shape_class_import_failure_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping cpu_shape_class on import failure used to be invisible."""
+    _block_import(monkeypatch, "scripts.server.stack_numa")
+    _targets, errors = stack_change_guard._launch_manifest_targets_or_error(
+        launch_numa_mode="both"
+    )
+
+    assert any("cpu_shape_class unavailable" in e for e in _could_not_check(errors))
+
+
+def test_launch_entry_without_error_channel_raises_on_shape_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _block_import(monkeypatch, "scripts.server.stack_numa")
+    with pytest.raises(stack_change_guard.LaunchViewUnavailableError):
+        stack_change_guard._launch_entry_for_role({"port": 1, "roles": ["x"]}, "x")
+
+
+def test_launch_manifest_targets_wrapper_raises_on_degraded_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The error-discarding wrapper returned a degraded view as if it were whole."""
+    _block_import(monkeypatch, "scripts.server.stack_manifest")
+    with pytest.raises(stack_change_guard.LaunchViewUnavailableError):
+        stack_change_guard._launch_manifest_targets()
+
+
+def test_live_role_without_serving_mapping_is_reported() -> None:
+    """A live role whose serving section is missing was skipped without a word."""
+    priors = _real_priors()
+    role = next(
+        r
+        for r, rec in sorted(priors["roles"].items())
+        if isinstance(rec, dict) and rec.get("deployment_status") == "live_stack"
+    )
+    priors["roles"][role] = {**priors["roles"][role], "serving": None}
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(priors)
+
+    assert any(
+        f"live role {role!r} has no mapping-valued serving section" in e for e in errors
+    )
+
+
+@pytest.mark.parametrize(
+    "fact",
+    ["launch.entries", "launch.runtime", "tier"],
+)
+def test_declared_fact_without_view_counterpart_is_could_not_check(
+    monkeypatch: pytest.MonkeyPatch, fact: str
+) -> None:
+    """Declared entries/runtime/tier with no launch-view counterpart used to skip."""
+    real = stack_change_guard._launch_manifest_targets_or_error
+
+    def stripped(**kwargs):
+        targets, errs = real(**kwargs)
+        for target in targets.values():
+            if fact == "launch.entries":
+                target["launch_entries"] = []
+            elif fact == "launch.runtime":
+                target["launch_runtime"] = {}
+            else:
+                target["tier"] = None
+        return targets, errs
+
+    monkeypatch.setattr(stack_change_guard, "_launch_manifest_targets_or_error", stripped)
+    errors = stack_change_guard.validate_launch_manifest_serving_alignment(_real_priors())
+
+    assert any(f"declares serving.{fact}" in e for e in _could_not_check(errors))

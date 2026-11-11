@@ -1154,12 +1154,12 @@ def _launch_cfg_from_target(target: dict[str, Any]) -> dict[str, Any]:
 
 def _realized_launch_numa_mode() -> str | None:
     """Realized-fleet NUMA mode for the launch view (module-level test seam)."""
-    try:
-        from scripts.server.realized_fleet import derive_realized_numa_mode
+    # An import/derivation failure PROPAGATES: returning None here was
+    # indistinguishable from "no realized fleet" and silently swapped the
+    # lineup under test for the ambient-env default. The caller reports it.
+    from scripts.server.realized_fleet import derive_realized_numa_mode
 
-        return derive_realized_numa_mode()
-    except Exception:
-        return None
+    return derive_realized_numa_mode()
 
 
 def _standalone_numa_mode(explicit_mode: str | None) -> tuple[str | None, str | None]:
@@ -1209,15 +1209,18 @@ def _launch_manifest_targets(
     """Return live launch ports/tier per role from the computed manifest.
 
     Convenience wrapper for readers that only want the view. Anything that
-    GATES on the view must call `_launch_manifest_targets_or_error`: an empty
-    return here means "could not evaluate" exactly as often as it means
-    "nothing to report", and the two must not be collapsed at a gate.
+    GATES on the view must call `_launch_manifest_targets_or_error`. This
+    wrapper RAISES when the view could not be fully evaluated rather than
+    discarding the error list: an empty or degraded return would mean "could
+    not evaluate" exactly as often as "nothing to report".
     """
-    targets, _errors = _launch_manifest_targets_or_error(
+    targets, errors = _launch_manifest_targets_or_error(
         registry_path=registry_path,
         descriptor_path=descriptor_path,
         launch_numa_mode=launch_numa_mode,
     )
+    if errors:
+        raise LaunchViewUnavailableError("; ".join(errors))
     return targets
 
 
@@ -1275,7 +1278,15 @@ def _launch_manifest_targets_or_error(
         # quarter-realized fleet guarded against a full-mode launch view
         # mismatches wholesale (the 105-error class, 2026-07-22). Env stays the
         # fallback for fleet-less environments (tests, cold hosts).
-        numa_mode = _realized_launch_numa_mode()
+        try:
+            numa_mode = _realized_launch_numa_mode()
+        except Exception as exc:  # noqa: BLE001 — report, then fall back to env
+            numa_mode = None
+            errors.append(
+                f"{COULD_NOT_CHECK}: realized-fleet NUMA mode could not be derived "
+                f"({type(exc).__name__}: {exc}); the launch view fell back to the "
+                "ambient env mode, which may not be the lineup actually serving"
+            )
         if numa_mode is None:
             numa_mode = env_stack_numa_mode()
     registry, registry_errors = _load_yaml_mapping_or_error(registry_path, "registry")
@@ -1292,6 +1303,7 @@ def _launch_manifest_targets_or_error(
     # fact, and 23 copies of it would bury the invariant errors underneath.
     requirements_unavailable: str | None = None
     context_unavailable: str | None = None
+    shape_unavailable: str | None = None
 
     targets: dict[str, dict[str, Any]] = {}
     for tier, servers in (
@@ -1329,7 +1341,10 @@ def _launch_manifest_targets_or_error(
                         },
                     )
                     target["ports"].append(port)
-                    entry = _launch_entry_for_role(server, role)
+                    shape_errors: list[str] = []
+                    entry = _launch_entry_for_role(server, role, shape_errors=shape_errors)
+                    if shape_errors:
+                        shape_unavailable = shape_unavailable or shape_errors[0]
                     target["launch_entries"].append(entry)
                     entry_shape_class = entry.get("cpu_shape_class")
                     if isinstance(entry_shape_class, str) and entry_shape_class:
@@ -1395,6 +1410,12 @@ def _launch_manifest_targets_or_error(
             f"launch target(s) — {context_unavailable}; every "
             "serving.effective_context_tokens assertion was skipped"
         )
+    if shape_unavailable:
+        errors.append(
+            f"{COULD_NOT_CHECK}: launch cpu_shape_class unavailable for the launch "
+            f"entries — {shape_unavailable}; every per-instance shape/-np "
+            "assertion was skipped"
+        )
     if requirements_unavailable:
         errors.append(
             f"{COULD_NOT_CHECK}: launch requirements unavailable for all {len(targets)} "
@@ -1414,7 +1435,12 @@ def _launch_mode_for_server(server: dict[str, Any]) -> str:
     return "default"
 
 
-def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any]:
+def _launch_entry_for_role(
+    server: dict[str, Any],
+    role: str,
+    *,
+    shape_errors: list[str] | None = None,
+) -> dict[str, Any]:
     roles = server.get("roles")
     primary_role = roles[0] if isinstance(roles, list) and roles and isinstance(roles[0], str) else role
     entry: dict[str, Any] = {
@@ -1437,8 +1463,15 @@ def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any]:
         from scripts.server.stack_numa import instance_shape_class
 
         shape_class = instance_shape_class(str(primary_role), numa_instance or 0)
-    except Exception:  # noqa: BLE001 — the guard must report, not abort on import
+    except Exception as exc:  # noqa: BLE001 — report, never silently drop the field
         shape_class = None
+        message = (
+            f"scripts.server.stack_numa.instance_shape_class unavailable "
+            f"({type(exc).__name__}: {exc})"
+        )
+        if shape_errors is None:
+            raise LaunchViewUnavailableError(message) from exc
+        shape_errors.append(message)
     if isinstance(shape_class, str) and shape_class:
         entry["cpu_shape_class"] = shape_class
     worker_type = server.get("worker_type")
@@ -1785,6 +1818,12 @@ def validate_launch_manifest_serving_alignment(
             target = targets[host_role]
         serving = record.get("serving")
         if not isinstance(serving, dict):
+            # A live role with no serving mapping used to be skipped outright,
+            # deleting every alignment assertion for it without a word.
+            errors.append(
+                f"live role {role!r} has no mapping-valued serving section; "
+                "launch/serving alignment for it could not be evaluated"
+            )
             continue
         target_port = target.get("port")
         target_tier = target.get("tier")
@@ -1828,6 +1867,24 @@ def validate_launch_manifest_serving_alignment(
             )
 
         endpoint_port = _port_from_endpoint(serving.get("endpoint"))
+        if derived_view:
+            declared_facts = {
+                "endpoint": endpoint_port is not None and not isinstance(target_port, int),
+                "tier": isinstance(serving.get("tier"), str)
+                and not isinstance(target_tier, str),
+                "launch.entries": bool(_normalized_launch_entries(declared_launch.get("entries")))
+                and not target_launch_entries,
+                "launch.runtime": bool(_normalized_launch_runtime(declared_launch.get("runtime")))
+                and not target_launch_runtime
+                and not host_role,
+            }
+            for fact, unmatched in declared_facts.items():
+                if unmatched:
+                    errors.append(
+                        f"{COULD_NOT_CHECK}: role {role!r} declares serving.{fact} but "
+                        "the launch view produced none; the comparison was skipped, "
+                        "not passed"
+                    )
         ports = serving.get("ports")
         port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
         if isinstance(target_port, int):
