@@ -101,6 +101,9 @@ MAX_SUMMARY_CONTEXT_CHARS = 8000
 DOCUMENT_BODY_INJECTION_POLICY_ENV = "ORCHESTRATOR_DOCUMENT_BODY_INJECTION_POLICY"
 DOCUMENT_BODY_INJECTION_POLICY_SOURCE = "source"
 DOCUMENT_BODY_INJECTION_POLICY_WARN = "warn"
+# Operator decision 2026-11-11 (OP-INJPOLICY): default is warn (was source).
+# Set ORCHESTRATOR_DOCUMENT_BODY_INJECTION_POLICY=source to restore the old behavior.
+DOCUMENT_BODY_INJECTION_POLICY_DEFAULT = DOCUMENT_BODY_INJECTION_POLICY_WARN
 DOCUMENT_BODY_INJECTION_POLICIES = frozenset(
     {
         DOCUMENT_BODY_INJECTION_POLICY_SOURCE,
@@ -373,7 +376,7 @@ class DocumentPreprocessor:
         """Return the configured primary document body injection policy."""
         raw_policy = os.environ.get(
             DOCUMENT_BODY_INJECTION_POLICY_ENV,
-            DOCUMENT_BODY_INJECTION_POLICY_SOURCE,
+            DOCUMENT_BODY_INJECTION_POLICY_DEFAULT,
         )
         policy = raw_policy.strip().lower()
         if policy in DOCUMENT_BODY_INJECTION_POLICIES:
@@ -381,9 +384,9 @@ class DocumentPreprocessor:
 
         warnings.append(
             f"Unknown {DOCUMENT_BODY_INJECTION_POLICY_ENV}={raw_policy!r}; "
-            f"using {DOCUMENT_BODY_INJECTION_POLICY_SOURCE}"
+            f"using {DOCUMENT_BODY_INJECTION_POLICY_DEFAULT}"
         )
-        return DOCUMENT_BODY_INJECTION_POLICY_SOURCE
+        return DOCUMENT_BODY_INJECTION_POLICY_DEFAULT
 
     def _scan_document_body_for_injection(
         self,
