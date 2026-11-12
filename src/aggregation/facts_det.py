@@ -17,9 +17,28 @@ EXTRACTOR_TABLE = "l3_table.v1"
 EXTRACTOR_REGEX = "l3_regex.v1"
 EXTRACTOR_TEXTROW = "l3_textrow.v1"
 
+# ``l3_period.v2`` (AGG-1.12, 2026-11-12): OPT-IN period attribution. ``None`` (every default) is the legacy behaviour, so
+# Phase 0 and AGG-1.1 stores reproduce byte for byte. The extractor names above are unchanged on purpose: ``store._SOURCE_RANK``
+# keys on them. v2 only changes WHICH period a row's printed columns get, never which rows are read:
+#   table_split         a table row whose label cell carries the first printed number ("Total assets $137,100 | $138,552",
+#                       the ODL merge shape) is split into label + numbers, so the first column is read, not the second
+#   table_header_narrow a table header cell must look like a column title (a year in a short cell); a 25-word cell that
+#                       merely mentions 2024 is not a header (the '2024' that Coca-Cola's long-term-debt row was stored under)
+#   date_header         OPTIONAL: consecutive date-only lines ("December 31, 2022" / "December 25, 2021") form the column header
+#                       (measured: aligns a pro-forma table's second statement and breaks AMD revenue under canonical.v1)
+#   inline_header       OPTIONAL: a year header inside a paragraph may carry a "December 31," date in its label
+#   first_column        the FIRST printed column takes the header's first year; with no header (or fewer numbers than header
+#                       years) it takes the filing's fiscal year from the corpus manifest; only canonical fields, never %/EPS
+#   row_select          where one (document, field) has several such rows, only the rows on the earliest primary
+#                       statements page keep the inferred period; none on a primary page -> none keep it
+L3_PERIOD_V2 = "l3_period.v2"
+L3_PERIOD_COMPONENTS = ("table_split", "table_header_narrow", "first_column", "row_select")   # the default of v2
+L3_PERIOD_OPTIONAL = ("date_header", "inline_header")   # measured, NOT in the default (see the probe JSON)
+
 _YEAR = re.compile(r"\b(19[89]\d|20[0-4]\d)\b")
 _NUM = re.compile(r"^\(?-?\$?\s*\(?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(\.[0-9]+)?\)?\s*%?\)?$")
 _DASH = {"-", "—", "–", "--", "n/a", "na", "nm", ""}
+_MAX_HEADER_CELL = 40  # v2 table_header_narrow: a column-title cell is short
 
 # Canonical field names for common statement lines (lower-case label prefix -> field).
 FIELD_ALIASES: tuple[tuple[str, str], ...] = (
@@ -107,7 +126,48 @@ def _fact_id(*parts: Any) -> str:
     return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()[:24]
 
 
-def facts_from_table(table: dict[str, Any], chunk_text: str = "") -> list[dict[str, Any]]:
+def _components(period_version: str | None, components: Iterable[str] | None) -> frozenset[str]:
+    if period_version is None:
+        return frozenset()
+    if period_version != L3_PERIOD_V2:
+        raise ValueError(f"unknown period_version {period_version!r}; known: {L3_PERIOD_V2}")
+    comp = frozenset(L3_PERIOD_COMPONENTS if components is None else components)
+    unknown = comp - set(L3_PERIOD_COMPONENTS) - set(L3_PERIOD_OPTIONAL)
+    if unknown:
+        raise ValueError(f"unknown l3_period components {sorted(unknown)}")
+    return comp
+
+
+_LABEL_NUMS = re.compile(r"^(?P<label>[^0-9$]*[A-Za-z][^0-9$]*?)\s+(?P<nums>\(?\s*-?\$?\s*\(?-?[0-9][0-9,]*(?:\.[0-9]+)?\)?\s*%?)$")
+_MAX_EMBEDDED_LABEL_TOKENS = 10
+
+
+def split_label_number(cell: str) -> tuple[str, float | None]:
+    """``'Total assets $137,100'`` -> ``('Total assets', 137100.0)``; a cell with no trailing number, a digit in its label
+    part, or a label longer than 10 tokens (a merged multi-row cell) is returned whole with None, and so is a trailing bare
+    year ("Net sales 2022": a column title, not a value)."""
+    m = _LABEL_NUMS.match(cell.strip())
+    if not m or len(m.group("label").split()) > _MAX_EMBEDDED_LABEL_TOKENS or _YEAR.fullmatch(m.group("nums").strip()):
+        return cell, None
+    v = parse_number(m.group("nums"))
+    return (m.group("label").strip(), v) if v is not None else (cell, None)
+
+
+def is_canonical_label(label: str) -> bool:
+    """True when ``label`` maps to a named field (table alias table, text-row synonym table or the attributable form)."""
+    low = re.sub(r"\s+", " ", label.lower()).strip().rstrip(":")
+    if any(low == pre or low.startswith(pre + " ") or low.startswith(pre + ",") for pre, _f in FIELD_ALIASES):
+        return True
+    return textrow_field(label)[1]
+
+
+def facts_from_table(table: dict[str, Any], chunk_text: str = "", *, period_version: str | None = None,
+                     fiscal_year: str | None = None,
+                     components: Iterable[str] | None = None) -> list[dict[str, Any]]:
+    """Table-row facts (``l3_table.v1``). ``period_version=None`` is the legacy behaviour; ``L3_PERIOD_V2`` is opt-in (see the
+    module comment). Under v2 a fact whose period was INFERRED (the fiscal year with no header) carries ``_inferred`` and
+    ``_ridx`` for the corpus-level row selection; ``extract_corpus_facts`` strips them."""
+    comp = _components(period_version, components)
     rows = [[cell_text(c) for c in r] for r in table.get("rows") or []]
     if not rows:
         return []
@@ -119,7 +179,7 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "") -> list[dict[s
         non_year_number = False
         for j, c in enumerate(r):
             m = _YEAR.search(c)
-            if m:
+            if m and ("table_header_narrow" not in comp or len(c) <= _MAX_HEADER_CELL):
                 cols[j] = m.group(1)
             elif parse_number(c) is not None:
                 non_year_number = True
@@ -135,8 +195,15 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "") -> list[dict[s
             continue
         nums = [(j, parse_number(c)) for j, c in enumerate(r)]
         nums = [(j, v) for j, v in nums if v is not None]
+        if "table_split" in comp:
+            lj = r.index(label)
+            base, emb = split_label_number(label)
+            if emb is not None and not any(j < lj for j, _v in nums):
+                label = base
+                nums = [(lj, emb)] + [(j, v) for j, v in nums if j > lj]
         if not nums:
             continue
+        inferred = False
         if periods:
             ordered = sorted(periods)
             if len(nums) == len(ordered):
@@ -146,13 +213,18 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "") -> list[dict[s
                 assign = [(periods[min(ordered, key=lambda p: (abs(p - j), p))], v)
                           for j, v in nums]
         else:
-            assign = [(None, nums[0][1])]
+            first_period = None
+            if ("first_column" in comp and fiscal_year and is_canonical_label(label)
+                    and not re.search(r"[0-9]\)?\s*%?$", label)   # a label that still ends in a number: first column unknown
+                    and not any(c.endswith("%") for c in r)):
+                first_period, inferred = str(fiscal_year), True
+            assign = [(first_period, nums[0][1])]
         quote = " | ".join(c for c in r if c)
         qs, qe, ls, le = _span(chunk_text, label)
         field = canonical_field(label)
         for period, value in assign:
             is_pct = any(c.endswith("%") for c in r)
-            out.append({
+            fact = {
                 "fact_id": _fact_id(table["table_id"], i, period, value),
                 "doc_hash": table["doc_hash"], "doc_id": table.get("doc_id"),
                 "entity": table.get("entity"), "period": period, "field": field,
@@ -161,7 +233,10 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "") -> list[dict[s
                 "table_id": table["table_id"], "page": table.get("page"),
                 "line_start": ls, "line_end": le, "confidence": "high",
                 "extractor": EXTRACTOR_TABLE, "audit_status": "unaudited",
-            })
+            }
+            if inferred:
+                fact["_inferred"], fact["_ridx"] = True, i
+            out.append(fact)
     return out
 
 
@@ -334,16 +409,27 @@ def _tokens(line: str, base: int) -> list[tuple[str, int, int]]:
     return out
 
 
+_MONTH_DAY = re.compile(r"\b(?:%s)[a-z]*\.?\s+\d{1,2},?" % "|".join(m[:3] for m in _MONTHS), re.I)
+_DATE_LINE = re.compile(
+    r"^\s*(?:(?:%s)[a-z]*\.?\s+\d{1,2},?\s+)?(?P<y>(?:19|20)\d\d)\s*$" % "|".join(m[:3] for m in _MONTHS), re.I)
+
+
 def facts_from_page_text(
     pages: Iterable[tuple[int, str]], *, doc_hash: str, doc_id: str | None = None,
-    entity: str | None = None,
+    entity: str | None = None, period_version: str | None = None, fiscal_year: str | None = None,
+    components: Iterable[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Deterministic statement-row facts from per-page text (``extractor: l3_textrow.v1``).
+
+    ``period_version=None`` is the legacy behaviour; ``L3_PERIOD_V2`` is opt-in (module comment). Under v2 a first-column
+    period that was INFERRED (header with fewer years than numbers aside, or the manifest fiscal year with no header)
+    carries ``_inferred`` for the corpus-level row selection.
 
     Rows are found in a token stream, so both real line-per-row text and the ODL shape (a
     whole statement joined into one paragraph) work: a label, then a run of 2-3 numeric
     tokens ends the row and the next label starts right after it.
     """
+    comp = _components(period_version, components)
     out: list[dict[str, Any]] = []
     years: list[str] | None = None
     years_page: int | None = None
@@ -355,6 +441,7 @@ def facts_from_page_text(
         if unit and unit_page is not None and page - unit_page > _STALE_PAGES:
             unit = None
         per_share: str | None = None
+        pending_dates: list[str] = []  # v2 date_header: consecutive date-only lines
         acc: list[tuple[str, int, int, int]] = []  # pending label tokens: text, start, end, line
         run: list[tuple[str, int, int, int]] = []  # pending numeric run
         pos = 0
@@ -364,8 +451,9 @@ def facts_from_page_text(
             toks = [t[0] for t in nums]
             vals = [_tok_value(t) for t in toks]
             label = " ".join(t[0] for t in label_toks).strip()
+            hdr_label = _MONTH_DAY.sub(" ", label) if "inline_header" in comp else label
             if all(_YEAR.fullmatch(t) for t in toks) and len(set(toks)) == len(toks) and \
-                    not re.search(r"\d", label):
+                    not re.search(r"\d", hdr_label):
                 years, years_page = toks, page  # a year-column header inside a paragraph
                 return
             if len(re.findall(r"[A-Za-z]", label)) < 3 or len(label_toks) > _MAX_LABEL_TOKENS:
@@ -393,15 +481,23 @@ def facts_from_page_text(
             aligned = years is not None and len(years) == len(toks)
             conf = ("high" if canonical and aligned and row_unit not in ("unknown", "percent")
                     else "medium" if canonical or row_unit == "USD_per_share" else "low")
+            first_period: str | None = None
+            if "first_column" in comp and not aligned and canonical and row_unit not in ("percent", "USD_per_share"):
+                if years is not None and len(toks) < len(years):
+                    first_period = years[0]
+                elif years is None and fiscal_year:
+                    first_period = str(fiscal_year)
             for i, v in enumerate(vals):
+                period = years[i] if aligned else (first_period if i == 0 else None)
                 out.append({
                     "fact_id": _fact_id(EXTRACTOR_TEXTROW, doc_hash, page, qstart, i, v),
                     "doc_hash": doc_hash, "doc_id": doc_id, "entity": entity,
-                    "period": years[i] if aligned else None, "field": field, "value": v,
+                    "period": period, "field": field, "value": v,
                     "unit": row_unit, "quote": text[qstart:qend], "quote_start": qstart,
                     "quote_end": qend, "chunk_id": None, "table_id": None, "page": page,
                     "line_start": qline, "line_end": lineno, "confidence": conf,
                     "extractor": EXTRACTOR_TEXTROW, "audit_status": "unaudited", "label": label,
+                    **({"_inferred": True} if (period is not None and not aligned) else {}),
                 })
 
         for lineno, raw in enumerate(text.split("\n"), start=1):
@@ -410,6 +506,15 @@ def facts_from_page_text(
             if not line:
                 acc, run = [], []
                 continue
+            if "date_header" in comp:
+                dm = _DATE_LINE.match(line)
+                if dm:
+                    pending_dates.append(dm.group("y"))
+                    continue
+                if pending_dates:
+                    if 2 <= len(pending_dates) <= 3 and len(set(pending_dates)) == len(pending_dates):
+                        years, years_page = pending_dates, page
+                    pending_dates = []
             u = _unit_of(line)
             if u:
                 unit, unit_page = u, page
@@ -478,18 +583,87 @@ def facts_from_result(result: Any, *, doc_hash: str, doc_id: str | None = None,
     return facts_from_page_text(page_texts(result), doc_hash=doc_hash, doc_id=doc_id, entity=entity)
 
 
-def extract_corpus_facts(store: CorpusStore, corpus_id: str) -> list[dict[str, Any]]:
+_STMT_TITLE = re.compile(
+    r"(?:balance\s+sheets?|statements?\s+of\s+(?:consolidated\s+)?(?:financial\s+position|financial\s+condition|income|"
+    r"operations|earnings|cash\s+flows?|comprehensive|equity|stockholders|shareholders|changes))", re.I)
+_NOTES_TO = re.compile(r"notes?\s+to\s+(?:the\s+)?(?:consolidated\s+)?(?:financial|balance|statements)", re.I)
+_TITLE_WINDOW = 500
+_INDEX_TITLES = 3  # this many distinct statement titles in the opening window is an index page, not a statement
+
+
+def primary_statement_pages(pages: Iterable[tuple[int, str]]) -> set[int]:
+    """Pages that OPEN with a primary-statement title (balance sheet, income / operations / earnings, cash flows,
+    comprehensive income, equity, financial position) and are neither a ``Notes to ...`` page nor an index page that lists
+    several of them. Deterministic, from the page text only."""
+    out: set[int] = set()
+    for page, text in pages:
+        head = (text or "")[:_TITLE_WINDOW]
+        n = len(_STMT_TITLE.findall(head))
+        if not n or n >= _INDEX_TITLES or _NOTES_TO.search(head[:200]):
+            continue
+        out.add(page)
+    return out
+
+
+def select_inferred_periods(facts: list[dict[str, Any]], primary_pages: dict[Any, set[int]]) -> dict[str, int]:
+    """v2 ``row_select``: among INFERRED-period facts, group by (document, field); one distinct row per group keeps its period;
+    several distinct rows keep it only on the EARLIEST primary-statements page that has one (every inferred row on that page),
+    and revert to period None when no row sits on a primary page. Mutates ``facts``; returns counts."""
+    groups: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+    for f in facts:
+        if f.get("_inferred"):
+            groups.setdefault((f.get("doc_hash"), f.get("field")), []).append(f)
+    kept = reverted = 0
+    for (doc_hash, _field), fs in groups.items():
+        rows = {(f["extractor"], f.get("page"), f.get("quote")) for f in fs}
+        if len(rows) <= 1:
+            kept += len(fs)
+            continue
+        prim = [f for f in fs if f.get("page") in primary_pages.get(doc_hash, ())]
+        keep_page = min((f["page"] for f in prim), default=None)
+        for f in fs:
+            if keep_page is not None and f.get("page") == keep_page:
+                kept += 1
+                continue
+            f["period"] = None
+            if f["extractor"] == EXTRACTOR_TABLE:
+                f["fact_id"] = _fact_id(f["table_id"], f["_ridx"], None, f["value"])
+            f.pop("_inferred", None)
+            reverted += 1
+    return {"inferred_kept": kept, "inferred_reverted": reverted}
+
+
+def extract_corpus_facts(store: CorpusStore, corpus_id: str, *, period_version: str | None = None,
+                         fiscal_years: dict[str, str] | None = None,
+                         components: Iterable[str] | None = None) -> list[dict[str, Any]]:
+    """L3 facts of a corpus. ``period_version=None`` is the legacy extraction (what Phase 0 and AGG-1.1 ran). With
+    ``L3_PERIOD_V2``, ``fiscal_years`` maps ``doc_id`` -> the filing's fiscal year (the corpus manifest); a document with no
+    entry gets no inferred period."""
+    comp = _components(period_version, components)
+    fy = fiscal_years or {}
     chunks = store.chunks(corpus_id)
     by_id = {c["chunk_id"]: c for c in chunks}
     entity = {d["doc_hash"]: d["entity"] for d in store.corpus_docs(corpus_id)}
+    doc_fy = {d["doc_hash"]: fy.get(d["doc_id"]) for d in store.corpus_docs(corpus_id)}
     facts: list[dict[str, Any]] = []
+    kw = {"period_version": period_version, "components": comp} if comp else {}
     for t in store.tables(corpus_id):
-        facts.extend(facts_from_table(t, (by_id.get(t["chunk_id"]) or {}).get("text", "")))
+        facts.extend(facts_from_table(t, (by_id.get(t["chunk_id"]) or {}).get("text", ""),
+                                      fiscal_year=doc_fy.get(t["doc_hash"]), **kw))
     for c in chunks:
         facts.extend(facts_from_text(c, entity.get(c["doc_hash"])))
+    primary: dict[Any, set[int]] = {}
     for d in store.document_pages(corpus_id):
         facts.extend(facts_from_page_text(
-            d["pages"], doc_hash=d["doc_hash"], doc_id=d["doc_id"], entity=d["entity"]))
+            d["pages"], doc_hash=d["doc_hash"], doc_id=d["doc_id"], entity=d["entity"],
+            fiscal_year=doc_fy.get(d["doc_hash"]), **kw))
+        primary[d["doc_hash"]] = primary_statement_pages(d["pages"])
+    if comp:
+        if "row_select" in comp:
+            select_inferred_periods(facts, primary)
+        for f in facts:
+            f.pop("_inferred", None)
+            f.pop("_ridx", None)
     return facts
 
 
