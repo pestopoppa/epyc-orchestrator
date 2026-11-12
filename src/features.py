@@ -119,6 +119,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Security Features
     FeatureSpec("credential_redaction", True, True, "CREDENTIAL_REDACTION", "Scan for leaked credentials"),
     FeatureSpec("cascading_tool_policy", False, True, "CASCADING_TOOL_POLICY", "Layered tool permission chain"),
+    FeatureSpec("agent_file_injection", False, False, "AGENT_FILE_INJECTION", "Append role agent file (compression operating point) to role prompts"),
     FeatureSpec("restricted_python", False, False, "RESTRICTED_PYTHON", "RestrictedPython for REPL"),
     # Phase 3: Specialist routing
     FeatureSpec("specialist_routing", False, True, "SPECIALIST_ROUTING", "Q-value specialist routing", ("memrl",)),
@@ -609,6 +610,7 @@ class Features:
     # Security Features
     credential_redaction: bool = True  # Scan tool/REPL output for leaked credentials
     cascading_tool_policy: bool = True  # Layered tool permission chain (Global→Role→Task)
+    agent_file_injection: bool = False  # F2: append registry-selected agent file to role prompts
     restricted_python: bool = False  # Use RestrictedPython for REPL (requires library)
 
     # Phase 3: Specialist routing (MemRL-driven intelligent orchestration)

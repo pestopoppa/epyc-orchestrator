@@ -1475,6 +1475,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             turn=state.turns - 1,
             corpus_context=corpus_ctx,
             solution_file=sol_file,
+            role=str(role),
         )
         # Programmatic feedback uses the existing request-local StepEventLog. It is default-off
         # with step-event logging; consumed facts are bounded and carry evidence, not diagnoses.

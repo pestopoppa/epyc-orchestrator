@@ -94,7 +94,8 @@ def _build_compact_specialist_prompt(
     role_instructions = ""
     try:
         from src.prompt_builders.resolver import resolve_prompt
-        role_text = resolve_prompt(delegate_role, "", subdir="roles")
+        from src.prompt_builders.agent_file import with_agent_file
+        role_text = with_agent_file(resolve_prompt(delegate_role, "", subdir="roles"), delegate_role)
         if role_text:
             role_instructions = role_text.strip() + "\n\n"
     except Exception:

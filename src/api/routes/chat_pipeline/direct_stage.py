@@ -133,6 +133,13 @@ def _execute_direct_with_budget(
             + direct_prompt
         )
 
+    # F2: registry-selected agent file ahead of the task (flag default off -> no-op)
+    from src.prompt_builders.agent_file import agent_file_block
+
+    _agent_block = agent_file_block(initial_role)
+    if _agent_block:
+        direct_prompt = f"{_agent_block}\n\n{direct_prompt}"
+
     # RTE-LOG-1: stage the block layout (hashes and lengths only; never raises).
     from src.backends import prompt_layout
 

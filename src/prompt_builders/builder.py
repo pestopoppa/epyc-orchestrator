@@ -28,6 +28,7 @@ from src.prompt_builders.constants import (
     DEFAULT_ROOT_LM_TOOLS,
 )
 from src.prompt_builders.resolver import resolve_prompt
+from src.prompt_builders.agent_file import with_agent_file
 from src.roles import Role, chain_name_to_role, get_tier
 from src.runtime import routing_stage_timing
 from src.task_ir import canonicalize_task_ir
@@ -233,6 +234,7 @@ class PromptBuilder:
         *,
         as_structured: bool = False,
         solution_file: str = "",
+        role: str = "",
     ) -> str | RootLMPrompt:
         """Build the prompt for the Root LM (frontdoor).
 
@@ -262,7 +264,9 @@ class PromptBuilder:
         # state block (the first divergence between consecutive turns) for the prompt tail.
         _counter_tail = bool(getattr(_get_features(), "repl_turn_counter_tail", False))
         prompt = RootLMPrompt(
-            system=resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK),
+            system=with_agent_file(
+                resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK), role
+            ) if role else resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK),
             tools=self._resolve_tools(),
             rules=self._resolve_rules(),
             state=state if _counter_tail else f"Turn {turn + 1}\n{state}",
@@ -687,6 +691,9 @@ class PromptBuilder:
         )
 
         prompt = resolve_prompt(role_name, fallback, subdir="roles")
+
+        # F2: registry-selected agent file (agent_file_injection flag, default off)
+        prompt = with_agent_file(prompt, role_name)
 
         # B1: Inject frozen user profile into system prompt (prefix cache stable)
         from src.features import features as _get_features
