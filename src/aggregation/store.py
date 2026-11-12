@@ -112,6 +112,16 @@ _UNIT_TO_USD_M = {"USD_thousands": 1e-3, "USD_millions": 1.0, "USD_billions": 1e
 POSITIVE_FIELDS = frozenset({"capex", "dividends_paid"})
 _YEAR_RE = re.compile(r"(?<!\d)(19[89]\d|20[0-4]\d)(?!\d)")
 
+# ``canonical.v2`` (AGG-1.9, 2026-11-12): ``canonical.v1`` applied after two NARROW candidate filters. ``canonical.v1`` stays the
+# default of every entry point, so Phase 0 / AGG-1.1 reproduce; v2 is selected by an explicit ``rule`` argument. A blanket
+# "prefer l4 over l3" tier flip was measured to break 19 cells for 7 fixed (AGG-1.8), so the filters never reorder tiers: they
+# only drop a candidate that is provably a different quantity (not the shareholders' net income) or a different scale.
+CANONICAL_RULE_V2 = "canonical.v2:v1+attributable_net_income+thousands_unit"
+CANONICAL_RULES = (CANONICAL_RULE, CANONICAL_RULE_V2)
+THOUSANDS_RATIO = 1000.0           # a candidate 1/1000 of a value that >= 2 others agree on is a unit-slip candidate
+_ATTRIBUTABLE_RE = re.compile(r"attributable\s+to", re.I)
+_NOT_PARENT_RE = re.compile(r"non[-\s]?controlling|minority|preferred|redeemable|participating|discontinued|common", re.I)
+
 
 def canonical_period(period: Any) -> str | None:
     """``'FY2022'`` / ``'2022'`` / ``'Dec 31, 2022'`` -> ``'2022'``; no period -> None."""
@@ -139,13 +149,84 @@ def canonical_sort_key(fact: dict[str, Any]) -> tuple:
     )
 
 
+def _agree(a: float, b: float, rel_tol: float) -> bool:
+    return abs(a - b) <= max(abs(b) * rel_tol, 1e-9)
+
+
+def _entity_token(entity: Any) -> str:
+    """The first alphanumeric token of 3+ characters of the entity name, lower case ('MGM Resorts International' -> 'mgm',
+    'The Coca-Cola Company' -> 'coca'); '' when none."""
+    for t in re.findall(r"[a-z0-9]+", str(entity or "").lower()):
+        if len(t) >= 3 and t not in ("the", "inc", "corp", "company", "corporation", "plc", "ltd"):
+            return t
+    return ""
+
+
+def is_attributable(fact: dict[str, Any]) -> bool:
+    """The quote says the figure is attributable to THE COMPANY'S shareholders: 'attributable to' followed by the company's own
+    name (first entity token) or by 'shareholders' / 'stockholders' / 'owners', and not the noncontrolling-interest, preferred,
+    common-shareholder (after preferred dividends), discontinued-operations or another-entity variants."""
+    q = str(fact.get("quote") or "")
+    m = _ATTRIBUTABLE_RE.search(q)
+    if not m or _NOT_PARENT_RE.search(q):
+        return False
+    after = q[m.end():].lower()
+    tok = _entity_token(fact.get("entity"))
+    generic = re.match(r"\s*(the\s+)?(company'?s?\s+)?(share|stock)?holders?\b|\s*owners\b", after) is not None
+    named = bool(tok) and re.search(r"\b" + re.escape(tok), after[:60]) is not None
+    return generic or named
+
+
+def guard_attributable_net_income(field: str, rows: list[dict[str, Any]], rel_tol: float = 0.005
+                                  ) -> tuple[list[dict[str, Any]], str | None]:
+    """``(preferred, note)``. For ``net_income`` only: when at least one candidate is attributable to the company's
+    shareholders, only those candidates compete (the order inside is still ``canonical.v1``, led by the number of
+    attributable candidates that agree with it). Never empties the group."""
+    if field != "net_income":
+        return rows, None
+    att = [r for r in rows if is_attributable(r)]
+    if not att:
+        return rows, None
+    vals = {id(r): normalised_value(r) for r in att}
+    support = {id(r): sum(1 for o in att if _agree(vals[id(o)], vals[id(r)], rel_tol)) for r in att}
+    att.sort(key=lambda r: (-support[id(r)],) + canonical_sort_key(r))
+    return att, "attributable_net_income"
+
+
+def guard_thousands_unit(rows: list[dict[str, Any]], rel_tol: float = 0.005
+                         ) -> tuple[list[dict[str, Any]], str | None]:
+    """``(kept, note)``. Drops a candidate that is a thousands-unit slip: its |value| is within 0.5 percent of
+    ``THOUSANDS_RATIO`` times, or 1/``THOUSANDS_RATIO`` of, a value that at least two OTHER candidates agree on. Never empties
+    the group. (The first draft also dropped any value 100x the median of the others; it broke 2 retained cells and is not
+    in this rule, see PREDECLARED_AGG19_AMENDMENT1.)"""
+    if len(rows) < 3:
+        return rows, None
+    vals = [abs(normalised_value(r)) for r in rows]
+    drop: set[int] = set()
+    for i, v in enumerate(vals):
+        if v <= 0:
+            continue
+        others = [x for j, x in enumerate(vals) if j != i and x > 0]
+        for target in (v * THOUSANDS_RATIO, v / THOUSANDS_RATIO):
+            if sum(1 for x in others if _agree(x, target, 0.005)) >= 2:
+                drop.add(i)
+    kept = [r for i, r in enumerate(rows) if i not in drop]
+    return (kept, "thousands_unit") if kept and drop else (rows, None)
+
+
 def select_canonical(
-    facts: Iterable[dict[str, Any]], *, rel_tol: float = 0.005
+    facts: Iterable[dict[str, Any]], *, rel_tol: float = 0.005, rule: str = CANONICAL_RULE,
+    guards: Sequence[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Pure selection. ``facts`` carry ``corpus_id`` plus the ``facts`` columns.
 
-    Returns ``(canonical_rows, conflict_log_rows)``; both lists are ordered by key.
+    Returns ``(canonical_rows, conflict_log_rows)``; both lists are ordered by key. ``rule`` picks the rule:
+    ``CANONICAL_RULE`` (``canonical.v1``, the default, AGG-1.1 behaviour) or ``CANONICAL_RULE_V2`` (the two AGG-1.9 guards;
+    ``guards`` narrows v2 to a subset of ``("thousands_unit", "attributable_net_income")`` for measurement).
     """
+    if rule not in CANONICAL_RULES:
+        raise ValueError(f"unknown canonical rule {rule!r}; known: {CANONICAL_RULES}")
+    active = tuple(guards) if guards is not None else ("thousands_unit", "attributable_net_income")
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for f in facts:
         if f.get("value") is None or not f.get("field"):
@@ -159,6 +240,15 @@ def select_canonical(
     for key in sorted(groups, key=lambda k: tuple(str(x) for x in k)):
         corpus_id, doc_id, field, per = key
         rows = sorted(groups[key], key=canonical_sort_key)
+        if rule == CANONICAL_RULE_V2:
+            pre = rows
+            if "thousands_unit" in active:
+                pre, _g = guard_thousands_unit(pre, rel_tol)
+            if "attributable_net_income" in active:
+                pre, _g = guard_attributable_net_income(field, pre, rel_tol)
+            if pre is not rows:   # the chosen candidate leads; every other candidate stays in the log, never silently dropped
+                lead = {id(r) for r in pre}
+                rows = pre + [r for r in rows if id(r) not in lead]
         best = rows[0]
         bv = normalised_value(best)
         n_conf = 0
@@ -170,7 +260,7 @@ def select_canonical(
                 "corpus_id": corpus_id, "doc_id": doc_id, "field": field, "period": per,
                 "chosen_fact_id": best["fact_id"], "other_fact_id": other["fact_id"],
                 "chosen_value": bv, "other_value": ov, "other_extractor": other.get("extractor"),
-                "kind": "conflict" if conflict else "duplicate", "rule": CANONICAL_RULE,
+                "kind": "conflict" if conflict else "duplicate", "rule": rule,
             })
         canon.append({
             "corpus_id": corpus_id, "doc_id": doc_id, "field": field, "period": per,
@@ -181,7 +271,7 @@ def select_canonical(
             "quote": best.get("quote"), "page": best.get("page"),
             "confidence": best.get("confidence"), "extractor": best.get("extractor"),
             "audit_status": best.get("audit_status"), "n_candidates": len(rows),
-            "n_conflicts": n_conf, "rule": CANONICAL_RULE,
+            "n_conflicts": n_conf, "rule": rule,
         })
     return canon, log
 
@@ -473,8 +563,8 @@ class CorpusStore:
         return [dict(zip(FACT_COLUMNS, r)) for r in self.conn.execute(sql, params).fetchall()]
 
     # --------------------------------------------------------- canonical facts
-    def refresh_canonical(self, corpus_id: str | None = None, *, rel_tol: float = 0.005
-                          ) -> dict[str, Any]:
+    def refresh_canonical(self, corpus_id: str | None = None, *, rel_tol: float = 0.005,
+                          rule: str = CANONICAL_RULE) -> dict[str, Any]:
         """Rebuild ``facts_canonical`` / ``fact_conflicts`` from ``facts`` (idempotent).
 
         Scope is one corpus, or every corpus when ``corpus_id`` is None. Returns counts for the
@@ -488,7 +578,7 @@ class CorpusStore:
             params.append(corpus_id)
         rows = [dict(zip(("corpus_id",) + FACT_COLUMNS, r))
                 for r in self.conn.execute(sql, params).fetchall()]
-        canon, log = select_canonical(rows, rel_tol=rel_tol)
+        canon, log = select_canonical(rows, rel_tol=rel_tol, rule=rule)
         scope, sp = ("WHERE corpus_id = ?", [corpus_id]) if corpus_id is not None else ("", [])
         self.conn.execute(f"DELETE FROM {CANONICAL_TABLE} {scope}", sp)
         self.conn.execute(f"DELETE FROM fact_conflicts {scope}", sp)
@@ -503,7 +593,7 @@ class CorpusStore:
                 f"VALUES ({', '.join('?' for _ in CONFLICT_COLUMNS)})",
                 [r[c] for c in CONFLICT_COLUMNS])
         self.conn.commit()
-        return {"rule": CANONICAL_RULE, "n_candidates": len(rows), "n_canonical": len(canon),
+        return {"rule": rule, "n_candidates": len(rows), "n_canonical": len(canon),
                 "n_duplicates": sum(1 for r in log if r["kind"] == "duplicate"),
                 "n_conflicts": sum(1 for r in log if r["kind"] == "conflict")}
 
