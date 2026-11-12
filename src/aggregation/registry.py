@@ -235,8 +235,13 @@ class IndexRegistry:
     registry produced (a handle served again from memory counts as neither); ``events`` has one record per
     produced handle, ``invalid`` one per persisted file that was refused (and then rebuilt)."""
 
-    def __init__(self, store: CorpusStore, *, persist: bool | None = None) -> None:
+    def __init__(self, store: CorpusStore, *, persist: bool | None = None, pipeline: Any = None,
+                 fiscal_years: dict[str, str] | None = None) -> None:
         self.store = store
+        # AGG-1.12: ``pipeline`` is a ``pipeline.PipelineSpec`` (None = the legacy v1 call, unchanged); it picks the L3
+        # extraction (``l3_period.v2`` for ``agg_pipeline.v2``) and ``fiscal_years`` (doc_id -> fiscal year) feeds it.
+        self.pipeline = pipeline
+        self.fiscal_years = fiscal_years
         self._live: dict[tuple[str, str, str, str], Any] = {}
         file_backed = store.path not in (":memory:", "")
         self.persist = file_backed if persist is None else bool(persist and file_backed)
@@ -367,7 +372,10 @@ class IndexRegistry:
         elif builder == "l3_facts_det":
             from src.aggregation.facts_det import extract_corpus_facts  # noqa: PLC0415
 
-            facts = extract_corpus_facts(self.store, corpus_id)
+            if self.pipeline is None:
+                facts = extract_corpus_facts(self.store, corpus_id)
+            else:
+                facts = self.pipeline.extract_l3(self.store, corpus_id, self.fiscal_years)
             self.store.write_facts(facts)
             handle, n = facts, len(facts)
         elif builder in ("l2_dense", "l4_facts_llm"):
