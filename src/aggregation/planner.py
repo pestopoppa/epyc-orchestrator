@@ -250,6 +250,27 @@ def backfill_plan(question: str, canonical: Sequence[Mapping[str, object]], docs
             "missing_docs": sorted({d for f in to_fill for d in per[f]["missing_docs"]}), "per_field": per}
 
 
+# ------------------------------------------------------------------ AGG-1.10: SQL shape (routing record)
+# ``agg110.v1`` answers a derived or filtered aggregation question over the pivot view (one row per document with one column per
+# field); a plain single-field question keeps the single-field plan of ``agg11.v0``. Deterministic, no model. The rule is a
+# phrase table plus the field table of :func:`question_fields`; it is a RECORD of which plan shape a question needs, and the
+# AGG-1.10 re-score runs every one of its 26 questions under ``agg110.v1`` regardless of the route.
+_DERIVED_CUES = re.compile(
+    r"\b(divided by|minus|ratio|margin|share of|as a share|payout|working capital|free cash flow|per share|"
+    r"exceed(?:ed)?|companies whose|among companies|among profitable|profitable companies|reported a net loss|"
+    r"net loss attributable|negative|positive)\b", re.I)
+SQL_SHAPES = ("single", "pivot")
+
+
+def sql_shape(question: str) -> dict:
+    """``{"shape": "pivot"|"single", "fields": [...], "cues": [...]}``: ``pivot`` when the question names two or more
+    canonical fields or carries a derived/filter cue (ratio, difference, margin, a filter on another field), else ``single``."""
+    fields = question_fields(question)
+    cues = sorted({m.group(0).lower() for m in _DERIVED_CUES.finditer(question)})
+    shape = "pivot" if len(fields) >= 2 or cues else "single"
+    return {"shape": shape, "fields": fields, "cues": cues}
+
+
 def _state(question: str, f: PlannerFacts) -> str:
     return json.dumps({"question": question, "facts": asdict(f)}, sort_keys=True)
 
