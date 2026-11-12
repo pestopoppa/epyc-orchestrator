@@ -15,6 +15,10 @@ The stage, per document (the arm AGG-1.6 measured on the 38 hard cells: 35/38 fi
             fact ids) and the unchanged parent-chunk declared-scale lookup; a window's rows for a field are kept only when
             the window is one of that field's union windows (``keep_slot``): a field's facts come from the windows chosen for
             that field, exactly as a v1 (field, document) unit's facts come from its own top-6.
+* quote rule ``value_in_quote`` (AGG-1.14): a row's value, or its declared-scale restatement under the L4d unit cross-check,
+            must be printed in its verbatim quote; a violating row is dropped with a note (``drop_unquoted``) before reconcile.
+            The check is ``facts_llm``'s own (``_printed_numbers`` / ``_matches_printed``, the two bases ``unit_override``
+            accepts); there is no second ladder here.
 * reconcile ``facts_llm.reconcile`` over the document's kept facts (L4d, incl. the unit-label cross-check), written to the store.
 
 The prompt and grammar are byte-identical to ``benchmarks/agg_phase1/agg16.py`` (``t_prompt`` / ``t_grammar``); the research
@@ -238,16 +242,18 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
         return facts
 
     def finish_doc(self, corpus_id: str, window_facts: Iterable[dict[str, Any]], fields: Sequence[str]) -> dict[str, Any]:
-        """L4d over the document's kept facts (``facts_llm.reconcile``), written to the store, one manifest row per field
-        (``l4_facts_llm:<field>``, the v1 builder name, so ``built_layers`` is the same)."""
+        """The quote rule (``drop_unquoted``), then L4d over the document's kept facts (``facts_llm.reconcile``), written to the
+        store, one manifest row per field (``l4_facts_llm:<field>``, the v1 builder name, so ``built_layers`` is the same).
+        The dropped rows are returned as ``quote_dropped`` (notes; they are not stored)."""
         require_enabled()
+        window_facts, quote_dropped = drop_unquoted(window_facts)
         kept, conflicts = facts_llm.reconcile(list(window_facts))
         self.store.write_facts(kept)
         h = self.store.corpus_content_hash(corpus_id)
         for f in fields:
             self.store.record_index(corpus_id, h, f"l4_facts_llm:{f}", "", layer="L4",
                                     n_items=sum(1 for k in kept if k.get("field") == f))
-        return {"facts": kept, "conflicts": conflicts,
+        return {"facts": kept, "conflicts": conflicts, "quote_dropped": quote_dropped,
                 "unit_overrides": [{"fact_id": k["fact_id"], "doc_id": k.get("doc_id"), "period": k.get("period"),
                                     **k["unit_override"]} for k in kept if k.get("unit_override")]}
 
@@ -268,6 +274,40 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
         out["windows"] = results
         out["n_calls"] = len(results)
         return out
+
+
+def value_in_quote(fact: dict[str, Any]) -> str | None:
+    """The AGG-1.1 L4 rule: ``"printed"`` when the row's value is a number printed in its quote, ``"restated"`` when it is a
+    printed number restated by the filing's declared scale (``facts_llm.unit_override``'s ``restated_to_millions`` basis: the
+    declared scale is not USD millions and ``value == printed * UNIT_SCALE[declared]``), else None (the row is not backed by its
+    quote: a per-share figure copied as dollars, a sum, an invented number). Reuses ``facts_llm``'s printed-number reader and
+    matcher unchanged; the value is the raw model value, i.e. before ``reconcile`` scales it."""
+    v = fact.get("value")
+    if v is None:
+        return None
+    printed = facts_llm._printed_numbers(fact.get("quote") or "")
+    if facts_llm._matches_printed(v, printed):
+        return "printed"
+    decl = fact.get("declared_scale")
+    if decl in facts_llm.UNIT_SCALE and decl != "USD_millions" and facts_llm._matches_printed(
+            v, [n * facts_llm.UNIT_SCALE[decl] for n in printed]):
+        return "restated"
+    return None
+
+
+def drop_unquoted(facts: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(kept, dropped)``: rows that satisfy ``value_in_quote`` and, one note per violating row (never stored)."""
+    kept: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for f in facts:
+        basis = value_in_quote(f)
+        if basis is None:
+            dropped.append({"fact_id": f.get("fact_id"), "doc_id": f.get("doc_id"), "field": f.get("field"),
+                            "period": f.get("period"), "value": f.get("value"), "unit": f.get("unit"),
+                            "declared_scale": f.get("declared_scale"), "quote": f.get("quote"), "reason": "value_not_in_quote"})
+        else:
+            kept.append(f)
+    return kept, dropped
 
 
 def keep_slot(fact: dict[str, Any], chosen_fields: set[str]) -> bool:

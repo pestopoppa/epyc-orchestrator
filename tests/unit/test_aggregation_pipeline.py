@@ -257,3 +257,83 @@ def test_typed_stage_leaves_the_v1_stage_alone():
     # nothing the v1 stage defines was replaced or wrapped
     assert facts_llm.EXTRACTOR_L4 == ft.EXTRACTOR == "l4_llm.v1"
     assert not hasattr(facts_llm, "TypedBackfill") and not hasattr(facts_llm, "typed_grammar")
+
+
+# ---------------------------------------------------------------- AGG-1.14: the value-in-quote rule of the typed stage
+JNJ_WINDOW = {"chunk_id": "h:0061#w0", "doc_hash": "h", "doc_id": "JNJ", "entity": "Johnson & Johnson", "page_start": 49,
+              "text": ("CONSOLIDATED STATEMENTS OF CASH FLOWS\n(Dollars in millions)\n"
+                        "Dividends to shareholders (11,682)\n"
+                        "Cash dividends paid were $4.45 per share in fiscal year 2022\n"
+                        "dividends to shareholders\n")}
+
+
+def _row(value, quote, unit="USD_millions", period="FY2022"):
+    return {"period": period, "value": value, "unit": unit, "quote": quote, "confidence": "high"}
+
+
+def test_value_in_quote_drops_the_per_share_row_keeps_the_printed_one_and_drops_the_junk_row():
+    be = TypedBackend(_typed({"dividends_paid": [_row(13895.3, "Cash dividends paid were $4.45 per share in fiscal year 2022"),
+                                                 _row(11682, "Dividends to shareholders (11,682)")],
+                              "revenue": [_row(11.7, "dividends to shareholders", unit="USD")]}))
+    r = ft.TypedBackfill(_store(), be).call_window(JNJ_WINDOW, DESCS)
+    assert len(r.facts) == 3                                       # window_facts keeps every row the model returned
+    by = {(f["field"], f["value"]): ft.value_in_quote(f) for f in r.facts}
+    assert by == {("dividends_paid", 13895.3): None, ("dividends_paid", 11682.0): "printed", ("revenue", 11.7): None}
+    kept, dropped = ft.drop_unquoted(r.facts)
+    assert [f["value"] for f in kept] == [11682.0]
+    assert sorted(d["value"] for d in dropped) == [11.7, 13895.3]
+    assert all(d["reason"] == "value_not_in_quote" and d["quote"] for d in dropped)
+
+
+def test_value_in_quote_accepts_the_declared_scale_restatement_only():
+    # printed 6.5 in a quote that names its own scale: the model restated to millions (6500) -> kept, basis "restated"
+    f = {"value": 6500.0, "unit": "USD_millions", "quote": "capital expenditures of $6.5 billion", "declared_scale": "USD_billions"}
+    assert ft.value_in_quote(f) == "restated"
+    assert ft.value_in_quote({**f, "value": 6.5, "unit": "USD_billions"}) == "printed"
+    # a thousands table: printed 11,682 (thousands) restated to 11.682 millions
+    th = {"value": 11.682, "unit": "USD_millions", "quote": "Net income 11,682", "declared_scale": "USD_thousands"}
+    assert ft.value_in_quote(th) == "restated"
+    # the same number with no declared scale cannot be attested; a value that is neither printed nor its restatement is not backed
+    assert ft.value_in_quote({**th, "declared_scale": None}) is None
+    assert ft.value_in_quote({**f, "value": 6501.0}) is None
+    assert ft.value_in_quote({**f, "value": None}) is None
+    # a negative value is checked on its magnitude (the quote prints the parenthesised amount)
+    assert ft.value_in_quote({"value": -11682.0, "quote": "Dividends to shareholders (11,682)", "declared_scale": "USD_millions"}) == "printed"
+
+
+def test_value_in_quote_is_the_facts_llm_check_not_a_second_ladder():
+    # the rule is built from facts_llm's own printed-number reader and matcher and agrees with unit_override's two bases
+    f = {"value": 6500.0, "unit": "USD_millions", "quote": "capital expenditures of $6.5 billion", "declared_scale": "USD_billions"}
+    assert facts_llm._matches_printed(f["value"], [n * facts_llm.UNIT_SCALE["USD_billions"] for n in facts_llm._printed_numbers(f["quote"])])
+    src = Path(ft.__file__).read_text()
+    assert "facts_llm._printed_numbers" in src and "facts_llm._matches_printed" in src and "re.compile" not in src
+
+
+def test_finish_doc_drops_unquoted_rows_before_reconcile_and_never_stores_them():
+    st = _store()
+    tb = ft.TypedBackfill(st, TypedBackend())
+    rows = {"dividends_paid": [_row(13895.3, "Cash dividends paid were $4.45 per share in fiscal year 2022"),
+                               _row(11682, "Dividends to shareholders (11,682)")]}
+    win = dict(JNJ_WINDOW, doc_hash=st.corpus_docs(CID)[0]["doc_hash"])           # the stored document's hash
+    facts = ft.TypedBackfill(st, TypedBackend(_typed(rows))).call_window(win, DESCS).facts
+    out = tb.finish_doc(CID, facts, ft.SCHEMA_FIELDS)
+    assert [f["value"] for f in out["facts"]] == [11682.0] and out["conflicts"] == []        # no disputed pair left
+    assert [d["value"] for d in out["quote_dropped"]] == [13895.3]
+    assert [f["value"] for f in st.facts(CID, extractor="l4_llm.v1")] == [11682.0]
+
+
+def test_fill_doc_applies_the_rule_end_to_end():
+    st = _two_chunk_store()
+    wins = ft.split_windows(st, CID)
+
+    class Liar:
+        def complete(self, prompt, *, grammar, n_predict, cache_prompt, id_slot):
+            ex = prompt.split("Excerpt:\n", 1)[1]
+            body = {s: [] for s in ft.SLOTS}
+            if "Total assets 27,165" in ex:
+                body["total_assets"] = [_row(27165, "Total assets 27,165", period="2022"), _row(99999, "Total assets 27,165", period="2021")]
+            return {"text": json.dumps(body), "prompt_tokens": 1, "cache_n": 0, "decode_tokens": 1, "finish_reason": "stop"}
+
+    out = ft.TypedBackfill(st, Liar()).fill_doc(CID, wins, ft.SCHEMA_FIELDS, DESCS)
+    assert {(f["period"], f["value"]) for f in st.facts(CID, extractor="l4_llm.v1")} == {("2022", 27165.0)}
+    assert [d["value"] for d in out["quote_dropped"]] == [99999]
