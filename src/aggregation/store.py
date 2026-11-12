@@ -564,7 +564,7 @@ class CorpusStore:
 
     # --------------------------------------------------------- canonical facts
     def refresh_canonical(self, corpus_id: str | None = None, *, rel_tol: float = 0.005,
-                          rule: str = CANONICAL_RULE) -> dict[str, Any]:
+                          rule: str = CANONICAL_RULE, guards: Sequence[str] | None = None) -> dict[str, Any]:
         """Rebuild ``facts_canonical`` / ``fact_conflicts`` from ``facts`` (idempotent).
 
         Scope is one corpus, or every corpus when ``corpus_id`` is None. Returns counts for the
@@ -578,7 +578,7 @@ class CorpusStore:
             params.append(corpus_id)
         rows = [dict(zip(("corpus_id",) + FACT_COLUMNS, r))
                 for r in self.conn.execute(sql, params).fetchall()]
-        canon, log = select_canonical(rows, rel_tol=rel_tol, rule=rule)
+        canon, log = select_canonical(rows, rel_tol=rel_tol, rule=rule, guards=guards)
         scope, sp = ("WHERE corpus_id = ?", [corpus_id]) if corpus_id is not None else ("", [])
         self.conn.execute(f"DELETE FROM {CANONICAL_TABLE} {scope}", sp)
         self.conn.execute(f"DELETE FROM fact_conflicts {scope}", sp)
@@ -593,7 +593,8 @@ class CorpusStore:
                 f"VALUES ({', '.join('?' for _ in CONFLICT_COLUMNS)})",
                 [r[c] for c in CONFLICT_COLUMNS])
         self.conn.commit()
-        return {"rule": rule, "n_candidates": len(rows), "n_canonical": len(canon),
+        return {"rule": rule, "guards": list(guards) if guards is not None else None,
+                "n_candidates": len(rows), "n_canonical": len(canon),
                 "n_duplicates": sum(1 for r in log if r["kind"] == "duplicate"),
                 "n_conflicts": sum(1 for r in log if r["kind"] == "conflict")}
 

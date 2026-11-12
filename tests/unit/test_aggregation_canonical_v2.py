@@ -116,3 +116,19 @@ def test_v2_choice_flows_through_refresh_canonical_and_v1_is_restored():
     assert st.canonical_facts("c")[0]["rule"] == CANONICAL_RULE_V2
     s1 = st.refresh_canonical("c")
     assert s1["rule"] == CANONICAL_RULE and st.canonical_facts("c")[0]["value"] == 21748.0
+
+
+def test_guards_argument_narrows_v2_and_is_recorded_by_refresh_canonical():
+    facts = [_f("a", "Verizon", "net_income", 21748.0, "l3_textrow.v1", "Net Income $ 21,748", entity="Verizon"),
+             _f("b", "Verizon", "net_income", 21256.0, "l4_llm.v1", "Net income attributable to Verizon 21,256",
+                entity="Verizon")]
+    assert _pick(facts, rule=CANONICAL_RULE_V2, guards=())[0]["value"] == 21748.0               # no guard: v1 order
+    assert _pick(facts, rule=CANONICAL_RULE_V2, guards=("thousands_unit",))[0]["value"] == 21748.0
+    assert _pick(facts, rule=CANONICAL_RULE_V2, guards=("attributable_net_income",))[0]["value"] == 21256.0
+    st = CorpusStore(":memory:")
+    st.conn.execute("INSERT INTO documents (doc_hash, corpus_id, doc_id, entity, n_tokens_est) VALUES "
+                    "('h:Verizon', 'c', 'Verizon', 'Verizon', 1)")
+    st.conn.commit()
+    st.write_facts([{k: v for k, v in f.items() if k != "corpus_id"} for f in facts])
+    stats = st.refresh_canonical("c", rule=CANONICAL_RULE_V2, guards=("attributable_net_income",))
+    assert stats["guards"] == ["attributable_net_income"] and st.canonical_facts("c")[0]["value"] == 21256.0
