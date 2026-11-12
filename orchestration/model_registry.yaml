@@ -3,7 +3,7 @@
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/worktrees/epyc-orchestrator-inf86-cms512/orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/worktrees/ak-revert512-o/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-11-11T14:12:26+00:00
-# Cache key:   24dc711c38dad8c4...
+# Compiled at: 2026-11-12T16:53:54+00:00
+# Cache key:   9ef72ad4106fddbf...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1853,7 +1853,6 @@ server_mode:
     slots: 4
     cache_ram: 32768
     ctx_checkpoints: 32
-    checkpoint_min_step: 512
     serving_shape:
       n_ctx: 262144
       slots_by_shape:
@@ -2023,7 +2022,6 @@ server_mode:
     cache_ram: 65536
     cache_idle_slots: false
     ctx_checkpoints: 32
-    checkpoint_min_step: 512
     serving_shape:
       n_ctx: 393216
       batch: 512
@@ -2095,7 +2093,6 @@ server_mode:
     slots: 1
     cache_ram: 32768
     ctx_checkpoints: 32
-    checkpoint_min_step: 512
     serving_shape:
       n_ctx: 262144
       slots_by_shape:

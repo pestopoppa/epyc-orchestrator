@@ -48,47 +48,47 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-11-11T14:12:28Z'
+compiled_at: '2026-11-12T16:54:11Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: orchestration/model_registry.yaml
-    sha256: d2c7e25f149f89c3a2420b93f87844bb448fd707c755c25ab052be07a476eab5
-    repo_commit: a0062fe0
+    sha256: 9615682d9461ced4f3a10cfebb9c8925bd40db351d2aa9bd18a5745bed40df79
+    repo_commit: 4d0265cd
   descriptors:
     path: orchestration/model_descriptors.yaml
-    sha256: 77f316149c4993195367bcb7ae5b9da814185d7ecf1f099b04916c8b8637a6cd
-    repo_commit: a0062fe0
+    sha256: acff74b561a32d586c854c28fd69d93efa39b62e054a3b8b392e670ea69b4442
+    repo_commit: 4d0265cd
   stack_manifest:
     path: scripts/server/stack_manifest.py
     sha256: 8329d81f8a7435f0e1cfce1e3a32e4a8635d0e80bc92fcf21100fd2e813b9143
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
   stack_numa:
     path: scripts/server/stack_numa.py
     sha256: edfdb41035ec638d3eab60631024ebece56a5e2d9b577851bf02e05a446e0c32
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
   launch_manifest:
     path: orchestration/launch_manifest.yaml
     sha256: ec0252f9b7d76af00d1c1b2fa7be0a0766a0a5b0560dd8739cbb490e07091ea4
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
   stack_topology:
     path: orchestration/stack_topology.yaml
     sha256: 15d7cfa5a2ca4abc373f44d41313b1abb9468b35f1d85c87ac244d9dad1b8de1
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
   orchestrator_stack:
     path: scripts/server/orchestrator_stack.py
     sha256: 3ed9bf3ea4c13b9a95c13217800b479c20ce3df17f3c802910502c6cd24ec0bc
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
   stack_paths:
     path: scripts/server/stack_paths.py
     sha256: 85291c79110d3ab7683b0acbffb9158f320c138ad61f8acbdde269ee7a47abd5
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
   stack_runtime:
     path: scripts/server/stack_runtime.py
     sha256: 984d27262e1f1d5a5332d0b4a3e6fb96fb8095fc890ddaa93da07bff52eb1c99
-    repo_commit: a0062fe0
+    repo_commit: 4d0265cd
 roles:
   architect_critic:
     role: architect_critic
@@ -159,7 +159,6 @@ roles:
             cache_ram: 65536
             cache_idle_slots: false
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: null
@@ -387,7 +386,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: null
             served_template_sha256: 12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce
             reasoning: 'off'
@@ -577,7 +575,6 @@ roles:
             cache_ram: 65536
             cache_idle_slots: false
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: null
@@ -824,7 +821,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
@@ -1029,7 +1025,6 @@ roles:
             cache_ram: 65536
             cache_idle_slots: false
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: null
@@ -1702,7 +1697,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
@@ -2312,7 +2306,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
@@ -2518,7 +2511,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
@@ -2724,7 +2716,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
@@ -2930,7 +2921,6 @@ roles:
             image_min_tokens: null
             cache_ram: 32768
             ctx_checkpoints: 32
-            checkpoint_min_step: 512
             chat_template_file: /mnt/raid0/llm/models/chat-templates/sha256/1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551.jinja
             served_template_sha256: 1443ea9ab4bb0a2663b1002a5d4baad970e9f0b2f42ca4ec12b4683838284551
             reasoning: 'off'
