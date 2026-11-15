@@ -106,13 +106,63 @@ def _fy_relabel_cols(cells: list[str], cols: dict[int, str], fiscal_year: str | 
     return {j: str(int(y) + sh) for j, y in cols.items()} if sh else cols
 
 
-def _fy_relabel_years(line: str, years: list[str], fiscal_year: str | None, months: tuple[int, ...]) -> list[str]:
-    """A text-row year-header ``line`` whose ``years`` are every year on it: fiscal-year-end labels when every year is a printed date."""
+# SPLIT HEADERS (AGG-1.13 amendment 2, 2026-11-15). Real flattened statements (Ulta, Foot Locker) print the date over TWO fragments: the month-day
+# part (``January 28, January 29, January 30,``) and the years (``2023 2022 2021``), the years sharing a line with the unit caption
+# (``(In thousands, except per share data) 2023 2022 2021``). The full-date patterns above never match that, so amendment 1's rule was a no-op on
+# the real parse. The split form is read the same way: the month-days leading the year line (before its first year), else the month-days of the
+# most recent month-day-only line (remembered across blank lines, expired at the next non-blank line), paired i-th month with i-th year ONLY
+# when the counts match; the pairs then go through the unchanged ``_fy_shift`` (months in ``fy_end``, first calendar year = manifest fiscal year + 1).
+# Walmart (``Fiscal Years Ended January 31, (Amounts in millions) 2022 2021 2020``: one month-day, three years) is not paired and is left alone.
+_MD_TOKEN = re.compile(r"\b(?P<m>%s)[a-z]*\.?\s+\d{1,2}(?!\d),?" % "|".join(_MONTH_ABBR), re.I)
+_MD_ONLY_FILLER = frozenset(("fiscal", "year", "years", "ended", "ending", "as", "of", "at", "period", "periods", "week", "weeks", "and"))
+
+
+def month_day_only_line(line: str) -> list[int] | None:
+    """The months (in column order) of a line that is ONLY month-day tokens plus ``Fiscal year ended``-style filler words, else None."""
+    mds = list(_MD_TOKEN.finditer(line))
+    if not mds:
+        return None
+    rest = _MD_TOKEN.sub(" ", line)
+    if any(w.lower() not in _MD_ONLY_FILLER for w in re.findall(r"[^\s,.:;]+", rest)):
+        return None
+    return [_month_no(m.group("m")) for m in mds]
+
+
+def _fy_relabel_years(line: str, years: list[str], fiscal_year: str | None, months: tuple[int, ...],
+                      pending: list[int] | None = None) -> list[str]:
+    """A text-row year-header ``line`` whose ``years`` are every year on it: fiscal-year-end labels when every year is a printed date, either
+    whole (``January 28, 2023``) or split (month-days leading the line or on ``pending``, the months of the preceding month-day-only line)."""
     found = [(_month_no(m.group("m")), int(m.group("y"))) for m in _DATE_IN_LINE.finditer(line)]
-    if len(found) != len(years) or [str(y) for _m, y in found] != list(years):
+    if found:
+        if len(found) != len(years) or [str(y) for _m, y in found] != list(years):
+            return years
+        sh = _fy_shift(found, fiscal_year, months)
+        return [str(int(y) + sh) for y in years] if sh else years
+    first = _YEAR.search(line)
+    lead = [_month_no(m.group("m")) for m in _MD_TOKEN.finditer(line[:first.start()])] if first else []
+    mons = lead or list(pending or [])
+    if len(mons) != len(years):
         return years
-    sh = _fy_shift(found, fiscal_year, months)
+    sh = _fy_shift(list(zip(mons, (int(y) for y in years))), fiscal_year, months)
     return [str(int(y) + sh) for y in years] if sh else years
+
+
+def _fy_relabel_cols_split(prev: list[str], cells: list[str], cols: dict[int, str], fiscal_year: str | None,
+                           months: tuple[int, ...]) -> dict[int, str]:
+    """Table header whose year cells ``cols`` are bare years under a row ``prev`` of month-day-only cells (``January 28,`` / ``January 29,``):
+    the cells of ``prev`` that are month-day-only, in column order, paired with the year columns in column order when the counts match."""
+    mons = []
+    for c in prev:
+        mo = month_day_only_line(c.strip()) if c.strip() else None
+        if mo is not None:
+            if len(mo) != 1:
+                return cols
+            mons.append(mo[0])
+    order = sorted(cols)
+    if len(mons) != len(order) or any(not re.fullmatch(r"(?:19|20)\d\d", cells[j].strip()) for j in order):
+        return cols
+    sh = _fy_shift(list(zip(mons, (int(cols[j]) for j in order))), fiscal_year, months)
+    return {j: str(int(y) + sh) for j, y in cols.items()} if sh else cols
 
 # Canonical field names for common statement lines (lower-case label prefix -> field).
 FIELD_ALIASES: tuple[tuple[str, str], ...] = (
@@ -260,7 +310,11 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "", *, period_vers
             elif parse_number(c) is not None:
                 non_year_number = True
         if cols and not non_year_number:
-            header_idx, periods = i, (_fy_relabel_cols(r, cols, fiscal_year, fy_months) if fy_months else cols)
+            header_idx, periods = i, cols
+            if fy_months:
+                periods = _fy_relabel_cols(r, cols, fiscal_year, fy_months)
+                if periods is cols and i > 0:   # bare-year header under a month-day-only row (amendment 2)
+                    periods = _fy_relabel_cols_split(rows[i - 1], r, cols, fiscal_year, fy_months)
             break
     out: list[dict[str, Any]] = []
     for i, r in enumerate(rows):
@@ -519,6 +573,7 @@ def facts_from_page_text(
             unit = None
         per_share: str | None = None
         pending_dates: list[str] = []  # v2 date_header: consecutive date-only lines
+        pending_md: list[int] | None = None  # fy_end: months of the most recent month-day-only line (survives blank lines)
         acc: list[tuple[str, int, int, int]] = []  # pending label tokens: text, start, end, line
         run: list[tuple[str, int, int, int]] = []  # pending numeric run
         pos = 0
@@ -592,13 +647,15 @@ def facts_from_page_text(
                     if 2 <= len(pending_dates) <= 3 and len(set(pending_dates)) == len(pending_dates):
                         years, years_page = pending_dates, page
                     pending_dates = []
+            md_now = pending_md
+            pending_md = month_day_only_line(line) if fy_months else None   # expires at the next non-blank line
             u = _unit_of(line)
             if u:
                 unit, unit_page = u, page
             yh = _year_header(line)
             if yh:
                 if fy_months:
-                    yh = _fy_relabel_years(line, yh, fiscal_year, fy_months)
+                    yh = _fy_relabel_years(line, yh, fiscal_year, fy_months, md_now)
                 years, years_page = yh, page
                 acc, run = [], []
                 continue
