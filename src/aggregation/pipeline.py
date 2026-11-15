@@ -18,6 +18,10 @@ Selection: ``pipeline_spec(version)`` with an explicit version, else the environ
 refused, never silently mapped to the default. ``v1`` calls every helper below with EXACTLY the arguments the Phase 0 /
 AGG-1.1 code used (no keyword at all), so those runs reproduce byte for byte; the tests assert it.
 
+Orthogonal opt-in (AGG-1.13 amendment 1, default OFF): ``fy_end`` (``facts_det.fy_end_months``; ``extract_l3(..., fy_end=...)``,
+``IndexRegistry(fy_end=...)``) labels a DATE column header by the filing's fiscal year (Ulta's "January 28, 2023" first column is fiscal 2022)
+under EITHER version; with it unset every helper makes exactly the call above.
+
 The per-document fiscal-year and unit-label fixes (``facts_llm.unit_override``, ``declared_scale``) are not part of the
 version: they are in ``facts_llm`` itself and are on for both.
 """
@@ -51,17 +55,25 @@ class PipelineSpec:
     canonical_guards: tuple[str, ...] | None
 
     # ------------------------------------------------------------------ L3
-    def l3_kwargs(self, fiscal_years: Mapping[str, str] | None) -> dict[str, Any]:
-        """Keyword arguments of ``facts_det.extract_corpus_facts``: EMPTY for v1 (the legacy call)."""
-        if self.l3_period_version is None:
-            return {}
-        return {"period_version": self.l3_period_version, "fiscal_years": dict(fiscal_years or {})}
+    def l3_kwargs(self, fiscal_years: Mapping[str, str] | None, fy_end: Any = None) -> dict[str, Any]:
+        """Keyword arguments of ``facts_det.extract_corpus_facts``: EMPTY for v1 (the legacy call). ``fy_end`` (AGG-1.13 amendment 1,
+        opt-in, default None = off) adds the fiscal-year-end column labelling to EITHER version: v1 then gets ``fy_end`` and ``fiscal_years``
+        (still ``period_version=None``), v2 gets ``fy_end`` on top of its own keywords."""
+        months = facts_det.fy_end_months(fy_end) if fy_end is not None else None
+        out: dict[str, Any] = {}
+        if self.l3_period_version is not None:
+            out = {"period_version": self.l3_period_version, "fiscal_years": dict(fiscal_years or {})}
+        if months:
+            out["fy_end"] = months
+            out.setdefault("fiscal_years", dict(fiscal_years or {}))
+        return out
 
     def extract_l3(self, store: CorpusStore, corpus_id: str,
-                   fiscal_years: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+                   fiscal_years: Mapping[str, str] | None = None, fy_end: Any = None) -> list[dict[str, Any]]:
         """The L3 facts of a corpus under this pipeline version (no model). ``fiscal_years`` maps ``doc_id`` to the
-        filing's fiscal year (the corpus manifest); v2 needs it for the first-column attribution of a table with no header."""
-        return facts_det.extract_corpus_facts(store, corpus_id, **self.l3_kwargs(fiscal_years))
+        filing's fiscal year (the corpus manifest); v2 needs it for the first-column attribution of a table with no header, and
+        ``fy_end`` (either version) for the fiscal-year-end labelling of date column headers."""
+        return facts_det.extract_corpus_facts(store, corpus_id, **self.l3_kwargs(fiscal_years, fy_end))
 
     # ------------------------------------------------------------ canonical
     def canonical_kwargs(self) -> dict[str, Any]:

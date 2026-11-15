@@ -236,12 +236,15 @@ class IndexRegistry:
     produced handle, ``invalid`` one per persisted file that was refused (and then rebuilt)."""
 
     def __init__(self, store: CorpusStore, *, persist: bool | None = None, pipeline: Any = None,
-                 fiscal_years: dict[str, str] | None = None) -> None:
+                 fiscal_years: dict[str, str] | None = None, fy_end: Any = None) -> None:
         self.store = store
         # AGG-1.12: ``pipeline`` is a ``pipeline.PipelineSpec`` (None = the legacy v1 call, unchanged); it picks the L3
         # extraction (``l3_period.v2`` for ``agg_pipeline.v2``) and ``fiscal_years`` (doc_id -> fiscal year) feeds it.
         self.pipeline = pipeline
         self.fiscal_years = fiscal_years
+        # AGG-1.13 amendment 1: ``fy_end`` (opt-in, None = off, any pipeline version) = fiscal-year-end labelling of date column headers
+        # (``facts_det.fy_end_months``); it needs ``fiscal_years`` (doc_id -> fiscal year) like v2's first-column rule.
+        self.fy_end = fy_end
         self._live: dict[tuple[str, str, str, str], Any] = {}
         file_backed = store.path not in (":memory:", "")
         self.persist = file_backed if persist is None else bool(persist and file_backed)
@@ -372,10 +375,14 @@ class IndexRegistry:
         elif builder == "l3_facts_det":
             from src.aggregation.facts_det import extract_corpus_facts  # noqa: PLC0415
 
-            if self.pipeline is None:
+            if self.pipeline is None and self.fy_end is None:
                 facts = extract_corpus_facts(self.store, corpus_id)
-            else:
+            elif self.pipeline is None:
+                facts = extract_corpus_facts(self.store, corpus_id, fiscal_years=self.fiscal_years, fy_end=self.fy_end)
+            elif self.fy_end is None:
                 facts = self.pipeline.extract_l3(self.store, corpus_id, self.fiscal_years)
+            else:
+                facts = self.pipeline.extract_l3(self.store, corpus_id, self.fiscal_years, self.fy_end)
             self.store.write_facts(facts)
             handle, n = facts, len(facts)
         elif builder in ("l2_dense", "l4_facts_llm"):

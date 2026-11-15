@@ -40,6 +40,80 @@ _NUM = re.compile(r"^\(?-?\$?\s*\(?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(\.[0-9]+)?\
 _DASH = {"-", "—", "–", "--", "n/a", "na", "nm", ""}
 _MAX_HEADER_CELL = 40  # v2 table_header_narrow: a column-title cell is short
 
+# ``fy_end`` (AGG-1.13 amendment 1, 2026-11-14): OPT-IN fiscal-year-end labelling of DATE column headers, independent of ``period_version``
+# (usable by ``agg_pipeline.v1`` and ``v2`` alike; ``None`` is every default, so Phase 0 / AGG-1.1 / AGG-1.12 stores reproduce byte for byte).
+# Some filers (Ulta, Foot Locker) print the fiscal-2022 column as the calendar date it ends on ("January 28, 2023") and name that fiscal 2022;
+# the year regex above then labels the column 2023. The rule reads only the PRINTED header and the filing's manifest fiscal year: when every
+# year-bearing header cell is a date whose month is in ``fy_end`` (default Jan-Mar) and the FIRST such column's calendar year is the manifest
+# fiscal year + 1, the filing labels fiscal years by the year BEFORE the calendar year of the period end, so every date column is shifted back
+# one year. A first column whose calendar year equals the manifest fiscal year (Best Buy "January 29, 2022", fiscal 2022) is left alone; so is
+# a header with any non-date year cell ("2022", "Fiscal 2022"), a date outside ``fy_end`` (December filers) or no manifest fiscal year.
+FY_END_MONTHS = (1, 2, 3)
+FY_END_ENV = "ORCHESTRATOR_AGG_FY_END"   # "1"/"on"/"true" = default months, or a comma list of month numbers; unset/"0"/"off" = disabled
+_MONTH_ABBR = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_DATE_CELL = re.compile(
+    r"^(?:(?:(?:fiscal\s+)?(?:years?|periods?|weeks?)\s+)?(?:ended|ending)\s+|as\s+of\s+|at\s+)?"
+    r"(?P<m>%s)[a-z]*\.?\s+\d{1,2},?\s+(?P<y>(?:19|20)\d\d)$" % "|".join(_MONTH_ABBR), re.I)
+_DATE_IN_LINE = re.compile(r"\b(?P<m>%s)[a-z]*\.?\s+\d{1,2},?\s+(?P<y>(?:19|20)\d\d)\b" % "|".join(_MONTH_ABBR), re.I)
+
+
+def fy_end_months(value: Any = None, *, environ: Any = None) -> tuple[int, ...] | None:
+    """Normalise the ``fy_end`` option: ``None`` / ``False`` / ``""`` / ``"0"`` / ``"off"`` = disabled (the default); ``True`` / ``"1"`` /
+    ``"on"`` = ``FY_END_MONTHS``; an iterable or a comma string of month numbers (1-12) = those months. With ``value`` omitted the
+    environment variable ``FY_END_ENV`` is read (unset = disabled)."""
+    if value is None:
+        import os  # noqa: PLC0415
+        value = (os.environ if environ is None else environ).get(FY_END_ENV)
+    if value is None or value is False:
+        return None
+    if value is True:
+        return FY_END_MONTHS
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("", "0", "off", "false", "no"):
+            return None
+        if v in ("1", "on", "true", "yes", "default"):
+            return FY_END_MONTHS
+        value = v.split(",")
+    months = tuple(sorted({int(m) for m in value}))
+    if not months or any(not 1 <= m <= 12 for m in months):
+        raise ValueError(f"fy_end months must be 1-12, got {months}")
+    return months
+
+
+def _fy_shift(dates: list[tuple[int, int]], fiscal_year: str | None, months: tuple[int, ...]) -> int:
+    """0 or -1: ``dates`` is the (month, calendar year) of EVERY year-bearing header cell in column order."""
+    if not dates or fiscal_year is None or not re.fullmatch(r"\d{4}", str(fiscal_year).strip()):
+        return 0
+    if any(m not in months for m, _y in dates):
+        return 0
+    return -1 if dates[0][1] == int(str(fiscal_year).strip()) + 1 else 0
+
+
+def _month_no(name: str) -> int:
+    return _MONTH_ABBR.index(name[:3].lower()) + 1
+
+
+def _fy_relabel_cols(cells: list[str], cols: dict[int, str], fiscal_year: str | None, months: tuple[int, ...]) -> dict[int, str]:
+    """Table header row ``cells`` with year columns ``cols`` (index -> year): the same mapping with fiscal-year-end labels, or ``cols`` itself."""
+    dates = []
+    for j in sorted(cols):
+        m = _DATE_CELL.match(cells[j].strip())
+        if not m:
+            return cols
+        dates.append((_month_no(m.group("m")), int(m.group("y"))))
+    sh = _fy_shift(dates, fiscal_year, months)
+    return {j: str(int(y) + sh) for j, y in cols.items()} if sh else cols
+
+
+def _fy_relabel_years(line: str, years: list[str], fiscal_year: str | None, months: tuple[int, ...]) -> list[str]:
+    """A text-row year-header ``line`` whose ``years`` are every year on it: fiscal-year-end labels when every year is a printed date."""
+    found = [(_month_no(m.group("m")), int(m.group("y"))) for m in _DATE_IN_LINE.finditer(line)]
+    if len(found) != len(years) or [str(y) for _m, y in found] != list(years):
+        return years
+    sh = _fy_shift(found, fiscal_year, months)
+    return [str(int(y) + sh) for y in years] if sh else years
+
 # Canonical field names for common statement lines (lower-case label prefix -> field).
 FIELD_ALIASES: tuple[tuple[str, str], ...] = (
     ("total revenues", "revenue"), ("total revenue", "revenue"), ("total net revenue", "revenue"),
@@ -163,11 +237,13 @@ def is_canonical_label(label: str) -> bool:
 
 def facts_from_table(table: dict[str, Any], chunk_text: str = "", *, period_version: str | None = None,
                      fiscal_year: str | None = None,
-                     components: Iterable[str] | None = None) -> list[dict[str, Any]]:
+                     components: Iterable[str] | None = None, fy_end: Iterable[int] | None = None) -> list[dict[str, Any]]:
     """Table-row facts (``l3_table.v1``). ``period_version=None`` is the legacy behaviour; ``L3_PERIOD_V2`` is opt-in (see the
     module comment). Under v2 a fact whose period was INFERRED (the fiscal year with no header) carries ``_inferred`` and
-    ``_ridx`` for the corpus-level row selection; ``extract_corpus_facts`` strips them."""
+    ``_ridx`` for the corpus-level row selection; ``extract_corpus_facts`` strips them. ``fy_end`` (opt-in, independent of
+    ``period_version``; module comment) relabels a date column header by the filing's fiscal year."""
     comp = _components(period_version, components)
+    fy_months = fy_end_months(fy_end) if fy_end is not None else None
     rows = [[cell_text(c) for c in r] for r in table.get("rows") or []]
     if not rows:
         return []
@@ -184,7 +260,7 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "", *, period_vers
             elif parse_number(c) is not None:
                 non_year_number = True
         if cols and not non_year_number:
-            header_idx, periods = i, cols
+            header_idx, periods = i, (_fy_relabel_cols(r, cols, fiscal_year, fy_months) if fy_months else cols)
             break
     out: list[dict[str, Any]] = []
     for i, r in enumerate(rows):
@@ -417,7 +493,7 @@ _DATE_LINE = re.compile(
 def facts_from_page_text(
     pages: Iterable[tuple[int, str]], *, doc_hash: str, doc_id: str | None = None,
     entity: str | None = None, period_version: str | None = None, fiscal_year: str | None = None,
-    components: Iterable[str] | None = None,
+    components: Iterable[str] | None = None, fy_end: Iterable[int] | None = None,
 ) -> list[dict[str, Any]]:
     """Deterministic statement-row facts from per-page text (``extractor: l3_textrow.v1``).
 
@@ -430,6 +506,7 @@ def facts_from_page_text(
     tokens ends the row and the next label starts right after it.
     """
     comp = _components(period_version, components)
+    fy_months = fy_end_months(fy_end) if fy_end is not None else None
     out: list[dict[str, Any]] = []
     years: list[str] | None = None
     years_page: int | None = None
@@ -520,6 +597,8 @@ def facts_from_page_text(
                 unit, unit_page = u, page
             yh = _year_header(line)
             if yh:
+                if fy_months:
+                    yh = _fy_relabel_years(line, yh, fiscal_year, fy_months)
                 years, years_page = yh, page
                 acc, run = [], []
                 continue
@@ -635,11 +714,13 @@ def select_inferred_periods(facts: list[dict[str, Any]], primary_pages: dict[Any
 
 def extract_corpus_facts(store: CorpusStore, corpus_id: str, *, period_version: str | None = None,
                          fiscal_years: dict[str, str] | None = None,
-                         components: Iterable[str] | None = None) -> list[dict[str, Any]]:
+                         components: Iterable[str] | None = None, fy_end: Iterable[int] | None = None) -> list[dict[str, Any]]:
     """L3 facts of a corpus. ``period_version=None`` is the legacy extraction (what Phase 0 and AGG-1.1 ran). With
     ``L3_PERIOD_V2``, ``fiscal_years`` maps ``doc_id`` -> the filing's fiscal year (the corpus manifest); a document with no
-    entry gets no inferred period."""
+    entry gets no inferred period. ``fy_end`` (opt-in, usable with ``period_version=None`` too; module comment) relabels date
+    column headers by the filing's fiscal year and needs ``fiscal_years`` for the same reason; ``None`` is the unchanged default."""
     comp = _components(period_version, components)
+    fy_months = fy_end_months(fy_end) if fy_end is not None else None
     fy = fiscal_years or {}
     chunks = store.chunks(corpus_id)
     by_id = {c["chunk_id"]: c for c in chunks}
@@ -647,6 +728,8 @@ def extract_corpus_facts(store: CorpusStore, corpus_id: str, *, period_version: 
     doc_fy = {d["doc_hash"]: fy.get(d["doc_id"]) for d in store.corpus_docs(corpus_id)}
     facts: list[dict[str, Any]] = []
     kw = {"period_version": period_version, "components": comp} if comp else {}
+    if fy_months:
+        kw["fy_end"] = fy_months
     for t in store.tables(corpus_id):
         facts.extend(facts_from_table(t, (by_id.get(t["chunk_id"]) or {}).get("text", ""),
                                       fiscal_year=doc_fy.get(t["doc_hash"]), **kw))
