@@ -41,9 +41,9 @@ SERVER_LOG_DIR = _REPO_ROOT / "logs"
 
 # Configured enabled engine set (from config/searxng/settings.yml). The
 # original SX-3 target included DDG/Qwant/Startpage, but the current EPYC egress
-# is blocked by those engines. The live profile is Bing primary, Brave
-# best-effort, and Wikipedia healthy.
-CONFIGURED_ENGINES = {"bing", "brave", "wikipedia"}
+# is blocked by those engines, and brave answers HTTP 429 (SX-6 sentinel,
+# 2026-11-16). The live profile is Bing + Yandex (general web) and Wikipedia.
+CONFIGURED_ENGINES = {"bing", "yandex", "wikipedia"}
 
 # Thresholds for go/no-go verdict
 MAX_ENGINES_DOWN_PCT = 50  # >50% of engines unresponsive in a query = bad query
@@ -54,7 +54,32 @@ MAX_FALLBACK_RATE = 10     # >10% of SearXNG calls falling back = hold
 _UNRESP_RE = re.compile(
     r"searxng unresponsive_engines:\s*([^\(]+?)\s*\(query="
 )
-_FALLBACK_RE = re.compile(r"SearXNG failed \(.*?\), falling back to DDG")
+# search.py emits three distinct fallback warnings: failure, empty result set,
+# and the low-relevance guard. All of them end in "falling back to DDG".
+_FALLBACK_RE = re.compile(
+    r"SearXNG (?:failed \(.*?\)|returned no results|low-relevance result set), "
+    r"falling back to DDG"
+)
+
+
+def count_query_log(root: Path) -> tuple[int, int]:
+    """Return (total_queries, ddg_fallbacks) from ``<root>/*queries*.jsonl``.
+
+    The sentinel driver writes one row per issued query with the backend that
+    finally answered; a ``duckduckgo`` row means SearXNG was tried first and
+    fell back (the log lines alone miss empty/low-relevance fallbacks).
+    """
+    total = fallbacks = 0
+    if not root.exists():
+        return 0, 0
+    for path in sorted(root.glob("*queries*.jsonl")):
+        for row in parse_jsonl(path):
+            if "query" not in row:
+                continue
+            total += 1
+            if row.get("backend") == "duckduckgo":
+                fallbacks += 1
+    return total, fallbacks
 
 
 def parse_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -118,6 +143,7 @@ def collect_telemetry(
         "fallback_events": 0,
         "engine_failure_counts": Counter(),
         "bad_queries": 0,  # >50% of engines down in a single query
+        "total_queries": 0,
     }
 
     day = start
@@ -163,6 +189,15 @@ def collect_telemetry(
 
         day += timedelta(days=1)
 
+    log_total, log_fallbacks = count_query_log(SERVER_LOG_DIR)
+    telemetry["fallback_events"] = max(telemetry["fallback_events"], log_fallbacks)
+    # Denominator is ALL queries, not just the ones SearXNG served.
+    # The query log is authoritative (one row per query); progress JSONL can
+    # record a query more than once.
+    telemetry["total_queries"] = log_total or (
+        telemetry["searxng_queries"] + telemetry["ddg_queries"]
+    )
+
     return telemetry
 
 
@@ -173,8 +208,9 @@ def compute_verdict(tel: dict[str, Any]) -> dict[str, Any]:
     ddg_p95 = percentile(tel["ddg_latencies_ms"], 95)
 
     total_sx = tel["searxng_queries"]
-    bad_query_rate = (100.0 * tel["bad_queries"] / total_sx) if total_sx else 0.0
-    fallback_rate = (100.0 * tel["fallback_events"] / total_sx) if total_sx else 0.0
+    total_q = tel.get("total_queries") or total_sx
+    bad_query_rate = (100.0 * tel["bad_queries"] / total_q) if total_q else 0.0
+    fallback_rate = (100.0 * tel["fallback_events"] / total_q) if total_q else 0.0
     latency_ratio = (searxng_p95 / ddg_p95) if ddg_p95 > 0 else 0.0
 
     reasons: list[str] = []
@@ -252,7 +288,7 @@ def format_human(tel: dict[str, Any], verdict: dict[str, Any]) -> str:
     )
     lines.append(
         f"  fallback-to-DDG events  : {tel['fallback_events']} "
-        f"({verdict['fallback_rate_pct']:.2f}% of SearXNG queries)"
+        f"({verdict['fallback_rate_pct']:.2f}% of all queries)"
     )
     if tel["engine_failure_counts"]:
         lines.append("  per-engine failure counts:")
@@ -316,6 +352,7 @@ def main() -> int:
                 "unresponsive_events": tel["unresponsive_events"],
                 "fallback_events": tel["fallback_events"],
                 "bad_queries": tel["bad_queries"],
+                "total_queries": tel["total_queries"],
                 "per_engine_failures": dict(tel["engine_failure_counts"]),
             },
             "verdict": verdict,

@@ -1,3 +1,4 @@
+import pytest
 """SearXNG web-search configuration tests."""
 
 import importlib
@@ -182,3 +183,49 @@ def test_web_search_fails_when_fallback_results_are_low_relevance(monkeypatch):
     assert result["backend"] == "duckduckgo"
     assert result["result_count"] == 0
     assert "No relevant search results" in result["error"]
+
+
+def test_shape_query_strips_preamble_and_condenses_long_questions():
+    shaped = search_mod._shape_query(
+        "Use web search to find the latest stable release version of Python as of 2026."
+    )
+    assert not shaped.lower().startswith("use web search")
+    assert "Python" in shaped and "2026" in shaped
+    long_q = (
+        "Who founded the company with the highest revenue in the Fortune Global 500 "
+        "list for 2025, and what year was it founded?"
+    )
+    shaped = search_mod._shape_query(long_q)
+    assert len(shaped.split()) < len(long_q.split())
+    assert "Fortune" in shaped and "revenue" in shaped
+    assert search_mod._shape_query("python json") == "python json"
+
+
+def test_web_search_retries_searxng_with_shaped_query(monkeypatch):
+    monkeypatch.setattr(search_mod, "_SEARXNG_DEFAULT", True)
+    seen: list[str] = []
+
+    def fake_searx(query, max_results=5):
+        seen.append(query)
+        if query.lower().startswith("use web search"):
+            return []
+        return [
+            {
+                "title": "Python release schedule",
+                "url": "https://www.python.org/downloads/",
+                "snippet": "latest stable release version of Python 2026",
+            }
+        ]
+
+    monkeypatch.setattr(search_mod, "_search_searxng", fake_searx)
+    monkeypatch.setattr(
+        search_mod,
+        "_search_duckduckgo",
+        lambda *a, **k: pytest.fail("DDG must not run when the shaped retry succeeds"),
+    )
+    result = search_mod.web_search(
+        "Use web search to find the latest stable release version of Python as of 2026."
+    )
+    assert result["backend"] == "searxng"
+    assert len(seen) == 2 and seen[0].lower().startswith("use web search")
+    assert not seen[1].lower().startswith("use web search")

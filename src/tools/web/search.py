@@ -268,6 +268,50 @@ def _results_pass_relevance_guard(query: str, results: list[dict[str, Any]]) -> 
     return max(scores, default=0) >= 2 or sum(score >= 1 for score in scores) >= 2
 
 
+_QUERY_PREAMBLE_RE = re.compile(
+    r"^\s*(?:please\s+)?use\s+(?:the\s+)?web\s+search(?:\s+tool)?\s+to\s+"
+    r"(?:(?:find|look\s+up|search\s+for|check|determine)\s+)?",
+    re.IGNORECASE,
+)
+_LONG_QUERY_TERMS = 12
+
+
+def _shape_query(query: str) -> str:
+    """Condense a long natural-language prompt into a keyword query (SX-6).
+
+    Strips an instruction preamble ("Use web search to find ...") and, when the
+    remainder is still long, keeps only the non-stopword terms. Returns the
+    original query when nothing would change.
+    """
+    shaped = _QUERY_PREAMBLE_RE.sub("", query).strip().rstrip("?.! ")
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-']*", shaped)
+    if len(tokens) > _LONG_QUERY_TERMS:
+        kept = [t for t in tokens if t.lower() not in _QUERY_STOPWORDS and len(t) > 2]
+        if kept:
+            shaped = " ".join(kept)
+    return shaped if shaped and shaped != query else query
+
+
+def _searxng_attempt(search_query: str, max_results: int):
+    result = safe_execute(
+        _search_searxng,
+        search_query,
+        max_results=max_results,
+        timeout_seconds=15,
+    )
+    if not result.success:
+        logger.warning("SearXNG failed (%s), falling back to DDG", result.error)
+        return result, None
+    searx_results = result.data or []
+    if not searx_results:
+        logger.warning("SearXNG returned no results, falling back to DDG")
+        return result, None
+    if not _results_pass_relevance_guard(search_query, searx_results):
+        logger.warning("SearXNG low-relevance result set, falling back to DDG")
+        return result, None
+    return result, searx_results
+
+
 def web_search(
     query: str,
     max_results: int = 5,
@@ -290,29 +334,22 @@ def web_search(
 
     # SX-6: Use SearXNG when enabled, fall back to DDG HTML scraping
     if _SEARXNG_DEFAULT:
-        result = safe_execute(
-            _search_searxng,
-            search_query,
-            max_results=max_results,
-            timeout_seconds=15,
-        )
-        if result.success:
-            searx_results = result.data or []
-            if not searx_results:
-                logger.warning("SearXNG returned no results, falling back to DDG")
-            elif not _results_pass_relevance_guard(search_query, searx_results):
-                logger.warning("SearXNG low-relevance result set, falling back to DDG")
-            else:
-                return {
-                    "success": True,
-                    "results": searx_results,
-                    "query": query,
-                    "result_count": len(searx_results),
-                    "elapsed_ms": result.elapsed_ms,
-                    "backend": "searxng",
-                }
-        else:
-            logger.warning("SearXNG failed (%s), falling back to DDG", result.error)
+        result, searx_results = _searxng_attempt(search_query, max_results)
+        if searx_results is None and result.success:
+            # SX-6: engines can miss long prompts; retry once with a shaped query.
+            shaped = _shape_query(search_query)
+            if shaped != search_query:
+                logger.info("SearXNG retry with shaped query %r", shaped)
+                result, searx_results = _searxng_attempt(shaped, max_results)
+        if searx_results:
+            return {
+                "success": True,
+                "results": searx_results,
+                "query": query,
+                "result_count": len(searx_results),
+                "elapsed_ms": result.elapsed_ms,
+                "backend": "searxng",
+            }
         # SearXNG failed or was low-quality - fall through to DDG as fallback
 
     result = safe_execute(

@@ -29,7 +29,9 @@ outgoing:
 # (access denied) and startpage (Suspended: CAPTCHA). Those engines only waste
 # request time and surface CAPTCHA noise in unresponsive_engines, so they are
 # disabled here. bing is the reliable workhorse from this egress; wikipedia is
-# healthy (no errors); brave is kept best-effort (intermittently rate-limited).
+# healthy for title-like queries (429s under sentinel load). SX-6 (2026-11-16):
+# brave disabled (HTTP 429), yandex added; mojeek/yahoo/presearch/searchmysite
+# also fail from this egress (403 / HTTP error).
 engines:
   - name: google
     engine: google
@@ -57,9 +59,17 @@ engines:
   - name: brave
     engine: brave
     shortcut: br
-    disabled: false
-    weight: 1.1               # Best-effort — intermittently rate-limited from this egress
+    disabled: true            # SX-6 (2026-11-16): search.brave.com answers HTTP 429 from
+                              # this egress on ~every request (suspended_time=180), 50/50 failures
     timeout: 3.0
+
+  - name: yandex
+    engine: yandex
+    shortcut: yd
+    disabled: false
+    weight: 1.1               # SX-6: works unauthenticated from this egress; returned 15 results on
+                              # long natural-language queries where bing returns 0 (8/8 rapid queries OK)
+    timeout: 4.0
 
   - name: bing
     engine: bing
