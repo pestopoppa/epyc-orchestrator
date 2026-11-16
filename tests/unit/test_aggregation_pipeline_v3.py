@@ -23,7 +23,7 @@ def _layer_on(monkeypatch):
 
 
 def test_v3_is_the_default_and_the_same_flag_pins_it(monkeypatch):
-    assert pl.PIPELINES == (pl.PIPELINE_V1, pl.PIPELINE_V2, pl.PIPELINE_V3) and pl.DEFAULT == pl.PIPELINE_V3
+    assert pl.PIPELINES[:3] == (pl.PIPELINE_V1, pl.PIPELINE_V2, pl.PIPELINE_V3) and pl.DEFAULT == pl.PIPELINE_V3
     assert pl.pipeline_spec().version == pl.PIPELINE_V3
     monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v3")
     assert pl.pipeline_spec().version == pl.PIPELINE_V3

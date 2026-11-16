@@ -56,7 +56,7 @@ def test_explicit_v1_and_v2_pins_still_reproduce_their_pipelines(monkeypatch):
 def test_unknown_version_is_refused_never_defaulted(monkeypatch):
     with pytest.raises(ValueError):
         pl.pipeline_spec("agg_pipeline.v9")
-    monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v4")      # v3 is a real version since AGG-1.16
+    monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v5")      # v3 since AGG-1.16 and v4 since AGG-1.18 are real versions
     with pytest.raises(ValueError):
         pl.pipeline_spec()
 

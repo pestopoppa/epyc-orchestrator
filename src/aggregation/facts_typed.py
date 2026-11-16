@@ -35,6 +35,10 @@ from src.aggregation import facts_llm, require_enabled
 from src.aggregation.store import CorpusStore
 
 STAGE = "l4_typed.v1"
+# ``value_in_quote`` rule versions (AGG-1.18; see the comment above ``value_in_quote``)
+VALUE_IN_QUOTE_V1 = "value_in_quote.v1"
+VALUE_IN_QUOTE_ROUNDED = "value_in_quote.rounded.v1"
+VALUE_IN_QUOTE_RULES = (VALUE_IN_QUOTE_V1, VALUE_IN_QUOTE_ROUNDED)
 EXTRACTOR = facts_llm.EXTRACTOR_L4          # facts keep the l4_llm.v1 extractor tag: the canonical source tier keys on it
 
 # the 8 schema fields of the Phase 0 / Phase 1 corpus plus long_term_debt (the AGG-1.4 backfill field): arm T's slots
@@ -241,12 +245,14 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
         self._declared_from_parent_chunk(facts)
         return facts
 
-    def finish_doc(self, corpus_id: str, window_facts: Iterable[dict[str, Any]], fields: Sequence[str]) -> dict[str, Any]:
+    def finish_doc(self, corpus_id: str, window_facts: Iterable[dict[str, Any]], fields: Sequence[str], *,
+                   quote_rule: str = VALUE_IN_QUOTE_V1) -> dict[str, Any]:
         """The quote rule (``drop_unquoted``), then L4d over the document's kept facts (``facts_llm.reconcile``), written to the
         store, one manifest row per field (``l4_facts_llm:<field>``, the v1 builder name, so ``built_layers`` is the same).
-        The dropped rows are returned as ``quote_dropped`` (notes; they are not stored)."""
+        The dropped rows are returned as ``quote_dropped`` (notes; they are not stored). ``quote_rule`` (AGG-1.18, opt-in):
+        ``VALUE_IN_QUOTE_ROUNDED`` also keeps a restated value rounded to the reply's own decimals (``value_in_quote``)."""
         require_enabled()
-        window_facts, quote_dropped = drop_unquoted(window_facts)
+        window_facts, quote_dropped = drop_unquoted(window_facts, rule=quote_rule)
         kept, conflicts = facts_llm.reconcile(list(window_facts))
         self.store.write_facts(kept)
         h = self.store.corpus_content_hash(corpus_id)
@@ -259,9 +265,10 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
 
     def fill_doc(self, corpus_id: str, doc_windows: list[dict[str, Any]], fields: Sequence[str],
                  descs: Mapping[str, str], *, on_window: Callable[[TypedWindowResult], None] | None = None,
-                 harvest: bool = False) -> dict[str, Any]:
+                 harvest: bool = False, quote_rule: str = VALUE_IN_QUOTE_V1) -> dict[str, Any]:
         """The whole stage for one document (no resume): plan, one call per distinct window, gate slots, reconcile, write.
-        ``harvest=True`` gates with ``keep_slot_harvest`` (``KEEP_SLOT_HARVEST``, AGG-1.15) instead of ``keep_slot``."""
+        ``harvest=True`` gates with ``keep_slot_harvest`` (``KEEP_SLOT_HARVEST``, AGG-1.15) instead of ``keep_slot``;
+        ``quote_rule`` is passed to ``finish_doc`` (default ``VALUE_IN_QUOTE_V1``, the AGG-1.14 rule unchanged)."""
         windows, chosen = doc_call_plan(doc_windows, fields, descs)
         kept: list[dict[str, Any]] = []
         results = []
@@ -274,13 +281,66 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
                 kept.extend(f for f in r.facts if keep_slot_harvest(f, chosen[w["chunk_id"]], fields))
             else:
                 kept.extend(f for f in r.facts if keep_slot(f, chosen[w["chunk_id"]]))
-        out = self.finish_doc(corpus_id, kept, fields)
+        out = (self.finish_doc(corpus_id, kept, fields) if quote_rule == VALUE_IN_QUOTE_V1
+               else self.finish_doc(corpus_id, kept, fields, quote_rule=quote_rule))
         out["windows"] = results
         out["n_calls"] = len(results)
         return out
 
 
-def value_in_quote(fact: dict[str, Any]) -> str | None:
+# ``value_in_quote`` rule versions. ``value_in_quote.v1`` is the AGG-1.14 rule (agg_pipeline.v1/v2/v3), unchanged. ``value_in_quote.rounded.v1``
+# (AGG-1.18, opt-in, agg_pipeline.v4): the v1 rule, plus a RESTATED value the model rounded to fewer decimals than the exact restatement
+# (BLOCK: "4,109,829" in USD thousands restated to 4109.829 USD millions, replied as 4109.83). Accepted only when the reply's value equals
+# the exact restatement rounded (half-up or half-even) to the reply's own decimal places, at most ``ROUND_MAX_DROPPED`` decimals are
+# dropped and the relative error is at most ``ROUND_REL_TOL``. A value no printed number restates (a per-share figure, a sum) stays dropped.
+# (the rule-version names are defined next to ``STAGE`` above)
+ROUND_REL_TOL = 5e-4
+ROUND_MAX_DROPPED = 2
+
+
+def _decimals(d: Any) -> int:
+    return max(0, -d.normalize().as_tuple().exponent)
+
+
+def restated_rounded(value: float, printed: Iterable[float], scale: float) -> bool:
+    """True when ``value`` is some ``printed * scale`` (exact decimal product) rounded to ``value``'s own decimal places, dropping 1 to
+    ``ROUND_MAX_DROPPED`` decimals, with relative error <= ``ROUND_REL_TOL``."""
+    from decimal import ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal  # noqa: PLC0415
+    v = Decimal(repr(abs(float(value))))
+    dv = _decimals(v)
+    sc = Decimal(repr(float(scale)))
+    for n in printed:
+        r = Decimal(repr(abs(float(n)))) * sc
+        if r == 0:
+            continue
+        dropped = _decimals(r) - dv
+        if not 1 <= dropped <= ROUND_MAX_DROPPED:
+            continue
+        if abs(v - r) / r > Decimal(repr(ROUND_REL_TOL)):
+            continue
+        q = Decimal(1).scaleb(-dv)
+        if v in (r.quantize(q, rounding=ROUND_HALF_UP), r.quantize(q, rounding=ROUND_HALF_EVEN)):
+            return True
+    return False
+
+
+def value_in_quote(fact: dict[str, Any], rule: str = VALUE_IN_QUOTE_V1) -> str | None:
+    """``rule=VALUE_IN_QUOTE_V1``: the AGG-1.14 rule below, byte for byte. ``rule=VALUE_IN_QUOTE_ROUNDED``: when the v1 rule returns None,
+    ``"restated_rounded"`` for a declared-scale restatement rounded to the reply's decimals (``restated_rounded``), else None."""
+    if rule not in VALUE_IN_QUOTE_RULES:
+        raise ValueError(f"unknown value_in_quote rule {rule!r}; known: {VALUE_IN_QUOTE_RULES}")
+    basis = _value_in_quote_v1(fact)
+    if basis is not None or rule == VALUE_IN_QUOTE_V1:
+        return basis
+    v, decl = fact.get("value"), fact.get("declared_scale")
+    if v is None or decl not in facts_llm.UNIT_SCALE or decl == "USD_millions":
+        return None
+    if restated_rounded(v, facts_llm._printed_numbers(fact.get("quote") or ""), facts_llm.UNIT_SCALE[decl]):
+        return "restated_rounded"
+    return None
+
+
+def _value_in_quote_v1(fact: dict[str, Any]) -> str | None:
     """The AGG-1.1 L4 rule: ``"printed"`` when the row's value is a number printed in its quote, ``"restated"`` when it is a
     printed number restated by the filing's declared scale (``facts_llm.unit_override``'s ``restated_to_millions`` basis: the
     declared scale is not USD millions and ``value == printed * UNIT_SCALE[declared]``), else None (the row is not backed by its
@@ -299,12 +359,12 @@ def value_in_quote(fact: dict[str, Any]) -> str | None:
     return None
 
 
-def drop_unquoted(facts: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """``(kept, dropped)``: rows that satisfy ``value_in_quote`` and, one note per violating row (never stored)."""
+def drop_unquoted(facts: Iterable[dict[str, Any]], rule: str = VALUE_IN_QUOTE_V1) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """``(kept, dropped)``: rows that satisfy ``value_in_quote`` (under ``rule``) and, one note per violating row (never stored)."""
     kept: list[dict[str, Any]] = []
     dropped: list[dict[str, Any]] = []
     for f in facts:
-        basis = value_in_quote(f)
+        basis = value_in_quote(f, rule)
         if basis is None:
             dropped.append({"fact_id": f.get("fact_id"), "doc_id": f.get("doc_id"), "field": f.get("field"),
                             "period": f.get("period"), "value": f.get("value"), "unit": f.get("unit"),

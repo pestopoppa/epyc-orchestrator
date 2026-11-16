@@ -19,8 +19,13 @@ document did not plan are kept from any called window, zero extra calls) and ``c
 attributable-net-income guard plus the ``long_term_debt`` label guard). Everything else is v2's. ``v1`` and ``v2`` are unchanged byte
 for byte (their ``l4_kwargs()`` is EMPTY and their ``as_record()`` has no new key); Pin ``ORCHESTRATOR_AGG_PIPELINE=agg_pipeline.v1`` (or ``v2``) to reproduce those pipelines.
 
+``agg_pipeline.v4`` (AGG-1.18, 2026-11-16, OPT-IN, not the default): ``agg_pipeline.v3`` plus the four accepted AGG-1.17 text-row label
+components (``V4_L3_TEXTROW``: ltd_qualifier, note_ref, tail_label, pipe_cells_ltd, passed as ``components`` on top of v2's period
+components) and the quote rule ``value_in_quote.rounded.v1`` (``facts_typed.VALUE_IN_QUOTE_ROUNDED``: a declared-scale restatement the model
+rounded to its own decimals is kept). v1, v2 and v3 kwargs and records are unchanged.
+
 Selection: ``pipeline_spec(version)`` with an explicit version, else the environment variable
-``ORCHESTRATOR_AGG_PIPELINE`` (``agg_pipeline.v1`` | ``agg_pipeline.v2`` | ``agg_pipeline.v3``), else ``agg_pipeline.v3``. An unknown value is
+``ORCHESTRATOR_AGG_PIPELINE`` (``agg_pipeline.v1`` | ``agg_pipeline.v2`` | ``agg_pipeline.v3`` | ``agg_pipeline.v4``), else ``agg_pipeline.v3``. An unknown value is
 refused, never silently mapped to the default. ``v1`` calls every helper below with EXACTLY the arguments the Phase 0 /
 AGG-1.1 code used (no keyword at all), so those runs reproduce byte for byte; the tests assert it.
 
@@ -39,13 +44,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from src.aggregation import facts_det
-from src.aggregation.facts_typed import KEEP_SLOT_HARVEST
+from src.aggregation.facts_typed import KEEP_SLOT_HARVEST, VALUE_IN_QUOTE_ROUNDED, VALUE_IN_QUOTE_V1
 from src.aggregation.store import CANONICAL_RULE, CANONICAL_RULE_V2, CANONICAL_RULE_V3, CorpusStore
 
 PIPELINE_V1 = "agg_pipeline.v1"
 PIPELINE_V2 = "agg_pipeline.v2"
 PIPELINE_V3 = "agg_pipeline.v3"
-PIPELINES = (PIPELINE_V1, PIPELINE_V2, PIPELINE_V3)
+PIPELINE_V4 = "agg_pipeline.v4"
+PIPELINES = (PIPELINE_V1, PIPELINE_V2, PIPELINE_V3, PIPELINE_V4)
 FLAG_ENV = "ORCHESTRATOR_AGG_PIPELINE"
 DEFAULT = PIPELINE_V3
 
@@ -53,6 +59,8 @@ L4_ROWS_V1 = "l4_rows.v1"            # facts_llm.LazyFieldBackfill
 L4_TYPED_V1 = "l4_typed.v1"          # facts_typed.TypedBackfill
 V2_CANONICAL_GUARDS = ("attributable_net_income",)
 KEEP_SLOT_V1 = "keep_slot.v1"        # facts_typed.keep_slot (v1 has no typed stage; v2's gate)
+# AGG-1.17's four accepted opt-in text-row label components (agg117 verdict admissible:ltd_qualifier+note_ref+tail_label+pipe_cells_ltd)
+V4_L3_TEXTROW = ("ltd_qualifier", "note_ref", "tail_label", "pipe_cells_ltd")
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,9 @@ class PipelineSpec:
     l4_stage: str
     canonical_rule: str
     canonical_guards: tuple[str, ...] | None
-    l4_slot_gate: str = KEEP_SLOT_V1     # AGG-1.16: ``KEEP_SLOT_HARVEST`` for v3 only
+    l4_slot_gate: str = KEEP_SLOT_V1     # AGG-1.16: ``KEEP_SLOT_HARVEST`` for v3 and v4
+    l3_textrow: tuple[str, ...] = ()     # AGG-1.18: ``V4_L3_TEXTROW`` for v4 only
+    l4_quote_rule: str = VALUE_IN_QUOTE_V1   # AGG-1.18: ``VALUE_IN_QUOTE_ROUNDED`` for v4 only
 
     # ------------------------------------------------------------------ L3
     def l3_kwargs(self, fiscal_years: Mapping[str, str] | None, fy_end: Any = None) -> dict[str, Any]:
@@ -73,6 +83,8 @@ class PipelineSpec:
         out: dict[str, Any] = {}
         if self.l3_period_version is not None:
             out = {"period_version": self.l3_period_version, "fiscal_years": dict(fiscal_years or {})}
+        if self.l3_textrow:              # v4 only: v2's period components plus the text-row components
+            out["components"] = list(facts_det.L3_PERIOD_COMPONENTS) + list(self.l3_textrow)
         if months:
             out["fy_end"] = months
             out.setdefault("fiscal_years", dict(fiscal_years or {}))
@@ -87,8 +99,12 @@ class PipelineSpec:
 
     # ------------------------------------------------------------------ L4
     def l4_kwargs(self) -> dict[str, Any]:
-        """Keyword arguments of ``facts_typed.TypedBackfill.fill_doc``: EMPTY for v1 and v2, ``{"harvest": True}`` for v3."""
-        return {"harvest": True} if self.l4_slot_gate == KEEP_SLOT_HARVEST else {}
+        """Keyword arguments of ``facts_typed.TypedBackfill.fill_doc``: EMPTY for v1 and v2, ``{"harvest": True}`` for v3, plus
+        ``quote_rule`` for v4."""
+        out: dict[str, Any] = {"harvest": True} if self.l4_slot_gate == KEEP_SLOT_HARVEST else {}
+        if self.l4_quote_rule != VALUE_IN_QUOTE_V1:
+            out["quote_rule"] = self.l4_quote_rule
+        return out
 
     # ------------------------------------------------------------ canonical
     def canonical_kwargs(self) -> dict[str, Any]:
@@ -105,6 +121,10 @@ class PipelineSpec:
                "canonical_rule": self.canonical_rule, "canonical_guards": list(self.canonical_guards or [])}
         if self.l4_slot_gate != KEEP_SLOT_V1:     # v1 / v2 records keep their exact keys
             out["l4_slot_gate"] = self.l4_slot_gate
+        if self.l3_textrow:                       # v1 / v2 / v3 records keep their exact keys
+            out["l3_textrow"] = list(self.l3_textrow)
+        if self.l4_quote_rule != VALUE_IN_QUOTE_V1:
+            out["l4_quote_rule"] = self.l4_quote_rule
         return out
 
 
@@ -113,6 +133,8 @@ _SPECS = {
     PIPELINE_V2: PipelineSpec(PIPELINE_V2, facts_det.L3_PERIOD_V2, L4_TYPED_V1, CANONICAL_RULE_V2, V2_CANONICAL_GUARDS),
     PIPELINE_V3: PipelineSpec(PIPELINE_V3, facts_det.L3_PERIOD_V2, L4_TYPED_V1, CANONICAL_RULE_V3, V2_CANONICAL_GUARDS,
                               KEEP_SLOT_HARVEST),
+    PIPELINE_V4: PipelineSpec(PIPELINE_V4, facts_det.L3_PERIOD_V2, L4_TYPED_V1, CANONICAL_RULE_V3, V2_CANONICAL_GUARDS,
+                              KEEP_SLOT_HARVEST, V4_L3_TEXTROW, VALUE_IN_QUOTE_ROUNDED),
 }
 
 
@@ -127,7 +149,7 @@ def pipeline_spec(version: str | None = None, *, environ: Mapping[str, str] | No
 
 
 def l4_stage_for(spec: PipelineSpec) -> str:
-    """The L4 stage module a caller runs for this version: ``facts_llm`` (v1) or ``facts_typed`` (v2, v3)."""
+    """The L4 stage module a caller runs for this version: ``facts_llm`` (v1) or ``facts_typed`` (v2, v3, v4)."""
     return "src.aggregation.facts_typed" if spec.l4_stage == L4_TYPED_V1 else "src.aggregation.facts_llm"
 
 
