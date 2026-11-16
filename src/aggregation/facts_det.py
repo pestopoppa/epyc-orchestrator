@@ -34,6 +34,25 @@ EXTRACTOR_TEXTROW = "l3_textrow.v1"
 L3_PERIOD_V2 = "l3_period.v2"
 L3_PERIOD_COMPONENTS = ("table_split", "table_header_narrow", "first_column", "row_select")   # the default of v2
 L3_PERIOD_OPTIONAL = ("date_header", "inline_header")   # measured, NOT in the default (see the probe JSON)
+# ``l3_textrow`` label components (AGG-1.17, 2026-11-16, OPT-IN, NOT in any default): text-row fixes for statement rows the
+# v2 reader loses. Each is independent; none changes a row the reader already maps to a canonical field.
+#   pipe_cells     ``|`` cell separators of a pipe-table page ("| Long-term debt 8,920 | 9,413 |") are whitespace, and a
+#                  ``|---|`` rule line is a blank line (Nike: the balance sheet reached the page text as a pipe table).
+#                  MEASURED REGRESSION (AGG-1.17): a pipe note total ("TOTAL ADDITIONS TO PROPERTY ...") outranks the cash-flow
+#                  capex row; use ``pipe_cells_ltd`` instead
+#   pipe_cells_ltd ``pipe_cells``, but a pipe-line row is kept only when it maps to ``long_term_debt``
+#   note_ref       ``(Note 15)`` stays in the label; its ``15)`` is not a numeric column (Block)
+#   tail_label     a label that is not canonical and carries an embedded number (a single-value row run on into the next
+#                  caption: "Warehouse funding facilities, non-current 877,066 Long-term debt") is retried as the caption
+#                  AFTER the last number; kept only if that tail is canonical
+#   ltd_qualifier  ``long_term_debt`` admits the AGG-1.4 qualifiers (``LTD_QUALIFIERS``: "less / net of / excluding current
+#                  portion", "and finance lease obligations", ...) and ignores a parenthetical ("(Note 15)", "(includes
+#                  $10.31 billion ... VIEs ...)"); a current-portion caption is never admitted
+L3_TEXTROW_OPTIONAL = ("pipe_cells", "pipe_cells_ltd", "note_ref", "tail_label", "ltd_qualifier")
+LTD_QUALIFIERS = ("", "less current portion", "net of current portion", "excluding current portion", "net of current maturities",
+                  "less current maturities", "excluding current maturities", "noncurrent", "non current", "net",
+                  "and finance lease obligations", "and obligations under finance leases", "and finance leases",
+                  "and capital lease obligations", "and obligations under capital leases", "and capital leases")
 
 _YEAR = re.compile(r"\b(19[89]\d|20[0-4]\d)\b")
 _NUM = re.compile(r"^\(?-?\$?\s*\(?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(\.[0-9]+)?\)?\s*%?\)?$")
@@ -252,11 +271,15 @@ def _fact_id(*parts: Any) -> str:
 
 def _components(period_version: str | None, components: Iterable[str] | None) -> frozenset[str]:
     if period_version is None:
-        return frozenset()
+        # the AGG-1.17 text-row components are independent of the period rule: legal on the legacy extraction too
+        extra = frozenset(components or ()) & frozenset(L3_TEXTROW_OPTIONAL)
+        if components and set(components) - set(L3_TEXTROW_OPTIONAL):
+            raise ValueError(f"components {sorted(set(components) - set(L3_TEXTROW_OPTIONAL))} need period_version={L3_PERIOD_V2!r}")
+        return extra
     if period_version != L3_PERIOD_V2:
         raise ValueError(f"unknown period_version {period_version!r}; known: {L3_PERIOD_V2}")
     comp = frozenset(L3_PERIOD_COMPONENTS if components is None else components)
-    unknown = comp - set(L3_PERIOD_COMPONENTS) - set(L3_PERIOD_OPTIONAL)
+    unknown = comp - set(L3_PERIOD_COMPONENTS) - set(L3_PERIOD_OPTIONAL) - set(L3_TEXTROW_OPTIONAL)
     if unknown:
         raise ValueError(f"unknown l3_period components {sorted(unknown)}")
     return comp
@@ -481,13 +504,21 @@ def normalise_label(label: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def textrow_field(label: str) -> tuple[str, bool]:
-    """(field, is_canonical): exact normalised synonym match, else label-only slug."""
+_NOTE_NUM = re.compile(r"\d{1,3}[A-Za-z]?\)")   # the "15)" of "(Note 15)"
+_PAREN = re.compile(r"\([^()]*\)?")
+_LTD_QUALIFIED = frozenset(("long term debt " + q).strip() for q in LTD_QUALIFIERS)
+
+
+def textrow_field(label: str, *, ltd_qualifier: bool = False) -> tuple[str, bool]:
+    """(field, is_canonical): exact normalised synonym match, else label-only slug. ``ltd_qualifier`` (opt-in, AGG-1.17)
+    also maps a ``long_term_debt`` caption with an admitted qualifier and/or a parenthetical (``LTD_QUALIFIERS``)."""
     n = normalise_label(label)
     if n in TEXTROW_SYNONYMS:
         return TEXTROW_SYNONYMS[n], True
     if _ATTRIB.match(n):
         return "net_income_attributable", True
+    if ltd_qualifier and normalise_label(_PAREN.sub(" ", label)) in _LTD_QUALIFIED:
+        return "long_term_debt", True
     return slug(label), False
 
 
@@ -577,6 +608,7 @@ def facts_from_page_text(
         acc: list[tuple[str, int, int, int]] = []  # pending label tokens: text, start, end, line
         run: list[tuple[str, int, int, int]] = []  # pending numeric run
         pos = 0
+        pipe_lines: set[int] = set()
 
         def emit(label_toks: list, nums: list, lineno: int) -> None:
             nonlocal years, years_page
@@ -592,15 +624,31 @@ def facts_from_page_text(
                 return
             qstart, qend = label_toks[0][1], nums[-1][2]
             qline = label_toks[0][3]
-            field, canonical = textrow_field(label)
+            ltdq = "ltd_qualifier" in comp
+            field, canonical = textrow_field(label, ltd_qualifier=ltdq)
+            if not canonical and "tail_label" in comp:  # a single-value row run on into this caption: retry the tail
+                cut = max((i for i, t in enumerate(label_toks)
+                           if _tok_value(t[0]) is not None and not _NOTE_NUM.fullmatch(t[0])), default=None)
+                if cut is not None and cut + 1 < len(label_toks):
+                    tail = label_toks[cut + 1:]
+                    f2, c2 = textrow_field(" ".join(t[0] for t in tail), ltd_qualifier=ltdq)
+                    if c2 and len(re.findall(r"[A-Za-z]", " ".join(t[0] for t in tail))) >= 3:
+                        label_toks = tail
+                        label = " ".join(t[0] for t in tail).strip()
+                        qstart = tail[0][1]
+                        qline = tail[0][3]
+                        field, canonical = f2, True
             if not canonical:  # an ALL-CAPS section word may prefix the caption ("ASSETS Cash ...")
                 lt = list(label_toks)
                 while len(lt) > 1 and lt[0][0].isupper() and len(lt[0][0]) >= 3:
                     lt = lt[1:]
-                    f2, c2 = textrow_field(" ".join(t[0] for t in lt))
+                    f2, c2 = textrow_field(" ".join(t[0] for t in lt), ltd_qualifier=ltdq)
                     if c2:
                         field, canonical = f2, True
                         break
+            if "pipe_cells_ltd" in comp and "pipe_cells" not in comp and label_toks[0][3] in pipe_lines \
+                    and field != "long_term_debt":
+                return
             row_unit = unit or "unknown"
             low = label.lower()
             if per_share is not None or "per share" in low or "per common share" in low:
@@ -634,6 +682,11 @@ def facts_from_page_text(
 
         for lineno, raw in enumerate(text.split("\n"), start=1):
             base, pos = pos, pos + len(raw) + 1
+            if ("pipe_cells" in comp or "pipe_cells_ltd" in comp) and "|" in raw:
+                pipe_lines.add(lineno)
+                raw = raw.replace("|", " ")    # same length: quote offsets into ``text`` stay exact
+                if not raw.strip(" :-"):
+                    raw = ""                    # a |---|---| rule line
             line = raw.strip()
             if not line:
                 acc, run = [], []
@@ -669,6 +722,10 @@ def facts_from_page_text(
                 acc = []
             for t, st, en in toks:
                 tl = (t, st, en, lineno)
+                if ("note_ref" in comp and not run and acc and _NOTE_NUM.fullmatch(t)
+                        and acc[-1][0].lower() in ("(note", "(notes", "note", "notes")):
+                    acc.append(tl)              # "(Note 15)": a reference, not a column
+                    continue
                 if _tok_value(t) is not None:
                     run.append(tl)
                     continue
