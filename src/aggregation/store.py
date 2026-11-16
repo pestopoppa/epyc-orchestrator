@@ -117,7 +117,13 @@ _YEAR_RE = re.compile(r"(?<!\d)(19[89]\d|20[0-4]\d)(?!\d)")
 # "prefer l4 over l3" tier flip was measured to break 19 cells for 7 fixed (AGG-1.8), so the filters never reorder tiers: they
 # only drop a candidate that is provably a different quantity (not the shareholders' net income) or a different scale.
 CANONICAL_RULE_V2 = "canonical.v2:v1+attributable_net_income+thousands_unit"
-CANONICAL_RULES = (CANONICAL_RULE, CANONICAL_RULE_V2)
+# ``canonical.v3`` (AGG-1.15, 2026-11-16, opt-in): ``canonical.v2`` plus one more NARROW filter for ``long_term_debt`` only. When at
+# least one candidate's quote names the line item ("long-term debt"), only those candidates compete; prose totals of ALL debt
+# ("total debt principal ... $2.5 billion", "total borrowings ... $39.7 billion") are a different quantity that the v1
+# ``|value| desc`` tie-break otherwise prefers. Never empties a group; v1 and v2 are unchanged.
+CANONICAL_RULE_V3 = "canonical.v3:v2+long_term_debt_label"
+CANONICAL_RULES = (CANONICAL_RULE, CANONICAL_RULE_V2, CANONICAL_RULE_V3)
+_LTD_LABEL_RE = re.compile(r"long[-\s]?term\s+debt", re.I)
 THOUSANDS_RATIO = 1000.0           # a candidate 1/1000 of a value that >= 2 others agree on is a unit-slip candidate
 _ATTRIBUTABLE_RE = re.compile(r"attributable\s+to", re.I)
 _NOT_PARENT_RE = re.compile(r"non[-\s]?controlling|minority|preferred|redeemable|participating|discontinued|common", re.I)
@@ -214,6 +220,17 @@ def guard_thousands_unit(rows: list[dict[str, Any]], rel_tol: float = 0.005
     return (kept, "thousands_unit") if kept and drop else (rows, None)
 
 
+def guard_long_term_debt_label(field: str, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
+    """``(preferred, note)``. For ``long_term_debt`` only: when at least one candidate's quote names the line item
+    ("long-term debt"), only those candidates compete (order inside is ``canonical.v1``). Never empties the group."""
+    if field != "long_term_debt":
+        return rows, None
+    named = [r for r in rows if _LTD_LABEL_RE.search(str(r.get("quote") or ""))]
+    if not named or len(named) == len(rows):
+        return rows, None
+    return named, "long_term_debt_label"
+
+
 def select_canonical(
     facts: Iterable[dict[str, Any]], *, rel_tol: float = 0.005, rule: str = CANONICAL_RULE,
     guards: Sequence[str] | None = None,
@@ -222,7 +239,8 @@ def select_canonical(
 
     Returns ``(canonical_rows, conflict_log_rows)``; both lists are ordered by key. ``rule`` picks the rule:
     ``CANONICAL_RULE`` (``canonical.v1``, the default, AGG-1.1 behaviour) or ``CANONICAL_RULE_V2`` (the two AGG-1.9 guards;
-    ``guards`` narrows v2 to a subset of ``("thousands_unit", "attributable_net_income")`` for measurement).
+    ``guards`` narrows v2 to a subset of ``("thousands_unit", "attributable_net_income")`` for measurement) or
+    ``CANONICAL_RULE_V3`` (v2's guards plus ``guard_long_term_debt_label``, AGG-1.15, opt-in).
     """
     if rule not in CANONICAL_RULES:
         raise ValueError(f"unknown canonical rule {rule!r}; known: {CANONICAL_RULES}")
@@ -240,12 +258,14 @@ def select_canonical(
     for key in sorted(groups, key=lambda k: tuple(str(x) for x in k)):
         corpus_id, doc_id, field, per = key
         rows = sorted(groups[key], key=canonical_sort_key)
-        if rule == CANONICAL_RULE_V2:
+        if rule in (CANONICAL_RULE_V2, CANONICAL_RULE_V3):
             pre = rows
             if "thousands_unit" in active:
                 pre, _g = guard_thousands_unit(pre, rel_tol)
             if "attributable_net_income" in active:
                 pre, _g = guard_attributable_net_income(field, pre, rel_tol)
+            if rule == CANONICAL_RULE_V3:
+                pre, _g = guard_long_term_debt_label(field, pre)
             if pre is not rows:   # the chosen candidate leads; every other candidate stays in the log, never silently dropped
                 lead = {id(r) for r in pre}
                 rows = pre + [r for r in rows if id(r) not in lead]

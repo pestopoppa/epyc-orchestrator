@@ -258,9 +258,10 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
                                     **k["unit_override"]} for k in kept if k.get("unit_override")]}
 
     def fill_doc(self, corpus_id: str, doc_windows: list[dict[str, Any]], fields: Sequence[str],
-                 descs: Mapping[str, str], *, on_window: Callable[[TypedWindowResult], None] | None = None
-                 ) -> dict[str, Any]:
-        """The whole stage for one document (no resume): plan, one call per distinct window, gate slots, reconcile, write."""
+                 descs: Mapping[str, str], *, on_window: Callable[[TypedWindowResult], None] | None = None,
+                 harvest: bool = False) -> dict[str, Any]:
+        """The whole stage for one document (no resume): plan, one call per distinct window, gate slots, reconcile, write.
+        ``harvest=True`` gates with ``keep_slot_harvest`` (``KEEP_SLOT_HARVEST``, AGG-1.15) instead of ``keep_slot``."""
         windows, chosen = doc_call_plan(doc_windows, fields, descs)
         kept: list[dict[str, Any]] = []
         results = []
@@ -269,7 +270,10 @@ class TypedBackfill(facts_llm.LazyFieldBackfill):
             results.append(r)
             if on_window:
                 on_window(r)
-            kept.extend(f for f in r.facts if keep_slot(f, chosen[w["chunk_id"]]))
+            if harvest:
+                kept.extend(f for f in r.facts if keep_slot_harvest(f, chosen[w["chunk_id"]], fields))
+            else:
+                kept.extend(f for f in r.facts if keep_slot(f, chosen[w["chunk_id"]]))
         out = self.finish_doc(corpus_id, kept, fields)
         out["windows"] = results
         out["n_calls"] = len(results)
@@ -313,3 +317,14 @@ def drop_unquoted(facts: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]]
 def keep_slot(fact: dict[str, Any], chosen_fields: set[str]) -> bool:
     """A window's rows for a field are kept only when the window is among that field's union windows."""
     return fact.get("field") in chosen_fields
+
+
+# ``keep_slot.harvest.v1`` (AGG-1.15, opt-in): every typed reply carries every SLOT, but ``keep_slot`` drops the rows of a slot
+# the document did not PLAN (agg_pipeline.v2 plans ``SCHEMA_FIELDS``, so ``long_term_debt`` rows were never kept). The harvest keeps
+# a row of an UNPLANNED slot from any called window (zero extra calls); planned fields keep ``keep_slot`` unchanged. Default off.
+KEEP_SLOT_HARVEST = "keep_slot.harvest.v1"
+
+
+def keep_slot_harvest(fact: dict[str, Any], chosen_fields: set[str], planned_fields: Iterable[str]) -> bool:
+    """``keep_slot``, plus: a row of a slot that is not a planned field is kept from any called window."""
+    return keep_slot(fact, chosen_fields) or fact.get("field") not in set(planned_fields)
