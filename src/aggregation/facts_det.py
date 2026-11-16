@@ -49,6 +49,19 @@ L3_PERIOD_OPTIONAL = ("date_header", "inline_header")   # measured, NOT in the d
 #                  portion", "and finance lease obligations", ...) and ignores a parenthetical ("(Note 15)", "(includes
 #                  $10.31 billion ... VIEs ...)"); a current-portion caption is never admitted
 L3_TEXTROW_OPTIONAL = ("pipe_cells", "pipe_cells_ltd", "note_ref", "tail_label", "ltd_qualifier")
+# AGG-1.19 (2026-11-16, OPT-IN, NOT in any default; ``agg_pipeline.v5`` only). Two held-out L3 recall fixes:
+#   fy_end_lone_monthday  under ``fy_end`` only: ONE month-day header ("Fiscal Year Ended January 31," on the year line before its first
+#                         year, or on the preceding header line, a leading footnote digit allowed) applies to EVERY following year column;
+#                         the pairs then go through the UNCHANGED manifest guard ``_fy_shift`` (first year == manifest FY + 1), so Walmart
+#                         ("January 31, ... 2022 2021 2020", manifest 2022) is still not shifted. Also a lone month-day table cell.
+#   fy1_captions          four normalised text-row captions mapped to their schema field (``FY1_CAPTION_SYNONYMS``), exact match only
+L3_AGG119_OPTIONAL = ("fy_end_lone_monthday", "fy1_captions")
+FY1_CAPTION_SYNONYMS: dict[str, str] = {
+    "net cash used in operating activities": "operating_cash_flow",            # Netflix 2019
+    "net cash used provided by operating activities": "operating_cash_flow",   # Boeing "Net cash (used)/provided by ..."
+    "net loss earnings": "net_income",                                         # Boeing "Net (loss)/earnings"
+    "property plant and equipment additions": "capex",                         # Boeing
+}
 LTD_QUALIFIERS = ("", "less current portion", "net of current portion", "excluding current portion", "net of current maturities",
                   "less current maturities", "excluding current maturities", "noncurrent", "non current", "net",
                   "and finance lease obligations", "and obligations under finance leases", "and finance leases",
@@ -147,8 +160,16 @@ def month_day_only_line(line: str) -> list[int] | None:
     return [_month_no(m.group("m")) for m in mds]
 
 
+def lone_month_day_line(line: str) -> list[int] | None:
+    """AGG-1.19 ``fy_end_lone_monthday``: the month of a header line that is ONE month-day plus ``Fiscal Year Ended``-style filler, an
+    optional leading 1-2 digit footnote number allowed ("4 Fiscal Year Ended January 31,"), else None."""
+    t = re.sub(r"^\d{1,2}\s+(?=[A-Za-z])", "", line.strip())
+    mo = month_day_only_line(t)
+    return mo if mo is not None and len(mo) == 1 else None
+
+
 def _fy_relabel_years(line: str, years: list[str], fiscal_year: str | None, months: tuple[int, ...],
-                      pending: list[int] | None = None) -> list[str]:
+                      pending: list[int] | None = None, lone: bool = False) -> list[str]:
     """A text-row year-header ``line`` whose ``years`` are every year on it: fiscal-year-end labels when every year is a printed date, either
     whole (``January 28, 2023``) or split (month-days leading the line or on ``pending``, the months of the preceding month-day-only line)."""
     found = [(_month_no(m.group("m")), int(m.group("y"))) for m in _DATE_IN_LINE.finditer(line)]
@@ -160,6 +181,8 @@ def _fy_relabel_years(line: str, years: list[str], fiscal_year: str | None, mont
     first = _YEAR.search(line)
     lead = [_month_no(m.group("m")) for m in _MD_TOKEN.finditer(line[:first.start()])] if first else []
     mons = lead or list(pending or [])
+    if lone and len(mons) == 1 and len(years) > 1:   # AGG-1.19: one month-day over every year column
+        mons = mons * len(years)
     if len(mons) != len(years):
         return years
     sh = _fy_shift(list(zip(mons, (int(y) for y in years))), fiscal_year, months)
@@ -167,7 +190,7 @@ def _fy_relabel_years(line: str, years: list[str], fiscal_year: str | None, mont
 
 
 def _fy_relabel_cols_split(prev: list[str], cells: list[str], cols: dict[int, str], fiscal_year: str | None,
-                           months: tuple[int, ...]) -> dict[int, str]:
+                           months: tuple[int, ...], lone: bool = False) -> dict[int, str]:
     """Table header whose year cells ``cols`` are bare years under a row ``prev`` of month-day-only cells (``January 28,`` / ``January 29,``):
     the cells of ``prev`` that are month-day-only, in column order, paired with the year columns in column order when the counts match."""
     mons = []
@@ -178,6 +201,8 @@ def _fy_relabel_cols_split(prev: list[str], cells: list[str], cols: dict[int, st
                 return cols
             mons.append(mo[0])
     order = sorted(cols)
+    if lone and len(mons) == 1 and len(order) > 1:   # AGG-1.19: one month-day cell over every year column
+        mons = mons * len(order)
     if len(mons) != len(order) or any(not re.fullmatch(r"(?:19|20)\d\d", cells[j].strip()) for j in order):
         return cols
     sh = _fy_shift(list(zip(mons, (int(cols[j]) for j in order))), fiscal_year, months)
@@ -272,14 +297,15 @@ def _fact_id(*parts: Any) -> str:
 def _components(period_version: str | None, components: Iterable[str] | None) -> frozenset[str]:
     if period_version is None:
         # the AGG-1.17 text-row components are independent of the period rule: legal on the legacy extraction too
-        extra = frozenset(components or ()) & frozenset(L3_TEXTROW_OPTIONAL)
-        if components and set(components) - set(L3_TEXTROW_OPTIONAL):
-            raise ValueError(f"components {sorted(set(components) - set(L3_TEXTROW_OPTIONAL))} need period_version={L3_PERIOD_V2!r}")
+        legal = set(L3_TEXTROW_OPTIONAL) | set(L3_AGG119_OPTIONAL)
+        extra = frozenset(components or ()) & frozenset(legal)
+        if components and set(components) - legal:
+            raise ValueError(f"components {sorted(set(components) - legal)} need period_version={L3_PERIOD_V2!r}")
         return extra
     if period_version != L3_PERIOD_V2:
         raise ValueError(f"unknown period_version {period_version!r}; known: {L3_PERIOD_V2}")
     comp = frozenset(L3_PERIOD_COMPONENTS if components is None else components)
-    unknown = comp - set(L3_PERIOD_COMPONENTS) - set(L3_PERIOD_OPTIONAL) - set(L3_TEXTROW_OPTIONAL)
+    unknown = comp - set(L3_PERIOD_COMPONENTS) - set(L3_PERIOD_OPTIONAL) - set(L3_TEXTROW_OPTIONAL) - set(L3_AGG119_OPTIONAL)
     if unknown:
         raise ValueError(f"unknown l3_period components {sorted(unknown)}")
     return comp
@@ -337,7 +363,8 @@ def facts_from_table(table: dict[str, Any], chunk_text: str = "", *, period_vers
             if fy_months:
                 periods = _fy_relabel_cols(r, cols, fiscal_year, fy_months)
                 if periods is cols and i > 0:   # bare-year header under a month-day-only row (amendment 2)
-                    periods = _fy_relabel_cols_split(rows[i - 1], r, cols, fiscal_year, fy_months)
+                    periods = _fy_relabel_cols_split(rows[i - 1], r, cols, fiscal_year, fy_months,
+                                                      lone="fy_end_lone_monthday" in comp)
             break
     out: list[dict[str, Any]] = []
     for i, r in enumerate(rows):
@@ -509,12 +536,15 @@ _PAREN = re.compile(r"\([^()]*\)?")
 _LTD_QUALIFIED = frozenset(("long term debt " + q).strip() for q in LTD_QUALIFIERS)
 
 
-def textrow_field(label: str, *, ltd_qualifier: bool = False) -> tuple[str, bool]:
+def textrow_field(label: str, *, ltd_qualifier: bool = False, fy1_captions: bool = False) -> tuple[str, bool]:
     """(field, is_canonical): exact normalised synonym match, else label-only slug. ``ltd_qualifier`` (opt-in, AGG-1.17)
-    also maps a ``long_term_debt`` caption with an admitted qualifier and/or a parenthetical (``LTD_QUALIFIERS``)."""
+    also maps a ``long_term_debt`` caption with an admitted qualifier and/or a parenthetical (``LTD_QUALIFIERS``).
+    ``fy1_captions`` (opt-in, AGG-1.19) also maps the exact normalised captions of ``FY1_CAPTION_SYNONYMS``."""
     n = normalise_label(label)
     if n in TEXTROW_SYNONYMS:
         return TEXTROW_SYNONYMS[n], True
+    if fy1_captions and n in FY1_CAPTION_SYNONYMS:
+        return FY1_CAPTION_SYNONYMS[n], True
     if _ATTRIB.match(n):
         return "net_income_attributable", True
     if ltd_qualifier and normalise_label(_PAREN.sub(" ", label)) in _LTD_QUALIFIED:
@@ -625,13 +655,14 @@ def facts_from_page_text(
             qstart, qend = label_toks[0][1], nums[-1][2]
             qline = label_toks[0][3]
             ltdq = "ltd_qualifier" in comp
-            field, canonical = textrow_field(label, ltd_qualifier=ltdq)
+            fy1 = "fy1_captions" in comp
+            field, canonical = textrow_field(label, ltd_qualifier=ltdq, fy1_captions=fy1)
             if not canonical and "tail_label" in comp:  # a single-value row run on into this caption: retry the tail
                 cut = max((i for i, t in enumerate(label_toks)
                            if _tok_value(t[0]) is not None and not _NOTE_NUM.fullmatch(t[0])), default=None)
                 if cut is not None and cut + 1 < len(label_toks):
                     tail = label_toks[cut + 1:]
-                    f2, c2 = textrow_field(" ".join(t[0] for t in tail), ltd_qualifier=ltdq)
+                    f2, c2 = textrow_field(" ".join(t[0] for t in tail), ltd_qualifier=ltdq, fy1_captions=fy1)
                     if c2 and len(re.findall(r"[A-Za-z]", " ".join(t[0] for t in tail))) >= 3:
                         label_toks = tail
                         label = " ".join(t[0] for t in tail).strip()
@@ -642,7 +673,7 @@ def facts_from_page_text(
                 lt = list(label_toks)
                 while len(lt) > 1 and lt[0][0].isupper() and len(lt[0][0]) >= 3:
                     lt = lt[1:]
-                    f2, c2 = textrow_field(" ".join(t[0] for t in lt), ltd_qualifier=ltdq)
+                    f2, c2 = textrow_field(" ".join(t[0] for t in lt), ltd_qualifier=ltdq, fy1_captions=fy1)
                     if c2:
                         field, canonical = f2, True
                         break
@@ -702,13 +733,15 @@ def facts_from_page_text(
                     pending_dates = []
             md_now = pending_md
             pending_md = month_day_only_line(line) if fy_months else None   # expires at the next non-blank line
+            if fy_months and pending_md is None and "fy_end_lone_monthday" in comp:
+                pending_md = lone_month_day_line(line)
             u = _unit_of(line)
             if u:
                 unit, unit_page = u, page
             yh = _year_header(line)
             if yh:
                 if fy_months:
-                    yh = _fy_relabel_years(line, yh, fiscal_year, fy_months, md_now)
+                    yh = _fy_relabel_years(line, yh, fiscal_year, fy_months, md_now, lone="fy_end_lone_monthday" in comp)
                 years, years_page = yh, page
                 acc, run = [], []
                 continue

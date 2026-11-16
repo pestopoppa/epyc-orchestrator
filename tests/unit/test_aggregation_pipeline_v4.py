@@ -66,7 +66,7 @@ def test_rounded_rule_bounds():
 
 # ---------------------------------------------------------------- Task 2: agg_pipeline.v4
 def test_v4_is_selectable_and_not_the_default(monkeypatch):
-    assert pl.PIPELINES == (pl.PIPELINE_V1, pl.PIPELINE_V2, pl.PIPELINE_V3, pl.PIPELINE_V4) and pl.DEFAULT == pl.PIPELINE_V3
+    assert pl.PIPELINES[:4] == (pl.PIPELINE_V1, pl.PIPELINE_V2, pl.PIPELINE_V3, pl.PIPELINE_V4) and pl.DEFAULT == pl.PIPELINE_V3
     assert pl.pipeline_spec().version == pl.PIPELINE_V3
     monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v4")
     assert pl.pipeline_spec().version == pl.PIPELINE_V4
