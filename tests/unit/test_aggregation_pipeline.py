@@ -43,7 +43,7 @@ def test_default_is_v1_and_env_selects_v2(monkeypatch):
 def test_unknown_version_is_refused_never_defaulted(monkeypatch):
     with pytest.raises(ValueError):
         pl.pipeline_spec("agg_pipeline.v9")
-    monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v3")
+    monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v4")      # v3 is a real version since AGG-1.16
     with pytest.raises(ValueError):
         pl.pipeline_spec()
 

@@ -1,4 +1,4 @@
-"""AGG pipeline version flag (AGG-1.12): ``agg_pipeline.v1`` (the default) or ``agg_pipeline.v2``.
+"""AGG pipeline version flag (AGG-1.12): ``agg_pipeline.v1`` (the default), ``agg_pipeline.v2`` or ``agg_pipeline.v3``.
 
 One switch, three behaviours that were each measured separately and are adopted together:
 
@@ -13,8 +13,14 @@ canonical          ``canonical.v1``                              ``canonical.v2`
                                                                  measured 0 fixes, 0 breaks)
 =================  ==========================================  ================================================
 
+``agg_pipeline.v3`` (AGG-1.16, 2026-11-16, opt-in): ``agg_pipeline.v2`` plus the two AGG-1.15 fixes, bundled:
+``keep_slot.harvest.v1`` (``facts_typed.keep_slot_harvest``; ``fill_doc(harvest=True)`` via ``PipelineSpec.l4_kwargs()``: rows of a slot the
+document did not plan are kept from any called window, zero extra calls) and ``canonical.v3`` (``store.CANONICAL_RULE_V3`` = v2's
+attributable-net-income guard plus the ``long_term_debt`` label guard). Everything else is v2's. ``v1`` and ``v2`` are unchanged byte
+for byte (their ``l4_kwargs()`` is EMPTY and their ``as_record()`` has no new key); ``v1`` stays the default.
+
 Selection: ``pipeline_spec(version)`` with an explicit version, else the environment variable
-``ORCHESTRATOR_AGG_PIPELINE`` (``agg_pipeline.v1`` | ``agg_pipeline.v2``), else ``agg_pipeline.v1``. An unknown value is
+``ORCHESTRATOR_AGG_PIPELINE`` (``agg_pipeline.v1`` | ``agg_pipeline.v2`` | ``agg_pipeline.v3``), else ``agg_pipeline.v1``. An unknown value is
 refused, never silently mapped to the default. ``v1`` calls every helper below with EXACTLY the arguments the Phase 0 /
 AGG-1.1 code used (no keyword at all), so those runs reproduce byte for byte; the tests assert it.
 
@@ -33,17 +39,20 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from src.aggregation import facts_det
-from src.aggregation.store import CANONICAL_RULE, CANONICAL_RULE_V2, CorpusStore
+from src.aggregation.facts_typed import KEEP_SLOT_HARVEST
+from src.aggregation.store import CANONICAL_RULE, CANONICAL_RULE_V2, CANONICAL_RULE_V3, CorpusStore
 
 PIPELINE_V1 = "agg_pipeline.v1"
 PIPELINE_V2 = "agg_pipeline.v2"
-PIPELINES = (PIPELINE_V1, PIPELINE_V2)
+PIPELINE_V3 = "agg_pipeline.v3"
+PIPELINES = (PIPELINE_V1, PIPELINE_V2, PIPELINE_V3)
 FLAG_ENV = "ORCHESTRATOR_AGG_PIPELINE"
 DEFAULT = PIPELINE_V1
 
 L4_ROWS_V1 = "l4_rows.v1"            # facts_llm.LazyFieldBackfill
 L4_TYPED_V1 = "l4_typed.v1"          # facts_typed.TypedBackfill
 V2_CANONICAL_GUARDS = ("attributable_net_income",)
+KEEP_SLOT_V1 = "keep_slot.v1"        # facts_typed.keep_slot (v1 has no typed stage; v2's gate)
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,7 @@ class PipelineSpec:
     l4_stage: str
     canonical_rule: str
     canonical_guards: tuple[str, ...] | None
+    l4_slot_gate: str = KEEP_SLOT_V1     # AGG-1.16: ``KEEP_SLOT_HARVEST`` for v3 only
 
     # ------------------------------------------------------------------ L3
     def l3_kwargs(self, fiscal_years: Mapping[str, str] | None, fy_end: Any = None) -> dict[str, Any]:
@@ -75,6 +85,11 @@ class PipelineSpec:
         ``fy_end`` (either version) for the fiscal-year-end labelling of date column headers."""
         return facts_det.extract_corpus_facts(store, corpus_id, **self.l3_kwargs(fiscal_years, fy_end))
 
+    # ------------------------------------------------------------------ L4
+    def l4_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments of ``facts_typed.TypedBackfill.fill_doc``: EMPTY for v1 and v2, ``{"harvest": True}`` for v3."""
+        return {"harvest": True} if self.l4_slot_gate == KEEP_SLOT_HARVEST else {}
+
     # ------------------------------------------------------------ canonical
     def canonical_kwargs(self) -> dict[str, Any]:
         """Keyword arguments of ``CorpusStore.refresh_canonical`` / ``select_canonical``: EMPTY for v1."""
@@ -86,13 +101,18 @@ class PipelineSpec:
         return store.refresh_canonical(corpus_id, **self.canonical_kwargs())
 
     def as_record(self) -> dict[str, Any]:
-        return {"pipeline": self.version, "l3_period": self.l3_period_version or "legacy", "l4_stage": self.l4_stage,
-                "canonical_rule": self.canonical_rule, "canonical_guards": list(self.canonical_guards or [])}
+        out = {"pipeline": self.version, "l3_period": self.l3_period_version or "legacy", "l4_stage": self.l4_stage,
+               "canonical_rule": self.canonical_rule, "canonical_guards": list(self.canonical_guards or [])}
+        if self.l4_slot_gate != KEEP_SLOT_V1:     # v1 / v2 records keep their exact keys
+            out["l4_slot_gate"] = self.l4_slot_gate
+        return out
 
 
 _SPECS = {
     PIPELINE_V1: PipelineSpec(PIPELINE_V1, None, L4_ROWS_V1, CANONICAL_RULE, None),
     PIPELINE_V2: PipelineSpec(PIPELINE_V2, facts_det.L3_PERIOD_V2, L4_TYPED_V1, CANONICAL_RULE_V2, V2_CANONICAL_GUARDS),
+    PIPELINE_V3: PipelineSpec(PIPELINE_V3, facts_det.L3_PERIOD_V2, L4_TYPED_V1, CANONICAL_RULE_V3, V2_CANONICAL_GUARDS,
+                              KEEP_SLOT_HARVEST),
 }
 
 
@@ -107,7 +127,7 @@ def pipeline_spec(version: str | None = None, *, environ: Mapping[str, str] | No
 
 
 def l4_stage_for(spec: PipelineSpec) -> str:
-    """The L4 stage module a caller runs for this version: ``facts_llm`` (v1) or ``facts_typed`` (v2)."""
+    """The L4 stage module a caller runs for this version: ``facts_llm`` (v1) or ``facts_typed`` (v2, v3)."""
     return "src.aggregation.facts_typed" if spec.l4_stage == L4_TYPED_V1 else "src.aggregation.facts_llm"
 
 
