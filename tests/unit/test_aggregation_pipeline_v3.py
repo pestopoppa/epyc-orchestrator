@@ -1,5 +1,5 @@
 """AGG-1.16 (2026-11-16): ``agg_pipeline.v3`` = ``agg_pipeline.v2`` + ``keep_slot.harvest.v1`` + ``canonical.v3`` (the two AGG-1.15 fixes,
-bundled under the same ``ORCHESTRATOR_AGG_PIPELINE`` flag). v1 stays the default; v1 and v2 specs, kwargs, records and outputs are unchanged.
+bundled under the same ``ORCHESTRATOR_AGG_PIPELINE`` flag). v3 is the default since 2026-11-16; v1 and v2 specs, kwargs, records and outputs are unchanged.
 No model, no network: an echo backend and in-memory stores.
 """
 
@@ -22,9 +22,9 @@ def _layer_on(monkeypatch):
     monkeypatch.delenv(pl.FLAG_ENV, raising=False)
 
 
-def test_v3_is_selectable_by_the_same_flag_and_v1_stays_default(monkeypatch):
-    assert pl.PIPELINES == (pl.PIPELINE_V1, pl.PIPELINE_V2, pl.PIPELINE_V3) and pl.DEFAULT == pl.PIPELINE_V1
-    assert pl.pipeline_spec().version == pl.PIPELINE_V1
+def test_v3_is_the_default_and_the_same_flag_pins_it(monkeypatch):
+    assert pl.PIPELINES == (pl.PIPELINE_V1, pl.PIPELINE_V2, pl.PIPELINE_V3) and pl.DEFAULT == pl.PIPELINE_V3
+    assert pl.pipeline_spec().version == pl.PIPELINE_V3
     monkeypatch.setenv(pl.FLAG_ENV, "agg_pipeline.v3")
     assert pl.pipeline_spec().version == pl.PIPELINE_V3
     assert pl.pipeline_spec(pl.PIPELINE_V2).version == pl.PIPELINE_V2   # explicit wins

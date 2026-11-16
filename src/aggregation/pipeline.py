@@ -1,4 +1,4 @@
-"""AGG pipeline version flag (AGG-1.12): ``agg_pipeline.v1`` (the default), ``agg_pipeline.v2`` or ``agg_pipeline.v3``.
+"""AGG pipeline version flag (AGG-1.12): ``agg_pipeline.v3`` (the default since 2026-11-16), ``agg_pipeline.v1`` or ``agg_pipeline.v2``.
 
 One switch, three behaviours that were each measured separately and are adopted together:
 
@@ -13,14 +13,14 @@ canonical          ``canonical.v1``                              ``canonical.v2`
                                                                  measured 0 fixes, 0 breaks)
 =================  ==========================================  ================================================
 
-``agg_pipeline.v3`` (AGG-1.16, 2026-11-16, opt-in): ``agg_pipeline.v2`` plus the two AGG-1.15 fixes, bundled:
+``agg_pipeline.v3`` (AGG-1.16, 2026-11-16; the DEFAULT since the operator decision "Bundle v3, verify" of 2026-11-16, AGG-1.16b held-out 6/14 vs v2 5/14, 0 regressions): ``agg_pipeline.v2`` plus the two AGG-1.15 fixes, bundled:
 ``keep_slot.harvest.v1`` (``facts_typed.keep_slot_harvest``; ``fill_doc(harvest=True)`` via ``PipelineSpec.l4_kwargs()``: rows of a slot the
 document did not plan are kept from any called window, zero extra calls) and ``canonical.v3`` (``store.CANONICAL_RULE_V3`` = v2's
 attributable-net-income guard plus the ``long_term_debt`` label guard). Everything else is v2's. ``v1`` and ``v2`` are unchanged byte
-for byte (their ``l4_kwargs()`` is EMPTY and their ``as_record()`` has no new key); ``v1`` stays the default.
+for byte (their ``l4_kwargs()`` is EMPTY and their ``as_record()`` has no new key); Pin ``ORCHESTRATOR_AGG_PIPELINE=agg_pipeline.v1`` (or ``v2``) to reproduce those pipelines.
 
 Selection: ``pipeline_spec(version)`` with an explicit version, else the environment variable
-``ORCHESTRATOR_AGG_PIPELINE`` (``agg_pipeline.v1`` | ``agg_pipeline.v2`` | ``agg_pipeline.v3``), else ``agg_pipeline.v1``. An unknown value is
+``ORCHESTRATOR_AGG_PIPELINE`` (``agg_pipeline.v1`` | ``agg_pipeline.v2`` | ``agg_pipeline.v3``), else ``agg_pipeline.v3``. An unknown value is
 refused, never silently mapped to the default. ``v1`` calls every helper below with EXACTLY the arguments the Phase 0 /
 AGG-1.1 code used (no keyword at all), so those runs reproduce byte for byte; the tests assert it.
 
@@ -47,7 +47,7 @@ PIPELINE_V2 = "agg_pipeline.v2"
 PIPELINE_V3 = "agg_pipeline.v3"
 PIPELINES = (PIPELINE_V1, PIPELINE_V2, PIPELINE_V3)
 FLAG_ENV = "ORCHESTRATOR_AGG_PIPELINE"
-DEFAULT = PIPELINE_V1
+DEFAULT = PIPELINE_V3
 
 L4_ROWS_V1 = "l4_rows.v1"            # facts_llm.LazyFieldBackfill
 L4_TYPED_V1 = "l4_typed.v1"          # facts_typed.TypedBackfill
@@ -117,7 +117,7 @@ _SPECS = {
 
 
 def pipeline_spec(version: str | None = None, *, environ: Mapping[str, str] | None = None) -> PipelineSpec:
-    """The spec of ``version`` (explicit wins), else ``ORCHESTRATOR_AGG_PIPELINE``, else ``agg_pipeline.v1``."""
+    """The spec of ``version`` (explicit wins), else ``ORCHESTRATOR_AGG_PIPELINE``, else ``agg_pipeline.v3``."""
     if version is None:
         env = os.environ if environ is None else environ
         version = (env.get(FLAG_ENV) or "").strip() or DEFAULT

@@ -101,7 +101,7 @@ def test_pipeline_l3_kwargs_defaults_are_unchanged():
     assert v1.l3_kwargs({"D": "2022"}, fy_end=False) == {}                      # explicit off is the default
     assert v1.l3_kwargs({"D": "2022"}, fy_end=True) == {"fy_end": (1, 2, 3), "fiscal_years": {"D": "2022"}}
     assert v2.l3_kwargs({"D": "2022"}, fy_end="1,2,3") == {"period_version": V2, "fiscal_years": {"D": "2022"}, "fy_end": (1, 2, 3)}
-    assert pl.pipeline_spec().version == pl.PIPELINE_V1                          # the flag does not touch the version default
+    assert pl.pipeline_spec().version == pl.PIPELINE_V3                          # the flag does not touch the version default
 
 
 # ---------------------------------------------------------------- the January-end filers: tables

@@ -1,4 +1,4 @@
-"""AGG-1.12 pipeline version flag (``agg_pipeline.v1`` default, ``agg_pipeline.v2`` opt-in) and the typed L4 stage.
+"""AGG-1.12 pipeline version flag (``agg_pipeline.v3`` default since 2026-11-16; ``v1`` / ``v2`` by pin) and the typed L4 stage.
 
 No model, no server, no PDF: a fake backend and an in-memory store. The v1 tests are the byte-reproducibility contract for
 Phase 0 and AGG-1.1: with the flag unset every helper makes EXACTLY the legacy call.
@@ -31,13 +31,26 @@ def _layer_on(monkeypatch):
 
 
 # ---------------------------------------------------------------- the flag
-def test_default_is_v1_and_env_selects_v2(monkeypatch):
-    assert pl.pipeline_spec().version == pl.PIPELINE_V1
+def test_default_is_v3_and_env_selects_v1_or_v2(monkeypatch):
+    assert pl.pipeline_spec().version == pl.PIPELINE_V3 and pl.DEFAULT == pl.PIPELINE_V3
     monkeypatch.setenv(pl.FLAG_ENV, pl.PIPELINE_V2)
     assert pl.pipeline_spec().version == pl.PIPELINE_V2
     assert pl.pipeline_spec(pl.PIPELINE_V1).version == pl.PIPELINE_V1       # an explicit version wins over the env
     monkeypatch.setenv(pl.FLAG_ENV, "")
-    assert pl.pipeline_spec().version == pl.PIPELINE_V1
+    assert pl.pipeline_spec().version == pl.PIPELINE_V3
+
+
+def test_explicit_v1_and_v2_pins_still_reproduce_their_pipelines(monkeypatch):
+    """The v3 default must not move v1 / v2: pinned by env or by argument they give the exact legacy / v2 specs."""
+    for ver in (pl.PIPELINE_V1, pl.PIPELINE_V2):
+        monkeypatch.setenv(pl.FLAG_ENV, ver)
+        assert pl.pipeline_spec() is pl.pipeline_spec(ver) and pl.pipeline_spec().version == ver
+    monkeypatch.delenv(pl.FLAG_ENV)
+    v1, v2 = pl.pipeline_spec(pl.PIPELINE_V1), pl.pipeline_spec(pl.PIPELINE_V2)
+    assert (v1.l3_period_version, v1.canonical_rule, v1.canonical_guards, v1.l4_stage) == (None, CANONICAL_RULE, None, pl.L4_ROWS_V1)
+    assert v1.l4_kwargs() == {} and v1.canonical_kwargs() == {} and "l4_slot_gate" not in v1.as_record()
+    assert v2.canonical_rule == CANONICAL_RULE_V2 and v2.l4_kwargs() == {} and "l4_slot_gate" not in v2.as_record()
+    assert v2.canonical_kwargs() == {"rule": CANONICAL_RULE_V2, "guards": ("attributable_net_income",)}
 
 
 def test_unknown_version_is_refused_never_defaulted(monkeypatch):
