@@ -341,7 +341,15 @@ def _run_backend(pdf_path: Path, backend: str, router: PDFRouter) -> ExtractionR
                 reason="missing_dependency",
                 detail=f"pdftotext not found at {pdftotext_path}",
             )
-        text, elapsed_ms = router._extract_with_pdftotext(pdf_path)
+        try:
+            text, elapsed_ms = router._extract_with_pdftotext(pdf_path)
+        except Exception as exc:  # PdftotextError: failure, not empty text
+            return _failure_record(
+                backend=backend,
+                pdf_path=pdf_path,
+                reason="extraction_failed",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
         return _record_from_text(
             backend=backend,
             pdf_path=pdf_path,

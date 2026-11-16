@@ -72,6 +72,14 @@ if TYPE_CHECKING:
     from src.models.odl_structured import ODLStructuredDocument
 
 
+class PdftotextError(RuntimeError):
+    """pdftotext was unavailable or failed (missing binary, rc != 0, timeout).
+
+    Distinct from "pdftotext ran and found no text" (returns ""), which means a
+    genuinely text-less PDF that legitimately needs OCR.
+    """
+
+
 @dataclass
 class BoundingBox:
     """Bounding box for an extracted figure."""
@@ -249,7 +257,12 @@ class PDFRouter:
         """Extract text using pdftotext (fallback / explicit fast path).
 
         Returns:
-            (text, latency_ms)
+            (text, latency_ms). An empty string means pdftotext RAN and found
+            no text layer.
+
+        Raises:
+            PdftotextError: binary missing, non-zero exit, or timeout. These
+                must never be conflated with "no text layer" (fail-closed).
         """
         start = time.perf_counter()
 
@@ -260,20 +273,26 @@ class PDFRouter:
                 text=True,
                 timeout=self.pdftotext_timeout_seconds,
             )
+        except subprocess.TimeoutExpired as exc:
+            msg = f"pdftotext timed out after {self.pdftotext_timeout_seconds}s on {pdf_path}"
+            logger.error(msg)
+            raise PdftotextError(msg) from exc
+        except FileNotFoundError as exc:
+            msg = f"pdftotext not found at {self.pdftotext_path}"
+            logger.error(msg)
+            raise PdftotextError(msg) from exc
 
-            latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms = (time.perf_counter() - start) * 1000
 
-            if result.returncode != 0:
-                logger.warning(f"pdftotext failed: {result.stderr}")
-                return "", latency_ms
+        if result.returncode != 0:
+            msg = (
+                f"pdftotext failed rc={result.returncode} on {pdf_path}: "
+                f"{(result.stderr or '').strip()}"
+            )
+            logger.error(msg)
+            raise PdftotextError(msg)
 
-            return result.stdout, latency_ms
-
-        except subprocess.TimeoutExpired:
-            return "", (time.perf_counter() - start) * 1000
-        except FileNotFoundError:
-            logger.error(f"pdftotext not found at {self.pdftotext_path}")
-            return "", 0.0
+        return result.stdout, latency_ms
 
     def _extract_with_opendataloader(self, pdf_path: Path) -> tuple[str, float]:
         """Extract text using OpenDataLoader (markdown output with structure).
@@ -887,7 +906,19 @@ class PDFRouter:
             # THIS document before paying for OCR — never emit garbage from the
             # fast path. Both extractors failing the check falls through to OCR.
             if use_odl and (not text or needs_ocr):
-                pt_text, pt_latency = self._extract_with_pdftotext(pdf_path)
+                try:
+                    pt_text, pt_latency = self._extract_with_pdftotext(pdf_path)
+                except PdftotextError as exc:
+                    # Explicit and loud: ODL output was already empty/garbled,
+                    # and the pdftotext fallback itself is broken (not "no text").
+                    logger.error(
+                        "pdftotext fallback UNAVAILABLE for %s (%s); "
+                        "routing to OCR because ODL output was rejected, "
+                        "not because the PDF lacks a text layer",
+                        pdf_path.name,
+                        exc,
+                    )
+                    pt_text, pt_latency = "", 0.0
                 pt_quality, pt_needs_ocr = self._assess_text_quality(pt_text)
                 if pt_text and not pt_needs_ocr:
                     logger.info(

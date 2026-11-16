@@ -2,12 +2,15 @@
 
 import os
 
+import asyncio
+
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from src.services.pdf_router import (
     PDFRouter,
+    PdftotextError,
     PDFExtractionResult,
     BoundingBox,
     ExtractedFigure,
@@ -154,8 +157,22 @@ class TestPDFRouterExtraction:
 
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="Error")
 
-        text, latency = router._extract_with_pdftotext(Path("/fake/test.pdf"))
+        with pytest.raises(PdftotextError, match="rc=1"):
+            router._extract_with_pdftotext(Path("/fake/test.pdf"))
 
+    @patch("subprocess.run", side_effect=FileNotFoundError("pdftotext"))
+    def test_pdftotext_missing_binary_raises(self, mock_run, caplog):
+        router = PDFRouter()
+        with caplog.at_level("ERROR"):
+            with pytest.raises(PdftotextError, match="not found"):
+                router._extract_with_pdftotext(Path("/fake/test.pdf"))
+        assert "pdftotext not found" in caplog.text
+
+    @patch("subprocess.run")
+    def test_pdftotext_empty_text_success_is_not_error(self, mock_run):
+        router = PDFRouter()
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        text, latency = router._extract_with_pdftotext(Path("/fake/test.pdf"))
         assert text == ""
 
     def test_extract_figures_no_pymupdf(self):
@@ -895,3 +912,17 @@ class TestExtractBatchOpendataloader:
 
     def test_batch_empty_input(self):
         assert PDFRouter().extract_batch_opendataloader([]) == {}
+
+
+class TestPdftotextFailClosedExtract:
+    def test_extract_propagates_pdftotext_failure_not_ocr(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PDF_EXTRACTOR", "pdftotext")
+        pdf = tmp_path / "a.pdf"
+        pdf.write_bytes(b"%PDF-1.4")
+        router = PDFRouter()
+        with patch.object(router, "_page_dimensions_pymupdf", return_value=[]), \
+             patch.object(router, "_extract_with_pdftotext", side_effect=PdftotextError("x")), \
+             patch.object(router, "_extract_with_lightonocr") as ocr:
+            with pytest.raises(PdftotextError):
+                asyncio.run(router.extract(pdf))
+        ocr.assert_not_called()
