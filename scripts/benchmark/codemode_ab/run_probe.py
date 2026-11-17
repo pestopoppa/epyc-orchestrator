@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model-id", default="mock")
     ap.add_argument("--url")
     ap.add_argument("--embed-url")
-    ap.add_argument("--embed-id", default="embeddinggemma-2")
+    ap.add_argument("--embed-id", default="bge-large-en-v1.5")
     ap.add_argument("--seeds", default="0,1,2")
     ap.add_argument("--arms", default=",".join(ARMS))
     ap.add_argument("--stages", default="1,2,3")

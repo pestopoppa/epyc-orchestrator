@@ -72,3 +72,12 @@ def test_embedding_selector_with_fake_embedder():
 
     r = ts.EmbeddingToolSelector(Fake(), TOOLS).select("price of a SKU", k=1)
     assert r.selected == ["syn_sku_price"] and r.fallback is None
+
+
+def test_bge_prefixes_are_model_dependent():
+    """BGE (the v10 production embedder): query instruction, NO document prefix. EG2 stays selectable by model id."""
+    from src.repl_environment.context_search import document_text, query_text
+
+    assert document_text("bge-large-en-v1.5", "d") == "d"
+    assert query_text("bge-large-en-v1.5", "q").startswith("Represent this sentence for searching relevant passages: ")
+    assert document_text("embeddinggemma-2", "d") != "d"
