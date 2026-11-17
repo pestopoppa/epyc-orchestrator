@@ -53,6 +53,17 @@ def _use_local_structured_pdf_extractor() -> bool:
     )
 
 
+def _use_routed_pdf_extractor() -> bool:
+    """ORCHESTRATOR_PDF_ROUTE_LIGHTON=1: send PDFs through pdf_router's validated route.
+
+    needs_ocr -> LightOnOCR (:9003), else LiteParse — the rule that passed the
+    PIP-04 held-out test. Off (default): the document_formalizer sidecar as before.
+    """
+    from src.services.pdf_router import PDFRouter
+
+    return PDFRouter._route_lighton_enabled()
+
+
 def _extract_local_structured_pdf(path: Path, *, extract_figures: bool) -> object:
     """Run the explicit local ODL structured path without OCR fallback."""
     from src.services.pdf_router import PDFRouter
@@ -444,6 +455,12 @@ async def process_document(request: DocumentProcessRequest) -> OCRResult:
                     path,
                     extract_figures=request.extract_figures,
                 )
+                return _ocr_result_from_pdf_extraction(result)
+
+            if _use_routed_pdf_extractor():
+                from src.services.pdf_router import PDFRouter
+
+                result = await PDFRouter().extract(path, extract_figures=request.extract_figures)
                 return _ocr_result_from_pdf_extraction(result)
 
             client = get_document_client()
