@@ -48,6 +48,14 @@ from src.prompt_builders.reusable_blocks import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _selected_tools_or(static_tools: str, task: str) -> str:
+    """codemode-ab arm C hook: DEFAULT OFF (``ORCHESTRATOR_TOOL_SELECTOR`` unset) returns ``static_tools`` unchanged."""
+    from src.prompt_builders.tool_selector import maybe_selected_tools_block
+
+    selected = maybe_selected_tools_block(task)
+    return static_tools if selected is None else selected
 _CORPUS_REGISTRY: Any | None = None
 _DEFAULT_CORPUS_SLOW_QUERY_MS = 5000.0
 _CORPUS_TASK_SCOPED_ROLES_ENV = "ORCHESTRATOR_CORPUS_TASK_SCOPED_ROLES"
@@ -273,7 +281,7 @@ class PromptBuilder:
             system=with_agent_file(
                 resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK), role
             ) if role else resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK),
-            tools=self._resolve_tools(),
+            tools=_selected_tools_or(self._resolve_tools(), original_prompt),
             rules=self._resolve_rules(),
             state=state if _counter_tail else f"Turn {turn + 1}\n{state}",
             task=original_prompt,
