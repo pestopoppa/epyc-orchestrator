@@ -106,6 +106,14 @@ def main(argv: list[str] | None = None) -> int:
     template = World(work / "template", ORCH_ROOT)
     selectors = build_selectors(a, template, out)
     done = out.done()
+    cat_uid = f"{a.model_id}|catalog"
+    if not any(json.loads(ln).get("unit_id") == cat_uid for ln in (out.res.read_text().splitlines() if out.res.exists() else []) if ln.strip()):
+        from scripts.benchmark.codemode_ab.arms import static_tool_names
+
+        td = template.tool_dicts()
+        out.append({"kind": "catalog", "unit_id": cat_uid, "model": a.model_id, "n_tools": len(td), "n_synthetic": len(template.synthetic),
+                    "n_real": len(td) - len(template.synthetic) - 6, "static_tools": static_tool_names(template),
+                    "schema_json_chars": len(json.dumps(td)), "n_groups": len(template.groups)})
     last_stage, n_run = None, 0
     for st, seed, tid, arm, task in units:
         if last_stage is not None and st != last_stage:

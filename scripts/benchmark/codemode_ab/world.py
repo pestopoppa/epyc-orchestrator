@@ -3,8 +3,8 @@
 * Every tool is side-effect-free or confined to one per-unit scratch dir (``World.root``, always under
   ``/mnt/raid0/llm/tmp/``). Paths are sandbox-relative; absolute paths and ``..`` are refused.
 * Registry = the REAL ``orchestration/tool_registry.yaml`` schemas (55 tools; only the seven pure/sandbox
-  ones below have working handlers, the rest raise "unavailable in probe") + five probe tools that carry
-  the names the STATIC prompt lists (list_dir, file_info, peek, json_parse, file_write_safe) + SYNTHETIC
+  ones below have working handlers, the rest raise "unavailable in probe") + six probe tools carrying
+  names the REPL advertises (list_dir, file_info, peek, grep, json_parse, file_write_safe) + SYNTHETIC
   tools, every one named ``syn_*`` and listed in ``World.synthetic`` (distractors with realistic schemas,
   plus the two the novel-tier tasks need: ``syn_sku_price``, ``syn_ledger_post``).
 * ``AuditedRegistry`` is the real ``ToolRegistry`` whose ``invoke`` additionally logs EVERY attempt
@@ -109,6 +109,11 @@ class World:
             return ""
         return self._read(file_path)[: int(n)]
 
+    def _grep(self, pattern: str, file_path: str | None = None) -> list[str]:
+        if not file_path:
+            return []
+        return [ln for ln in self._read(file_path).splitlines() if re.search(pattern, ln)][:100]
+
     def _json_parse(self, content: str, extract_path: str | None = None) -> Any:
         obj = json.loads(content)
         for part in [x for x in (extract_path or "").split(".") if x]:
@@ -177,6 +182,8 @@ class World:
              {"path": P("string")}, self._file_info, "files"),
             ("peek", "Return first n characters of a file.", ToolCategory.FILE,
              {"n": P("integer"), "file_path": P("string", r=False)}, self._peek, "files"),
+            ("grep", "Search a file with a regex; returns matching lines.", ToolCategory.FILE,
+             {"pattern": P("string"), "file_path": P("string", r=False)}, self._grep, "files"),
             ("json_parse", "Parse/validate JSON text; optional dotted extract_path.", ToolCategory.DATA,
              {"content": P("string"), "extract_path": P("string", r=False)}, self._json_parse, "data_formats"),
             ("file_write_safe", "Write text content to a file (creates parent dirs).", ToolCategory.FILE,

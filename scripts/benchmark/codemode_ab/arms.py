@@ -27,16 +27,17 @@ MAX_TURNS_A = 40
 WALL_CAP_S = 900.0
 TOOL_RESULT_CAP = 12000
 
-_STATIC_NAME_RE = re.compile(r"`([a-z_][a-z0-9_]*)\(|CALL\(\"([a-z_][a-z0-9_]*)\"")
+_STATIC_NAME_RE = re.compile(r"^([a-z_][a-z0-9_]*)\(|^CALL\(\"([a-z_][a-z0-9_]*)\"", re.M)
 
 
 def static_tool_names(world: World) -> list[str]:
-    """Tools named in today's static prompt text that exist in the world (REPL-only names like FINAL excluded)."""
-    from src.prompt_builders.constants import DEFAULT_ROOT_LM_TOOLS
+    """Tools named in today's LIVE static prompt text (COMPACT_ROOT_LM_TOOLS: ``src/graph/helpers.py`` builds the REPL
+    prompt with PromptStyle.MINIMAL) that exist in the world; REPL-only names (llm_call, FINAL, ...) drop out."""
+    from src.prompt_builders.constants import COMPACT_ROOT_LM_TOOLS
 
     have = {t["name"] for t in world.tool_dicts()}
     seen: list[str] = []
-    for m in _STATIC_NAME_RE.finditer(DEFAULT_ROOT_LM_TOOLS):
+    for m in _STATIC_NAME_RE.finditer(COMPACT_ROOT_LM_TOOLS):
         n = m.group(1) or m.group(2)
         if n in have and n not in seen:
             seen.append(n)
@@ -158,11 +159,12 @@ def make_repl(world: World) -> Any:
     g["file_info"] = lambda path: world.call("file_info", path=path)
     g["peek"] = lambda n, file_path=None: world.call("peek", n=n, file_path=file_path) if file_path else ""
     g["file_write_safe"] = lambda path, content: world.call("file_write_safe", path=path, content=content)
+    g["grep"] = lambda pattern, file_path=None: world.call("grep", pattern=pattern, file_path=file_path)
 
     def blocked(*_a: Any, **_k: Any) -> Any:
         raise PermissionError("not available in the offline probe sandbox")
 
-    for n in ("run_shell", "run_python_code", "grep", "fetch_docs", "ocr_document", "analyze_figure", "extract_figure"):
+    for n in ("run_shell", "run_python_code", "fetch_docs", "ocr_document", "analyze_figure", "extract_figure"):
         if n in g:
             g[n] = blocked
     return env
@@ -171,10 +173,11 @@ def make_repl(world: World) -> Any:
 def run_arm_repl(task: Task, world: World, llm: Any, seed: int, arm: str, selection_block: str | None) -> dict[str, Any]:
     from src.prompt_builders import tool_selector as ts
     from src.prompt_builders.builder import PromptBuilder
+    from src.prompt_builders.types import PromptConfig, PromptStyle
     from src.prompt_builders.code_utils import auto_wrap_final, extract_code_from_response
 
     env = make_repl(world)
-    builder = PromptBuilder()
+    builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))  # exactly what src/graph/helpers.py:1414 builds live
     rec = {"in_tokens": 0, "out_tokens": 0, "in_cached": 0, "turns": 0, "failed_snippets": 0, "end_reason": "max_turns",
            "tools_prompt_chars": 0}
     prev_flag = os.environ.get(ts.ENV_FLAG)

@@ -2,7 +2,7 @@
 
 Per seed: 4 sweep families x N in {5,20,50,100,200} + 2 fixed single-step novel-tool tasks = 22 tasks.
 
-tier "static": solvable with tools named in today's static prompt (list_dir, peek, json_parse, file_write_safe).
+tier "static": solvable with tools named in today's LIVE static prompt (COMPACT list: peek, file_write_safe).
 tier "novel":  REQUIRES a tool that the static prompt does not name (syn_sku_price / syn_ledger_post / statistics).
 
 ``needed`` is a list of any-of groups: the minimal tool requirement. Selector recall (arm C) is the fraction
@@ -84,12 +84,12 @@ def _task_s_agg(n: int, seed: int) -> Task:
             return False, {"reason": "unparsable out/summary.json"}
         return got == exp, {"got": got, "expected": exp}
 
-    prompt = (f"The directory data/inbox holds {n} JSON files (item_001.json ...). Each is an object with keys "
+    prompt = (f"The directory data/inbox holds {n} JSON files (item_001.json ... item_{n:03d}.json). Each is an object with keys "
               '"id", "qty" (integer) and "flag" ("ship", "hold" or "drop"). Read every file and write '
               'out/summary.json containing exactly the JSON object {"total_qty": <sum of qty over ALL items>, '
               '"ship_count": <number of items whose flag is "ship">, "max_id": <id of the item with the largest qty>}.')
     return Task(f"S-AGG-n{n}-s{seed}", "S-AGG", n, seed, "static", prompt,
-                [["list_dir", "list_directory"], READ_ANY, WRITE_ANY], setup, oracle, exp)
+                [READ_ANY, WRITE_ANY], setup, oracle, exp)
 
 
 def _task_s_filt(n: int, seed: int) -> Task:
@@ -112,12 +112,12 @@ def _task_s_filt(n: int, seed: int) -> Task:
         return not (missing or extra or wrong), {"missing": missing[:5], "extra": extra[:5], "wrong": wrong[:5],
                                                   "n_expected": len(exp), "n_got": len(got)}
 
-    prompt = (f"The directory data/inbox holds {n} JSON files (item_001.json ...), each an object with keys "
+    prompt = (f"The directory data/inbox holds {n} JSON files (item_001.json ... item_{n:03d}.json), each an object with keys "
               '"id", "qty" and "flag". For EVERY item whose flag is "ship", create the file out/ship/<id>.txt whose '
               'content is exactly "<id>:<qty>" (for example it-007:1234), with no trailing newline. '
               "Create no other files.")
     return Task(f"S-FILT-n{n}-s{seed}", "S-FILT", n, seed, "static", prompt,
-                [["list_dir", "list_directory"], READ_ANY, WRITE_ANY], setup, oracle, {"n_expected": len(exp)})
+                [READ_ANY, WRITE_ANY], setup, oracle, {"n_expected": len(exp)})
 
 
 def _orders(rng: random.Random, n: int) -> list[dict[str, Any]]:

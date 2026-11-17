@@ -72,7 +72,6 @@ class MockLLM:
             if t.tier == "novel":
                 calls.append(("list_tools", {}))
             if t.family in ("S-AGG", "S-FILT"):
-                calls.append(("list_dir", {"path": "data/inbox"}))
                 calls += [("peek", {"n": 100000, "file_path": str(p.relative_to(w.root))}) for p in sorted(w.path("data/inbox").glob("*.json"))]
             elif t.tier == "static":
                 calls.append(("peek", {"n": 100000, "file_path": "data/orders.csv"}))
