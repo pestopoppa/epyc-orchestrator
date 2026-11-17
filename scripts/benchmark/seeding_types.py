@@ -44,9 +44,9 @@ STACK_PRIOR_SEEDING_EXCLUDED_ROLES = frozenset({
     "toolrunner", "worker_math", "worker_summarize",
 })
 SEEDING_EXCLUDED_ROLES = frozenset({
-    "voice_server", "document_formalizer",
+    "voice_server", "document_formalizer", "ocr_pdf_lighton",
     "nextplaid_code", "nextplaid_docs",
-    "dev", "reap_25b",
+    "dev",
 })
 HEAVY_MODEL_MEM_GB_THRESHOLD = 18.0
 _COST_TIER_1_MAX_MEM_GB = 18.0

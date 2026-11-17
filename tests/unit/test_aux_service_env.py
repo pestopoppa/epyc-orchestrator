@@ -28,7 +28,7 @@ import pytest
 
 from scripts.server.stack_env import build_launch_env, build_service_env, compose_ld_library_path
 from scripts.server.stack_manifest import AUX_SERVICES, _MANIFEST, _aux_service
-from src.registry.kernel_paths import backend_dir, backend_ld_library_path, server_binary
+from src.registry.kernel_paths import aux_service_ld_library_path, backend_dir, server_binary
 
 # The FOREIGN tree — llama.cpp's CPU build, ggml 0.16.0. This is not a synthetic
 # fixture: it is on the real LD_LIBRARY_PATH of the running orchestrator API
@@ -88,7 +88,7 @@ def test_current_backend_declarations_already_explicitly_enable_linkage():
 
 def _composed_env(name: str, ambient: str) -> dict[str, str]:
     service = AUX_SERVICES[name]
-    spec = service._replace(ld_library_path=tuple(backend_ld_library_path(service.backend)))
+    spec = service._replace(ld_library_path=tuple(aux_service_ld_library_path(service.backend)))
     return build_service_env(spec, dict(os.environ, LD_LIBRARY_PATH=ambient))
 
 
@@ -162,7 +162,7 @@ def test_declared_env_var_cannot_reintroduce_the_ambient_path(name: str) -> None
     service = AUX_SERVICES[name]
     hostile = service._replace(
         env={"LD_LIBRARY_PATH": ADVERSARIAL_AMBIENT},
-        ld_library_path=tuple(backend_ld_library_path(service.backend)),
+        ld_library_path=tuple(aux_service_ld_library_path(service.backend)),
     )
     env = build_service_env(hostile, dict(os.environ, LD_LIBRARY_PATH=ADVERSARIAL_AMBIENT))
     entries = env["LD_LIBRARY_PATH"].split(":")
@@ -346,11 +346,15 @@ def test_missing_ld_preload_fails_only_that_launch(tmp_path, monkeypatch) -> Non
 
 @pytest.fixture
 def _pure_speech_backend_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Declared speech path metadata only; real loader tests never use this fixture."""
+    """Declared backend path metadata only; real loader tests never use this fixture.
+
+    Covers every backend an aux service declares (stt, tts and, since
+    STACKCHG-OCR-LIGHTON-20261117, cpu for ocr_pdf_lighton).
+    """
     from src.registry import kernel_paths
 
     directories = {}
-    for backend in ("stt", "tts"):
+    for backend in sorted({"stt", "tts"} | {svc.backend for svc in AUX_SERVICES.values() if svc.backend}):
         directory = tmp_path / backend
         directory.mkdir(mode=0o700)
         directories[backend] = directory
@@ -364,7 +368,7 @@ def _pure_speech_backend_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(kernel_paths, "backend_dir", declared_dir)
     monkeypatch.setattr(sys.modules[__name__], "backend_dir", declared_dir)
-    # backend_ld_library_path remains real: matching tree first, then vendor policy.
+    # aux_service_ld_library_path remains real: matching tree first, then vendor policy.
     monkeypatch.setattr(subprocess, "Popen", refuse_child)
     yield directories
     assert all(not list(directory.iterdir()) for directory in directories.values())

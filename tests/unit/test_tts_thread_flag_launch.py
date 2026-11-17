@@ -35,7 +35,7 @@ def test_flag_path_pins_binary_and_removes_only_shim(tmp_path, monkeypatch):
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     monkeypatch.setattr(kernel_paths, 'server_binary', lambda backend: binary)
     monkeypatch.setattr(kernel_paths, 'backend_dir', lambda backend: tmp_path)
-    monkeypatch.setattr(kernel_paths, 'backend_ld_library_path', lambda backend: [str(tmp_path)])
+    monkeypatch.setattr(kernel_paths, 'aux_service_ld_library_path', lambda backend: [str(tmp_path)])
     service = AUX_SERVICES['tts']
     flag = {'threads': 16, 'binary_sha256': digest}
     monkeypatch.setattr(stack, '_tts_thread_flag', lambda service: flag)

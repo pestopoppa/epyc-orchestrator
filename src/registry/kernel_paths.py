@@ -115,6 +115,31 @@ def backend_ld_library_path(backend: str) -> list[str]:
     return [str(backend_dir(backend)), *(str(path) for path in vendor_dirs)]
 
 
+def aux_service_ld_library_path(backend: str) -> list[str]:
+    """``LD_LIBRARY_PATH`` entries for a stack AUX service, which always LEADS with its tree.
+
+    Unlike ``backend_ld_library_path`` this has NO ``cpu`` exemption. An aux service
+    composes its LD_LIBRARY_PATH in ``replace`` mode, and the ``cpu`` exemption's
+    premise -- "the ambient environment already resolves to the CPU tree" -- stopped
+    being true at the v10 freeze (2026-09-22): production is served from the KERNEL
+    STORE (``kernels/production/cpu``), while the ambient path can still name the
+    frozen tree's in-tree ``build/bin`` (the v9 binaries). An empty declared list
+    would leave that ambient value in place and the store binary would load v9 ggml.
+    Found by tests/unit/test_aux_service_env.py when the first ``backend: cpu`` aux
+    service (ocr_pdf_lighton, STACKCHG-OCR-LIGHTON-20261117) was declared.
+
+    Scoped to aux services on purpose: ``backend_ld_library_path`` also feeds every
+    CPU llama role's compiled stack priors, and changing it would change the
+    environment of every serving CPU role -- a separate, wider change.
+    """
+    if backend not in VALID_BACKENDS:
+        raise KernelPathError(
+            f"unknown kernel backend {backend!r}; valid: {sorted(VALID_BACKENDS)}"
+        )
+    vendor_dirs = BACKEND_VENDOR_LIB_DIRS.get(backend, ())
+    return [str(backend_dir(backend)), *(str(path) for path in vendor_dirs)]
+
+
 def server_binary(backend: str) -> Path:
     """Return the executable server binary for ``backend``, or raise."""
     directory = backend_dir(backend)

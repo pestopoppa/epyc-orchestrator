@@ -109,6 +109,7 @@ port_map:
   sd_server: 8190          # Qwen-Image-2.1 compatibility service (CPU-only Diffusers)
   whisper: 9000            # whisper.cpp STT (transcription service, not llama-server)
   tts: 9002                # qwentts.cpp TTS (registered 2026-08-02, W4)
+  ocr_pdf_lighton: 9003    # LightOnOCR-2-1B-bbox F16 llama-server (PDF OCR route, STACKCHG-OCR-LIGHTON-20261117)
 
 # Stack-managed auxiliaries whose startup failure is non-fatal but must remain
 # visible in the read-only status surface even when no state row was created.
@@ -973,6 +974,53 @@ aux_services:
       min_bytes: 1024
       timeout: 180
     log: tts.log
+
+  - name: ocr_pdf_lighton
+    port: 9003
+    # STACKCHG-OCR-LIGHTON-20261117 (operator-approved intent 2026-11-17): the
+    # needs_ocr arm of src/services/pdf_router.py (ORCHESTRATOR_PDF_ROUTE_LIGHTON=1
+    # routes needs_ocr PDFs here, everything else to LiteParse). 9003 verified free
+    # in port_map. NOT the :9001 document_formalizer (Q4_K_M, Python worker pool,
+    # llama-mtmd-cli children) -- that service is untouched by this change.
+    #
+    # Recipe = the validated holdout row pip04-holdout-lighton-ocr-20261116-r2
+    # (common.py r4-holdout argv), verbatim except --host/--port/--alias:
+    #   -np 1 -c 8192 -t 24 --flash-attn on --device none -ngl 0
+    # Weights pinned by sha256 (precond of the same row):
+    #   LightOnOCR-2-1B-bbox-F16.gguf        7e2234e1d6f44ac41f086a5a7f654be7802ba5e363095b8b7a2abe69dacbf431
+    #   LightOnOCR-2-1B-bbox-mmproj-F16.gguf 1cc0e44fbdc8c6bcaf1db5ab927e3f52fb9b92a65e0f1ff3fec6862c63c79ed5
+    # Evidence: held-out PASS /mnt/raid0/llm/tmp/pip04-holdout-score-20261116/final/result.json
+    # (226 paired needs_ocr docs, mean diff +0.267 vs LiteParse, one-sided LB95 0.247).
+    #
+    # optional: true -- a failed OCR server must not fail `start` for the whole
+    # stack; with the route flag on, the router FAILS CLOSED (LightOnOCRError) for
+    # needs_ocr documents while it is down, it never silently degrades to LiteParse.
+    # No cpuset: see PACKAGE.md needs-operator NO-2 (every 24-core quarter SMT-folds
+    # onto an embedder, speech or GPU-host-lane fence; undeclared placement takes the
+    # SS-BENCH-GATE-b default-affinity path like document_formalizer).
+    optional: true
+    description: LightOnOCR-2-1B-bbox F16 llama-server (PDF OCR needs_ocr route, CPU)
+    backend: cpu
+    argv: ["llama-server",
+           "--alias", "lightonocr-2-1b",
+           "-m", "{models_dir}/LightOnOCR-2-1B-bbox-F16.gguf",
+           "--mmproj", "{models_dir}/LightOnOCR-2-1B-bbox-mmproj-F16.gguf",
+           "--host", "127.0.0.1",
+           "--port", "9003",
+           "-np", "1",
+           "-c", "8192",
+           "-t", "24",
+           "--flash-attn", "on",
+           "--device", "none",
+           "-ngl", "0"]
+    env:
+      HIP_VISIBLE_DEVICES: "-1"
+    cwd: "{project_root}"
+    verify_ggml_linkage: true
+    health_path: /health
+    health_timeout: 120
+    model_label: LightOnOCR-2-1B-bbox F16 + mmproj F16 (CPU -t 24, v10 store)
+    log: ocr_pdf_lighton.log
 
   - name: handoff_dashboard
     port: 8100

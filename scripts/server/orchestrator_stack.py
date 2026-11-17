@@ -2825,6 +2825,18 @@ def start_orchestrator(
     # within ~3 min. Tune via env override if your workload changes.
     env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S", "180")
     env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S", "180")
+    # STACKCHG-OCR-LIGHTON-20261117 (operator-approved intent 2026-11-17): route
+    # needs_ocr PDFs to the LightOnOCR-2-1B-bbox llama-server aux service and
+    # enable the L3 textrow table extraction. Both flags default OFF in code
+    # (src/services/pdf_router.py, src/services/document_chunker.py); setdefault
+    # keeps the instant rollback: relaunch/reload with the flag =0 in the shell env.
+    # The URL is DERIVED from the aux service declaration, never restated.
+    env.setdefault("ORCHESTRATOR_PDF_ROUTE_LIGHTON", "1")
+    env.setdefault(
+        "ORCHESTRATOR_PDF_LIGHTON_URL",
+        f"http://127.0.0.1:{AUX_SERVICES['ocr_pdf_lighton'].port}",
+    )
+    env.setdefault("ORCHESTRATOR_L3_TEXTROW", "1")
 
     # Write the fleet-startup marker BEFORE Popen. uvicorn forks workers
     # AFTER its own startup (each worker imports the app independently),
@@ -2970,12 +2982,12 @@ def _resolve_aux_launch(service) -> tuple[list[str], list[str], Path | None]:
     if service.backend:
         from src.registry.kernel_paths import (
             backend_dir,
-            backend_ld_library_path,
+            aux_service_ld_library_path,
             server_binary,
         )
 
         argv[0] = str(server_binary(service.backend))
-        ld_paths = backend_ld_library_path(service.backend)
+        ld_paths = aux_service_ld_library_path(service.backend)
         tree = backend_dir(service.backend)
     thread_flag = _tts_thread_flag(service)
     if thread_flag is not None:
