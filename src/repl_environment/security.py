@@ -11,6 +11,41 @@ import re
 _DUNDER_FORMAT_FIELD = re.compile(r"\{[^{}]*__[^{}]*\}")
 
 
+_DEADLINE_NAMES = ("REPLDeadline", "KeyboardInterrupt", "SystemExit")
+
+
+class _HandlerHardener(ast.NodeTransformer):
+    """``except:`` / ``except BaseException`` -> ``except Exception`` so model code cannot
+    swallow ``REPLDeadline`` (a BaseException). Locations are preserved."""
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> ast.AST:
+        self.generic_visit(node)
+
+        def exc_name(ref: ast.AST) -> ast.Name:
+            return ast.copy_location(ast.Name(id="Exception", ctx=ast.Load()), ref)
+
+        t = node.type
+        if t is None:
+            node.type = exc_name(node)
+        elif isinstance(t, ast.Name) and t.id == "BaseException":
+            node.type = exc_name(t)
+        elif isinstance(t, ast.Tuple):
+            t.elts = [exc_name(e) if isinstance(e, ast.Name) and e.id == "BaseException" else e
+                      for e in t.elts]
+        return node
+
+
+def harden_exception_handlers(code: str, filename: str = "<string>"):
+    """Compile ``code`` with deadline-swallowing handlers rewritten; returns a code object,
+    or ``code`` unchanged if it does not parse (exec then reports the SyntaxError as before)."""
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError:
+        return code
+    tree = ast.fix_missing_locations(_HandlerHardener().visit(tree))
+    return compile(tree, filename, "exec")
+
+
 #: Memory-bomb guard (in-process; an RLIMIT_AS on the shared API worker is NOT an option).
 #: Statically-evident oversized materialisation is refused: ``"x" * N`` / ``[0] * N`` with a
 #: literal repeat count above this, and integer ``**`` / ``<<`` whose result would exceed
@@ -307,15 +342,13 @@ class ASTSecurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
-        """Bare ``except:`` / ``except BaseException`` could swallow the REPL deadline
-        (a BaseException) in a loop forever; no analysis snippet needs them."""
-        names = []
+        """Handlers that explicitly name the deadline/interrupt types have no legitimate use
+        here and are refused. Bare ``except:`` / ``except BaseException`` are NOT refused:
+        ``harden_exception_handlers`` rewrites them to ``except Exception`` before exec."""
         t = node.type
-        if t is None:
-            self.violations.append("bare except (would swallow the execution deadline)")
-        else:
+        if t is not None:
             for el in (t.elts if isinstance(t, ast.Tuple) else [t]):
-                if isinstance(el, ast.Name) and el.id in ("BaseException", "REPLDeadline", "KeyboardInterrupt", "SystemExit"):
+                if isinstance(el, ast.Name) and el.id in _DEADLINE_NAMES:
                     self.violations.append(f"except {el.id} (would swallow the execution deadline)")
         self.generic_visit(node)
 

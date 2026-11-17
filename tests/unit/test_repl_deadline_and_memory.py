@@ -5,7 +5,7 @@ import time
 import pytest
 
 from src.repl_environment.environment import REPLEnvironment
-from src.repl_environment.security import ASTSecurityVisitor
+from src.repl_environment.security import ASTSecurityVisitor, harden_exception_handlers
 from src.repl_environment.types import REPLConfig, REPLDeadline, REPLError
 
 
@@ -23,6 +23,10 @@ def test_deadline_is_not_an_exception():
         "while True:\n    pass\n",
         # `except Exception` must not swallow the deadline
         "while True:\n    try:\n        while True:\n            pass\n    except Exception:\n        pass\n",
+        # bare except / except BaseException are rewritten to `except Exception`
+        "while True:\n    try:\n        while True:\n            pass\n    except:\n        pass\n",
+        "while True:\n    try:\n        while True:\n            pass\n    except BaseException:\n        pass\n",
+        "while True:\n    try:\n        while True:\n            pass\n    except (ValueError, BaseException) as e:\n        pass\n",
     ],
 )
 def test_timeout_not_bypassable(code):
@@ -36,10 +40,26 @@ def test_timeout_not_bypassable(code):
     assert "timed out" in env.execute("x = 1").error
 
 
-@pytest.mark.parametrize("handler", ["except:", "except BaseException:", "except (ValueError, BaseException):"])
-def test_deadline_swallowing_handlers_refused_statically(handler):
-    res = _env(1).execute(f"while True:\n    try:\n        pass\n    {handler}\n        pass\n")
+@pytest.mark.parametrize("handler", ["except REPLDeadline:", "except KeyboardInterrupt:", "except (ValueError, SystemExit):"])
+def test_explicit_deadline_handlers_refused(handler):
+    res = _env(1).execute(f"try:\n    pass\n{handler}\n    pass\n")
     assert res.error and "swallow the execution deadline" in res.error
+
+
+@pytest.mark.parametrize("handler", ["except:", "except BaseException:", "except (KeyError, BaseException) as e:"])
+def test_bare_except_still_runs_and_catches_valueerror(handler):
+    res = _env(5).execute(f"try:\n    int('zz')\n{handler}\n    print('caught')\n")
+    assert res.error is None and "caught" in res.output
+
+
+def test_traceback_line_numbers_preserved():
+    res = _env(5).execute("x = 1\ntry:\n    pass\nexcept:\n    pass\n\n\nraise ValueError('boom')\n")
+    assert res.error and "ValueError: boom" in res.error
+    import traceback  # noqa: F401
+    code = harden_exception_handlers("a = 1\ntry:\n    pass\nexcept:\n    pass\nb = 2 / 0\n")
+    with pytest.raises(ZeroDivisionError) as ei:
+        exec(code, {})
+    assert ei.value.__traceback__.tb_next.tb_lineno == 6
 
 
 def test_swallowed_deadline_reported_even_if_code_finishes():

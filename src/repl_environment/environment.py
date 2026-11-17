@@ -36,7 +36,7 @@ from src.repl_environment.parallel_dispatch import (
     extract_tool_calls,
     execute_parallel_calls,
 )
-from src.repl_environment.security import ASTSecurityVisitor
+from src.repl_environment.security import ASTSecurityVisitor, harden_exception_handlers
 from src.repl_environment.unicode_sanitizer import sanitize_code_unicode
 from src.repl_environment.combined_ops import _CombinedOpsMixin
 from src.repl_environment.suggestions import _SuggestionsMixin
@@ -1406,7 +1406,7 @@ class REPLEnvironment(
 
             try:
                 with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    exec(code, self._globals)
+                    exec(harden_exception_handlers(code), self._globals)
                 if _deadline_state["hit"]:
                     # the deadline fired but model code swallowed it: still a timeout
                     raise REPLDeadline(self.timeout_error)
@@ -1776,7 +1776,7 @@ class REPLEnvironment(
 
             try:
                 with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    exec(code, self._globals)
+                    exec(harden_exception_handlers(code), self._globals)
                 if _deadline_state["hit"]:
                     # the deadline fired but model code swallowed it: still a timeout
                     raise REPLDeadline(self.timeout_error)
