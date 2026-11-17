@@ -28,6 +28,9 @@ def _get_project_root() -> Path:
     return Path(os.getcwd())
 
 
+from src.repl_environment.write_dedupe import idempotent_write
+
+
 class _FileMutationMixin:
     """Mixin providing file write operations and patch management.
 
@@ -37,6 +40,7 @@ class _FileMutationMixin:
         _validate_file_path: Callable[[str], tuple[bool, str | None]] — path validation method
     """
 
+    @idempotent_write("log_append", ())
     def _log_append(self, log_name: str, message: str) -> str:
         """Append a message to a log file.
 
@@ -91,6 +95,7 @@ class _FileMutationMixin:
             logger.debug("log_append failed", exc_info=True)
             return f"[ERROR: {type(e).__name__}: {e}]"
 
+    @idempotent_write("file_write_safe", ("path",), fp_arg="content")
     def _file_write_safe(
         self,
         path: str,
@@ -186,6 +191,7 @@ class _FileMutationMixin:
     # Patch Tools
     # =========================================================================
 
+    @idempotent_write("prepare_patch", ())
     def _prepare_patch(self, files: list[str], description: str) -> str:
         """Generate unified diff for owner review.
 
@@ -295,6 +301,7 @@ class _FileMutationMixin:
             logger.debug("list_patches failed", exc_info=True)
             return f"[ERROR: {type(e).__name__}: {e}]"
 
+    @idempotent_write("apply_approved_patch", ())
     def _apply_approved_patch(self, patch_name: str) -> str:
         """Apply a patch after owner approval.
 
@@ -358,6 +365,7 @@ class _FileMutationMixin:
             logger.debug("apply_approved_patch failed", exc_info=True)
             return f"[ERROR: {type(e).__name__}: {e}]"
 
+    @idempotent_write("reject_patch", ())
     def _reject_patch(self, patch_name: str, reason: str) -> str:
         """Reject a pending patch with reason.
 

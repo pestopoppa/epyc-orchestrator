@@ -489,6 +489,19 @@ class _ContextMixin:
         if _steps is not None:  # HIL-13a, default off
             _steps.enter()
         try:
+            # Idempotent write tools: a regenerated snippet must not repeat a write-type
+            # CALL that already succeeded in this request (see write_dedupe.py).
+            _tool_obj = getattr(self.tool_registry, "_tools", {}).get(tool_name) \
+                if isinstance(getattr(self.tool_registry, "_tools", None), dict) else None
+            if _tool_obj is not None and self._tool_budget_bucket(_tool_obj) == "write":
+                from src.repl_environment.write_dedupe import guarded_call, _sha
+
+                _res = guarded_call(
+                    self, tool_name, ("call", tool_name, _sha(kwargs)), "same",
+                    lambda: self._dispatch_tool(tool_name, **kwargs),
+                )
+                _result = _res
+                return _result
             _result = self._dispatch_tool(tool_name, **kwargs)
             return _result
         except Exception:
