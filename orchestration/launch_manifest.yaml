@@ -986,6 +986,10 @@ aux_services:
     # Recipe = the validated holdout row pip04-holdout-lighton-ocr-20261116-r2
     # (common.py r4-holdout argv), verbatim except --host/--port/--alias:
     #   -np 1 -c 8192 -t 24 --flash-attn on --device none -ngl 0
+    # 2026-11-17 page parallelism: -np 4 -c 32768 (= 4 x the validated 8192 per slot).
+    # Probe /mnt/raid0/llm/tmp/lighton-np4-probe-20261117/result-np4.json: 3 dense pages
+    # serial 145.6 s vs parallel 75.4 s (1.93x), output byte-identical per page at T=0.
+    # The client sends ORCHESTRATOR_PDF_LIGHTON_CONCURRENCY (=4, orchestrator_stack.py) pages at once.
     # Weights pinned by sha256 (precond of the same row):
     #   LightOnOCR-2-1B-bbox-F16.gguf        7e2234e1d6f44ac41f086a5a7f654be7802ba5e363095b8b7a2abe69dacbf431
     #   LightOnOCR-2-1B-bbox-mmproj-F16.gguf 1cc0e44fbdc8c6bcaf1db5ab927e3f52fb9b92a65e0f1ff3fec6862c63c79ed5
@@ -1007,8 +1011,8 @@ aux_services:
            "--mmproj", "{models_dir}/LightOnOCR-2-1B-bbox-mmproj-F16.gguf",
            "--host", "127.0.0.1",
            "--port", "9003",
-           "-np", "1",
-           "-c", "8192",
+           "-np", "4",
+           "-c", "32768",
            "-t", "24",
            "--flash-attn", "on",
            "--device", "none",

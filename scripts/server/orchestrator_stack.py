@@ -2837,6 +2837,7 @@ def start_orchestrator(
         f"http://127.0.0.1:{AUX_SERVICES['ocr_pdf_lighton'].port}",
     )
     env.setdefault("ORCHESTRATOR_L3_TEXTROW", "1")
+    env.setdefault("ORCHESTRATOR_PDF_LIGHTON_CONCURRENCY", "4")  # = ocr_pdf_lighton -np
 
     # Write the fleet-startup marker BEFORE Popen. uvicorn forks workers
     # AFTER its own startup (each worker imports the app independently),

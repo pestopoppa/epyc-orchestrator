@@ -21,6 +21,7 @@ Architecture:
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import math
@@ -74,6 +75,7 @@ PDF_ROUTE_LIGHTON_ENV = "ORCHESTRATOR_PDF_ROUTE_LIGHTON"
 LIGHTON_URL_ENV = "ORCHESTRATOR_PDF_LIGHTON_URL"  # base URL, e.g. http://host:port
 LIGHTON_MODEL_ENV = "ORCHESTRATOR_PDF_LIGHTON_MODEL"
 LIGHTON_TIMEOUT_S_ENV = "ORCHESTRATOR_PDF_LIGHTON_TIMEOUT_S"
+LIGHTON_CONCURRENCY_ENV = "ORCHESTRATOR_PDF_LIGHTON_CONCURRENCY"  # pages in flight; match the server -np
 LIGHTON_DPI = 200
 LIGHTON_MAX_SIDE_PX = 1540
 LIGHTON_MAX_TOKENS = 4096
@@ -1006,8 +1008,18 @@ class PDFRouter:
         texts: list[str] = []
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                for png in pages:
-                    texts.append((await self._lighton_ocr_page(client, base_url, png)).strip())
+                try:
+                    width = max(1, int(os.environ.get(LIGHTON_CONCURRENCY_ENV, "1")))
+                except ValueError:
+                    width = 1
+                sem = asyncio.Semaphore(width)
+
+                async def _one(png: bytes) -> str:
+                    async with sem:
+                        return (await self._lighton_ocr_page(client, base_url, png)).strip()
+
+                # gather keeps page order; the first failing page fails the document closed.
+                texts = list(await asyncio.gather(*(_one(png) for png in pages)))
         except LightOnOCRError as exc:
             logger.warning("LightOnOCR route failed for %s: %s", pdf_path.name, exc)
             raise
