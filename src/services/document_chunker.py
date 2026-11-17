@@ -258,7 +258,7 @@ class DocumentChunker:
         method="textrow" so they are distinguishable from parser tables.
         """
         from src.services.textrow_extractor import (
-            rows_to_markdown, text_to_table_rows, textrow_enabled,
+            rows_to_markdown, text_to_table_with_header, textrow_enabled,
         )
 
         if not textrow_enabled():
@@ -267,13 +267,13 @@ class DocumentChunker:
         for page, text in sorted((getattr(structured, "page_texts", None) or {}).items()):
             if page in pages_with_tables:
                 continue
-            rows = text_to_table_rows(text)
+            rows, has_header = text_to_table_with_header(text)
             if not rows:
                 continue
             idx = start_index + len(out) + 1
             ref = TableRef(
                 id=f"p{page}_table{idx}", page=page,
-                markdown=rows_to_markdown(rows), rows=rows, method="textrow",
+                markdown=rows_to_markdown(rows, has_header), rows=rows, method="textrow",
             )
             if sections:
                 for section in sections:
