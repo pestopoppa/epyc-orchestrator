@@ -1,11 +1,11 @@
 descriptor_version: 3
-compiled_at: '2026-11-17T20:58:30Z'
+compiled_at: '2026-11-17T21:11:39Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: orchestration/model_registry.yaml
-    repo_commit: 0e5647ce
+    repo_commit: 0bd06614
     sha256: 9615682d9461ced4f3a10cfebb9c8925bd40db351d2aa9bd18a5745bed40df79
   research:
     path: origin/main:orchestration/model_registry.yaml
