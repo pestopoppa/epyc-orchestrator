@@ -34,6 +34,12 @@ from src.runtime import routing_stage_timing
 from src.task_ir import canonicalize_task_ir
 from src.features import features as _get_features
 from src.security.control_tokens import neutralise_control_tokens as _ct_neutralise
+from src.security.untrusted_text import (
+    UNTRUSTED_NOTICE as _UT_NOTICE,
+    enabled as _ut_enabled,
+    sanitize_tool_text as _ut_sanitize,
+    wrap_untrusted as _ut_wrap,
+)
 from src.prompt_builders.reusable_blocks import (
     cache_friendly_enabled,
     pack_blocks,
@@ -282,15 +288,21 @@ class PromptBuilder:
             error_preview = last_error[: self.config.max_error_preview]
             if len(last_error) > self.config.max_error_preview:
                 error_preview += "..."
+            # Untrusted-tool-text hardening (arXiv 2602.15945): the single choke point
+            # where REPL error text re-enters model context.
+            error_preview = _ut_wrap(_ut_sanitize(error_preview), "error")
+            _ut_note = [_UT_NOTICE] if _ut_enabled() else []
             context_parts.extend(
                 [
                     "## Last Error",
+                    *_ut_note,
                     "```",
                     error_preview,
                     "```",
                 ]
             )
-            _tool_output_block = f"## Last Error\n```\n{error_preview}\n```"
+            _ut_nl = (_UT_NOTICE + "\n") if _ut_enabled() else ""
+            _tool_output_block = f"## Last Error\n{_ut_nl}```\n{error_preview}\n```"
             if solution_file:
                 context_parts.append(
                     f"Your previous code is saved at `{solution_file}`. "
@@ -307,15 +319,21 @@ class PromptBuilder:
             output_preview = last_output[: self.config.max_output_preview]
             if len(last_output) > self.config.max_output_preview:
                 output_preview += "..."
+            # Untrusted-tool-text hardening (arXiv 2602.15945): the single choke point
+            # where REPL output text re-enters model context.
+            output_preview = _ut_wrap(_ut_sanitize(output_preview), "output")
+            _ut_note = [_UT_NOTICE] if _ut_enabled() else []
             context_parts.extend(
                 [
                     "## Last Output",
+                    *_ut_note,
                     "```",
                     output_preview,
                     "```",
                 ]
             )
-            _tool_output_block = f"## Last Output\n```\n{output_preview}\n```"
+            _ut_nl = (_UT_NOTICE + "\n") if _ut_enabled() else ""
+            _tool_output_block = f"## Last Output\n{_ut_nl}```\n{output_preview}\n```"
 
         if _get_features().deferred_tool_results:
             context_parts.append(
