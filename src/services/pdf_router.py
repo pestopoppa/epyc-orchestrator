@@ -68,6 +68,16 @@ ODL_HYBRID_URL_ENV = "ORCHESTRATOR_ODL_HYBRID_URL"
 ODL_HYBRID_TIMEOUT_MS_ENV = "ORCHESTRATOR_ODL_HYBRID_TIMEOUT_MS"
 ODL_HYBRID_FALLBACK_ENV = "ORCHESTRATOR_ODL_HYBRID_FALLBACK"
 
+# Held-out-confirmed routing rule (default OFF): docs flagged needs_ocr go to a
+# LightOnOCR-2-1B OpenAI-compatible llama-server; all others to LiteParse 2.12.
+PDF_ROUTE_LIGHTON_ENV = "ORCHESTRATOR_PDF_ROUTE_LIGHTON"
+LIGHTON_URL_ENV = "ORCHESTRATOR_PDF_LIGHTON_URL"  # base URL, e.g. http://host:port
+LIGHTON_MODEL_ENV = "ORCHESTRATOR_PDF_LIGHTON_MODEL"
+LIGHTON_TIMEOUT_S_ENV = "ORCHESTRATOR_PDF_LIGHTON_TIMEOUT_S"
+LIGHTON_DPI = 200
+LIGHTON_MAX_SIDE_PX = 1540
+LIGHTON_MAX_TOKENS = 4096
+
 if TYPE_CHECKING:
     from src.models.odl_structured import ODLStructuredDocument
 
@@ -78,6 +88,14 @@ class PdftotextError(RuntimeError):
     Distinct from "pdftotext ran and found no text" (returns ""), which means a
     genuinely text-less PDF that legitimately needs OCR.
     """
+
+
+class LightOnOCRError(RuntimeError):
+    """LightOnOCR-2-1B endpoint unconfigured/unavailable or returned no text."""
+
+
+class LiteParseUnavailableError(RuntimeError):
+    """The ``liteparse`` package is not installed (only raised when that path runs)."""
 
 
 @dataclass
@@ -847,6 +865,143 @@ class PDFRouter:
             logger.error(f"LightOnOCR request failed: {e}")
             return "", [], (time.perf_counter() - start) * 1000
 
+    # ------------------------------------------------------------------
+    # LightOnOCR-2-1B / LiteParse routing (ORCHESTRATOR_PDF_ROUTE_LIGHTON=1)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _route_lighton_enabled() -> bool:
+        return os.environ.get(PDF_ROUTE_LIGHTON_ENV, "0").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
+    def _render_pages_for_ocr(self, pdf_path: Path) -> list[bytes]:
+        """Render each page to PNG at 200 dpi, longest side capped at 1540 px."""
+        try:
+            import fitz
+        except ImportError as exc:
+            raise LightOnOCRError("PyMuPDF (fitz) required to render pages for OCR") from exc
+        pages: list[bytes] = []
+        with fitz.open(str(pdf_path)) as doc:
+            for page in doc:
+                zoom = LIGHTON_DPI / 72.0
+                longest = max(page.rect.width, page.rect.height) * zoom
+                if longest > LIGHTON_MAX_SIDE_PX:
+                    zoom *= LIGHTON_MAX_SIDE_PX / longest
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                pages.append(pix.tobytes("png"))
+        return pages
+
+    async def _lighton_ocr_page(self, client, base_url: str, png: bytes) -> str:
+        """One OpenAI-compatible chat request for one page image (temperature 0)."""
+        import base64
+
+        payload = {
+            "model": os.environ.get(LIGHTON_MODEL_ENV, "lightonocr-2-1b"),
+            "temperature": 0,
+            "max_tokens": LIGHTON_MAX_TOKENS,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "data:image/png;base64,"
+                                + base64.b64encode(png).decode("ascii")
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+        resp = await client.post(f"{base_url}/v1/chat/completions", json=payload)
+        if resp.status_code != 200:
+            raise LightOnOCRError(
+                f"LightOnOCR endpoint returned HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        try:
+            return resp.json()["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LightOnOCRError(f"LightOnOCR malformed response: {exc}") from exc
+
+    async def _extract_with_lighton_server(self, pdf_path: Path) -> tuple[str, float]:
+        """OCR every page via the LightOnOCR-2-1B llama-server; pages joined by a blank line.
+
+        Raises LightOnOCRError (never returns empty text as success).
+        """
+        import httpx
+
+        base_url = os.environ.get(LIGHTON_URL_ENV, "").strip().rstrip("/")
+        if not base_url:
+            raise LightOnOCRError(
+                f"{LIGHTON_URL_ENV} is not set; cannot route to LightOnOCR-2-1B"
+            )
+        start = time.perf_counter()
+        pages = self._render_pages_for_ocr(pdf_path)
+        if not pages:
+            raise LightOnOCRError(f"no pages rendered from {pdf_path.name}")
+        timeout = float(os.environ.get(LIGHTON_TIMEOUT_S_ENV, "300"))
+        texts: list[str] = []
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for png in pages:
+                    texts.append((await self._lighton_ocr_page(client, base_url, png)).strip())
+        except LightOnOCRError as exc:
+            logger.warning("LightOnOCR route failed for %s: %s", pdf_path.name, exc)
+            raise
+        except httpx.HTTPError as exc:
+            logger.warning("LightOnOCR endpoint unavailable for %s: %s", pdf_path.name, exc)
+            raise LightOnOCRError(f"LightOnOCR endpoint unavailable: {exc}") from exc
+        text = "\n\n".join(texts)
+        if not text.strip():
+            raise LightOnOCRError(f"LightOnOCR returned empty text for {pdf_path.name}")
+        return text, (time.perf_counter() - start) * 1000
+
+    def _extract_with_liteparse(self, pdf_path: Path) -> tuple[str, float]:
+        """Extract markdown via LiteParse 2.12 (lazy import)."""
+        try:
+            from liteparse import LiteParse
+        except ImportError as exc:
+            raise LiteParseUnavailableError(
+                "liteparse is not installed but ORCHESTRATOR_PDF_ROUTE_LIGHTON=1 routed "
+                "this document to LiteParse; install liteparse==2.12"
+            ) from exc
+        start = time.perf_counter()
+        text = LiteParse(output_format="markdown").parse(str(pdf_path)).text
+        return text, (time.perf_counter() - start) * 1000
+
+    async def _extract_routed_lighton(
+        self, pdf_path: Path, page_count: int, extract_figures: bool, save_figures: bool,
+        total_start: float,
+    ) -> PDFExtractionResult:
+        """Route by the needs_ocr flag: True -> LightOnOCR-2-1B, False -> LiteParse.
+
+        PdftotextError from the feature probe propagates (fail closed).
+        """
+        pt_text, _ = self._extract_with_pdftotext(pdf_path)
+        quality_score, needs_ocr = self._assess_text_quality(pt_text)
+        needs_ocr = bool(needs_ocr or not pt_text)
+        if needs_ocr:
+            text, _lat = await self._extract_with_lighton_server(pdf_path)
+            method, figures = "lightonocr-2-1b", []
+        else:
+            text, _lat = self._extract_with_liteparse(pdf_path)
+            if not text or not text.strip():
+                raise RuntimeError(f"LiteParse returned empty text for {pdf_path.name}")
+            method, figures = "liteparse", []
+            if extract_figures:
+                out = self.temp_dir / pdf_path.stem if save_figures else None
+                if out:
+                    out.mkdir(parents=True, exist_ok=True)
+                figures = self._extract_figures_pymupdf(pdf_path, out)
+        total_latency = (time.perf_counter() - total_start) * 1000
+        logger.info("PDF routed (needs_ocr=%s) via %s: %d chars", needs_ocr, method, len(text))
+        return PDFExtractionResult(
+            text=text, figures=figures, page_count=page_count, method=method,
+            quality_score=quality_score, latency_ms=total_latency, ocr_required=needs_ocr,
+        )
+
     async def extract(
         self,
         pdf_path: str | Path,
@@ -877,6 +1032,11 @@ class PDFRouter:
         # when its runtime is available (2026-07 Phase-1 flip); pdftotext is
         # both the explicit alternative (PDF_EXTRACTOR=pdftotext) and the
         # per-document fallback when ODL fails the quality/garbage checks.
+        if not force_ocr and self._route_lighton_enabled():
+            return await self._extract_routed_lighton(
+                pdf_path, page_count, extract_figures, save_figures, total_start
+            )
+
         structured_data = None
         if not force_ocr:
             extractor = self._resolve_extractor()
