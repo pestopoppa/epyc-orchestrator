@@ -225,6 +225,9 @@ class PDFRouter:
             self.temp_dir = Path(tempfile.gettempdir()) / "pdf_router"
             self.temp_dir.mkdir(parents=True, exist_ok=True)
         self.pdftotext_path = pdftotext_path or resolve_poppler_tool("pdftotext")
+        # Page cap for the LightOnOCR/LiteParse route (API DocumentProcessRequest.max_pages).
+        # OCR cost is per page, so this is what bounds a document's total time.
+        self.max_pages: int | None = None
 
         # Check for PyMuPDF
         try:
@@ -935,7 +938,9 @@ class PDFRouter:
             return self._render_pages_pdftoppm(pdf_path)
         pages: list[bytes] = []
         with fitz.open(str(pdf_path)) as doc:
-            for page in doc:
+            for page_no, page in enumerate(doc):
+                if getattr(self, "max_pages", None) and page_no >= self.max_pages:
+                    break
                 zoom = LIGHTON_DPI / 72.0
                 longest = max(page.rect.width, page.rect.height) * zoom
                 if longest > LIGHTON_MAX_SIDE_PX:
@@ -950,7 +955,10 @@ class PDFRouter:
 
         tool = resolve_poppler_tool("pdftoppm")
         with tempfile.TemporaryDirectory(prefix="lighton-render-") as td:
-            cmd = [tool, "-r", str(LIGHTON_DPI), "-png", str(pdf_path), os.path.join(td, "p")]
+            cmd = [tool, "-r", str(LIGHTON_DPI), "-png"]
+            if getattr(self, "max_pages", None):
+                cmd += ["-l", str(int(self.max_pages))]
+            cmd += [str(pdf_path), os.path.join(td, "p")]
             try:
                 proc = subprocess.run(cmd, capture_output=True, timeout=300)
             except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1069,7 +1077,9 @@ class PDFRouter:
                 "this document to LiteParse; install liteparse==2.12"
             ) from exc
         start = time.perf_counter()
-        parsed = LiteParse(output_format="markdown").parse(str(pdf_path))
+        parsed = LiteParse(
+            output_format="markdown", max_pages=getattr(self, "max_pages", None) or None
+        ).parse(str(pdf_path))
         pages: dict[int, str] = {}
         for idx, page in enumerate(getattr(parsed, "pages", None) or []):
             num = int(getattr(page, "page_num", 0) or idx + 1)

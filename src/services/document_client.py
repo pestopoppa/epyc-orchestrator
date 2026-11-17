@@ -462,7 +462,9 @@ async def process_document(request: DocumentProcessRequest) -> OCRResult:
             if _use_routed_pdf_extractor():
                 from src.services.pdf_router import PDFRouter
 
-                result = await PDFRouter().extract(path, extract_figures=request.extract_figures)
+                router = PDFRouter()
+                router.max_pages = request.max_pages
+                result = await router.extract(path, extract_figures=request.extract_figures)
                 return _ocr_result_from_pdf_extraction(result)
 
             client = get_document_client()
