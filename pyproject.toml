@@ -18,6 +18,8 @@ dependencies = [
     "sse-starlette>=2.0.0",  # Proper SSE streaming
 
     # Parsing
+    "liteparse==2.12.0",  # PDF route (ORCHESTRATOR_PDF_ROUTE_LIGHTON=1): non-OCR docs; pinned to the PIP-04 held-out PASS
+    "py-cpuinfo>=9.0.0",  # liteparse runtime import
     "markdown-it-py>=3.0.0",  # Proper markdown parsing for code extraction
 
     # Configuration
