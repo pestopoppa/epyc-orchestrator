@@ -90,6 +90,29 @@ class PdftotextError(RuntimeError):
     """
 
 
+
+POPPLER_DIR_ENV = "ORCHESTRATOR_POPPLER_DIR"
+PINNED_POPPLER_DIR = "/mnt/raid0/llm/tools/poppler-noble"
+
+
+def resolve_poppler_tool(name: str) -> str:
+    """Locate a poppler-utils binary: $ORCHESTRATOR_POPPLER_DIR, then PATH, then the pinned build.
+
+    The API process PATH carries no poppler on this host, so without the pinned
+    fallback every PDF fails closed at the pdftotext probe.
+    """
+    d = os.environ.get(POPPLER_DIR_ENV, "").strip()
+    if d and os.access(os.path.join(d, name), os.X_OK):
+        return os.path.join(d, name)
+    found = shutil.which(name)
+    if found:
+        return found
+    pinned = os.path.join(PINNED_POPPLER_DIR, name)
+    if os.access(pinned, os.X_OK):
+        return pinned
+    return name
+
+
 class LightOnOCRError(RuntimeError):
     """LightOnOCR-2-1B endpoint unconfigured/unavailable or returned no text."""
 
@@ -145,7 +168,7 @@ class PDFRouter:
         self,
         lightonocr_url: str | None = None,
         temp_dir: str | None = None,
-        pdftotext_path: str = "pdftotext",
+        pdftotext_path: str | None = None,
     ):
         """Initialize PDF router.
 
@@ -172,7 +195,7 @@ class PDFRouter:
             # Fallback to system temp for CI
             self.temp_dir = Path(tempfile.gettempdir()) / "pdf_router"
             self.temp_dir.mkdir(parents=True, exist_ok=True)
-        self.pdftotext_path = pdftotext_path
+        self.pdftotext_path = pdftotext_path or resolve_poppler_tool("pdftotext")
 
         # Check for PyMuPDF
         try:
@@ -879,8 +902,8 @@ class PDFRouter:
         """Render each page to PNG at 200 dpi, longest side capped at 1540 px."""
         try:
             import fitz
-        except ImportError as exc:
-            raise LightOnOCRError("PyMuPDF (fitz) required to render pages for OCR") from exc
+        except ImportError:
+            return self._render_pages_pdftoppm(pdf_path)
         pages: list[bytes] = []
         with fitz.open(str(pdf_path)) as doc:
             for page in doc:
@@ -890,6 +913,44 @@ class PDFRouter:
                     zoom *= LIGHTON_MAX_SIDE_PX / longest
                 pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
                 pages.append(pix.tobytes("png"))
+        return pages
+
+    def _render_pages_pdftoppm(self, pdf_path: Path) -> list[bytes]:
+        """pdftoppm renderer (no PyMuPDF): LIGHTON_DPI, longest side capped at LIGHTON_MAX_SIDE_PX."""
+        import tempfile
+
+        tool = resolve_poppler_tool("pdftoppm")
+        with tempfile.TemporaryDirectory(prefix="lighton-render-") as td:
+            cmd = [tool, "-r", str(LIGHTON_DPI), "-png", str(pdf_path), os.path.join(td, "p")]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, timeout=300)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise LightOnOCRError(f"pdftoppm unavailable or timed out ({tool}): {exc}") from exc
+            if proc.returncode != 0:
+                raise LightOnOCRError(
+                    f"pdftoppm rc={proc.returncode}: {proc.stderr.decode(errors='replace')[:300]}"
+                )
+            files = sorted(
+                Path(td).glob("p-*.png"), key=lambda f: int(f.stem.rsplit("-", 1)[1])
+            )
+            pages: list[bytes] = []
+            for f in files:
+                data = f.read_bytes()
+                try:
+                    from PIL import Image
+                    import io
+
+                    with Image.open(io.BytesIO(data)) as im:
+                        longest = max(im.size)
+                        if longest > LIGHTON_MAX_SIDE_PX:
+                            k = LIGHTON_MAX_SIDE_PX / longest
+                            im2 = im.resize((max(1, round(im.size[0] * k)), max(1, round(im.size[1] * k))))
+                            buf = io.BytesIO()
+                            im2.save(buf, format="PNG")
+                            data = buf.getvalue()
+                except ImportError:
+                    pass
+                pages.append(data)
         return pages
 
     async def _lighton_ocr_page(self, client, base_url: str, png: bytes) -> str:
