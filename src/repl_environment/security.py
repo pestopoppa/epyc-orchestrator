@@ -11,6 +11,44 @@ import re
 _DUNDER_FORMAT_FIELD = re.compile(r"\{[^{}]*__[^{}]*\}")
 
 
+#: Memory-bomb guard (in-process; an RLIMIT_AS on the shared API worker is NOT an option).
+#: Statically-evident oversized materialisation is refused: ``"x" * N`` / ``[0] * N`` with a
+#: literal repeat count above this, and integer ``**`` / ``<<`` whose result would exceed
+#: ``_MAX_INT_BITS`` bits.  Dynamic sizes are not caught (documented limit).
+MAX_LITERAL_REPEAT = 10_000_000
+_MAX_INT_BITS = 10_000_000
+_HUGE = object()
+
+
+def _fold_int(node: ast.AST):
+    """Constant-fold a small integer expression; ``_HUGE`` if it is statically huge, else None/int."""
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        v = _fold_int(node.operand)
+        if isinstance(v, int):
+            return -v if isinstance(node.op, ast.USub) else v
+        return v
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Pow, ast.Mult, ast.LShift, ast.Add, ast.Sub)):
+        a, b = _fold_int(node.left), _fold_int(node.right)
+        if a is _HUGE or b is _HUGE:
+            return _HUGE
+        if not isinstance(a, int) or not isinstance(b, int):
+            return None
+        if isinstance(node.op, ast.Pow):
+            if b < 0:
+                return None
+            if abs(a) > 1 and b * max(abs(a).bit_length() - 1, 1) > _MAX_INT_BITS:
+                return _HUGE
+            return a**b
+        if isinstance(node.op, ast.LShift):
+            return _HUGE if b > _MAX_INT_BITS else (a << b if b >= 0 else None)
+        if isinstance(node.op, ast.Mult):
+            return a * b
+        return a + b if isinstance(node.op, ast.Add) else a - b
+    return None
+
+
 class ASTSecurityVisitor(ast.NodeVisitor):
     """AST visitor that checks for dangerous code patterns.
 
@@ -266,6 +304,36 @@ class ASTSecurityVisitor(ast.NodeVisitor):
                 if keyword.arg in self.FORBIDDEN_METHOD_DEFS:
                     self.violations.append(f"dict({keyword.arg}=...)")
 
+        self.generic_visit(node)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        """Bare ``except:`` / ``except BaseException`` could swallow the REPL deadline
+        (a BaseException) in a loop forever; no analysis snippet needs them."""
+        names = []
+        t = node.type
+        if t is None:
+            self.violations.append("bare except (would swallow the execution deadline)")
+        else:
+            for el in (t.elts if isinstance(t, ast.Tuple) else [t]):
+                if isinstance(el, ast.Name) and el.id in ("BaseException", "REPLDeadline", "KeyboardInterrupt", "SystemExit"):
+                    self.violations.append(f"except {el.id} (would swallow the execution deadline)")
+        self.generic_visit(node)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        """Refuse statically-evident memory bombs (see ``MAX_LITERAL_REPEAT``)."""
+        if isinstance(node.op, (ast.Pow, ast.LShift)):
+            if _fold_int(node) is _HUGE:
+                self.violations.append("oversized integer expression (memory bound)")
+        elif isinstance(node.op, ast.Mult):
+            for seq, count in ((node.left, node.right), (node.right, node.left)):
+                is_seq = isinstance(seq, (ast.List, ast.Tuple)) or (
+                    isinstance(seq, ast.Constant) and isinstance(seq.value, (str, bytes))
+                )
+                if is_seq:
+                    n = _fold_int(count)
+                    if n is _HUGE or (isinstance(n, int) and n > MAX_LITERAL_REPEAT):
+                        self.violations.append("oversized sequence repeat (memory bound)")
+                    break
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:

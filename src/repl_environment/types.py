@@ -65,6 +65,15 @@ class REPLTimeout(REPLError):
     pass
 
 
+class REPLDeadline(BaseException):
+    """Wall-clock deadline hit inside ``exec``.
+
+    Deliberately a ``BaseException`` (like KeyboardInterrupt): model-written
+    ``try/except Exception`` (or a library's) must not be able to swallow the
+    deadline and keep running.  Only the REPL's own ``execute`` catches it.
+    """
+
+
 class REPLSecurityError(REPLError):
     """Attempted to execute dangerous code."""
 

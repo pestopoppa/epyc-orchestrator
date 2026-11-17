@@ -24,6 +24,7 @@ from src.repl_environment.types import (
     FinalSignal,
     REPLConfig,
     REPLSecurityError,
+    REPLDeadline,
     REPLTimeout,
     wrap_tool_output,
     neutralise_tool_markers,
@@ -367,6 +368,25 @@ class REPLEnvironment(
         """Canonical user-facing error for this environment's timeout."""
         return f"REPLTimeout: Execution timed out after {self.config.timeout_seconds}s"
 
+    # Deadline re-arm interval: if model code swallows the deadline exception (bare
+    # ``except:`` / ``except BaseException``) the alarm fires again this often.
+    _DEADLINE_REARM_S = 1
+
+    def _make_deadline_handler(self, state: dict):
+        """SIGALRM handler raising ``REPLDeadline`` (a BaseException) and re-arming itself,
+        so neither ``except Exception`` nor a swallowed first alarm can bypass the timeout."""
+        seconds = self.config.timeout_seconds
+
+        def deadline_handler(signum, frame):
+            state["hit"] = True
+            try:
+                signal.alarm(self._DEADLINE_REARM_S)
+            except Exception:  # pragma: no cover
+                pass
+            raise REPLDeadline(f"Execution timed out after {seconds}s")
+
+        return deadline_handler
+
     def mark_timed_out(self) -> str:
         """Make timeout terminal for this environment and return its error."""
         self._timeout_terminal = True
@@ -582,7 +602,48 @@ class REPLEnvironment(
         # CT-12.3c: REPL data functions return RAW text (the agent's code may write
         # it back to files / tool args). Neutralisation happens only at model-bound
         # boundaries: last_output in the prompt builder, llm_call/llm_batch args.
+        self._count_tool_calls(globals_dict)
         return globals_dict
+
+    # Per-snippet tool-call budget (matches Monty's default of 100; 0 disables).
+    # Env: ORCHESTRATOR_REPL_MAX_TOOL_CALLS.  Reset at the start of every execute().
+    @staticmethod
+    def _max_tool_calls() -> int:
+        try:
+            return max(0, int(os.environ.get("ORCHESTRATOR_REPL_MAX_TOOL_CALLS", "100")))
+        except ValueError:
+            return 100
+
+    def _charge_tool_call(self, name: str) -> None:
+        cap = self._max_tool_calls()
+        self._snippet_tool_calls = getattr(self, "_snippet_tool_calls", 0) + 1
+        if cap and self._snippet_tool_calls > cap:
+            raise RuntimeError(
+                f"Tool-call budget exceeded: more than {cap} tool calls in one snippet "
+                f"(at {name}); split the work across turns or batch it."
+            )
+
+    def _count_tool_calls(self, globals_dict: dict) -> None:
+        """Wrap REPL-exposed bound-method tools so each call is charged to the snippet.
+        TOOL/CALL are charged inside ``_invoke_tool`` (also reached by chains); FINAL*
+        are control signals, not tools."""
+        import functools as _ft
+        import inspect as _inspect
+
+        for key, fn in list(globals_dict.items()):
+            if key in ("TOOL", "CALL") or key.startswith("FINAL") or not _inspect.ismethod(fn):
+                continue
+            if getattr(fn, "__self__", None) is not self:
+                continue
+
+            def _make(k, f):
+                @_ft.wraps(f)
+                def counted(*a, **kw):
+                    self._charge_tool_call(k)
+                    return f(*a, **kw)
+                return counted
+
+            globals_dict[key] = _make(key, fn)
 
     def _register_session_artifact(self, path: str, task_id: str) -> bool:
         """Record one graph-produced tmp file for this REPL, never a directory grant."""
@@ -1330,16 +1391,14 @@ class REPLEnvironment(
 
         old_handler = None
         _alarm_set = False
+        _deadline_state: dict = {"hit": False}
         try:
             if hasattr(signal, "SIGALRM"):
                 try:
 
-                    def timeout_handler(signum, frame):
-                        raise REPLTimeout(
-                            f"Execution timed out after {self.config.timeout_seconds}s"
-                        )
-
-                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                    old_handler = signal.signal(
+                        signal.SIGALRM, self._make_deadline_handler(_deadline_state)
+                    )
                     signal.alarm(self.config.timeout_seconds)
                     _alarm_set = True
                 except ValueError:
@@ -1348,6 +1407,9 @@ class REPLEnvironment(
             try:
                 with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                     exec(code, self._globals)
+                if _deadline_state["hit"]:
+                    # the deadline fired but model code swallowed it: still a timeout
+                    raise REPLDeadline(self.timeout_error)
 
                 output = stdout_capture.getvalue()
                 if stderr_capture.getvalue():
@@ -1376,6 +1438,12 @@ class REPLEnvironment(
                     is_final=False,
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
+
+            except REPLDeadline:
+                # Disarm the self-re-arming alarm first, then report a terminal timeout.
+                signal.alarm(0)
+                self.mark_timed_out()
+                return self._timeout_result(start_time)
 
             except FinalSignal as e:
                 return ExecutionResult(
@@ -1621,6 +1689,25 @@ class REPLEnvironment(
         )
 
     def execute(self, code: str) -> ExecutionResult:
+        """Execute model code. Refuses re-entrant calls: a nested ``execute`` would
+        reset the outer call's SIGALRM deadline (``signal.alarm(0)`` in its ``finally``)."""
+        import time as _time
+
+        if getattr(self, "_in_execute", False):
+            return ExecutionResult(
+                output="",
+                is_final=False,
+                error="[ERROR: nested REPL execute refused (the outer deadline must stay armed)]",
+                elapsed_seconds=0.0,
+            )
+        self._in_execute = True
+        self._snippet_tool_calls = 0
+        try:
+            return self._execute_impl(code)
+        finally:
+            self._in_execute = False
+
+    def _execute_impl(self, code: str) -> ExecutionResult:
         """Execute Python code in the sandboxed environment.
 
         Args:
@@ -1668,8 +1755,8 @@ class REPLEnvironment(
         self._record_code_log(code, ok=True)
 
         # Set up timeout handler
-        def timeout_handler(signum, frame):
-            raise REPLTimeout(f"Execution timed out after {self.config.timeout_seconds}s")
+        _deadline_state: dict = {"hit": False}
+        timeout_handler = self._make_deadline_handler(_deadline_state)
 
         # Capture stdout/stderr
         stdout_capture = io.StringIO()
@@ -1690,6 +1777,9 @@ class REPLEnvironment(
             try:
                 with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
                     exec(code, self._globals)
+                if _deadline_state["hit"]:
+                    # the deadline fired but model code swallowed it: still a timeout
+                    raise REPLDeadline(self.timeout_error)
 
                 output = stdout_capture.getvalue()
                 if stderr_capture.getvalue():
@@ -1711,6 +1801,12 @@ class REPLEnvironment(
                     is_final=False,
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
+
+            except REPLDeadline:
+                # Disarm the self-re-arming alarm first, then report a terminal timeout.
+                signal.alarm(0)
+                self.mark_timed_out()
+                return self._timeout_result(start_time)
 
             except FinalSignal as e:
                 output = self._bundle_cap_output(stdout_capture.getvalue())

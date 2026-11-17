@@ -251,6 +251,25 @@ def _spec_path(policy: Policy, deny_paths: list[str], fence_roots: Any) -> str:
     return path
 
 
+RLIMIT_AS_ENV = "ORCHESTRATOR_EXEC_CHILD_RLIMIT_AS_MB"
+DEFAULT_CHILD_RLIMIT_AS_MB = 16384  # fat-finger bound; virtual size, so deliberately generous
+
+
+def child_rlimit_as_mb() -> int:
+    """RLIMIT_AS (MiB) applied to contained exec CHILDREN only; 0 disables.
+
+    Never applied to the API worker process: an in-process RLIMIT_AS would also kill
+    unrelated requests sharing the uvicorn worker.
+    """
+    raw = os.environ.get(RLIMIT_AS_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_CHILD_RLIMIT_AS_MB
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_CHILD_RLIMIT_AS_MB
+
+
 def wrap(
     argv: list[str],
     *,
@@ -284,7 +303,11 @@ def wrap(
         raise ContainmentUnavailable(f"could not build the containment spec: {exc}") from exc
     extra = [str(p) for p in extra_allow if p]
     wrapped = [sys.executable, "-c", fence_kernel.shim_source(), spec, "--", *argv]
-    return wrapped, {"EPYC_FENCE_KERNEL_EXTRA": json.dumps(extra)}
+    env = {"EPYC_FENCE_KERNEL_EXTRA": json.dumps(extra)}
+    mb = child_rlimit_as_mb()
+    if mb > 0:
+        env["EPYC_EXEC_RLIMIT_AS_MB"] = str(mb)
+    return wrapped, env
 
 
 def describe_refusal(exc: BaseException) -> str:

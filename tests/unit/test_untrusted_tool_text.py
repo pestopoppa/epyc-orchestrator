@@ -47,5 +47,5 @@ def test_builder_labels_error_and_output():
 
 
 def test_builder_error_cap_still_applies():
-    p = _prompt(last_error="x" * 5000)
-    assert p.count("x") <= 500
+    p = _prompt(last_error="Q" * 5000)
+    assert "Q" * 500 in p and "Q" * 501 not in p

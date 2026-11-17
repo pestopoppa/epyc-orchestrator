@@ -382,6 +382,17 @@ def _k_main(argv):
             _k_fail("unknown mode %r" % (mode,))
     except Exception as exc:  # noqa: BLE001 - never exec unrestricted
         _k_fail("%s: %s" % (type(exc).__name__, exc))
+    # Memory bound for THIS child only (never the API worker): RLIMIT_AS, set after the
+    # restriction and inherited by descendants.  Unset/0/invalid = no limit.
+    try:
+        _k_mb = int(_k_os.environ.pop("EPYC_EXEC_RLIMIT_AS_MB", "") or "0")
+        if _k_mb > 0:
+            import resource as _k_resource
+
+            _k_cap = _k_mb * 1024 * 1024
+            _k_resource.setrlimit(_k_resource.RLIMIT_AS, (_k_cap, _k_cap))
+    except (ValueError, OSError) as exc:
+        _k_fail("rlimit: %s" % (exc,))
     try:
         _k_os.execvp(command[0], command)
     except OSError as exc:

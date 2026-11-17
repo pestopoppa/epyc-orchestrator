@@ -481,6 +481,9 @@ class _ContextMixin:
         import time as _time
         from types import SimpleNamespace as _NS
 
+        _charge = getattr(self, "_charge_tool_call", None)
+        if _charge is not None:
+            _charge(tool_name)
         self._tool_invocations += 1
         _t0 = _time.perf_counter()
         _ok = True

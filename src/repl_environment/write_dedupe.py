@@ -97,7 +97,35 @@ def guarded_call(
     return result
 
 
-def idempotent_write(name: str, slot_args: tuple[str, ...], fp_arg: str | None = None):
+MAX_WRITE_CHARS = 5_000_000
+
+
+def validate_write_args(name: str, a: dict, types: dict[str, Any]) -> str | None:
+    """Cheap argument validation for write tools; returns an ``[ERROR: ...]`` string or None.
+
+    ``types`` maps argument -> type (``str``) or ``list[str]`` (spelled ``"list[str]"``).
+    Strings may not contain NUL and may not exceed ``MAX_WRITE_CHARS``.
+    """
+    for arg, want in types.items():
+        v = a.get(arg)
+        if want == "list[str]":
+            ok = isinstance(v, (list, tuple)) and all(isinstance(x, str) for x in v)
+            strs = list(v) if ok else []
+        else:
+            ok = isinstance(v, want)
+            strs = [v] if ok else []
+        if not ok:
+            return f"[ERROR: {name}: argument {arg!r} must be {want if isinstance(want, str) else want.__name__}, got {type(v).__name__}]"
+        for x in strs:
+            if "\x00" in x and arg != "content":
+                return f"[ERROR: {name}: argument {arg!r} contains a NUL byte]"
+            if len(x) > MAX_WRITE_CHARS:
+                return f"[ERROR: {name}: argument {arg!r} exceeds {MAX_WRITE_CHARS} chars]"
+    return None
+
+
+def idempotent_write(name: str, slot_args: tuple[str, ...], fp_arg: str | None = None,
+                     types: dict[str, Any] | None = None):
     """Decorator for REPL write-tool methods.
 
     ``slot_args`` name the arguments that identify the target; ``fp_arg`` (optional)
@@ -110,6 +138,15 @@ def idempotent_write(name: str, slot_args: tuple[str, ...], fp_arg: str | None =
 
         @functools.wraps(method)
         def wrapper(self, *args, **kwargs):
+            if types:  # validation is independent of the dedupe kill-switch
+                try:
+                    _b = sig.bind(self, *args, **kwargs)
+                    _b.apply_defaults()
+                except TypeError as exc:
+                    return f"[ERROR: {name}: {exc}]"
+                _err = validate_write_args(name, _b.arguments, types)
+                if _err:
+                    return _err
             if not enabled():
                 return method(self, *args, **kwargs)
             try:
