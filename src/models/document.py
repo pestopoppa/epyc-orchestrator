@@ -331,6 +331,7 @@ class FigureRef:
             image_path=data.get("image_path"),
             image_base64=None,  # Not cached - re-extract if needed
             section_id=data.get("section_id"),
+            method=data.get("method", "parser"),
         )
 
 
@@ -345,10 +346,11 @@ class TableRef:
     caption: str = ""
     rows: list[list[Any]] = field(default_factory=list)
     section_id: str | None = None
+    method: str = "parser"  # "parser" (ODL-found) | "textrow" (text-row extractor fallback)
 
     def to_cache_dict(self) -> dict[str, Any]:
         """Serialize for session cache."""
-        return {
+        d = {
             "id": self.id,
             "page": self.page,
             "bbox": self.bbox.to_cache_dict() if self.bbox else None,
@@ -357,6 +359,9 @@ class TableRef:
             "rows": self.rows,
             "section_id": self.section_id,
         }
+        if self.method != "parser":  # keep legacy cache dicts byte-identical
+            d["method"] = self.method
+        return d
 
     @classmethod
     def from_cache_dict(cls, data: dict[str, Any]) -> "TableRef":
@@ -369,6 +374,7 @@ class TableRef:
             caption=data.get("caption", ""),
             rows=data.get("rows", []),
             section_id=data.get("section_id"),
+            method=data.get("method", "parser"),
         )
 
 

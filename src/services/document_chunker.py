@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from typing import Any
 from dataclasses import dataclass, field
 
 from src.models.document import (
@@ -199,8 +200,10 @@ class DocumentChunker:
         from src.models.odl_structured import coerce_structured_document
 
         structured = coerce_structured_document(structured_doc)
-        if not structured or not structured.tables:
+        if not structured:
             return []
+        if not structured.tables:
+            return self._textrow_tables(structured, sections, set())
 
         tables: list[TableRef] = []
         for table in structured.tables:
@@ -236,7 +239,49 @@ class DocumentChunker:
 
             tables.append(table_ref)
 
+        # Parser tables are never replaced; textrow only adds rows for pages
+        # the parser left table-less.
+        tables.extend(self._textrow_tables(
+            structured, sections, {t.page for t in tables}, start_index=len(tables)))
         return tables
+
+    def _textrow_tables(
+        self,
+        structured: Any,
+        sections: list[Section] | None,
+        pages_with_tables: set[int],
+        start_index: int = 0,
+    ) -> list[TableRef]:
+        """Empty-L3 fallback: text-row extraction on pages with no parser table.
+
+        Gated by ORCHESTRATOR_L3_TEXTROW=1 (default off). Emits TableRef with
+        method="textrow" so they are distinguishable from parser tables.
+        """
+        from src.services.textrow_extractor import (
+            rows_to_markdown, text_to_table_rows, textrow_enabled,
+        )
+
+        if not textrow_enabled():
+            return []
+        out: list[TableRef] = []
+        for page, text in sorted((getattr(structured, "page_texts", None) or {}).items()):
+            if page in pages_with_tables:
+                continue
+            rows = text_to_table_rows(text)
+            if not rows:
+                continue
+            idx = start_index + len(out) + 1
+            ref = TableRef(
+                id=f"p{page}_table{idx}", page=page,
+                markdown=rows_to_markdown(rows), rows=rows, method="textrow",
+            )
+            if sections:
+                for section in sections:
+                    if section.page_start <= page <= section.page_end:
+                        ref.section_id = section.id
+                        break
+            out.append(ref)
+        return out
 
     def assign_page_ranges(
         self,
