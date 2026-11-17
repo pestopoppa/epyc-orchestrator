@@ -86,6 +86,11 @@ def _should_think_harder(ctx: Ctx, error_category: ErrorCategory) -> bool:
     cfg = ctx.deps.config
     state = ctx.state
 
+    from src.graph.decision_gates import _regeneration_cap_reached
+
+    if _regeneration_cap_reached(ctx):
+        return False
+
     # Format/schema errors: just retry, don't think harder
     if (
         error_category in cfg.no_escalate_categories

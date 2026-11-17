@@ -37,6 +37,15 @@ def _make_task_manager():
 # ---------------------------------------------------------------------------
 
 
+def _default_max_regenerations() -> int:
+    import os
+
+    try:
+        return max(0, int(os.environ.get("ORCHESTRATOR_REPL_MAX_REGENERATIONS", "8")))
+    except ValueError:
+        return 8
+
+
 @dataclass
 class GraphConfig:
     """Configuration for the orchestration graph.
@@ -48,6 +57,10 @@ class GraphConfig:
     max_retries: int = 2
     max_escalations: int = 2
     max_turns: int = 15
+    max_regenerations: int = field(default_factory=lambda: _default_max_regenerations())
+    """Task-wide cap on REPL turns that failed and made the model regenerate code
+    (any role). 0 disables. Env: ORCHESTRATOR_REPL_MAX_REGENERATIONS (default 8).
+    Complements max_retries (consecutive, per role) which resets on escalation."""
     optional_gates: frozenset[str] = field(
         default_factory=lambda: frozenset({"typecheck", "integration", "shellcheck"})
     )
@@ -87,6 +100,7 @@ class TaskState:
     context: str = ""
     current_role: Role | str = Role.FRONTDOOR
     consecutive_failures: int = 0
+    total_repl_failures: int = 0
     consecutive_nudges: int = 0
     escalation_count: int = 0
     role_history: list[str] = field(default_factory=list)

@@ -2371,6 +2371,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         trajectory_log_events=_trajectory_log_events(deps, _exploration_baseline),
         **_verbatim_result,
     )
+    if result.error and not result.is_final:
+        state.total_repl_failures += 1  # regeneration budget (decision_gates._regeneration_cap_reached)
     return output, result.error if result.error else None, result.is_final, artifacts
 
 

@@ -58,6 +58,12 @@ def _is_infra_failure(artifacts: dict) -> bool:
     return bool(artifacts.get("_infra_failure"))
 
 
+def _regeneration_cap_reached(ctx: Ctx) -> bool:
+    """True when the task-wide failed-turn budget (code regenerations) is spent."""
+    cap = getattr(ctx.deps.config, "max_regenerations", 0)
+    return isinstance(cap, int) and cap > 0 and ctx.state.total_repl_failures >= cap
+
+
 def _should_escalate(
     ctx: Ctx,
     error_category: ErrorCategory,
@@ -66,6 +72,11 @@ def _should_escalate(
     """Determine if we should escalate (vs retry or fail)."""
     cfg = ctx.deps.config
     state = ctx.state
+
+    if _regeneration_cap_reached(ctx):
+        log.warning("Regeneration cap (%d failed turns) reached; refusing escalation",
+                    state.total_repl_failures)
+        return False
 
     # Format errors never escalate
     if error_category in cfg.no_escalate_categories:
@@ -129,6 +140,8 @@ def _should_retry(ctx: Ctx, error_category: ErrorCategory) -> bool:
     # infra path (e.g., repeated 90s frontdoor timeouts). Fail fast so
     # escalation/benchmark logic can move on.
     if error_category == ErrorCategory.TIMEOUT:
+        return False
+    if _regeneration_cap_reached(ctx):
         return False
     cfg = ctx.deps.config
     return ctx.state.consecutive_failures < cfg.max_retries
