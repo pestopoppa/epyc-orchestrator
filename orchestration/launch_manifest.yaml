@@ -987,8 +987,9 @@ aux_services:
     # (common.py r4-holdout argv), verbatim except --host/--port/--alias:
     #   -np 1 -c 8192 -t 24 --flash-attn on --device none -ngl 0
     # 2026-11-17 page parallelism: -np 4 -c 32768 (= 4 x the validated 8192 per slot).
-    # Probe /mnt/raid0/llm/tmp/lighton-np4-probe-20261117/result-np4.json: 3 dense pages
-    # serial 145.6 s vs parallel 75.4 s (1.93x), output byte-identical per page at T=0.
+    # Probe /mnt/raid0/llm/tmp/lighton-np4-probe-20261117/result-np4-nocache.json (cache_prompt
+    # off): 3 dense pages serial 147.6 s vs parallel 119.0 s (1.24x), byte-identical at T=0.
+    # (An earlier 1.93x reading reused the serial pass's prompt cache and is void.)
     # The client sends ORCHESTRATOR_PDF_LIGHTON_CONCURRENCY (=4, orchestrator_stack.py) pages at once.
     # Weights pinned by sha256 (precond of the same row):
     #   LightOnOCR-2-1B-bbox-F16.gguf        7e2234e1d6f44ac41f086a5a7f654be7802ba5e363095b8b7a2abe69dacbf431

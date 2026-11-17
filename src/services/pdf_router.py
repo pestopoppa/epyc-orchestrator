@@ -161,6 +161,33 @@ class PDFExtractionResult:
     # Phase 2 ODL JSON path (None unless ORCHESTRATOR_ODL_STRUCTURED=1 and ODL ran).
     # Type lazily resolved to avoid bloating the import chain — see _build_structured_result().
     structured_data: object | None = None
+    # 1-based page -> text, filled by the LightOnOCR / LiteParse route so callers keep page structure.
+    page_texts: dict[int, str] = field(default_factory=dict)
+
+
+_LIGHTON_FIG_RE = None
+
+
+def figures_from_lighton_pages(page_texts: dict[int, str]) -> list[ExtractedFigure]:
+    """Figure boxes from LightOnOCR-2-bbox markup ``![image](image_N.png)x0,y0,x1,y1``.
+
+    The model emits coordinates normalized to 0-1000 per page; returned boxes are 0-1.
+    """
+    import re
+
+    global _LIGHTON_FIG_RE
+    if _LIGHTON_FIG_RE is None:
+        _LIGHTON_FIG_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)\s*(\d+),(\d+),(\d+),(\d+)")
+    figures: list[ExtractedFigure] = []
+    for page in sorted(page_texts):
+        for m in _LIGHTON_FIG_RE.finditer(page_texts[page] or ""):
+            x0, y0, x1, y1 = (min(max(int(v), 0), 1000) / 1000.0 for v in m.groups())
+            if x1 <= x0 or y1 <= y0:
+                continue
+            figures.append(ExtractedFigure(
+                index=len(figures) + 1, bbox=BoundingBox(x0=x0, y0=y0, x1=x1, y1=y1, page=page)
+            ))
+    return figures
 
 
 class PDFRouter:
@@ -1026,6 +1053,7 @@ class PDFRouter:
         except httpx.HTTPError as exc:
             logger.warning("LightOnOCR endpoint unavailable for %s: %s", pdf_path.name, exc)
             raise LightOnOCRError(f"LightOnOCR endpoint unavailable: {exc}") from exc
+        self._last_page_texts = {i + 1: t for i, t in enumerate(texts)}
         text = "\n\n".join(texts)
         if not text.strip():
             raise LightOnOCRError(f"LightOnOCR returned empty text for {pdf_path.name}")
@@ -1041,8 +1069,13 @@ class PDFRouter:
                 "this document to LiteParse; install liteparse==2.12"
             ) from exc
         start = time.perf_counter()
-        text = LiteParse(output_format="markdown").parse(str(pdf_path)).text
-        return text, (time.perf_counter() - start) * 1000
+        parsed = LiteParse(output_format="markdown").parse(str(pdf_path))
+        pages: dict[int, str] = {}
+        for idx, page in enumerate(getattr(parsed, "pages", None) or []):
+            num = int(getattr(page, "page_num", 0) or idx + 1)
+            pages[num] = getattr(page, "markdown", None) or getattr(page, "text", "") or ""
+        self._last_page_texts = pages
+        return parsed.text, (time.perf_counter() - start) * 1000
 
     async def _extract_routed_lighton(
         self, pdf_path: Path, page_count: int, extract_figures: bool, save_figures: bool,
@@ -1052,12 +1085,17 @@ class PDFRouter:
 
         PdftotextError from the feature probe propagates (fail closed).
         """
+        self._last_page_texts = {}
         pt_text, _ = self._extract_with_pdftotext(pdf_path)
         quality_score, needs_ocr = self._assess_text_quality(pt_text)
         needs_ocr = bool(needs_ocr or not pt_text)
         if needs_ocr:
             text, _lat = await self._extract_with_lighton_server(pdf_path)
-            method, figures = "lightonocr-2-1b", []
+            method = "lightonocr-2-1b"
+            figures = (
+                figures_from_lighton_pages(getattr(self, "_last_page_texts", {}) or {})
+                if extract_figures else []
+            )
         else:
             text, _lat = self._extract_with_liteparse(pdf_path)
             if not text or not text.strip():
@@ -1070,9 +1108,11 @@ class PDFRouter:
                 figures = self._extract_figures_pymupdf(pdf_path, out)
         total_latency = (time.perf_counter() - total_start) * 1000
         logger.info("PDF routed (needs_ocr=%s) via %s: %d chars", needs_ocr, method, len(text))
+        page_texts = dict(getattr(self, "_last_page_texts", {}) or {})
         return PDFExtractionResult(
-            text=text, figures=figures, page_count=page_count, method=method,
+            text=text, figures=figures, page_count=max(page_count, len(page_texts)), method=method,
             quality_score=quality_score, latency_ms=total_latency, ocr_required=needs_ocr,
+            page_texts=page_texts,
         )
 
     async def extract(

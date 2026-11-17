@@ -83,7 +83,9 @@ def _ocr_result_from_pdf_extraction(result: object) -> OCRResult:
     # Per-page text from the ODL element tree. Without it every page's text
     # lands on page 1 and the page count falls back to PyMuPDF, which is not
     # installed in the orchestrator venv: one flat page per document.
-    page_texts: dict[int, str] = dict(getattr(structured, "page_texts", None) or {})
+    page_texts: dict[int, str] = dict(
+        getattr(structured, "page_texts", None) or getattr(result, "page_texts", None) or {}
+    )
     page_count = max(
         int(getattr(result, "page_count", 0) or 0),
         int(getattr(structured, "page_count", 0) or 0),
