@@ -13,7 +13,19 @@ sinks:
   src/api/routes/chat_pipeline/scout_stage.py::prefill_trunk: {kind: post, reason: "scout prefill, same assembler"}
   src/api/routes/chat_vision.py::_handle_vision_request: {kind: post, reason: "VL request, OCR/tool text neutralised in chat_vision"}
   src/api/routes/chat_vision.py::_vision_react_mode_answer: {kind: post, reason: "VL react mode, same module"}
-  src/api/routes/openai_compat.py::_client_usage: {kind: reference, reason: "usage object type string, no prompt"}
+  src/aggregation/llm_backend.py::__init__: {kind: post, reason: "AGG-layer backend: builds the caller's own llama-server /v1/chat/completions URL; the prompt is the fixed extraction/planner template over document text, sent by chat() with cache_prompt and a deterministic seed"}
+  src/api/routes/chat_pipeline/scout_stage.py::_record_scout_call: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record (endpoint string), no prompt leaves here"}
+  src/api/routes/chat_vision.py::_record_vl_call: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record (endpoint string), no prompt leaves here"}
+  src/backends/llama_server.py::_record_infer_stream: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for infer_stream (endpoint string), no prompt leaves here"}
+  src/harness_loop/transport.py::<module>: {kind: table, reason: "V1_CHAT_PATH constant of the HIL-6 sibling-loop transport seam: build-only, tests inject fakes, nothing here runs a request (module docstring)"}
+  src/services/pdf_router.py::_lighton_ocr_page: {kind: post, reason: "LightOnOCR-2-1B page OCR: the only model input is a rendered page PNG (image_url data URI) with no text prompt, so there is no untrusted text to neutralise; output is document text that re-enters the pipeline as untrusted, like every other OCR result"}
+  src/services/worker_pool.py::_record_worker_completion: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for a worker-pool /completion call (endpoint string), no prompt leaves here"}
+  src/structured_output/repair.py::_record_repair_call: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for a repair turn (endpoint string), no prompt leaves here"}
+  src/tools/web/research.py::_record_worker_synthesis: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for web synthesis (endpoint string), no prompt leaves here"}
+  src/trace/attribution/judge.py::__call__: {kind: post, reason: "offline trace-attribution judge over recorded traces (operator-run analysis tooling, not a serving path)"}
+  src/typed_decisions/decision_backend_pin.py::capture_running_backend_pin: {kind: reference, reason: "backend-pin proof record: the /completion endpoint string of the running server, no prompt"}
+  src/typed_decisions/decision_backend_pin.py::llm_call: {kind: post, reason: "typed-decision JSON /completion transport; the prompt is the fixed decision template over the closed-set question and state (TD plane, grammar-constrained answer)"}
+  src/vision/analyzers/vl_describe.py::_record_server_call: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for the VL describe call (endpoint string), no prompt leaves here"}
   src/api/routes/openai_compat.py::openai_chat_completions: {kind: route, reason: "OpenAIChatRequest messages neutralised (CT-12.3a)"}
   src/api/routes/passthrough.py::<module>: {kind: table, reason: "passthrough path map; raw llama-server surface behind the gate"}
   src/api/routes/passthrough.py::passthrough_chat_completions: {kind: route, reason: "raw passthrough route, operator-gated"}
