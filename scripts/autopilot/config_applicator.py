@@ -56,7 +56,6 @@ HOT_SWAP_FEATURES = {
     "routing_classifier", "staged_rewards", "session_compaction",
     "try_cheap_first", "long_context", "web_search", "web_research",
     "cascading_tool_policy", "factual_risk",
-    "repl_child_lane",  # D-RI-CONTAIN-T2: contained REPL child lane (zero-restart opt-in)
     # Tier 3 promotions 2026-05-20: opt-in via StructuralLab's flag-mutation
     # pool. All three were previously default-off and required hand-rolled
     # experiments per the rlm-orchestrator-roadmap.md R6 candidate matrix.

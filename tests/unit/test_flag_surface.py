@@ -448,7 +448,7 @@ def test_flags_are_on_the_autopilot_hot_swap_surface_except_pinned_security_flag
     from scripts.autopilot.config_applicator import HOT_SWAP_FEATURES, classify_params
     from scripts.autopilot.species.structural_lab import PINNED_OBSERVE_ONLY_FLAGS
 
-    assert PINNED_OBSERVE_ONLY_FLAGS == {"exec_containment", "untrusted_tool_text"}
+    assert PINNED_OBSERVE_ONLY_FLAGS == {"exec_containment", "untrusted_tool_text", "repl_child_lane"}
     for name in NEW_FLAGS:
         if name in PINNED_OBSERVE_ONLY_FLAGS:
             assert name not in HOT_SWAP_FEATURES
@@ -503,7 +503,7 @@ def test_planner_flag_block_names_the_pinned_flags():
 
     lab = SimpleNamespace(current_flags=lambda: {"tool_selector": False}, flag_schema=lambda: [{"name": "tool_selector", "dependencies": []}])
     block = ap._build_feature_flags_block(lab)
-    assert "Pinned observe-only security flags: exec_containment, untrusted_tool_text" in block
+    assert "Pinned observe-only security flags: exec_containment, repl_child_lane, untrusted_tool_text" in block
 
 
 def test_exec_containment_still_runtime_toggleable_by_a_human_post():

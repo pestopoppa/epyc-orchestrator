@@ -745,7 +745,7 @@ def test_flag_is_in_the_autopilot_hot_swap_set_and_program_md_and_spec():
     root = Path(__file__).resolve().parents[2]
     ns: dict = {}
     src = (root / "scripts/autopilot/config_applicator.py").read_text()
-    assert '"repl_child_lane",' in src
+    assert '"repl_child_lane",' not in src  # pinned observe-only until the lane brokers the full tool surface
     prog = (root / "scripts/autopilot/program.md").read_text()
     tier2 = prog.split("### Tier 2")[1].split("### Tier 3")[0]
     assert "`repl_child_lane`" in tier2 and "POST /config" in tier2
