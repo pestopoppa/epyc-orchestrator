@@ -605,14 +605,17 @@ class REPLEnvironment(
         self._count_tool_calls(globals_dict)
         return globals_dict
 
-    # Per-snippet tool-call budget (matches Monty's default of 100; 0 disables).
+    # Per-snippet tool-call budget (0 disables). Default 1000, not Monty's 100: code
+    # mode's point is one snippet looping over a batch (e.g. 200 items x read+write),
+    # and every REPL helper is charged, so 100 would truncate exactly those jobs.
+    # 1000 still stops runaway loops; the wall-clock deadline is the hard bound.
     # Env: ORCHESTRATOR_REPL_MAX_TOOL_CALLS.  Reset at the start of every execute().
     @staticmethod
     def _max_tool_calls() -> int:
         try:
-            return max(0, int(os.environ.get("ORCHESTRATOR_REPL_MAX_TOOL_CALLS", "100")))
+            return max(0, int(os.environ.get("ORCHESTRATOR_REPL_MAX_TOOL_CALLS", "1000")))
         except ValueError:
-            return 100
+            return 1000
 
     def _charge_tool_call(self, name: str) -> None:
         cap = self._max_tool_calls()

@@ -23,13 +23,13 @@ def test_budget_resets_per_snippet_and_under_cap_ok(monkeypatch):
         assert env.execute("for i in range(5):\n    context_len()\n").error is None
 
 
-def test_default_100_and_disable(monkeypatch):
+def test_default_1000_and_disable(monkeypatch):
     monkeypatch.delenv("ORCHESTRATOR_REPL_MAX_TOOL_CALLS", raising=False)
-    assert REPLEnvironment._max_tool_calls() == 100
-    res = _env().execute("for i in range(101):\n    context_len()\n")
+    assert REPLEnvironment._max_tool_calls() == 1000
+    res = _env().execute("for i in range(1001):\n    context_len()\n")
     assert res.error and "Tool-call budget exceeded" in res.error
     monkeypatch.setenv("ORCHESTRATOR_REPL_MAX_TOOL_CALLS", "0")
-    assert _env().execute("for i in range(150):\n    context_len()\n").error is None
+    assert _env().execute("for i in range(1500):\n    context_len()\n").error is None
 
 
 def test_final_not_charged(monkeypatch):
