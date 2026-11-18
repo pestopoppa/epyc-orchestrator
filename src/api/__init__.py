@@ -153,6 +153,22 @@ async def lifespan(app: FastAPI):
         state.tool_registry, f, registry_cls=get_script_registry_class(), log=logger
     )
 
+    # Tool picker (ORCHESTRATOR_TOOL_SELECTOR, default off): register the pooled-embedder providers. Flag-guarded and
+    # try/except so the API starts even if the picker cannot be wired.
+    try:
+        from src.prompt_builders.tool_selector import wire_default_providers
+
+        _registry = state.tool_registry
+        _picker = wire_default_providers(
+            tools_source=(lambda: _registry.list_tools()) if _registry is not None else None,
+        )
+        if _picker.get("wired"):
+            logger.info("tool picker wired: %s", _picker)
+        elif _picker.get("reason") != "flag_off":
+            logger.warning("tool picker not wired: %s", _picker)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tool picker wiring skipped: %s", exc)
+
     # Preflight check for knowledge tools (warn only, don't block startup)
     if f.tools:
         from src.api.routes.health import _check_knowledge_tools
