@@ -54,11 +54,13 @@ class MockLLM:
     def __init__(self, task: Task, world: World, seed: int):
         self.task, self.world, self.seed, self.turn = task, world, seed, 0
         self.usage_total = {"prompt_tokens": 0, "completion_tokens": 0}
+        self.offered: set[str] = set()
 
     def chat(self, messages, *, tools=None, max_tokens=0, seed=0, json_schema=None) -> Reply:
         self.turn += 1
         plen = sum(len(str(m.get("content") or "")) for m in messages)
         if tools:
+            self.offered = {x["function"]["name"] for x in tools}
             r = self._a_turn(messages)
         else:
             r = self._repl_turn()
@@ -68,6 +70,7 @@ class MockLLM:
     def _a_turn(self, messages) -> Reply:
         t, w = self.task, self.world
         calls: list[tuple[str, dict[str, Any]]] = []
+        offered = self.offered
         if self.turn == 1:  # discovery + reads
             if t.tier == "novel":
                 calls.append(("list_tools", {}))
@@ -76,19 +79,21 @@ class MockLLM:
             elif t.tier == "static":
                 calls.append(("peek", {"n": 100000, "file_path": "data/orders.csv"}))
             else:
-                calls.append(("call_tool", {"name": "read_file", "arguments": {"path": "data/series.json" if t.family == "N-STAT" else "data/orders.csv"}}))
+                _rp = {"path": "data/series.json" if t.family == "N-STAT" else "data/orders.csv"}
+                calls.append(("read_file", _rp) if "read_file" in offered else ("call_tool", {"name": "read_file", "arguments": _rp}))
         elif self.turn == 2:  # lookups
             if t.family == "N-CSV":
                 for sku in sorted({ln.split(",")[1] for ln in w.path("data/orders.csv").read_text().splitlines()[1:]}):
-                    calls.append(("call_tool", {"name": "syn_sku_price", "arguments": {"sku": sku}}))
+                    calls.append(("syn_sku_price", {"sku": sku}) if "syn_sku_price" in offered else ("call_tool", {"name": "syn_sku_price", "arguments": {"sku": sku}}))
             elif t.family == "N-QUOTE":
-                calls.append(("call_tool", {"name": "syn_sku_price", "arguments": {"sku": t.expected["sku"]}}))
+                calls.append(("syn_sku_price", {"sku": t.expected["sku"]}) if "syn_sku_price" in offered else ("call_tool", {"name": "syn_sku_price", "arguments": {"sku": t.expected["sku"]}}))
             elif t.family == "N-STAT":
-                calls.append(("call_tool", {"name": "statistics", "arguments": {"data": json.loads(w.path("data/series.json").read_text()), "metrics": ["mean", "max"]}}))
+                _sa = {"data": json.loads(w.path("data/series.json").read_text()), "metrics": ["mean", "max"]}
+                calls.append(("statistics", _sa) if "statistics" in offered else ("call_tool", {"name": "statistics", "arguments": _sa}))
         elif self.turn == 3:  # writes
             writes = _solve_calls(t, w)
             for name, args in writes:
-                calls.append((name, args) if name == "file_write_safe" else ("call_tool", {"name": name, "arguments": args}))
+                calls.append((name, args) if (name == "file_write_safe" or name in offered) else ("call_tool", {"name": name, "arguments": args}))
             if self.seed % 3 == 1 and calls:  # injected duplicate write
                 calls.append(calls[0])
             if self.seed % 5 == 0:  # injected wrong-argument call

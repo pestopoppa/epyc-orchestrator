@@ -871,6 +871,21 @@ class REPLEnvironment(
                     'CALL("run_python_code", code=your_code_string, stdin_data=test_input) '
                     "to test it, then FINAL(your_code_string) to submit."
                 )
+            from src.prompt_builders.codemode_prompt import prompt_v2_enabled
+
+            if prompt_v2_enabled():  # ORCHESTRATOR_CODEMODE_PROMPT=v2: hints that match the sandbox contract (no run_python_code, real signatures)
+                _fn = violation.split("(")[0].strip()
+                hints = {
+                    "open": " Hint: read files with read_file(path) or peek(n, file_path=path); write with file_write_safe(path, content).",
+                    "eval": " Hint: eval/exec/compile are blocked; write the code directly.",
+                    "exec": " Hint: eval/exec/compile are blocked; write the code directly.",
+                    "compile": " Hint: eval/exec/compile are blocked; write the code directly.",
+                    "getattr": " Hint: getattr/hasattr/setattr/dir/vars are blocked; use dict.get(key) or try/except.",
+                    "hasattr": " Hint: getattr/hasattr/setattr/dir/vars are blocked; use dict.get(key) or try/except.",
+                    "dir": " Hint: dir() is blocked; use list_tools() / list_dir(path) to explore.",
+                    "vars": " Hint: dir/vars/globals/locals are blocked; use list_tools() / list_dir(path) to explore.",
+                    "input": " Hint: input() is not available; the task input is the variable `context`.",
+                }.get(_fn, " Hint: see the SANDBOX CONTRACT in the prompt for the blocked names and the allowed helpers.")
             raise REPLSecurityError(
                 f"Dangerous operation not allowed: {violation}.{hints}"
             )

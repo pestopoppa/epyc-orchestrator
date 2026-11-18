@@ -4,6 +4,7 @@
     run_probe.py --out OUT --model-id ID --url http://127.0.0.1:PORT --embed-url http://127.0.0.1:PORT2 --embed-id ID
     run_probe.py --mock --out OUT [--limit N]          # no model, no server: scripted solver (smoke)
     run_probe.py --dry-run --out OUT                   # prints the plan only, writes nothing
+    run_probe.py ... --arm-set v2                      # probe v2: A,B (reused controls) + A_pick,B1,B2,C3 (PREDECLARED_v2.md)
 
 Stages (predeclared in PREDECLARED.md): 1 = singles + N in {5,20}; 2 = N=50; 3 = N in {100,200}.
 After stage 1 and 2 the futility / descriptive-answer gates of ``score.evaluate`` are applied; a stop writes
@@ -22,8 +23,8 @@ from pathlib import Path
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ORCH_ROOT))
 
-from scripts.benchmark.codemode_ab import score  # noqa: E402
-from scripts.benchmark.codemode_ab.arms import ARMS, K_SELECTED, run_episode  # noqa: E402
+from scripts.benchmark.codemode_ab import score, score_v2  # noqa: E402
+from scripts.benchmark.codemode_ab.arms import ARMS, ARMS_V1, ARMS_V2, K_SELECTED, run_episode  # noqa: E402
 from scripts.benchmark.codemode_ab.tasks import STAGES, build_tasks  # noqa: E402
 from scripts.benchmark.codemode_ab.world import GROUP_DESC, World  # noqa: E402
 
@@ -45,6 +46,18 @@ class Out:
             fh.write(json.dumps({"mode": self.mode, "at": now(), **rec}, default=str) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
+
+    def transcript(self, uid: str, turns: list) -> str:
+        """Full per-turn transcript of one episode -> ``transcripts/<uid>.jsonl`` (one JSON object per turn). Returns the relative path."""
+        d = self.dir / "transcripts"
+        d.mkdir(parents=True, exist_ok=True)
+        name = uid.replace("|", "__").replace("/", "_") + ".jsonl"
+        with (d / name).open("w", encoding="utf-8") as fh:
+            for t in turns:
+                fh.write(json.dumps(t, default=str) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        return f"transcripts/{name}"
 
     def done(self) -> set[str]:
         s: set[str] = set()
@@ -73,7 +86,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--embed-url")
     ap.add_argument("--embed-id", default="bge-large-en-v1.5")
     ap.add_argument("--seeds", default="0,1,2")
-    ap.add_argument("--arms", default=",".join(ARMS))
+    ap.add_argument("--arms", default=",".join(ARMS_V1))
+    ap.add_argument("--arm-set", choices=("v1", "v2"), help="v2 = A,B,A_pick,B1,B2,C3 (overrides --arms)")
     ap.add_argument("--stages", default="1,2,3")
     ap.add_argument("--limit", type=int, default=0, help="smoke: stop after N units")
     ap.add_argument("--mock", action="store_true")
@@ -83,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     seeds = [int(x) for x in a.seeds.split(",")]
     arms = tuple(x for x in a.arms.split(",") if x)
+    if a.arm_set == "v2":
+        arms = ("A", "B") + ARMS_V2
+    bad = [x for x in arms if x not in ARMS]
+    if bad:
+        print(f"unknown arm(s): {bad}; known: {ARMS}", file=sys.stderr)
+        return 3
     stages = [int(x) for x in a.stages.split(",")]
     units = plan(seeds, arms, stages)
     if a.dry_run:
@@ -104,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     stopf = os.environ.get("FILLER_STOPFILE", "")
     deadline = int(os.environ.get("FILLER_DEADLINE", "0"))
     template = World(work / "template", ORCH_ROOT)
+    os.environ.setdefault("ORCHESTRATOR_TOOL_SELECTOR_LOG", str(out.dir / "picker_events.jsonl"))
     selectors = build_selectors(a, template, out)
+    register_native_picker(selectors, template)
     done = out.done()
     cat_uid = f"{a.model_id}|catalog"
     if not any(json.loads(ln).get("unit_id") == cat_uid for ln in (out.res.read_text().splitlines() if out.res.exists() else []) if ln.strip()):
@@ -138,6 +160,9 @@ def main(argv: list[str] | None = None) -> int:
             rec = {"arm": arm, "task_id": tid, "family": task.family, "n": task.n, "seed": seed, "tier": task.tier, "stage": st,
                    "success": False, "in_tokens": 0, "out_tokens": 0, "end_reason": f"llm_error:harness:{type(exc).__name__}:{exc}"[:200],
                    "wall_s": 0.0, "turns": 0, "failed_snippet_rate": 0.0, "param_accuracy": None, "duplicate_writes": 0}
+        tr = rec.pop("_transcript", None)
+        if tr is not None:  # every episode gets a transcript file; a harness crash (no transcript) is caught by smoke_check_v2
+            rec["transcript_path"] = out.transcript(uid, tr)
         out.append({"kind": "episode", "unit_id": uid, "model": a.model_id, **rec})
         n_run += 1
         if a.limit and n_run >= a.limit:
@@ -147,6 +172,22 @@ def main(argv: list[str] | None = None) -> int:
     (out.dir / "TERMINAL.json").write_text(json.dumps({"state": "complete", "mode": out.mode, "at": now()}))
     out.append({"kind": "terminal", "unit_id": f"{a.model_id}|terminal", "state": "complete"})
     return 0
+
+
+def register_native_picker(selectors: dict, template: World) -> None:
+    """Arm A_pick runs the PRODUCTION native picker: register the C1 embedder as its provider and warm the memoised selector once
+    (cold document embedding must not eat the 500 ms budget of the first episode)."""
+    emb = selectors.get("embedder")
+    if emb is None:
+        return
+    from src.prompt_builders import tool_selector as ts
+    from scripts.benchmark.codemode_ab.arms import openai_tool
+
+    ts.set_native_selector_provider(ts.make_native_provider("embed", embedder=emb))
+    from src.prompt_builders.tool_picker import memoised_embedding_selector
+
+    dicts = [d for d in (ts.openai_tool_to_dict(openai_tool(t)) for t in template.tool_dicts()) if d]
+    memoised_embedding_selector(emb, dicts)
 
 
 def build_selectors(a: argparse.Namespace, template: World, out: Out) -> dict:
@@ -159,16 +200,20 @@ def build_selectors(a: argparse.Namespace, template: World, out: Out) -> dict:
 
         kw = {"files": ["director", "file", "json", "csv", "read"], "data_formats": ["json", "csv"], "catalog": ["price", "sku"],
               "ledger": ["ledger", "post"], "math_stats": ["statistics", "mean"]}
-        return {"C1": EmbeddingToolSelector(MockEmbedder(), tools),
+        emb = MockEmbedder()
+        return {"C1": EmbeddingToolSelector(emb, tools), "embedder": emb,
                 "C2": OneShotToolSelector(MockPrimitives(kw), tools, template.groups, GROUP_DESC), "llm": None}
     llm = HttpLLM(a.url, a.model_id)
-    return {"C1": EmbeddingToolSelector(HttpEmbedder(a.embed_url, a.embed_id), tools),
+    emb = HttpEmbedder(a.embed_url, a.embed_id)
+    return {"C1": EmbeddingToolSelector(emb, tools), "embedder": emb,
             "C2": OneShotToolSelector(llm, tools, template.groups, GROUP_DESC), "llm": llm}
 
 
 def gate(out: Out, stage: int, model: str, final: bool = False) -> bool:
     """Interim look after ``stage``; True = a predeclared stop fired (TERMINAL written)."""
-    res = score.evaluate(score.load(out.res) if out.mode == "full" else [r for r in _smoke_records(out)], stage)
+    recs = score.load(out.res) if out.mode == "full" else [r for r in _smoke_records(out)]
+    scorer = score_v2 if any(r.get("arm") in ARMS_V2 for r in recs) else score
+    res = scorer.evaluate(recs, stage)
     gate_rec = {"kind": "gate", "unit_id": f"{model}|gate|stage{stage}", "stage": stage, "interim": res["interim"], "final": final}
     out.append(gate_rec)
     if final or stage >= 3:

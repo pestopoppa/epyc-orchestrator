@@ -85,3 +85,18 @@ def test_v2_example_is_valid_python_and_passes_the_ast_guard(monkeypatch):
     v = ASTSecurityVisitor()
     v.visit(tree)
     assert not v.violations
+
+
+def _refusal(code: str) -> str:
+    from src.repl_environment.environment import REPLEnvironment
+
+    return REPLEnvironment(context="").execute(code).error or ""
+
+
+def test_refusal_hints_unchanged_when_off_and_contract_shaped_when_v2(monkeypatch):
+    legacy = _refusal("x = open('a')")
+    assert "peek(path)" in legacy  # the wrong-signature hint production gives today
+    monkeypatch.setenv(cp.ENV_PROMPT, "v2")
+    v2 = _refusal("x = open('a')")
+    assert "read_file(path)" in v2 and "peek(n, file_path=path)" in v2 and "peek(path)" not in v2
+    assert "dict.get" in _refusal("y = getattr(a, 'b')") and "run_python_code" not in _refusal("z = eval('1')")

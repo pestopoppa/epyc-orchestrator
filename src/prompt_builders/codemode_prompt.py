@@ -63,7 +63,7 @@ llm_call(prompt, role='worker') → sub-LM call (keep prompt short)
 escalate(reason, target_role=None) → hand off to higher tier
 FINAL(answer) → signal task completion (REQUIRED for every task)
 CALL(name, **kw) → invoke any registered tool, returns JSON string; TOOL(name, **kw) → returns a Python object
-list_tools() → discover ALL available tools and their schemas"""
+list_tools() → [{name, description}] for ALL tools; it is long, so print only names: print([t["name"] for t in list_tools()])"""
 
 
 V2_SYSTEM = """Simple questions: FINAL("answer") immediately. No code, no tools. Follow ALL user formatting constraints exactly.

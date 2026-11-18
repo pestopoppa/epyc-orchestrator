@@ -412,7 +412,8 @@ def select_native_tools_ex(
             tp.maybe_shadow_rerank(req_id, query, dicts, res.picks, cfg.k_max, environ)
             LAST_NATIVE_SELECTION.clear()
             LAST_NATIVE_SELECTION.update(variant=variant, k=res.k_eff, n_in=len(tools), n_out=len(sent_now), selected=list(res.picks),
-                                         fallback=res.rung if res.rung not in ("none", "widen") else None, mode=res.mode, core=res.core)
+                                         fallback=res.rung if res.rung not in ("none", "widen") else None, mode=res.mode, core=res.core,
+                                         rung=res.rung, elapsed_ms=res.elapsed_ms)
         if frozen.mode == "full":
             return tools, None
         history = sorted(_history_tool_names(messages))
