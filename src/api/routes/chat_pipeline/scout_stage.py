@@ -177,6 +177,12 @@ SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv", "
                        ".ccache", "CMakeFiles"})
 _SKIP_DIR_PREFIXES = ("build",)
 _EVIDENCE_RE = re.compile(r"[\w./+-]+\.[A-Za-z]{1,5}:\d+")
+#: OAB-17 F15: `_EVIDENCE_RE` backtracks quadratically on a long run of word characters, so
+#: the count is taken over a bounded prefix of the summary, never the whole reply.
+EVIDENCE_SCAN_CHARS = 20_000
+#: OAB-17 F15: the scout block is bounded as a whole (worst case was ~37K tokens): each
+#: summary is trimmed to its share of this budget, with a marker, past it.
+BLOCK_MAX_CHARS = 48_000
 _THINK_RE = re.compile(r"<think>.*?(</think>|$)", re.DOTALL)
 _ARCH_DIRS = {"x86_64": {"x86", "x86_64", "amd64", "avx2", "avx512"},
               "aarch64": {"arm", "arm64", "aarch64", "neon"}}
@@ -693,7 +699,7 @@ def run_scout(index: int, target: ScoutTarget, *, reader: ScopedReader,
                 if len(summary) > summary_cap:
                     summary = summary[:summary_cap] + "\n[… summary clipped]"
                 result.summary = summary
-                result.evidence_refs = len(_EVIDENCE_RE.findall(summary))
+                result.evidence_refs = len(_EVIDENCE_RE.findall(summary[:EVIDENCE_SCAN_CHARS]))
                 result.status = "ok" if summary.strip() else "no_summary"
                 return result
             messages.append({"role": "assistant",
@@ -1256,7 +1262,11 @@ def render_block(results: list[ScoutResult], *, role: str, cap: int) -> str:
         if r.summary:
             out.append(f"{head} [status {r.status}; {size:,} chars, "
                        f"~{max(1, size // SUMMARY_CHARS_PER_TOKEN):,} tokens; {r.turns} turns]")
-            out.append(r.summary.strip())
+            body = r.summary.strip()
+            share = max(1_000, BLOCK_MAX_CHARS // max(1, len(ran)))
+            if len(body) > share:
+                body = body[:share] + f"\n…[trimmed {len(body) - share:,} chars: block cap]"
+            out.append(body)
         else:
             reason = r.error or r.status
             out.append(f"{head} [status {r.status}; no summary: {reason}]")
