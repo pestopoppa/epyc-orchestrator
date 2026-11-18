@@ -190,6 +190,10 @@ def test_api_request_entry_points_are_wrapped():
     import src.api.routes.chat as chat
 
     assert "@closes_lanes\n    async def generate()" in inspect.getsource(chat)
+    import src.api.routes.openai_compat as oc
+
+    assert hasattr(oc.openai_chat_completions, "__wrapped__")
+    assert "@closes_lanes\n        async def generate_stream()" in inspect.getsource(oc)
 
 
 # ── item 2: the real session lease and fencing ───────────────────────────────

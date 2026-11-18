@@ -62,6 +62,7 @@ from src.registry.stack_priors import (
     stack_prior_serving,
 )
 from src.repl_environment import REPLEnvironment
+from src.repl_environment.child_lane import closes_lanes
 from src.exceptions import AdmissionDenied, AdmissionDeniedText, ContextOverflowError
 from src.scheduling.contention_gate import ContentionDenied
 from src.roles import Role
@@ -1352,6 +1353,7 @@ def _execute_repl_turn(repl: REPLEnvironment, code: str) -> Any:
 
 
 @router.post("/chat/completions", response_model=None)
+@closes_lanes
 async def openai_chat_completions(
     request: OpenAIChatRequest,
     http_request: Request,
@@ -1554,6 +1556,7 @@ async def openai_chat_completions(
 
     if request.stream:
         # Streaming mode with real orchestration
+        @closes_lanes
         async def generate_stream() -> AsyncGenerator[str, None]:
             start_time = time.perf_counter()
             total_tokens = 0
