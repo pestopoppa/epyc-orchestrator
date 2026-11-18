@@ -18,6 +18,8 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from src.flag_env import flag_env
+
 ENV_STUBS = "ORCHESTRATOR_CODEMODE_STUBS"
 
 _PY_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool", "array": "list", "object": "dict"}
@@ -25,7 +27,7 @@ _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def stubs_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     return str(env.get(ENV_STUBS, "")).strip().lower() in ("1", "true", "on", "yes")
 
 

@@ -153,10 +153,15 @@ async def lifespan(app: FastAPI):
         state.tool_registry, f, registry_cls=get_script_registry_class(), log=logger
     )
 
-    # Tool picker (ORCHESTRATOR_TOOL_SELECTOR, default off): register the pooled-embedder providers. Flag-guarded and
-    # try/except so the API starts even if the picker cannot be wired.
+    # Tool picker (feature ``tool_selector`` / ORCHESTRATOR_TOOL_SELECTOR, default off): register the pooled-embedder providers.
+    # Flag-guarded and try/except so the API starts even if the picker cannot be wired. The tools source is kept even while the flag
+    # is off, so flipping it at runtime (POST /config) wires the providers lazily (tool_selector.ensure_providers). The C2 shadow
+    # rerank (feature ``tool_selector_shadow``) needs the decision model registered here; without it the flag never fired.
     try:
+        from src.prompt_builders import tool_picker as _tool_picker
         from src.prompt_builders.tool_selector import wire_default_providers
+
+        _tool_picker.set_shadow_primitives(state.llm_primitives)
 
         _registry = state.tool_registry
         _picker = wire_default_providers(

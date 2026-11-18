@@ -21,6 +21,8 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from src.flag_env import flag_env
+
 ENV_TURN_MEMORY = "ORCHESTRATOR_REPL_TURN_MEMORY"
 DEFAULT_PREVIEW_CHARS = 4000
 MAX_TURNS = 16
@@ -28,7 +30,7 @@ MAX_TURNS = 16
 
 def turn_memory_n(environ: Mapping[str, str] | None = None) -> int:
     """Number of prior turns to carry; 0 (default, unset, non-integer or negative) means off."""
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     try:
         n = int(str(env.get(ENV_TURN_MEMORY, "0")).strip() or "0")
     except ValueError:

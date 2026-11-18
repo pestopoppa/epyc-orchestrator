@@ -55,7 +55,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from src.env_parsing import env_bool
 
@@ -80,6 +80,25 @@ logger = logging.getLogger(__name__)
 # (validated by test_features_registry_consistency).
 
 
+def _env_in(*values: str) -> Callable[[str], bool]:
+    """``env_parse`` helper: True when the (stripped, lower-cased) env value is one of ``values``."""
+    wanted = frozenset(values)
+    return lambda raw: raw.strip().lower() in wanted
+
+
+def _env_not_in(*values: str) -> Callable[[str], bool]:
+    """``env_parse`` helper: False when the (stripped, lower-cased) env value is one of ``values``."""
+    blocked = frozenset(values)
+    return lambda raw: raw.strip().lower() not in blocked
+
+
+def _env_positive_int(raw: str) -> bool:
+    try:
+        return int(raw.strip()) > 0
+    except ValueError:
+        return False
+
+
 @dataclass(frozen=True)
 class FeatureSpec:
     """Declarative specification for a single feature flag."""
@@ -89,6 +108,18 @@ class FeatureSpec:
     env_var: str  # env var suffix (without ORCHESTRATOR_ prefix)
     description: str = ""
     dependencies: tuple[str, ...] = ()
+    # Mode-valued env vars (flag-surface, 2026-11-18). Some pre-existing ORCHESTRATOR_* knobs are read
+    # straight from os.environ and carry a MODE string (``ORCHESTRATOR_TOOL_SELECTOR=embed``), not a
+    # bool. ``env_parse`` turns the raw env string into this flag's bool (default: the 1/0/true/false
+    # parser). ``env_on`` / ``env_off`` are the env values the code path sees when a RUNTIME override
+    # (``POST /config``) turns the flag on / off; ``env_on`` is used only when the env does not already
+    # say "on" (so ``=oneshot`` survives a runtime ON). Empty ``env_on`` and ``env_off`` = the flag is
+    # read via ``features()`` and has no env overlay. See ``src/flag_env.py``.
+    env_parse: Callable[[str], bool] | None = None
+    env_on: str = ""
+    env_off: str = ""
+    # Full env var name when it is not ORCHESTRATOR_<env_var> (two flags sharing one mode var).
+    env_name: str = ""
 
 
 _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
@@ -340,6 +371,27 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # neighbour in-flight cap (src/embedding_pool/). Default OFF in BOTH test and
     # prod; with it off the factories return None and no consumer is migrated.
     FeatureSpec("repl_embedding_pool", False, False, "REPL_EMBEDDING_POOL", "UFH-12 REPL-EMB-1.1/1.4: pooled embedding client with placement-aware scheduling and the busy-frontdoor neighbour cap"),
+    # ── Flag surface (2026-11-18): codemode / tool-picker / REPL / document knobs that used to be
+    # env-only. Registering them here puts them on the autopilot manipulation surface (POST /config,
+    # StructuralLab flag trials, the planner flag block) and makes them toggle at runtime: the code
+    # paths read them through ``src.flag_env.flag_env()``, which overlays the shared runtime-flag file
+    # on ``os.environ``. With no runtime override the env value is returned untouched, so a flag that
+    # is not toggled behaves byte-identically. ``env_var`` is the ORIGINAL env name (unchanged).
+    FeatureSpec("tool_selector", False, False, "TOOL_SELECTOR", "CM-1 hardened tool picker: narrow the per-request tool list (native /v1 path + REPL prompt); ORCHESTRATOR_TOOL_SELECTOR=embed|oneshot selects the variant (runtime ON = embed); fails open to the full list; embeds through the pooled embedder, so it needs repl_embedding_pool (without it the picker is not wired and every request gets the full list)", ("repl_embedding_pool",), env_parse=_env_in("embed", "oneshot"), env_on="embed", env_off="off"),
+    FeatureSpec("tool_selector_shadow", False, False, "TOOL_SELECTOR_SHADOW", "C2 shadow rerank beside the applied picker pick (logs the one-shot decision-model choice, never applied); needs tool_selector; costs one worker call per selection", ("tool_selector",), env_parse=_env_in("oneshot"), env_on="oneshot", env_off="off"),
+    FeatureSpec("repl_explicit_final", True, True, "REPL_EXPLICIT_FINAL", "codemode fix 1: a one-line REPL tool/exploration call is never auto-wrapped as FINAL(...) (ORCHESTRATOR_REPL_EXPLICIT_FINAL unset/tools); off = legacy wrap of every single-line expression", env_parse=_env_not_in("0", "false", "off", "no"), env_on="tools", env_off="0"),
+    FeatureSpec("repl_explicit_final_strict", False, False, "REPL_EXPLICIT_FINAL_STRICT", "codemode fix 1 strict: only an obvious answer VALUE is auto-wrapped as FINAL (ORCHESTRATOR_REPL_EXPLICIT_FINAL=strict); implies repl_explicit_final", env_parse=_env_in("1", "true", "on", "yes", "strict"), env_name="ORCHESTRATOR_REPL_EXPLICIT_FINAL"),
+    FeatureSpec("repl_turn_memory", False, False, "REPL_TURN_MEMORY", "codemode fix 2: last N REPL turns of code + output/error in the root prompt (ORCHESTRATOR_REPL_TURN_MEMORY=N; runtime ON = N 4)", env_parse=_env_positive_int, env_on="4", env_off="0"),
+    FeatureSpec("codemode_prompt_v2", False, False, "CODEMODE_PROMPT", "codemode fix 3: v2 code-mode root prompt for task_root-scoped tool requests (ORCHESTRATOR_CODEMODE_PROMPT=v2)", env_parse=_env_in("v2"), env_on="v2", env_off=""),
+    FeatureSpec("codemode_stubs", False, False, "CODEMODE_STUBS", "codemode fix 4: typed Python stubs for picked tools, bound as direct REPL functions returning Python objects", env_on="1", env_off="0"),
+    FeatureSpec("repl_tool_search", False, False, "REPL_TOOL_SEARCH", "CM-2: search_tools / describe_tool in the REPL", env_on="1", env_off="0"),
+    FeatureSpec("structured_read_only", False, False, "STRUCTURED_READ_ONLY", "CM-3: ToolOutput envelope for read-only tools only (write tools keep today's shape); companion of codemode_stubs", env_on="1", env_off="0"),
+    FeatureSpec("repl_classify", False, False, "REPL_CLASSIFY", "CM-4: classify / route_classify / risk_bands / q_scores in the REPL (per-session item budget ORCHESTRATOR_REPL_CLASSIFY_BUDGET)", env_on="1", env_off="0"),
+    FeatureSpec("repl_handles", False, False, "REPL_HANDLES", "CM-5: store / load / handles (branch-replayed handle store) in the REPL; turns replay recording on by default while on", env_on="1", env_off="0"),
+    FeatureSpec("untrusted_tool_text", True, True, "UNTRUSTED_TOOL_TEXT", "SECURITY: label, defang and cap UNTRUSTED tool text before it re-enters model context (ORCHESTRATOR_UNTRUSTED_TOOL_TEXT=0 is the kill switch); autopilot pinned, observe only", env_on="1", env_off="0"),
+    FeatureSpec("repl_write_dedupe", True, True, "REPL_WRITE_DEDUPE", "REPL: an identical write call that already succeeded in this request is skipped, not re-run (ORCHESTRATOR_REPL_WRITE_DEDUPE=0 is the kill switch)", env_on="1", env_off="0"),
+    FeatureSpec("pdf_route_lighton", False, False, "PDF_ROUTE_LIGHTON", "PDF ingest: needs_ocr documents go to the LightOnOCR-2-1B aux server, the rest to LiteParse (PIP-04 held-out rule); the stack launcher sets ORCHESTRATOR_PDF_ROUTE_LIGHTON=1", env_on="1", env_off="0"),
+    FeatureSpec("l3_textrow", False, False, "L3_TEXTROW", "L3 empty-table fallback: text-row table extraction on pages with no parser table (method=textrow); the stack launcher sets ORCHESTRATOR_L3_TEXTROW=1", env_parse=_env_in("1"), env_on="1", env_off="0"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -838,6 +890,24 @@ class Features:
     # UFH14-B1 F2: wall-time forced-answer turn in the REPL graph.
     repl_answer_force: bool = False
 
+
+    # Flag surface (2026-11-18): see the registry block above. Defaults mirror the registry.
+    tool_selector: bool = False
+    tool_selector_shadow: bool = False
+    repl_explicit_final: bool = True
+    repl_explicit_final_strict: bool = False
+    repl_turn_memory: bool = False
+    codemode_prompt_v2: bool = False
+    codemode_stubs: bool = False
+    repl_tool_search: bool = False
+    structured_read_only: bool = False
+    repl_classify: bool = False
+    repl_handles: bool = False
+    untrusted_tool_text: bool = True
+    repl_write_dedupe: bool = True
+    pdf_route_lighton: bool = False
+    l3_textrow: bool = False
+
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
 
@@ -854,6 +924,12 @@ class Features:
         # Scripts require tools
         if self.scripts and not self.tools:
             errors.append("scripts feature requires tools feature")
+
+        # Tool picker shadow rerank only means something beside an applied pick; the picker embeds via the pool
+        if self.tool_selector_shadow and not self.tool_selector:
+            errors.append("tool_selector_shadow feature requires tool_selector feature")
+        if self.tool_selector and not self.repl_embedding_pool:
+            errors.append("tool_selector feature requires repl_embedding_pool feature")
 
         # MemRL-dependent features
         if self.specialist_routing and not self.memrl:
@@ -952,10 +1028,13 @@ def _compute_feature_flags(
     flags: dict[str, bool] = {}
     sources: dict[str, str] = {}
     for spec in _FEATURE_REGISTRY:
-        env_key = f"{ENV_PREFIX}{spec.env_var}"
+        env_key = spec.env_name or f"{ENV_PREFIX}{spec.env_var}"
         feature_env_key = f"{FEATURE_ENV_PREFIX}{spec.env_var}"
         if env_key in os.environ:
-            value = _feature_flag_bool(spec.env_var, defaults[spec.name])
+            if spec.env_parse is not None:
+                value = spec.env_parse(os.environ[env_key])
+            else:
+                value = _feature_flag_bool(spec.env_var, defaults[spec.name])
             source = env_key
         elif feature_env_key in os.environ:
             value = env_bool(feature_env_key, defaults[spec.name])

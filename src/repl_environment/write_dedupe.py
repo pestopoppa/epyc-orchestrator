@@ -24,7 +24,6 @@ import functools
 import hashlib
 import inspect
 import json
-import os
 import threading
 from typing import Any, Callable
 
@@ -35,7 +34,9 @@ MESSAGE = (
 
 
 def enabled() -> bool:
-    return os.environ.get("ORCHESTRATOR_REPL_WRITE_DEDUPE", "1").strip().lower() not in (
+    from src.flag_env import flag_env
+
+    return flag_env().get("ORCHESTRATOR_REPL_WRITE_DEDUPE", "1").strip().lower() not in (
         "0", "false", "off", "no",
     )
 

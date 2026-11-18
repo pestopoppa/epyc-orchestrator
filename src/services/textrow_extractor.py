@@ -8,7 +8,6 @@ than min_cols that is followed by more words does not close a row. Handles both 
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -17,7 +16,9 @@ FLAG_ENV = "ORCHESTRATOR_L3_TEXTROW"
 
 def textrow_enabled() -> bool:
     """Feature flag (default OFF), same "1"-string convention as ORCHESTRATOR_ODL_STRUCTURED."""
-    return os.environ.get(FLAG_ENV, "0") == "1"
+    from src.flag_env import flag_env
+
+    return flag_env().get(FLAG_ENV, "0") == "1"
 
 NUM = re.compile(r'^\$?\(?-?\$?\d[\d,]*(?:\.\d+)?\)?%?\)?$|^[—–]$|^\$?\([—–]\)$')
 

@@ -534,11 +534,12 @@ class ToolRegistry:
 
         # Check if structured output is enabled
         from src.features import features as _get_features
+        from src.flag_env import flag_env
 
         use_structured = _get_features().structured_tool_output
         # CM-3: envelope for read-only tools only (ORCHESTRATOR_STRUCTURED_READ_ONLY=1, default off), so a read-only
         # tool never returns a bare string on success while write tools keep today's shape.
-        if not use_structured and SideEffect.READ_ONLY in tool.side_effects and os.environ.get(
+        if not use_structured and SideEffect.READ_ONLY in tool.side_effects and flag_env().get(
             "ORCHESTRATOR_STRUCTURED_READ_ONLY", ""
         ).strip().lower() in ("1", "true", "on", "yes"):
             use_structured = True

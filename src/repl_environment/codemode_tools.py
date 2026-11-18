@@ -27,6 +27,8 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from src.flag_env import flag_env
+
 ENV_SEARCH = "ORCHESTRATOR_REPL_TOOL_SEARCH"
 ENV_CLASSIFY = "ORCHESTRATOR_REPL_CLASSIFY"
 ENV_HANDLES = "ORCHESTRATOR_REPL_HANDLES"
@@ -38,7 +40,7 @@ DETAILS = ("names", "brief", "full")
 
 
 def flag(name: str, environ: Mapping[str, str] | None = None) -> bool:
-    return str((os.environ if environ is None else environ).get(name, "")).strip().lower() in ("1", "true", "on", "yes")
+    return str((flag_env() if environ is None else environ).get(name, "")).strip().lower() in ("1", "true", "on", "yes")
 
 
 # --- CM-2 ---------------------------------------------------------------------------------------
@@ -114,7 +116,7 @@ class ClassifierBudget:
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "ClassifierBudget":
-        raw = (os.environ if environ is None else environ).get(ENV_CLASSIFY_BUDGET, "")
+        raw = (flag_env() if environ is None else environ).get(ENV_CLASSIFY_BUDGET, "")
         try:
             limit = int(raw) if str(raw).strip() else DEFAULT_CLASSIFIER_BUDGET
         except ValueError:
@@ -245,7 +247,7 @@ def replay_default_on(environ: Mapping[str, str] | None = None) -> bool:
     directions; with the handles flag off this is always False and nothing changes."""
     if not flag(ENV_HANDLES, environ):
         return False
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     if any(k in env for k in ("ORCHESTRATOR_REPLAY_RECORDING", "ORCHESTRATOR_FEATURE_REPLAY_RECORDING")):
         return False
     try:

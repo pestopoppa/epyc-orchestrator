@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.flag_env import flag_env
+
 ENV_K_MIN = "ORCHESTRATOR_TOOL_SELECTOR_K_MIN"
 ENV_K_MAX = "ORCHESTRATOR_TOOL_SELECTOR_K_MAX"
 ENV_DELTA = "ORCHESTRATOR_TOOL_SELECTOR_DELTA"
@@ -75,7 +77,7 @@ class PickerConfig:
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> PickerConfig:
-        env = os.environ if environ is None else environ
+        env = flag_env() if environ is None else environ
         k_min = max(1, _num(env, ENV_K_MIN, DEFAULTS["k_min"], int))
         return cls(k_min=k_min, k_max=max(k_min, _num(env, ENV_K_MAX, DEFAULTS["k_max"], int)),
                    delta=max(0.0, _num(env, ENV_DELTA, DEFAULTS["delta"])), family_cap=max(1, _num(env, ENV_FAMILY_CAP, DEFAULTS["family_cap"], int)),
@@ -86,7 +88,7 @@ class PickerConfig:
 # --- core pin + family ------------------------------------------------------------------------------------
 def core_names(names: Sequence[str], environ: Mapping[str, str] | None = None) -> list[str]:
     """The pinned names present in ``names`` (at most ``CORE_MAX``): the explicit core names first, then the vocabulary."""
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     override = [x.strip() for x in str(env.get(ENV_CORE, "")).split(",") if x.strip()]
     wanted = override or list(CORE_NAMES)
     have = set(names)
@@ -347,7 +349,7 @@ _LOG_LOCK = threading.Lock()
 
 
 def log_path(environ: Mapping[str, str] | None = None) -> Path | None:
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     v = env.get(ENV_LOG)
     if v is not None:
         return Path(v) if v.strip() else None  # explicit empty string disables the log
@@ -399,7 +401,7 @@ def maybe_shadow_rerank(req_id: str, query: str, dicts: list[dict[str, Any]], ap
                         environ: Mapping[str, str] | None = None) -> bool:
     """Off unless ``ORCHESTRATOR_TOOL_SELECTOR_SHADOW=oneshot`` AND primitives are registered. Submits to a background thread and
     returns at once; the C2 choice is only LOGGED next to the applied pick (never applied, never awaited)."""
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     prim = _SHADOW_PRIMITIVES
     if str(env.get(ENV_SHADOW, "")).strip().lower() != "oneshot" or prim is None:
         return False

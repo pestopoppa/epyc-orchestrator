@@ -32,6 +32,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.flag_env import flag_env
+
 ENV_FLAG = "ORCHESTRATOR_TOOL_SELECTOR"
 ENV_K = "ORCHESTRATOR_TOOL_SELECTOR_K"
 VARIANT_EMBED = "embed"
@@ -51,13 +53,13 @@ CORE_REPL_LINES = (
 
 def selector_variant(environ: Mapping[str, str] | None = None) -> str:
     """``"embed"`` | ``"oneshot"`` | ``"off"`` (default; any other value is off)."""
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     v = str(env.get(ENV_FLAG, "")).strip().lower()
     return v if v in (VARIANT_EMBED, VARIANT_ONESHOT) else "off"
 
 
 def selector_k(environ: Mapping[str, str] | None = None) -> int:
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     try:
         return max(1, int(str(env.get(ENV_K, DEFAULT_K))))
     except ValueError:
@@ -242,7 +244,10 @@ def set_selector_provider(provider: Provider | None) -> None:
 
 def maybe_selected_tools_block(task: str, environ: Mapping[str, str] | None = None) -> str | None:
     """Hook for ``PromptBuilder``: None (static tools text kept) unless flag on AND provider set."""
-    if selector_variant(environ) == "off" or _PROVIDER is None:
+    if selector_variant(environ) == "off":
+        return None
+    ensure_providers(environ)
+    if _PROVIDER is None:
         return None
     try:
         return _PROVIDER(task)
@@ -376,6 +381,7 @@ def select_native_tools_ex(
 
     if not tools or selector_variant(environ) == "off" or tool_choice == "none":
         return tools, None
+    ensure_providers(environ)
     k = selector_k(environ)
     if len(tools) <= k:
         return tools, None
@@ -511,7 +517,13 @@ def wire_default_providers(environ: Mapping[str, str] | None = None, *, embedder
                            tools_source: Callable[[], Sequence[Mapping[str, Any]]] | None = None) -> dict[str, Any]:
     """Startup wiring (``src/api/__init__.py::lifespan``). A no-op unless ``ORCHESTRATOR_TOOL_SELECTOR`` is on. Registers the native
     and REPL providers over the pooled embedder. Never raises and never calls the network: document embedding stays lazy (first
-    request, under the picker's latency budget). With no embedder nothing is registered and the picker fails open to the full list."""
+    request, under the picker's latency budget). With no embedder nothing is registered and the picker fails open to the full list.
+
+    The tools source is remembered even while the flag is off, so a RUNTIME flip (``POST /config`` ``tool_selector``) can wire the
+    providers on the first request that needs them (:func:`ensure_providers`) with no restart."""
+    global _TOOLS_SOURCE
+    if tools_source is not None:
+        _TOOLS_SOURCE = tools_source
     if selector_variant(environ) == "off":
         return {"wired": False, "reason": "flag_off"}
     try:
@@ -528,3 +540,24 @@ def wire_default_providers(environ: Mapping[str, str] | None = None, *, embedder
         return {"wired": True, "embedder": str(getattr(emb, "model_id", "")), "repl": tools_source is not None}
     except Exception as exc:  # noqa: BLE001 - startup must survive a broken picker
         return {"wired": False, "reason": f"{type(exc).__name__}: {exc}"[:160]}
+
+
+_TOOLS_SOURCE: Callable[[], Sequence[Mapping[str, Any]]] | None = None
+_WIRE_RETRY_S = 30.0
+_WIRE_LAST_ATTEMPT = float("-inf")
+
+
+def ensure_providers(environ: Mapping[str, str] | None = None) -> dict[str, Any] | None:
+    """Runtime-toggle support: the selector flag is on but the startup wiring skipped it (flag was off at boot), or the embedder
+    was not ready then. Wire the providers now, at most once per ``_WIRE_RETRY_S``. Returns the wiring result when it tried, else
+    None. Cheap no-op (two attribute reads) once both providers exist, and never raises."""
+    global _WIRE_LAST_ATTEMPT
+    if selector_variant(environ) == "off":
+        return None
+    if _NATIVE_PROVIDER is not None and (_PROVIDER is not None or _TOOLS_SOURCE is None):
+        return None
+    now = time.monotonic()
+    if now - _WIRE_LAST_ATTEMPT < _WIRE_RETRY_S:
+        return None
+    _WIRE_LAST_ATTEMPT = now
+    return wire_default_providers(environ, tools_source=_TOOLS_SOURCE)

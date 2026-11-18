@@ -15,17 +15,19 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 
+from src.flag_env import flag_env
+
 ENV_PROMPT = "ORCHESTRATOR_CODEMODE_PROMPT"
 ENV_STUBS = "ORCHESTRATOR_CODEMODE_STUBS"
 
 
 def prompt_v2_enabled(environ: Mapping[str, str] | None = None) -> bool:
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     return str(env.get(ENV_PROMPT, "")).strip().lower() == "v2"
 
 
 def _stubs_on(environ: Mapping[str, str] | None = None) -> bool:
-    env = os.environ if environ is None else environ
+    env = flag_env() if environ is None else environ
     return str(env.get(ENV_STUBS, "")).strip().lower() in ("1", "true", "on", "yes")
 
 

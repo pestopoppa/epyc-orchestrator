@@ -799,7 +799,9 @@ _FINAL_NAME_RE = re.compile(r"^(?:final_?)?(?:answer|result|response|output|summ
 
 
 def _explicit_final_mode() -> str:
-    v = os.environ.get(ENV_EXPLICIT_FINAL, "").strip().lower()
+    from src.flag_env import flag_env
+
+    v = flag_env().get(ENV_EXPLICIT_FINAL, "").strip().lower()
     if v in ("0", "false", "off", "no"):
         return "legacy"
     if v in ("1", "true", "on", "yes", "strict"):

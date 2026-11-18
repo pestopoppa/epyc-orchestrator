@@ -20,7 +20,6 @@ Kill-switch: ``ORCHESTRATOR_UNTRUSTED_TOOL_TEXT=0`` makes ``sanitize_tool_text``
 
 from __future__ import annotations
 
-import os
 import re
 
 ZWSP = "​"
@@ -44,7 +43,9 @@ _ROLE_TAG_RE = re.compile(r"(?i)<(/?)\s*(system|assistant|user|developer|instruc
 
 
 def enabled() -> bool:
-    return os.environ.get("ORCHESTRATOR_UNTRUSTED_TOOL_TEXT", "1").strip().lower() not in (
+    from src.flag_env import flag_env
+
+    return flag_env().get("ORCHESTRATOR_UNTRUSTED_TOOL_TEXT", "1").strip().lower() not in (
         "0", "false", "off", "no",
     )
 

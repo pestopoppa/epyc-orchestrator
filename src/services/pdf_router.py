@@ -926,7 +926,9 @@ class PDFRouter:
 
     @staticmethod
     def _route_lighton_enabled() -> bool:
-        return os.environ.get(PDF_ROUTE_LIGHTON_ENV, "0").strip().lower() in (
+        from src.flag_env import flag_env
+
+        return flag_env().get(PDF_ROUTE_LIGHTON_ENV, "0").strip().lower() in (
             "1", "true", "yes", "on",
         )
 
