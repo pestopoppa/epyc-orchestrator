@@ -30,10 +30,16 @@ import types as _types
 from typing import Any, Callable
 
 #: Globals every sandbox already has locally (preloaded stdlib modules and bookkeeping); not tools.
-CORE_NAMES: frozenset[str] = frozenset({
-    "__builtins__", "__name__", "context", "artifacts", "json", "math", "re", "collections",
-    "itertools", "functools", "statistics", "datetime", "fractions", "decimal", "copy",
-})
+def _core_names() -> frozenset[str]:
+    # Preloaded stdlib modules are derived from SAFE_IMPORT_MODULES (single source of truth).
+    # numpy/scipy are third-party and handled by EXCLUDED below, so they are not core.
+    from src.repl_environment.environment import REPLEnvironment
+
+    stdlib = frozenset(REPLEnvironment.preloaded_modules()) - {"numpy", "scipy", "sympy"}
+    return frozenset({"__builtins__", "__name__", "context", "artifacts"}) | stdlib
+
+
+CORE_NAMES: frozenset[str] = _core_names()
 
 #: Control signals the lane implements itself in the sandbox (they end the cell); the parent still
 #: executes ``_final`` / ``_final_var``.

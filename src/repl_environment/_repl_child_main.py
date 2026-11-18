@@ -576,6 +576,16 @@ class _Child:
             "functools": functools, "statistics": statistics, "datetime": _dt, "fractions": _fractions,
             "decimal": _decimal, "copy": __import__("copy"),
         }
+        # Mirror the parent: preload every stdlib safe module under its own name so a stripped
+        # plain `import X` never leaves X undefined. Non-stdlib (numpy/scipy/sympy) are unavailable
+        # under `-I -S` and skipped; `import X` of them keeps raising through _safe_import.
+        import importlib as _importlib
+        for _mn in sorted(sm - {"numpy", "scipy", "sympy"}):
+            if _mn not in g:
+                try:
+                    g[_mn] = _importlib.import_module(_mn)
+                except Exception:
+                    pass
         for name in msg["allow"]:
             g[name] = self._stub(name)
         for name in msg["refuse"]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import json
 import logging
@@ -352,12 +353,53 @@ def translate_openai_tool_calls(text: str) -> str | None:
     return _render_call_code(calls_seen)
 
 
-def _strip_import_lines(code: str) -> str:
-    """Strip top-level import/from lines since safe modules are pre-loaded in REPL globals.
+@functools.lru_cache(maxsize=1)
+def _preloaded_module_names() -> frozenset[str]:
+    from src.repl_environment.environment import REPLEnvironment
 
-    Models frequently generate 'import math' or 'import os' even when told not to.
-    Safe modules (math, json, re, collections, numpy, scipy, etc.) are pre-loaded
-    in _build_globals(); unsafe modules would be blocked by _safe_import() anyway.
+    return frozenset(REPLEnvironment.preloaded_modules())
+
+
+def _import_line_is_strippable(line: str) -> bool:
+    """True if a column-0 single-line import is safe to drop.
+
+    Droppable: ``import X[, Y]`` where every X is pre-loaded under its plain name
+    (no alias, no dots), and any import (any form) of a sandbox-FORBIDDEN module
+    (os, sys, ...), which the sandbox would reject anyway. Everything else
+    (``import X as Y``, ``from X import a``, non-preloaded modules) is kept so
+    _safe_import resolves it or raises a clear ImportError.
+    """
+    from src.repl_environment.security import ASTSecurityVisitor
+
+    try:
+        tree = ast.parse(line.strip())
+    except SyntaxError:
+        return False
+    if len(tree.body) != 1:
+        return False
+    node = tree.body[0]
+    forbidden = ASTSecurityVisitor.FORBIDDEN_MODULES
+    if isinstance(node, ast.Import):
+        preloaded = _preloaded_module_names()
+        for alias in node.names:
+            top = alias.name.split(".")[0]
+            if top in forbidden:
+                continue
+            if alias.asname is None and "." not in alias.name and top in preloaded:
+                continue
+            return False
+        return True
+    if isinstance(node, ast.ImportFrom):
+        return node.level == 0 and bool(node.module) and node.module.split(".")[0] in forbidden
+    return False
+
+
+def _strip_import_lines(code: str) -> str:
+    """Strip column-0 import lines the REPL does not need or must not honour.
+
+    Only strips what is already satisfied (plain ``import X`` of a pre-loaded
+    module) or forbidden by the sandbox; see _import_line_is_strippable. All other
+    imports are kept and resolved by _safe_import in the REPL.
 
     Skips lines inside triple-quoted strings to avoid corrupting embedded code
     (e.g., USACO solutions wrapped in solution = \"\"\"import sys...\"\"\" ).
@@ -378,8 +420,10 @@ def _strip_import_lines(code: str) -> str:
                     triple_char = tq
                     break
             # Only strip imports at top level (outside strings)
-            if not in_triple_quote and (
-                stripped.startswith("import ") or stripped.startswith("from ")
+            if (
+                not in_triple_quote
+                and (line.startswith("import ") or line.startswith("from "))
+                and _import_line_is_strippable(line)
             ):
                 continue
         else:

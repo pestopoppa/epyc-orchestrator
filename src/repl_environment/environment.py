@@ -435,7 +435,26 @@ class REPLEnvironment(
         "pprint", "reprlib",
         # Scientific computing (if installed)
         "numpy", "scipy", "sympy",
+        # uuid: pure id generation. pathlib is deliberately NOT listed:
+        # Path.read_text/open would bypass the file sandbox.
+        "uuid",
     })
+    # Safe modules NOT eagerly pre-loaded (slow import); `import X` stays in the
+    # code and resolves through _safe_import.
+    _LAZY_SAFE_MODULES: frozenset[str] = frozenset({"sympy"})
+
+    @classmethod
+    def preloaded_modules(cls) -> dict[str, Any]:
+        """name -> module for every installed, eagerly pre-loaded SAFE_IMPORT_MODULES entry."""
+        import importlib
+
+        out: dict[str, Any] = {}
+        for name in sorted(cls.SAFE_IMPORT_MODULES - cls._LAZY_SAFE_MODULES):
+            try:
+                out[name] = importlib.import_module(name)
+            except Exception:  # noqa: BLE001 - optional module not installed/broken
+                continue
+        return out
     # Read-only REPL-callable helpers (safe for parallel dispatch).
     # This covers non-registry built-ins like peek/grep plus utility calls.
     _READ_ONLY_REPL_TOOLS: frozenset[str] = frozenset({
@@ -484,29 +503,9 @@ class REPLEnvironment(
 
         safe_builtins["__import__"] = _safe_import
 
-        # Pre-load commonly used safe modules so _strip_import_lines()
-        # doesn't cause NameErrors when it removes import statements.
-        import json as _json
-        import math as _math
-        import re as _re
-        import collections as _collections
-        import itertools as _itertools
-        import functools as _functools
-        import statistics as _statistics
-        import datetime as _datetime
-        import fractions as _fractions
-        import decimal as _decimal
-        import copy as _copy
-
-        # Optional scientific modules (may not be installed)
-        try:
-            import numpy as _numpy
-        except ImportError:
-            _numpy = None
-        try:
-            import scipy as _scipy
-        except ImportError:
-            _scipy = None
+        # Pre-load every SAFE_IMPORT_MODULES entry (single source of truth) so
+        # _strip_import_lines() dropping a plain `import X` never causes a NameError.
+        _preloaded = self.preloaded_modules()
 
         globals_dict = {
             "__builtins__": safe_builtins,
@@ -516,20 +515,8 @@ class REPLEnvironment(
             "context": (self.context if getattr(self, "_context_bundle", None) is None
                         else self._bundle_view()),
             "artifacts": self.artifacts,
-            # Safe modules (pre-loaded to match _strip_import_lines behavior)
-            "json": _json,
-            "math": _math,
-            "re": _re,
-            "collections": _collections,
-            "itertools": _itertools,
-            "functools": _functools,
-            "statistics": _statistics,
-            "datetime": _datetime,
-            "fractions": _fractions,
-            "decimal": _decimal,
-            "copy": _copy,
-            **({"numpy": _numpy} if _numpy else {}),
-            **({"scipy": _scipy} if _scipy else {}),
+            # Safe modules (pre-loaded; derived from SAFE_IMPORT_MODULES)
+            **_preloaded,
             # Built-in functions
             "peek": self._peek,
             "read_file": self._read_session_file,
@@ -1130,12 +1117,37 @@ class REPLEnvironment(
     # ------------------------------------------------------------------
     # Tool-hint injection for failed code that looks like a tool call
     # ------------------------------------------------------------------
+    def _import_name_error_hint(self, exc: Exception | None) -> str:
+        """One-line hint when a NameError names an allowed or forbidden module."""
+        if not isinstance(exc, NameError):
+            return ""
+        name = getattr(exc, "name", None)
+        if not name:
+            import re as _re
+
+            m = _re.search(r"name '(\w+)' is not defined", str(exc))
+            name = m.group(1) if m else ""
+        if not name:
+            return ""
+        if name in self.SAFE_IMPORT_MODULES:
+            return (f"\nHint: '{name}' is an allowed module but is not imported in this cell; "
+                    f"add `import {name}` at the top (allowed: {', '.join(sorted(self.SAFE_IMPORT_MODULES))}).")
+        from src.repl_environment.security import ASTSecurityVisitor
+
+        if name in ASTSecurityVisitor.FORBIDDEN_MODULES:
+            return f"\nHint: module '{name}' is not available in the sandbox."
+        return ""
+
     def _tool_hint_if_relevant(self, code: str, exc: Exception | None = None) -> str:
         """Return a tool-usage hint string if *code* looks like a failed tool call.
 
         Returns empty string when no hint is appropriate.
         """
         import re as _re
+
+        name_hint = self._import_name_error_hint(exc)
+        if name_hint:
+            return name_hint
 
         # Quick patterns that suggest the model tried to call a tool
         _TOOL_PATTERNS = (
