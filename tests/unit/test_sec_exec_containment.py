@@ -25,7 +25,9 @@ def test_child_env_drops_secrets_keeps_basics(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "x" * 20)
     monkeypatch.setenv("LANG", "C.UTF-8")
     env = child_env({"EPYC_EVAL_FENCE_CONFIG_FILE": "/x"})
-    assert "OPENAI_API_KEY" not in env and "HF_HOME" not in env
+    # HF_HOME may exist (containment ON gives a token-free scratch one) but never the parent's.
+    assert "OPENAI_API_KEY" not in env
+    assert env.get("HF_HOME") != "/mnt/raid0/llm/cache/huggingface"
     assert "AWS_SECRET_ACCESS_KEY" not in env
     assert env["LANG"] == "C.UTF-8" and "PATH" in env
     assert env["EPYC_EVAL_FENCE_CONFIG_FILE"] == "/x"
@@ -37,9 +39,9 @@ def test_run_python_code_child_has_no_secrets(monkeypatch, audit):
     repl = REPLEnvironment(context="t")
     out = repl._run_python_code(
         "import os\nprint('K' if 'OPENAI_API_KEY' in os.environ else 'nokey',"
-        " 'H' if 'HF_HOME' in os.environ else 'nohf')"
+        " os.environ.get('HF_HOME', 'nohf'))"
     )
-    assert "nokey nohf" in out
+    assert "nokey" in out and "/planted/hf" not in out
 
 
 def test_run_shell_child_has_no_secrets(monkeypatch, audit):
@@ -61,7 +63,8 @@ def test_run_shell_child_has_no_secrets(monkeypatch, audit):
         out = repl._run_shell("echo hi")
     assert "hi" in out
     assert seen["env"] is not None
-    assert "OPENAI_API_KEY" not in seen["env"] and "HF_HOME" not in seen["env"]
+    assert "OPENAI_API_KEY" not in seen["env"]
+    assert seen["env"].get("HF_HOME") != "/planted/hf"
 
 
 @pytest.mark.parametrize("cmd", [

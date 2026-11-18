@@ -1,6 +1,6 @@
 """SEC-EXEC-3/5: kernel-enforced containment for model-exec children (run_shell, run_python_code).
 
-Behind the ``exec_containment`` feature flag (default OFF). When on, a child is launched through
+Behind the ``exec_containment`` feature flag (default ON; ``ORCHESTRATOR_EXEC_CONTAINMENT=0`` disables). When on, a child is launched through
 the standalone shim (``_fence_kernel_shim``) which applies, before exec and inherited by every
 descendant:
 

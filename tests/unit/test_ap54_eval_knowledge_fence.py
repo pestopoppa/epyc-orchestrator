@@ -36,6 +36,23 @@ from src.tool_registry import ToolCategory  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _exec_containment_off(monkeypatch):
+    """These tests pin the fence layer's own launch shape (bare ``python3``, argv unwrapped).
+
+    SEC-EXEC-5 containment legitimately wraps every child in the Landlock shim, so the fence
+    suite pins that flag OFF and stays correct whichever way the flag defaults. Containment's
+    own behaviour is covered by test_sec_exec3_5_sandbox / test_sec_exec_containment.
+    """
+    from src.features import reset_features
+
+    monkeypatch.setenv("ORCHESTRATOR_EXEC_CONTAINMENT", "0")
+    reset_features()
+    yield
+    monkeypatch.undo()
+    reset_features()
+
+
+@pytest.fixture(autouse=True)
 def _no_leaked_carrier():
     kf.clear()
     yield

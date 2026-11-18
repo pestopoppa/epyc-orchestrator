@@ -171,7 +171,7 @@ def test_python_hook_is_transparent_to_output_and_tracebacks(audit, flags, narro
 
 
 def test_python_flag_off_launches_exactly_as_before(audit, flags):
-    flags(exec_write_flags=False)
+    flags(exec_write_flags=False, exec_containment=False)  # containment wraps argv in the shim
     seen = {}
     real = subprocess.run
 
