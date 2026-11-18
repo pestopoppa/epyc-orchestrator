@@ -724,3 +724,57 @@ def test_flag_is_in_the_autopilot_hot_swap_set_and_program_md_and_spec():
     spec = (root / "orchestration/runtime_flags.spec.yaml").read_text()
     assert "  repl_child_lane: baseline" in spec and "  repl_tool_arg_validation: baseline" in spec
     del ns
+
+
+# ── triage of the flags-on suite run ─────────────────────────────────────────
+
+
+def test_child_handler_hardener_matches_the_parents():
+    import ast
+
+    from src.repl_environment.security import _HandlerHardener as parent
+
+    for src in ("try:\n    pass\nexcept:\n    pass\n",
+                "try:\n    pass\nexcept BaseException:\n    pass\n",
+                "try:\n    pass\nexcept (KeyError, BaseException) as e:\n    pass\n",
+                "try:\n    pass\nexcept ValueError:\n    pass\n"):
+        a = ast.fix_missing_locations(parent().visit(ast.parse(src)))
+        b = ast.fix_missing_locations(codec._HandlerHardener().visit(ast.parse(src)))
+        assert ast.dump(a, include_attributes=True) == ast.dump(b, include_attributes=True)
+
+
+@needs_kernel
+def test_except_baseexception_is_hardened_like_in_process(lane_on, make_env):
+    r = make_env().execute("try:\n    raise ValueError('x')\nexcept BaseException:\n    print('caught')\n")
+    assert r.error is None and r.output == "caught\n"
+
+
+@needs_kernel
+def test_artifacts_written_by_a_brokered_tool_survive_the_cells_merge(lane_on, make_env):
+    env = make_env()
+
+    def noting_peek(n=500, file_path=None, offset=0):  # a tool that records into the parent's artifact ledger
+        env.artifacts.setdefault("_tool_outputs", []).append(["peek", n])
+        return "x" * n
+
+    env._peek = noting_peek
+    env.artifacts["_unencodable"] = object()  # parent-only: never shown to the child, never lost
+    env.execute("artifacts['mine'] = 1\nprint(peek(2))")
+    assert env.artifacts["_tool_outputs"] == [["peek", 2]] and env.artifacts["mine"] == 1
+    assert "_unencodable" in env.artifacts
+    env.execute("print(peek(3), 'mine' in artifacts, '_tool_outputs' in artifacts)")  # the child sees the parent's ledger next cell
+    r = env.execute("print('_tool_outputs' in artifacts, artifacts['_tool_outputs'])")
+    assert r.output == "True [['peek', 2], ['peek', 3]]\n"
+    env.execute("del artifacts['mine']")
+    assert "mine" not in env.artifacts and "_tool_outputs" in env.artifacts and "_unencodable" in env.artifacts
+
+
+@needs_kernel
+def test_a_child_edit_beats_a_parent_value_it_did_not_touch(lane_on, make_env):
+    env = make_env()
+    env.artifacts["k"] = [1]
+    env.execute("artifacts['k'].append(2)")
+    assert env.artifacts["k"] == [1, 2]
+    env.artifacts["k"] = [9]  # edited outside the lane between cells
+    r = env.execute("print(artifacts['k'])")
+    assert r.output == "[9]\n"

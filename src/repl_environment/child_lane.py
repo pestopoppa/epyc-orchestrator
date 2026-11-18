@@ -599,6 +599,10 @@ def _codec():
     return m
 
 
+def _canon(enc: Any) -> str:
+    return json.dumps(enc, sort_keys=True, ensure_ascii=True, allow_nan=True)
+
+
 def _make_ctx(env: Any, allow_opaque: bool):
     """Parent-side codec context. Carried definitions are only ever STORED (as ``LaneOpaque``),
     never executed here, and their source must pass the REPL's own AST security gate first."""
@@ -652,6 +656,8 @@ class ChildLane:
         self.spawns = 0
         self._intentional_restart = False
         self._state_objs: tuple[Any, Any] | None = None
+        self._art_view: dict[str, str] = {}   # what the child holds: key -> canonical JSON of its encoding
+        self._art_start: dict[str, str] = {}  # the parent's encodable artifacts when the current cell began
         self.admission_open = False
         self._nonce: str | None = None
         self._structured = False
@@ -706,7 +712,11 @@ class ChildLane:
         self.admission_open = True
         try:
             assert proc.reader is not None
-            proc.send({"t": "cell", "id": nonce, "code": code}, deadline)
+            cell = {"t": "cell", "id": nonce, "code": code}
+            patch = self._artifact_patch(env)
+            if patch:
+                cell["art_patch"] = patch
+            proc.send(cell, deadline)
             while True:
                 if self._cancel.is_set():
                     raise LaneRevoked("cancelled")
@@ -843,11 +853,9 @@ class ChildLane:
                 state[key] = m.encode(val, pctx)
             except m.Unsupported as exc:
                 bad.append(f"{key} ({exc})")
-        try:
-            arts = m.encode(dict(env.artifacts), _make_ctx(env, allow_opaque=False))
-        except m.Unsupported as exc:
-            arts = {}
-            bad.append(f"artifacts ({exc})")
+        arts = self._encodable_artifacts(env)
+        self._art_view = {k: _canon(v) for k, v in arts.items()}
+        self._art_start = dict(self._art_view)
         if bad:
             raise LaneUnavailable(
                 "unsupported REPL state cannot be restored into the contained lane: " + ", ".join(sorted(bad)[:10])
@@ -916,10 +924,10 @@ class ChildLane:
             else:
                 fn, charged = getattr(env, BROKER[name]), False
             if name == "FINAL_VAR":
-                arts = m.decode(frame.get("artifacts"), _make_ctx(env, allow_opaque=False))
+                arts = frame.get("artifacts")
                 if not isinstance(arts, dict):
                     return err("ValueError", "FINAL_VAR requires the artifact snapshot")
-                self._mirror_artifacts(env, arts)
+                self._merge_artifacts(env, arts)
             if not charged and name not in _CHILD_DEFINED:
                 env._charge_tool_call(name)
             thunk = lambda: call_validated(name, fn, args, kwargs)  # noqa: E731
@@ -983,9 +991,60 @@ class ChildLane:
         return box.get("v")
 
     @staticmethod
-    def _mirror_artifacts(env: Any, arts: dict) -> None:
-        env.artifacts.clear()
-        env.artifacts.update(arts)
+    def _encodable_artifacts(env: Any) -> dict[str, Any]:
+        """The parent's artifacts that can cross (key -> encoding). Anything else (a tool's
+        ``_tool_outputs`` ledger holding arbitrary objects, ...) is parent-owned: the child never sees
+        it and its absence from the child's result is never read as a deletion."""
+        m = _codec()
+        ctx = _make_ctx(env, allow_opaque=False)
+        out: dict[str, Any] = {}
+        for k, v in list(env.artifacts.items()):
+            if not isinstance(k, str):
+                continue
+            try:
+                out[k] = m.encode(v, ctx)
+            except m.Unsupported:
+                continue
+        return out
+
+    def _artifact_patch(self, env: Any) -> dict[str, Any] | None:
+        """What changed in the parent's artifacts since the child last saw them (a tool wrote
+        ``_tool_outputs`` in a previous cell, or code outside the lane edited them)."""
+        cur = self._encodable_artifacts(env)
+        canon = {k: _canon(v) for k, v in cur.items()}
+        patch = {
+            "set": {k: cur[k] for k in cur if self._art_view.get(k) != canon[k]},
+            "del": [k for k in self._art_view if k not in cur],
+        }
+        self._art_view = canon
+        self._art_start = dict(canon)
+        return patch if (patch["set"] or patch["del"]) else None
+
+    def _merge_artifacts(self, env: Any, child_arts: dict) -> None:
+        """Three-way merge of ``env.artifacts``: the child's edits win for keys it changed; keys a
+        brokered tool wrote in the parent during the cell, and parent-only keys, are kept."""
+        m = _codec()
+        start = self._art_start
+        child_canon = {k: _canon(v) for k, v in child_arts.items()}
+        decoded = m.decode(child_arts, _make_ctx(env, allow_opaque=False))
+        live = env.artifacts
+        merged: dict[str, Any] = {}
+        for k in list(live):  # parent-only keys and keys the parent changed/created
+            if k in child_canon:
+                continue
+            if k in start:  # shipped, and the child deleted it
+                continue
+            merged[k] = live[k]
+        for k, v in decoded.items():
+            if k in start and child_canon[k] == start[k]:
+                if k in live:  # the child left it alone: the parent's (possibly tool-updated) value stands
+                    merged[k] = live[k]
+            else:
+                merged[k] = v
+        live.clear()
+        live.update(merged)
+        self._art_view = dict(child_canon)
+        self._art_start = dict(child_canon)
 
     # state ----------------------------------------------------------------
     def sync_state(self, env: Any, done: dict) -> None:
@@ -1003,7 +1062,7 @@ class ChildLane:
                 env._globals[key] = val
         arts = done.get("artifacts")
         if isinstance(arts, dict):
-            self._mirror_artifacts(env, m.decode(arts, _make_ctx(env, allow_opaque=False)))
+            self._merge_artifacts(env, arts)
 
 
 class _CallbackAbort(BaseException):

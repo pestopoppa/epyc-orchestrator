@@ -587,11 +587,18 @@ class _Child:
     def run_cell(self, msg):
         self.cell_id = msg["id"]
         self.seq = 0
+        patch = msg.get("art_patch")
+        if patch:  # the parent's artifacts changed since this child last saw them
+            arts = self.g["artifacts"]
+            for k in patch.get("del", []):
+                arts.pop(k, None)
+            for k, v in (patch.get("set") or {}).items():
+                arts[k] = decode(v, _Ctx_with_modules(self.safe_modules))
         cap = int(self.caps["output_chars"])
         out, err = _Capped(cap), _Capped(cap)
         status, final, etype, eargs, emsg, etool = "ok", None, None, None, None, None
         try:
-            code = compile(msg["code"], "<string>", "exec")
+            code = _compile_hardened(msg["code"])
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 exec(code, self.g)
         except _Final as e:
@@ -687,6 +694,36 @@ class _Ctx_with_modules(_Ctx):
     def __init__(self, safe_modules):
         self.safe_modules = safe_modules
 
+
+
+class _HandlerHardener(ast.NodeTransformer):
+    """Copy of ``security._HandlerHardener`` (this file cannot import ``src``; a test pins them equal):
+    ``except:`` / ``except BaseException`` -> ``except Exception``, locations preserved, so the cell
+    sees exactly the names the in-process path gives it (``BaseException`` is not a sandbox builtin)."""
+
+    def visit_ExceptHandler(self, node):
+        self.generic_visit(node)
+
+        def exc_name(ref):
+            return ast.copy_location(ast.Name(id="Exception", ctx=ast.Load()), ref)
+
+        t = node.type
+        if t is None:
+            node.type = exc_name(node)
+        elif isinstance(t, ast.Name) and t.id == "BaseException":
+            node.type = exc_name(t)
+        elif isinstance(t, ast.Tuple):
+            t.elts = [exc_name(e) if isinstance(e, ast.Name) and e.id == "BaseException" else e for e in t.elts]
+        return node
+
+
+def _compile_hardened(source):
+    try:
+        tree = ast.parse(source, mode="exec")
+    except SyntaxError:
+        return compile(source, "<string>", "exec")  # raises the SyntaxError exactly as exec would
+    tree = ast.fix_missing_locations(_HandlerHardener().visit(tree))
+    return compile(tree, "<string>", "exec")
 
 
 class _RefusedTool:
