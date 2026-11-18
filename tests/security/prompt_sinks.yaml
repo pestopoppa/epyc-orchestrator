@@ -22,7 +22,7 @@ sinks:
   src/services/worker_pool.py::_record_worker_completion: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for a worker-pool /completion call (endpoint string), no prompt leaves here"}
   src/structured_output/repair.py::_record_repair_call: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for a repair turn (endpoint string), no prompt leaves here"}
   src/tools/web/research.py::_record_worker_synthesis: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for web synthesis (endpoint string), no prompt leaves here"}
-  src/trace/attribution/judge.py::__call__: {kind: post, reason: "offline trace-attribution judge over recorded traces (operator-run analysis tooling, not a serving path)"}
+  src/trace/attribution/judge.py::__call__: {kind: post, reason: "trace-attribution judge (OpenAICompatJudge): an injected callable that POSTs to a LOCAL OpenAI-compatible server (non-local hosts refused); analysis tooling over recorded traces, not a serving path"}
   src/typed_decisions/decision_backend_pin.py::capture_running_backend_pin: {kind: reference, reason: "backend-pin proof record: the /completion endpoint string of the running server, no prompt"}
   src/typed_decisions/decision_backend_pin.py::llm_call: {kind: post, reason: "typed-decision JSON /completion transport; the prompt is the fixed decision template over the closed-set question and state (TD plane, grammar-constrained answer)"}
   src/vision/analyzers/vl_describe.py::_record_server_call: {kind: reference, reason: "UFH14-LB6.2 serving_call.v1 telemetry record for the VL describe call (endpoint string), no prompt leaves here"}
