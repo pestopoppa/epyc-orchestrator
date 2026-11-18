@@ -130,6 +130,8 @@ def test_binding_names_include_function_globals():
     ("import os", "ast_gate"),
     ("print((1,", "syntax:cpython_rejects"),
     ("remember('x')", "tool_reads_cell_state:remember"),
+    ("llm_batch([peek(1, 1)])", "name:undefined:llm_batch"),
+    ("undefined_thing", "name:undefined:undefined_thing"),
     ("print(1 + 1)", "in_subset"),
 ])
 def test_static_screen(code, reason):
@@ -365,7 +367,6 @@ def test_user_errors_are_not_retried():
     with _ad(env) as ad:
         for code, err in [("1/0", "ZeroDivisionError: division by zero"), ("assert 1 == 2, 'no'", "AssertionError: no"),
                           ("assert 1 == 2", "AssertionError: "), ("{}['k']", "KeyError: 'k'"),
-                          ("undefined_thing", "NameError: name 'undefined_thing' is not defined"),
                           ("raise RuntimeError('mine')", "RuntimeError: mine")]:
             cp = REPLEnvironment(context="c").execute(code)
             r = ad.execute(code)

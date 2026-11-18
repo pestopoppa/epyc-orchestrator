@@ -440,6 +440,31 @@ def screen(adapter: "MontyREPLAdapter", code: str) -> ScreenVerdict:
     if feat:
         return ScreenVerdict(ROUTE_CPYTHON, feat)
     builtin = tool_names(p)
+    # Names the cell binds anywhere (any scope): a Load of anything else that nothing defines is a NameError on
+    # CPython, which resolves a callee before its arguments; Monty can raise a different error first (argument
+    # evaluation order), so such a cell runs on CPython and fails with CPython's own text.
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+    sb = p._globals.get("__builtins__", {})
+    sb_names = set(sb) if isinstance(sb, dict) else set(dir(sb))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            n = node.id
+            if (n not in bound and n not in p._globals and n not in sb_names and n not in builtin
+                    and n not in _ENGINE_NAMES and n not in adapter.defs):
+                return ScreenVerdict(ROUTE_CPYTHON, f"name:undefined:{n}")
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)):
             continue
