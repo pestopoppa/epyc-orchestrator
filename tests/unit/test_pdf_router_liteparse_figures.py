@@ -44,7 +44,7 @@ def test_liteparse_route_real_pdf_figure_box(router, tmp_path):
     page = doc.new_page(width=200, height=100)
     pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 10, 10), False)
     pix.clear_with(128)
-    page.insert_image(fitz.Rect(20, 10, 120, 60), pixmap=pix)
+    page.insert_image(fitz.Rect(20, 10, 120, 60), pixmap=pix, keep_proportion=False)
     doc.save(str(pdf))
     doc.close()
     router._has_pymupdf = True
