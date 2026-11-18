@@ -56,7 +56,9 @@ def _selected_tools_or(static_tools: str, task: str) -> str:
     from src.prompt_builders.tool_selector import maybe_selected_tools_block
 
     selected = maybe_selected_tools_block(task)
-    return static_tools if selected is None else selected
+    # The pick ADDS to the static tools text: it never replaces it (arm C of the probe dropped the static list and lost the
+    # file tools). list_tools() stays in both the static text and the selected block.
+    return static_tools if selected is None else f"{static_tools}\n\n{selected}"
 _CORPUS_REGISTRY: Any | None = None
 _DEFAULT_CORPUS_SLOW_QUERY_MS = 5000.0
 _CORPUS_TASK_SCOPED_ROLES_ENV = "ORCHESTRATOR_CORPUS_TASK_SCOPED_ROLES"

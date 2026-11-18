@@ -16,13 +16,18 @@ TOOLS = [_oa("syn_sku_price", "Look up unit price for a product SKU"), _oa("syn_
          _oa("read_file", "Read a file from disk"), _oa("syn_weather", "Weather forecast for a city"),
          _oa("syn_fx", "Currency exchange rate"), _oa("syn_mail", "Send an email message")]
 MSG = [{"role": "user", "content": "what is the unit price for this SKU"}]
-ON = {ts.ENV_FLAG: "embed", ts.ENV_K: "2"}
+ON = {ts.ENV_FLAG: "embed", ts.ENV_K: "2", "ORCHESTRATOR_TOOL_SELECTOR_LOG": ""}
+SERVER = {"list_tools", "search_tools", "describe_tool"}
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_TOOL_SELECTOR_LOG", "")
     ts.set_native_selector_provider(None)
     ts.LAST_NATIVE_SELECTION.clear()
+    from src.prompt_builders import tool_picker as tp
+
+    tp.BREAKER.success()
     yield
     ts.set_native_selector_provider(None)
 
@@ -36,26 +41,30 @@ def test_default_off_returns_same_object():
     assert ts.select_native_tools(TOOLS, MSG, None, {ts.ENV_FLAG: "bogus"}) is TOOLS
 
 
-def test_on_narrows_to_topk_keeping_order_and_records_fallback():
+def test_on_without_provider_fails_open_to_the_full_list_and_records_lexical():
+    """Flag on, nothing registered: the lexical ranker is low-confidence, so a list of <= 40 tools is sent whole (never worse than off)."""
     out = ts.select_native_tools(TOOLS, MSG, "auto", ON)
-    assert len(out) == 2 and "syn_sku_price" in names(out)
-    assert names(out) == [n for n in names(TOOLS) if n in names(out)]
-    assert ts.LAST_NATIVE_SELECTION["fallback"] == "lexical:no_provider"
+    assert out is TOOLS
+    assert ts.LAST_NATIVE_SELECTION["fallback"] == "full" and ts.LAST_NATIVE_SELECTION["mode"] == "full"
 
 
-def test_registered_provider_is_used_and_cached():
+def test_registered_provider_is_used_frozen_per_conversation_and_adds_the_server_tools():
     calls = []
-    ts.set_native_selector_provider(lambda q, d, k: calls.append(q) or ["read_file"])
-    assert names(ts.select_native_tools(TOOLS, MSG, None, ON)) == ["read_file"]
-    ts.select_native_tools(TOOLS, MSG, None, ON)
-    assert len(calls) == 1  # stable across turns: no second decision call
+    ts.set_native_selector_provider(lambda q, d, k: calls.append(q) or ["syn_sku_price"])
+    out = names(ts.select_native_tools(TOOLS, MSG, None, ON))
+    assert out[:3] == ["list_tools", "search_tools", "describe_tool"]
+    assert out[3:] == ["syn_sku_price", "read_file"]  # client order; core read_file pinned outside k
+    names(ts.select_native_tools(TOOLS, MSG, None, ON))
+    assert len(calls) == 1  # frozen: stable across turns, no second pick
 
 
-def test_forced_choice_and_history_tools_stay():
-    ts.set_native_selector_provider(lambda q, d, k: ["read_file"])
+def test_forced_choice_and_history_tools_are_added_not_reshuffled():
+    ts.set_native_selector_provider(lambda q, d, k: ["syn_sku_price"])
+    first = names(ts.select_native_tools(TOOLS, MSG, None, ON))
     msgs = MSG + [{"role": "assistant", "tool_calls": [{"function": {"name": "syn_fx", "arguments": "{}"}}]}]
-    out = ts.select_native_tools(TOOLS, msgs, {"type": "function", "function": {"name": "syn_mail"}}, ON)
-    assert set(names(out)) == {"read_file", "syn_fx", "syn_mail"}
+    out = names(ts.select_native_tools(TOOLS, msgs, {"type": "function", "function": {"name": "syn_mail"}}, ON))
+    assert out[: len(first)] == first  # the frozen prefix is untouched
+    assert set(out[len(first):]) == {"syn_fx", "syn_mail"}
 
 
 @pytest.mark.parametrize("tools,msgs,choice", [(TOOLS[:2], MSG, None), (TOOLS, [], None), (TOOLS, MSG, "none"), (None, MSG, None)])
@@ -100,9 +109,10 @@ def test_chat_path_wiring(monkeypatch):
 
     monkeypatch.setenv(ts.ENV_FLAG, "embed")
     monkeypatch.setenv(ts.ENV_K, "2")
+    ts.set_native_selector_provider(lambda q, d, k: ["syn_sku_price"])
     req = SimpleNamespace(tools=TOOLS, tool_choice="auto", max_tokens=8)
     oc._run_client_tool_completion(Prim(), req, MSG, role="worker", sampling_kwargs={})
-    assert len(seen["tools"]) == 2
+    assert names(seen["tools"]) == ["list_tools", "search_tools", "describe_tool", "syn_sku_price", "read_file"]
     monkeypatch.delenv(ts.ENV_FLAG)
     oc._run_client_tool_completion(Prim(), req, MSG, role="worker", sampling_kwargs={})
     assert seen["tools"] is TOOLS

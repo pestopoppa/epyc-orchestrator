@@ -43,7 +43,8 @@ DEFAULT_K = 8
 CORE_REPL_LINES = (
     "- `context`: str - full input. `artifacts`: dict - store intermediate results between turns.",
     "- `CALL(name, **kw)`: invoke a tool, returns JSON string. `TOOL(name, **kw)`: returns a Python object.",
-    "- `list_tools()`: discover ALL available tools (use only if none of the tools below fits).",
+    "- `list_tools()`: discover ALL available tools (always available; the tools below are picks that ADD to it).",
+    "- `search_tools(query)` / `describe_tool(name)`: find a tool by purpose / read one schema without listing everything.",
     "- `FINAL(answer)`: signal completion with the final answer. REQUIRED for every task.",
 )
 
@@ -263,8 +264,12 @@ LAST_NATIVE_SELECTION: dict[str, Any] = {}
 def set_native_selector_provider(provider: NativeProvider | None) -> None:
     """Register ``provider(query, tool_dicts, k) -> selected names | None``. ``None`` unregisters and clears the cache."""
     global _NATIVE_PROVIDER
+    from src.prompt_builders import tool_picker as tp
+
     _NATIVE_PROVIDER = provider
     _NATIVE_CACHE.clear()
+    tp.clear_frozen()
+    tp.clear_selectors()
 
 
 def _native_name(tool: Mapping[str, Any]) -> str | None:
@@ -316,64 +321,209 @@ def _history_tool_names(messages: Sequence[Mapping[str, Any]]) -> set[str]:
     return used
 
 
+def first_user_query(messages: Sequence[Mapping[str, Any]]) -> str:
+    """Text of the FIRST user message ('' when none): the conversation's stable pick query."""
+    for i, m in enumerate(messages):
+        if m.get("role") == "user":
+            return last_user_query(list(messages)[: i + 1])
+    return ""
+
+
+@dataclass
+class PickContext:
+    """What the route needs after ``select_native_tools_ex``: ids for the log, the frozen-pick key and a re-pick closure."""
+
+    request_id: str
+    conversation: str
+    key: str
+    variant: str
+    sent: list[str]
+    history: list[str]
+    original: list[dict[str, Any]]  # the client's FULL tool list (OpenAI shape)
+    query: str
+    repick: Callable[[str], list[str]]
+    environ: Mapping[str, str] | None = None
+    scope: str = ""
+
+
 def select_native_tools(
     tools: list[dict[str, Any]] | None,
     messages: Sequence[Mapping[str, Any]],
     tool_choice: Any = None,
     environ: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Narrow a client ``tools`` list to the per-request top-k. Returns ``tools`` itself (same object) whenever
-    the flag is off, the list is already <= k, there is no user query, ``tool_choice`` is
-    ``"none"``, or anything fails. With the flag on and no provider registered the lexical ranker is used and recorded. Original order is kept; a forced ``tool_choice`` function and any tool already
-    called earlier in the conversation always stay (so the prompt prefix is stable across turns and history stays valid)."""
+    """Narrow a client ``tools`` list with the hardened picker (see ``tool_picker``). Returns ``tools`` itself (same object) whenever
+    the flag is off, the list is already <= k, there is no user query, ``tool_choice`` is ``"none"``, the picker is low-confidence,
+    slow, failing or its breaker is open (fail open to the unpicked list), or anything goes wrong."""
+    return select_native_tools_ex(tools, messages, tool_choice, environ)[0]
+
+
+def select_native_tools_ex(
+    tools: list[dict[str, Any]] | None,
+    messages: Sequence[Mapping[str, Any]],
+    tool_choice: Any = None,
+    environ: Mapping[str, str] | None = None,
+    *,
+    scope: str = "",
+) -> tuple[list[dict[str, Any]] | None, PickContext | None]:
+    """:func:`select_native_tools` plus the :class:`PickContext` (None whenever the list was returned unpicked and unlogged).
+
+    The pick is made once per conversation (on the first user turn) and FROZEN: later turns reuse it and may only ADD tools
+    (called earlier, forced, recovered), appended after the frozen names, so the tool block stays a stable cacheable prefix.
+    The core set is pinned outside k and ``list_tools`` / ``search_tools`` / ``describe_tool`` (server-executed) are always sent
+    with a narrowed list, so the pick ADDS to discoverability and never replaces it."""
+    from src.prompt_builders import tool_picker as tp
+
     if not tools or selector_variant(environ) == "off" or tool_choice == "none":
-        return tools
+        return tools, None
     k = selector_k(environ)
     if len(tools) <= k:
-        return tools
-    query = last_user_query(messages).strip()
+        return tools, None
+    query = first_user_query(messages).strip()
     if not query:
-        return tools
+        return tools, None
     try:
+        variant = selector_variant(environ)
+        cfg = tp.PickerConfig.from_env(environ)
         dicts = [d for d in (openai_tool_to_dict(t) for t in tools) if d is not None]
-        names = tuple(d["name"] for d in dicts)
-        key = (selector_variant(environ), query, names, k)
-        chosen = _NATIVE_CACHE.get(key)
-        fallback = None
-        if chosen is None:
-            provider = _NATIVE_PROVIDER
-            if provider is None:  # flag on, nothing registered: lexical top-k, recorded (never silent)
-                provider, fallback = make_native_provider("lexical"), "lexical:no_provider"
-            chosen = provider(query, dicts, k)
-            if not chosen:
-                return tools
-            if len(_NATIVE_CACHE) >= _NATIVE_CACHE_MAX:
-                _NATIVE_CACHE.pop(next(iter(_NATIVE_CACHE)))
-            _NATIVE_CACHE[key] = list(chosen)
-        keep = set(chosen) | _history_tool_names(messages)
+        names = [d["name"] for d in dicts]
+        key = tp.conversation_key(messages, names, scope)
+        req_id = tp.new_request_id()
+        provider = _NATIVE_PROVIDER
+        if provider is not None and getattr(provider, "shadow_only", False):
+            provider = None  # C2 never picks on the critical path
+        scorer = getattr(provider, "scorer", None) if provider is not None else None
+        frozen = tp.frozen_get(key)
+        hit = frozen is not None
+        if frozen is None:
+            if provider is not None and scorer is None:  # legacy provider: names only (no scores, no adaptive k)
+                chosen = list(provider(query, dicts, k) or [])
+                if not chosen:
+                    return tools, None
+                core = tp.core_names(names, environ)
+                res = tp.PickResult("narrow", [n for n in chosen if n not in core], core, len(chosen), len(chosen), "provider")
+            else:
+                res = tp.pick(query, dicts, scorer, cfg, environ)
+            keep = set(res.picks) | set(res.core)
+            frozen = tp.Frozen(res.mode, [n for n in names if n in keep] if res.mode != "full" else [], {})
+            tp.frozen_put(key, frozen)
+            sent_now = names if res.mode == "full" else frozen.names
+            tp.log_event(tp.selection_row(req_id, key, variant, scope, res, sent_now, len(tools), cfg, query, frozen_hit=False), environ)
+            tp.maybe_shadow_rerank(req_id, query, dicts, res.picks, cfg.k_max, environ)
+            LAST_NATIVE_SELECTION.clear()
+            LAST_NATIVE_SELECTION.update(variant=variant, k=res.k_eff, n_in=len(tools), n_out=len(sent_now), selected=list(res.picks),
+                                         fallback=res.rung if res.rung not in ("none", "widen") else None, mode=res.mode, core=res.core)
+        if frozen.mode == "full":
+            return tools, None
+        history = sorted(_history_tool_names(messages))
+        adds = [n for n in history if n in names]
         forced = _forced_name(tool_choice)
-        if forced:
-            keep.add(forced)
-        narrowed = [t for t in tools if _native_name(t) is None or _native_name(t) in keep]
-        LAST_NATIVE_SELECTION.clear()
-        LAST_NATIVE_SELECTION.update(variant=key[0], k=k, n_in=len(tools), n_out=len(narrowed), selected=list(chosen), fallback=fallback)
-        return narrowed or tools
+        if forced and forced in names:
+            adds.append(forced)
+        tp.frozen_add(key, adds)
+        by = {_native_name(t): t for t in tools if _native_name(t)}
+        ordered = [by[n] for n in frozen.names if n in by]
+        extra = [t for t in tools if _native_name(t) is None]
+        narrowed = tp.server_tool_defs() + ordered + extra
+        sent = [n for n in frozen.names if n in by]
+
+        def repick(extra_query: str) -> list[str]:
+            r = tp.pick(f"{query}\n{extra_query}", dicts, scorer, cfg, environ)
+            return [n for n in r.picks if n in by]
+
+        if hit:
+            tp.log_event({"type": "selection_reuse", "request_id": req_id, "conversation": key, "n_tools_out": len(sent), "added": adds}, environ)
+        ctx = PickContext(req_id, key, key, variant, sent, history, list(tools), query, repick, environ, scope)
+        return narrowed, ctx
     except Exception:  # noqa: BLE001 - a broken selector must never break the request
-        return tools
+        return tools, None
+
+
+class NativeEmbedProvider:
+    """C1 native provider: callable (legacy names API) plus ``scorer`` (scores, used by the hardened picker)."""
+
+    def __init__(self, embedder: Any):
+        from src.prompt_builders.tool_picker import embed_scorer
+
+        self.embedder = embedder
+        self.scorer = embed_scorer(embedder)
+
+    def __call__(self, query: str, tools: list[dict[str, Any]], k: int) -> list[str] | None:
+        scores, _fb, _emb = self.scorer(query, tools)
+        return _topk(scores, [t["name"] for t in tools], k)
 
 
 def make_native_provider(variant: str, *, embedder: Any = None, primitives: Any = None, role: str = "worker") -> NativeProvider:
-    """Provider for :func:`set_native_selector_provider`. ``embed``: C1 over the request's own tools (needs an embedder).
-    ``oneshot``: C2 with one NOUL question per tool (the request's tools have no groups), the decision model is
-    ``primitives``. A missing dependency falls back to lexical top-k (never silent: it is logged via LAST_NATIVE_SELECTION)."""
+    """Provider for :func:`set_native_selector_provider`. ``embed``: C1 over the request's own tools (needs an embedder); the
+    selector is MEMOISED per (embedder, tool-registry version), not rebuilt per call. ``oneshot``: C2 with one NOUL question per
+    tool; it is SHADOW ONLY (``shadow_only``): the picker never calls it on the request's critical path. A missing dependency falls
+    back to lexical top-k (never silent: it is logged)."""
+    if variant == VARIANT_EMBED and embedder is not None:
+        return NativeEmbedProvider(embedder)
 
     def provider(query: str, tools: list[dict[str, Any]], k: int) -> list[str] | None:
-        if variant == VARIANT_EMBED and embedder is not None:
-            return EmbeddingToolSelector(embedder, tools).select(query, k).selected
         if variant == VARIANT_ONESHOT and primitives is not None:
             groups = {t["name"]: [t["name"]] for t in tools}
             desc = {t["name"]: t["description"][:120] for t in tools}
             return OneShotToolSelector(primitives, tools, groups, desc, role=role).select(query, k).selected
         return _topk(lexical_scores(query, tools), [t["name"] for t in tools], k)
 
+    provider.shadow_only = variant == VARIANT_ONESHOT  # type: ignore[attr-defined]
     return provider
+
+
+# --- REPL (code mode) provider and startup wiring ----------------------------------------------------------------------
+def make_repl_provider(embedder: Any, tools_source: Callable[[], Sequence[Mapping[str, Any]]]) -> Provider:
+    """Provider for :func:`set_selector_provider`: ``provider(task) -> selected-tools block | None``. Same picker as the native path
+    (memoised C1 selector, core pin, adaptive k, family cap, ladder, 500 ms budget, breaker). The pick is frozen per task text. ``None``
+    (fail open) leaves the static tools text untouched."""
+    from src.prompt_builders import tool_picker as tp
+
+    scorer = tp.embed_scorer(embedder)
+
+    def provider(task: str) -> str | None:
+        dicts = [dict(t) for t in tools_source()]
+        if not dicts or not task.strip():
+            return None
+        names = [d["name"] for d in dicts]
+        cfg = tp.PickerConfig.from_env()
+        if len(dicts) <= selector_k():
+            return None
+        key = tp.conversation_key([{"role": "user", "content": task}], names, "repl")
+        frozen = tp.frozen_get(key)
+        if frozen is None:
+            res = tp.pick(task, dicts, scorer, cfg)
+            if res.rung in ("timeout", "error", "breaker_open"):
+                tp.log_event(tp.selection_row(tp.new_request_id(), key, "embed", "repl", res, [], len(dicts), cfg, task, frozen_hit=False))
+                return None  # fail open: the static text stays
+            keep = set(res.picks) | set(res.core)
+            chosen = [n for n in names if n in keep] if res.mode == "narrow" else (names if res.mode == "full" else list(res.core))
+            frozen = tp.Frozen(res.mode, chosen)
+            tp.frozen_put(key, frozen)
+            tp.log_event(tp.selection_row(tp.new_request_id(), key, "embed", "repl", res, chosen, len(dicts), cfg, task, frozen_hit=False))
+        return render_tools_block(dicts, frozen.names)
+
+    return provider
+
+
+def wire_default_providers(environ: Mapping[str, str] | None = None, *, embedder: Any = None,
+                           tools_source: Callable[[], Sequence[Mapping[str, Any]]] | None = None) -> dict[str, Any]:
+    """Startup wiring (``src/api/__init__.py::lifespan``). A no-op unless ``ORCHESTRATOR_TOOL_SELECTOR`` is on. Registers the native
+    and REPL providers over the pooled embedder. Never raises and never calls the network: document embedding stays lazy (first
+    request, under the picker's latency budget). With no embedder nothing is registered and the picker fails open to the full list."""
+    if selector_variant(environ) == "off":
+        return {"wired": False, "reason": "flag_off"}
+    try:
+        emb = embedder
+        if emb is None:
+            from src.repl_environment.context_search import pool_dense_embedder
+
+            emb = pool_dense_embedder()
+        if emb is None:
+            return {"wired": False, "reason": "no_embedder"}
+        set_native_selector_provider(make_native_provider(VARIANT_EMBED, embedder=emb))
+        if tools_source is not None:
+            set_selector_provider(make_repl_provider(emb, tools_source))
+        return {"wired": True, "embedder": str(getattr(emb, "model_id", "")), "repl": tools_source is not None}
+    except Exception as exc:  # noqa: BLE001 - startup must survive a broken picker
+        return {"wired": False, "reason": f"{type(exc).__name__}: {exc}"[:160]}

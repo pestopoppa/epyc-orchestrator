@@ -211,7 +211,11 @@ def bind_stub_tools(globals_dict: dict[str, Any], invoke: Callable[..., Any], to
 def install(env: Any, globals_dict: dict[str, Any], environ: Mapping[str, str] | None = None) -> list[str]:
     """Add the flagged functions to a REPL globals dict. Returns the names added (empty when everything is off)."""
     added: list[str] = []
-    if flag(ENV_SEARCH, environ) and getattr(env, "tool_registry", None) is not None:
+    # the picker is on -> search_tools/describe_tool are ALWAYS available (recovery when the needed tool was not picked)
+    from src.prompt_builders.tool_selector import selector_variant
+
+    search_on = flag(ENV_SEARCH, environ) or selector_variant(environ) != "off"
+    if search_on and getattr(env, "tool_registry", None) is not None:
         globals_dict["search_tools"] = lambda query, detail="names", k=8: search_tools(env._list_tools(), query, detail, k)
         globals_dict["describe_tool"] = lambda name: describe_tool(env._list_tools(), name)
         added += ["search_tools", "describe_tool"]

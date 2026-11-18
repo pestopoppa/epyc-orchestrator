@@ -55,6 +55,7 @@ STUB_CORE_LINES = (
     "- Each tool below is a Python function: call it directly and use the returned Python object (no json.loads).",
     "  A failing call raises an exception with the reason. `CALL(name, **kw)` / `TOOL(name, **kw)` still reach any other tool.",
     "- `list_tools()`: discover ALL available tools and their schemas (always available; the picks below add to it, never replace it).",
+    "  `search_tools(query)` / `describe_tool(name)` find or read one tool without listing everything.",
     "- `FINAL(answer)`: signal completion with the final answer. REQUIRED for every task.",
 )
 

@@ -763,26 +763,84 @@ def _run_client_tool_completion(
     apply in client mode; ``max_tokens`` is the only bound.
     """
     # codemode-ab CM-1: per-request tool selection on the DIRECT native path (flag ORCHESTRATOR_TOOL_SELECTOR, default off).
-    from src.prompt_builders.tool_selector import select_native_tools
+    from src.prompt_builders.tool_selector import select_native_tools_ex
 
-    result = primitives.chat_completion_call(
-        messages,
-        role=role,
-        tools=select_native_tools(request.tools, messages, request.tool_choice),
-        tool_choice=request.tool_choice,
-        n_tokens=request.max_tokens,
-        on_chunk=on_chunk,
-        **sampling_kwargs,
-    )
+    send_tools, pctx = select_native_tools_ex(request.tools, messages, request.tool_choice, scope=str(role))
+
+    def _call(msgs: list[dict[str, Any]], tools: Any) -> dict[str, Any]:
+        return primitives.chat_completion_call(
+            msgs,
+            role=role,
+            tools=tools,
+            tool_choice=request.tool_choice,
+            n_tokens=request.max_tokens,
+            on_chunk=on_chunk,
+            **sampling_kwargs,
+        )
+
+    result = _call(messages, send_tools)
     tool_calls = _normalise_client_tool_calls(list(result.get("tool_calls") or []))
     content = str(result.get("content") or "")
+    usage_total = result.get("usage")
+    if pctx is not None:
+        # Hardened picker only: server-executed list_tools/search_tools/describe_tool, one re-pick for a hallucinated tool name,
+        # and the called_not_selected log. All of it is skipped (pctx is None) when the picker is off or failed open.
+        from src.prompt_builders import tool_picker as _tp
+
+        msgs = list(messages)
+        repicked = False
+        for _step in range(3):
+            server = [c for c in tool_calls if c["function"]["name"] in _tp.SERVER_TOOLS]
+            if server and len(server) < len(tool_calls):  # mixed: the client's calls win, server calls are dropped
+                tool_calls = [c for c in tool_calls if c not in server]
+                break
+            if server:  # only server tools: execute them here and let the model continue
+                msgs.append({"role": "assistant", "content": content or None, "tool_calls": tool_calls})
+                for c in server:
+                    try:
+                        a = json.loads(c["function"]["arguments"] or "{}")
+                    except ValueError:
+                        a = {}
+                    msgs.append({"role": "tool", "tool_call_id": c["id"],
+                                 "content": _tp.execute_server_tool(c["function"]["name"], a if isinstance(a, dict) else {}, pctx)})
+            else:
+                allowed = {_tp_name(t) for t in pctx.original}
+                unknown = [c["function"]["name"] for c in tool_calls if c["function"]["name"] not in allowed]
+                if not unknown or repicked:
+                    break
+                repicked = True  # tool-not-found: re-pick ONCE server-side with the failed name, add to the frozen set, retry
+                _tp.frozen_add(pctx.key, pctx.repick(" ".join(unknown)))
+            send_tools = _tp.rebuild_tools(pctx)
+            result = _call(msgs, send_tools)
+            tool_calls = _normalise_client_tool_calls(list(result.get("tool_calls") or []))
+            content = str(result.get("content") or "")
+            usage_total = _sum_usage(usage_total, result.get("usage"))
+        tool_calls = [c for c in tool_calls if c["function"]["name"] not in _tp.SERVER_TOOLS]  # the client cannot run these
+        _tp.record_outcome(pctx, [c["function"]["name"] for c in tool_calls])
     if tool_calls:
         finish_reason = "tool_calls"
     else:
         finish_reason = str(result.get("finish_reason") or "stop")
         if finish_reason not in _CLIENT_FINISH_REASONS:
             finish_reason = "stop"
-    return content, tool_calls, finish_reason, _client_usage(result.get("usage"))
+    return content, tool_calls, finish_reason, _client_usage(usage_total)
+
+
+def _tp_name(tool: Any) -> str | None:
+    fn = tool.get("function") if isinstance(tool, dict) else None
+    return fn.get("name") if isinstance(fn, dict) else None
+
+
+def _sum_usage(a: Any, b: Any) -> Any:
+    """Sum the integer token counts of two backend usage dicts (picker re-calls); anything else keeps ``b``."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return b
+    out = dict(b)
+    for k in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+        x, y = a.get(k), b.get(k)
+        if isinstance(x, int) and isinstance(y, int):
+            out[k] = x + y
+    return out
 
 
 def _token_count(value: Any) -> int | None:

@@ -40,7 +40,8 @@ def test_hook_replaces_tools_only_when_on(monkeypatch):
     ts.set_selector_provider(lambda task: "SELECTED-TOOLS-BLOCK")
     monkeypatch.setenv(ts.ENV_FLAG, "embed")
     out = PromptBuilder().build_root_lm_prompt(state="s", original_prompt="task")
-    assert "SELECTED-TOOLS-BLOCK" in out and DEFAULT_ROOT_LM_TOOLS not in out
+    # the pick ADDS to the static list (list_tools, llm_call, escalate, ...), it never replaces it
+    assert "SELECTED-TOOLS-BLOCK" in out and DEFAULT_ROOT_LM_TOOLS in out
 
 
 def test_broken_provider_falls_back_to_static(monkeypatch):
