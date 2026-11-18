@@ -6,6 +6,7 @@ import ast
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 from typing import TYPE_CHECKING, NamedTuple
@@ -775,9 +776,54 @@ def auto_wrap_final(code: str) -> str:
             "print(",
         ]
         if not any(first_line.startswith(p) for p in non_final_patterns) and not _is_assignment_statement(first_line):
+            if _explicit_final_only() and not _is_final_answer_value(first_line):
+                return code
             return f"FINAL({first_line})"
 
     return code
+
+
+# codemode reliability fix 1 (ORCHESTRATOR_REPL_EXPLICIT_FINAL, DEFAULT OFF): a one-line TOOL CALL such as
+# ``list_dir("data")`` / ``CALL("x", ...)`` is exploration for the next turn, never an answer; auto-wrapping it
+# as FINAL(...) ended code-mode episodes on turn 1. With the flag on only an obvious answer VALUE is wrapped.
+ENV_EXPLICIT_FINAL = "ORCHESTRATOR_REPL_EXPLICIT_FINAL"
+_FINAL_NAME_RE = re.compile(r"^(?:final_?)?(?:answer|result|response|output|summary)s?$|^.+_(?:answer|result)$", re.IGNORECASE)
+
+
+def _explicit_final_only() -> bool:
+    return os.environ.get(ENV_EXPLICIT_FINAL, "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _is_final_answer_value(line: str) -> bool:
+    """True for a line that is clearly an answer value: a string/number literal (f-strings included), or a bare
+    variable named like answer/result. A call, subscript chain or anything computed is NOT (it may be a tool call).
+    ``answer = <literal>`` (the FINAL keyword-alias form) also counts."""
+    try:
+        tree = ast.parse(line)
+    except SyntaxError:
+        return False
+    if len(tree.body) != 1:
+        return False
+    node = tree.body[0]
+    if isinstance(node, ast.Assign):
+        alias = len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in _FINAL_KWARG_ALIASES
+        return alias and _is_literal_answer(node.value)
+    if not isinstance(node, ast.Expr):
+        return False
+    v = node.value
+    if isinstance(v, ast.Name):
+        return bool(_FINAL_NAME_RE.match(v.id))
+    return _is_literal_answer(v)
+
+
+def _is_literal_answer(v: ast.AST) -> bool:
+    if isinstance(v, ast.Constant):
+        return isinstance(v.value, (str, int, float)) and not isinstance(v.value, bool)
+    if isinstance(v, ast.UnaryOp) and isinstance(v.op, (ast.USub, ast.UAdd)):
+        return isinstance(v.operand, ast.Constant) and isinstance(v.operand.value, (int, float)) and not isinstance(v.operand.value, bool)
+    if isinstance(v, ast.JoinedStr):  # f"..." with only names/attributes inside, no calls
+        return not any(isinstance(n, ast.Call) for n in ast.walk(v))
+    return False
 
 
 # FINAL()'s keyword aliases (repl_environment/context.py ``_final``): ``answer = 42`` wrapped as
