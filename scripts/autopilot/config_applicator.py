@@ -70,6 +70,9 @@ HOT_SWAP_FEATURES = {
     "repl_turn_memory", "codemode_prompt_v2", "codemode_stubs", "repl_tool_search",
     "structured_read_only", "repl_classify", "repl_handles", "repl_write_dedupe",
     "pdf_route_lighton", "l3_textrow",
+    # D-RI-MONTY-LANE (2026-11-18): REPL cells routed to a confined Monty worker with CPython fallback.
+    # Read live per REPL construction and per cell; telemetry in logs/monty_lane.jsonl.
+    "monty_repl",
 }
 
 # Parameters applied via env vars (require API restart)
