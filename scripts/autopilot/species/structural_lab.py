@@ -33,9 +33,7 @@ STRATEGY_STORE_CHECKPOINT = "strategy_store"
 #: Security flags the autopilot may OBSERVE (they sit in the attested flag summary and the planner flag block) but must never
 #: propose, enable or disable. A trial that "improves" a score by switching containment or tool-text sanitising off is a
 #: security regression, not an optimisation. Only a human operator changes these (POST /config by hand, or the registry default).
-# repl_child_lane is pinned until the lane brokers the full REPL tool surface (writes, TOOL/CALL,
-# llm_call, shell); today free-form cells get read-only callbacks only, so a trial would break tool use.
-PINNED_OBSERVE_ONLY_FLAGS: frozenset[str] = frozenset({"exec_containment", "untrusted_tool_text", "repl_child_lane"})
+PINNED_OBSERVE_ONLY_FLAGS: frozenset[str] = frozenset({"exec_containment", "untrusted_tool_text"})
 
 AUTOPILOT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 EPISODIC_DB = MEMORY_DIR / "episodic.db"
