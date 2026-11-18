@@ -172,16 +172,26 @@ def monty_enabled() -> bool:
         return False
 
 
+def _env() -> Any:
+    """Env reads go through ``src.flag_env`` (runtime-overridable view of ``os.environ``; identical when untoggled)."""
+    try:
+        from src.flag_env import flag_env
+
+        return flag_env()
+    except Exception:  # noqa: BLE001
+        return os.environ
+
+
 def _env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, "") or default)
+        return int(_env().get(name, "") or default)
     except ValueError:
         return default
 
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.environ.get(name, "") or default)
+        return float(_env().get(name, "") or default)
     except ValueError:
         return default
 
@@ -456,7 +466,7 @@ _LOG_LOCK = threading.Lock()
 
 
 def telemetry_path() -> str:
-    env = os.environ.get(ENV_LOG)
+    env = _env().get(ENV_LOG)
     if env:
         return env
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -522,7 +532,7 @@ class _LanePool:
         import shutil
         import sys
 
-        env = os.environ.get("MONTY_BIN")
+        env = _env().get("MONTY_BIN")
         for cand in (env, os.path.join(os.path.dirname(sys.executable), "monty"), shutil.which("monty")):
             if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
                 return cand
@@ -530,7 +540,7 @@ class _LanePool:
 
     def _cgroup(self) -> Any:
         """An owned cgroup v2 leaf with BOTH memory.max and pids.max applied, or None (then rlimits are used)."""
-        mode = os.environ.get("ORCHESTRATOR_MONTY_CGROUP", "auto").strip().lower()
+        mode = _env().get("ORCHESTRATOR_MONTY_CGROUP", "auto").strip().lower()
         if mode == "off":
             return None
         from src.repl_environment.child_lane import LaneConfig, LaneUnavailable, _Cgroup
@@ -592,7 +602,7 @@ class _LanePool:
             self.nproc = head
             lines.append(f"__n=$(ls -d /proc/[0-9]*/task/[0-9]* 2>/dev/null | wc -l); ulimit -u $((__n + {head}))")
         lines.append(f"ulimit -v {as_mb * 1024}")
-        err_log = os.environ.get("ORCHESTRATOR_MONTY_WORKER_STDERR", "")
+        err_log = _env().get("ORCHESTRATOR_MONTY_WORKER_STDERR", "")
         if err_log:  # diagnostics: keep the worker's stderr (panics) instead of the pool's pipe
             lines.append(f"exec 2>>{shlex.quote(err_log)}")
         lines += [f"export {k}={shlex.quote(v)}" for k, v in env.items()]

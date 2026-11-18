@@ -88,7 +88,7 @@ def test_autopilot_can_hot_swap_the_flag():
         sys.path.pop(0)
     assert '"monty_repl",' in text
     assert "monty_repl" in Features().summary()  # POST /config applies any key of the summary
-    assert "`monty_repl` on/off" in (_ROOT / "scripts/autopilot/program.md").read_text()
+    assert "| `monty_repl` |" in (_ROOT / "scripts/autopilot/program.md").read_text()
 
 
 @needs_monty
