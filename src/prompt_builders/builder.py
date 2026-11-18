@@ -210,6 +210,11 @@ class PromptBuilder:
             except OSError as exc:
                 _log.warning("Failed to read tools_file %s: %s", self.config.tools_file, exc)
 
+        from src.prompt_builders import codemode_prompt as _cm
+
+        if self.config.codemode and _cm.prompt_v2_enabled():  # codemode fix 3 (default off; tool-task variant only)
+            return _cm.V2_TOOLS
+
         # P3d: A/B variant override via env var
         import os
         variant = os.environ.get("TOOL_DEFINITION_VARIANT", "").strip().lower()
@@ -235,6 +240,10 @@ class PromptBuilder:
                 return Path(self.config.rules_file).read_text().strip()
             except OSError as exc:
                 _log.warning("Failed to read rules_file %s: %s", self.config.rules_file, exc)
+        from src.prompt_builders import codemode_prompt as _cm
+
+        if self.config.codemode and _cm.prompt_v2_enabled():  # codemode fix 3 (default off; tool-task variant only)
+            return _cm.v2_rules()
         return DEFAULT_ROOT_LM_RULES
 
     def build_root_lm_prompt(
@@ -288,10 +297,15 @@ class PromptBuilder:
         # RTE-PFX-3: with repl_turn_counter_tail the per-turn counter leaves the head of the
         # state block (the first divergence between consecutive turns) for the prompt tail.
         _counter_tail = bool(getattr(_get_features(), "repl_turn_counter_tail", False))
+        from src.prompt_builders import codemode_prompt as _cm
+
+        _system_text = (
+            _cm.V2_SYSTEM  # codemode fix 3 (default off; tool-task variant only)
+            if self.config.codemode and _cm.prompt_v2_enabled()
+            else resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK)
+        )
         prompt = RootLMPrompt(
-            system=with_agent_file(
-                resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK), role
-            ) if role else resolve_prompt("root_lm_system", _ROOT_LM_SYSTEM_FALLBACK),
+            system=with_agent_file(_system_text, role) if role else _system_text,
             tools=_selected_tools_or(self._resolve_tools(), original_prompt),
             rules=self._resolve_rules(),
             state=state if _counter_tail else f"Turn {turn + 1}\n{state}",

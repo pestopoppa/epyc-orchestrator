@@ -1412,7 +1412,13 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             if os.path.exists(candidate):
                 sol_file = candidate
 
-        builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))
+        try:  # codemode fix 3: the v2 prompt is for task_root-scoped TOOL requests only (QA/coding keep today's text)
+            from src.repl_environment.task_root import request_scope as _request_scope
+
+            _codemode_task = _request_scope() is not None
+        except Exception:  # noqa: BLE001
+            _codemode_task = False
+        builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL, codemode=_codemode_task))
         _prompt_cfg = builder.config
         # INF-78 OAB-7: with a context bundle attached, the REPL's per-turn print cap is
         # THE bound on printed output reaching this prompt; widen the preview to it so a

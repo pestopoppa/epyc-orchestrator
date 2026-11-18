@@ -177,7 +177,7 @@ def run_arm_repl(task: Task, world: World, llm: Any, seed: int, arm: str, select
     from src.prompt_builders.code_utils import auto_wrap_final, extract_code_from_response
 
     env = make_repl(world)
-    builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))  # exactly what src/graph/helpers.py:1414 builds live
+    builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL, codemode=True))  # (codemode=True only matters with ORCHESTRATOR_CODEMODE_PROMPT=v2) exactly what src/graph/helpers.py:1414 builds live
     rec = {"in_tokens": 0, "out_tokens": 0, "in_cached": 0, "turns": 0, "failed_snippets": 0, "end_reason": "max_turns",
            "tools_prompt_chars": 0}
     prev_flag = os.environ.get(ts.ENV_FLAG)

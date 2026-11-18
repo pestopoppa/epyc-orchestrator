@@ -47,6 +47,10 @@ class PromptConfig:
     rules_file: str | None = None
     """Path to external rules prompt file. Overrides DEFAULT_ROOT_LM_RULES when set."""
 
+    codemode: bool = False
+    """Code-mode / tool-task prompt variant. Only with this AND ``ORCHESTRATOR_CODEMODE_PROMPT=v2`` does the builder use
+    the v2 tools/rules text (``codemode_prompt.py``); QA and coding prompts never do."""
+
 
 @dataclass
 class RootLMPrompt:
