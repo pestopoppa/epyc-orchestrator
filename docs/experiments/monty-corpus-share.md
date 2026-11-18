@@ -76,13 +76,14 @@ state-loss ones):
 
 | | Monty runs | Monty fails |
 |---|---|---|
-| static screen says in subset | 88 | 36 |
-| static screen says out | 9 | 46 |
+| static screen says in subset | 88 | 24 |
+| static screen says out | 9 | 58 |
 
-Precision of "in subset" is 71%; the 36 misses are mostly runtime errors, undefined cross-cell names and gate refusals
-that a name screen cannot see, plus model bugs. All 45 cells the screen flagged for an outside-the-bridge callable failed under Monty (no false positive). It missed 12 such
-cells: `TOOL`, `llm_batch`, `list_tools`, `llm_call` (not registered in the probe environment, so the screen did not know they
-were REPL callables; fixable by listing the REPL tool names) and `peek`/`grep` called with `file_path`. The Monty-language-feature checks
+Precision of "in subset" is 79% (88 of 112); the 24 misses are mostly runtime errors, undefined cross-cell names and gate refusals
+that a name screen cannot see, plus model bugs. All 58 failing cells that the screen flagged for an outside-the-bridge callable failed under Monty (59 flagged, the 59th
+was indeterminate), and no callable-boundary failure was missed. A first pass missed 12 (`TOOL`, `llm_batch`, `list_tools`,
+`llm_call`, and `peek`/`grep` with `file_path`); the screen now knows those names and checks the `file_path` keyword, and the
+table above is from the rerun. The Monty-language-feature checks
 (generators, absent modules) never fired on a cell that mattered.
 
 ## Recommendation
@@ -96,12 +97,11 @@ were REPL callables; fixable by listing the REPL tool names) and `peek`/`grep` c
    `list_dir`, `file_write_safe`, `run_shell`, `llm_call`, `TOOL` are refused by design. The statistics/numpy/generator/
    exception-subclass gaps measured in the slice are real but rare here (zero cells).
 3. A static screen is therefore cheap: a gate check plus a callable-name check against the full REPL tool-name list and
-   the `file_path` kwarg on peek/grep, about 20 lines of `ast`, with no need for a Monty feature model. If T2 goes ahead, wire exactly that screen, route in-screen cells to
+   the `file_path` kwarg on peek/grep (implemented in `static_screen`), about 20 lines of `ast`, with no need for a Monty feature model. If T2 goes ahead, wire exactly that screen, route in-screen cells to
    Monty and everything else to CPython, and log the screen verdict with each cell. Do not build a larger feature screen.
 
-**Before T2 commits effort, close the measurement gap:** persist the REPL code with its role. The smallest change is
-to add `role` (and request id) to `tap_write_repl_exec` or to write `get_code_log()` to the session store at
-episode end, run for a few days of real traffic, then re-run `monty_corpus_share.py` unchanged on that log. Until then
+**Before T2 commits effort, close the measurement gap:** persist the REPL code with its role. Done in this branch: the tap now records `role`, `request_id` and `task_id` on its header line (`monty_corpus_share.py`
+reads them when present). Once the API is reloaded, run for a few days of real traffic, then re-run `monty_corpus_share.py` unchanged on that log. Until then
 the share for worker roles is unmeasured, and the only defensible claim is the screen's design: it has no false positive on the
 callable boundary in this corpus, and the Monty-language gaps it would also test for never occurred.
 

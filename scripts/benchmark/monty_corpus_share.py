@@ -51,7 +51,7 @@ def load_tap() -> list[dict]:
     text = open(TAP, errors="replace").read()
     cells: list[dict] = []
     pat = re.compile(
-        r"={72}\n\[(?P<ts>[^\]]+)\] REPL turn (?P<turn>\d+)\n-{72}\n\[turn \d+\] \$ python3 <<'CODE'\n(?P<code>.*?)\nCODE\n"
+        r"={72}\n\[(?P<ts>[^\]]+)\] REPL turn (?P<turn>\d+)(?: \| (?P<meta>[^\n]*))?\n-{72}\n\[turn \d+\] \$ python3 <<'CODE'\n(?P<code>.*?)\nCODE\n"
         r"(?P<res>.*?)(?=\n?={72}\n|\Z)", re.S)
     sess = 0
     for m in pat.finditer(text):
@@ -59,8 +59,10 @@ def load_tap() -> list[dict]:
         if turn == 1:
             sess += 1
         res = m["res"]
+        meta = dict(kv.split("=", 1) for kv in (m["meta"] or "").split() if "=" in kv)
         cells.append({
-            "source": "A_tap", "role": "unlabelled", "session": sess, "turn": turn, "ts": m["ts"],
+            "source": "A_tap", "role": meta.get("role", "unlabelled"), "request_id": meta.get("request_id"),
+            "task_id": meta.get("task_id"), "session": sess, "turn": turn, "ts": m["ts"],
             "code": m["code"], "orig_error": ("ERROR:" in res), "orig_final": ("] FINAL" in res),
             "orig_err_text": res.split("ERROR:", 1)[1][:300] if "ERROR:" in res else "",
         })
@@ -155,8 +157,10 @@ def static_screen(code: str, repl_callables: set[str]) -> list[str]:
             out.add(f"absent_name:{n.id}")
         elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
             nm = n.func.id
-            if nm in repl_callables and nm not in BRIDGED and nm not in defined:
+            if nm in (repl_callables | REPL_TOOL_NAMES) and nm not in BRIDGED and nm not in defined:
                 out.add(f"repl_callable:{nm}")
+            elif nm in ("peek", "grep") and any(k.arg == "file_path" for k in n.keywords):
+                out.add(f"repl_callable:{nm}_file_path")
         elif isinstance(n, ast.Match):
             out.add("match_statement")
         elif isinstance(n, (ast.With, ast.AsyncWith)):

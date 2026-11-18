@@ -198,6 +198,10 @@
     "cells": 22,
     "pass": 0
    },
+   "repl_callable:TOOL": {
+    "cells": 4,
+    "pass": 0
+   },
    "repl_callable:file_info": {
     "cells": 4,
     "pass": 0
@@ -206,12 +210,32 @@
     "cells": 19,
     "pass": 0
    },
+   "repl_callable:grep_file_path": {
+    "cells": 1,
+    "pass": 0
+   },
    "repl_callable:list_dir": {
     "cells": 15,
     "pass": 0
    },
+   "repl_callable:list_tools": {
+    "cells": 1,
+    "pass": 0
+   },
+   "repl_callable:llm_batch": {
+    "cells": 5,
+    "pass": 0
+   },
+   "repl_callable:llm_call": {
+    "cells": 2,
+    "pass": 0
+   },
    "repl_callable:ocr_document": {
     "cells": 5,
+    "pass": 0
+   },
+   "repl_callable:peek_file_path": {
+    "cells": 3,
     "pass": 0
    },
    "repl_callable:run_shell": {
@@ -221,8 +245,8 @@
   },
   "static_screen_confusion": {
    "static_in_subset|monty_runs": 88,
-   "static_in_subset|monty_fails": 36,
-   "static_out|monty_fails": 46,
+   "static_in_subset|monty_fails": 24,
+   "static_out|monty_fails": 58,
    "static_out|monty_runs": 9
   }
  },
@@ -242,7 +266,7 @@
    "orig_error": false,
    "head": "FINAL(\"42\")",
    "err": "",
-   "ms": 83.5
+   "ms": 86.9
   },
   {
    "source": "A_tap",
@@ -259,7 +283,7 @@
    "orig_error": false,
    "head": "FINAL(42)",
    "err": "",
-   "ms": 27.5
+   "ms": 31.1
   },
   {
    "source": "A_tap",
@@ -276,7 +300,7 @@
    "orig_error": false,
    "head": "x = 2 + 2 \\n FINAL(x)",
    "err": "",
-   "ms": 36.1
+   "ms": 28.6
   },
   {
    "source": "A_tap",
@@ -293,7 +317,7 @@
    "orig_error": false,
    "head": "for i in range(3): \\n     print(f'step {i}')",
    "err": "",
-   "ms": 28.1
+   "ms": 30.0
   },
   {
    "source": "A_tap",
@@ -310,7 +334,7 @@
    "orig_error": false,
    "head": "FINAL(\"done-result\")",
    "err": "",
-   "ms": 27.4
+   "ms": 30.0
   },
   {
    "source": "A_tap",
@@ -327,7 +351,7 @@
    "orig_error": true,
    "head": "result = \"[ERROR: tool call 'web_search' NOT executed: its JSON arguments are malformed and could no",
    "err": "",
-   "ms": 27.2
+   "ms": 28.1
   },
   {
    "source": "A_tap",
@@ -344,7 +368,7 @@
    "orig_error": true,
    "head": "result = \"[ERROR: tool call 'web_search' NOT executed: its JSON arguments are malformed and could no",
    "err": "",
-   "ms": 25.7
+   "ms": 28.6
   },
   {
    "source": "A_tap",
@@ -361,7 +385,7 @@
    "orig_error": true,
    "head": "results = [] \\n for i in range(5): \\n     results.append(10 / (2 - i)) \\n print(results)",
    "err": "ZeroDivisionError: division by zero",
-   "ms": 26.9
+   "ms": 28.1
   },
   {
    "source": "A_tap",
@@ -378,7 +402,7 @@
    "orig_error": false,
    "head": "x = 42 \\n y = x * 2 \\n z = y + 1",
    "err": "",
-   "ms": 27.1
+   "ms": 29.1
   },
   {
    "source": "A_tap",
@@ -395,7 +419,7 @@
    "orig_error": false,
    "head": "FINAL(\"done\")",
    "err": "",
-   "ms": 26.4
+   "ms": 29.4
   },
   {
    "source": "A_tap",
@@ -412,7 +436,7 @@
    "orig_error": false,
    "head": "FINAL('done')",
    "err": "",
-   "ms": 30.6
+   "ms": 30.7
   },
   {
    "source": "A_tap",
@@ -429,7 +453,7 @@
    "orig_error": false,
    "head": "FINAL(\"completed\")",
    "err": "",
-   "ms": 30.8
+   "ms": 39.3
   },
   {
    "source": "A_tap",
@@ -446,7 +470,7 @@
    "orig_error": false,
    "head": "FINAL(\"D\")",
    "err": "",
-   "ms": 28.9
+   "ms": 29.9
   },
   {
    "source": "A_tap",
@@ -463,7 +487,7 @@
    "orig_error": false,
    "head": "print('hello')",
    "err": "",
-   "ms": 29.6
+   "ms": 42.3
   },
   {
    "source": "A_tap",
@@ -480,7 +504,7 @@
    "orig_error": false,
    "head": "FINAL(\"extracted\")",
    "err": "",
-   "ms": 31.6
+   "ms": 28.9
   },
   {
    "source": "A_tap",
@@ -497,7 +521,7 @@
    "orig_error": false,
    "head": "FINAL(\"Paris\")",
    "err": "",
-   "ms": 29.6
+   "ms": 28.7
   },
   {
    "source": "A_tap",
@@ -514,7 +538,7 @@
    "orig_error": false,
    "head": "FINAL(\"4\")",
    "err": "",
-   "ms": 28.5
+   "ms": 26.7
   },
   {
    "source": "A_tap",
@@ -531,7 +555,7 @@
    "orig_error": true,
    "head": "results = [] \\n for i in range(5): \\n     results.append(10 / (2 - i))",
    "err": "ZeroDivisionError: division by zero",
-   "ms": 30.2
+   "ms": 29.3
   },
   {
    "source": "A_tap",
@@ -548,7 +572,7 @@
    "orig_error": true,
    "head": "FINAL(1 / 0)",
    "err": "ZeroDivisionError: division by zero",
-   "ms": 29.4
+   "ms": 28.3
   },
   {
    "source": "A_tap",
@@ -565,7 +589,7 @@
    "orig_error": false,
    "head": "FINAL(\"summary here\")",
    "err": "",
-   "ms": 29.9
+   "ms": 30.5
   },
   {
    "source": "A_tap",
@@ -582,7 +606,7 @@
    "orig_error": false,
    "head": "FINAL(\"21\")",
    "err": "",
-   "ms": 30.3
+   "ms": 30.1
   },
   {
    "source": "A_tap",
@@ -599,7 +623,7 @@
    "orig_error": false,
    "head": "FINAL(\"fixed\")",
    "err": "",
-   "ms": 30.5
+   "ms": 29.2
   },
   {
    "source": "A_tap",
@@ -616,7 +640,7 @@
    "orig_error": false,
    "head": "FINAL(\"solved\")",
    "err": "",
-   "ms": 28.8
+   "ms": 31.5
   },
   {
    "source": "A_tap",
@@ -633,7 +657,7 @@
    "orig_error": false,
    "head": "FINAL(\"ok\")",
    "err": "",
-   "ms": 28.2
+   "ms": 40.1
   },
   {
    "source": "A_tap",
@@ -650,7 +674,7 @@
    "orig_error": false,
    "head": "big = context['big'] \\n n_hits = len(context.grep('needle')) \\n print(len(big), n_hits)",
    "err": "TypeError: string indices must be integers, not 'str'",
-   "ms": 31.2
+   "ms": 28.9
   },
   {
    "source": "A_tap",
@@ -667,7 +691,7 @@
    "orig_error": false,
    "head": "FINAL('{\"abstain\": \"nothing to change\"}')",
    "err": "",
-   "ms": 0.3
+   "ms": 0.4
   },
   {
    "source": "A_tap",
@@ -684,7 +708,7 @@
    "orig_error": false,
    "head": "FINAL('hello')",
    "err": "",
-   "ms": 29.2
+   "ms": 26.1
   },
   {
    "source": "A_tap",
@@ -701,7 +725,7 @@
    "orig_error": true,
    "head": "FINAL(x = broken_code())",
    "err": "NameError: name 'broken_code' is not defined",
-   "ms": 30.0
+   "ms": 27.1
   },
   {
    "source": "A_tap",
@@ -718,7 +742,7 @@
    "orig_error": false,
    "head": "FINAL('fixed')",
    "err": "",
-   "ms": 0.3
+   "ms": 0.4
   },
   {
    "source": "A_tap",
@@ -735,7 +759,7 @@
    "orig_error": false,
    "head": "FINAL(x = 1)",
    "err": "ValueError: FINAL() requires an answer. Use FINAL(answer) or FINAL(result=answer).",
-   "ms": 30.9
+   "ms": 33.6
   },
   {
    "source": "A_tap",
@@ -752,7 +776,7 @@
    "orig_error": true,
    "head": "FINAL(x = attempt())",
    "err": "NameError: name 'attempt' is not defined",
-   "ms": 28.2
+   "ms": 27.1
   },
   {
    "source": "A_tap",
@@ -769,7 +793,7 @@
    "orig_error": true,
    "head": "FINAL(x = broken())",
    "err": "NameError: name 'broken' is not defined",
-   "ms": 29.6
+   "ms": 25.3
   },
   {
    "source": "A_tap",
@@ -786,7 +810,7 @@
    "orig_error": false,
    "head": "FINAL('{\"answer\": \"yes\"}')",
    "err": "",
-   "ms": 31.1
+   "ms": 29.9
   },
   {
    "source": "A_tap",
@@ -803,7 +827,7 @@
    "orig_error": false,
    "head": "FINAL('{\"wrong\": 1}')",
    "err": "",
-   "ms": 29.8
+   "ms": 28.5
   },
   {
    "source": "A_tap",
@@ -820,7 +844,7 @@
    "orig_error": false,
    "head": "FINAL('{\"answer\": \"fixed\"}')",
    "err": "",
-   "ms": 28.0
+   "ms": 27.8
   },
   {
    "source": "A_tap",
@@ -837,7 +861,7 @@
    "orig_error": false,
    "head": "FINAL('{\"answer\": \"x\"}')",
    "err": "",
-   "ms": 30.4
+   "ms": 25.3
   },
   {
    "source": "A_tap",
@@ -854,7 +878,7 @@
    "orig_error": false,
    "head": "FINAL(1)",
    "err": "",
-   "ms": 29.7
+   "ms": 25.8
   },
   {
    "source": "A_tap",
@@ -865,13 +889,15 @@
    "fixture": false,
    "occurrences": 95,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:TOOL"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:TOOL",
    "orig_error": false,
    "head": "a = TOOL(\"calc\", n=2) \\n print(a)",
    "err": "NameError: name 'TOOL' is not defined",
-   "ms": 28.3
+   "ms": 40.1
   },
   {
    "source": "A_tap",
@@ -888,7 +914,7 @@
    "orig_error": false,
    "head": "print(peek(12))",
    "err": "",
-   "ms": 160.4
+   "ms": 172.2
   },
   {
    "source": "A_tap",
@@ -899,7 +925,9 @@
    "fixture": false,
    "occurrences": 79,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:TOOL"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:TOOL",
    "orig_error": false,
@@ -933,13 +961,15 @@
    "fixture": true,
    "occurrences": 64,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:TOOL"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:TOOL",
    "orig_error": false,
    "head": "print(TOOL(\"calc\", n=5)[\"value\"])",
    "err": "NameError: name 'TOOL' is not defined",
-   "ms": 0.2
+   "ms": 0.3
   },
   {
    "source": "A_tap",
@@ -973,7 +1003,7 @@
    "orig_error": false,
    "head": "print(big[:40])",
    "err": "NameError: name 'big' is not defined",
-   "ms": 32.7
+   "ms": 30.0
   },
   {
    "source": "A_tap",
@@ -990,7 +1020,7 @@
    "orig_error": false,
    "head": "print(context['big'])",
    "err": "TypeError: string indices must be integers, not 'str'",
-   "ms": 32.4
+   "ms": 29.7
   },
   {
    "source": "A_tap",
@@ -1007,7 +1037,7 @@
    "orig_error": false,
    "head": "FINAL('ok')",
    "err": "",
-   "ms": 33.9
+   "ms": 31.3
   },
   {
    "source": "A_tap",
@@ -1018,13 +1048,15 @@
    "fixture": false,
    "occurrences": 106,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:TOOL"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:TOOL",
    "orig_error": false,
    "head": "t = TOOL(\"get_time\") \\n print(t[\"date\"] == t[\"datetime\"][:10])",
    "err": "NameError: name 'TOOL' is not defined",
-   "ms": 34.1
+   "ms": 29.1
   },
   {
    "source": "A_tap",
@@ -1035,7 +1067,9 @@
    "fixture": false,
    "occurrences": 99,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:list_tools"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:list_tools",
    "orig_error": false,
@@ -1052,13 +1086,15 @@
    "fixture": false,
    "occurrences": 88,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:llm_call"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:llm_call",
    "orig_error": false,
    "head": "s = llm_call(\"Reply with the single word OK.\", role=\"worker\") \\n print(\"sub:\", s)",
    "err": "NameError: name 'llm_call' is not defined",
-   "ms": 0.3
+   "ms": 0.4
   },
   {
    "source": "A_tap",
@@ -1075,7 +1111,7 @@
    "orig_error": false,
    "head": "print(peek(16))",
    "err": "",
-   "ms": 9.7
+   "ms": 8.1
   },
   {
    "source": "A_tap",
@@ -1092,7 +1128,7 @@
    "orig_error": true,
    "head": "x = broken_code()",
    "err": "NameError: name 'broken_code' is not defined",
-   "ms": 33.3
+   "ms": 29.2
   },
   {
    "source": "A_tap",
@@ -1109,7 +1145,7 @@
    "orig_error": false,
    "head": "x = 1",
    "err": "",
-   "ms": 31.9
+   "ms": 29.9
   },
   {
    "source": "A_tap",
@@ -1126,7 +1162,7 @@
    "orig_error": true,
    "head": "x = attempt()",
    "err": "NameError: name 'attempt' is not defined",
-   "ms": 33.8
+   "ms": 29.0
   },
   {
    "source": "A_tap",
@@ -1143,7 +1179,7 @@
    "orig_error": true,
    "head": "x = broken()",
    "err": "NameError: name 'broken' is not defined",
-   "ms": 32.8
+   "ms": 30.3
   },
   {
    "source": "A_tap",
@@ -1160,7 +1196,7 @@
    "orig_error": false,
    "head": "FINAL('coder fixed')",
    "err": "",
-   "ms": 32.5
+   "ms": 31.4
   },
   {
    "source": "A_tap",
@@ -1177,7 +1213,7 @@
    "orig_error": false,
    "head": "FINAL('architect solution')",
    "err": "",
-   "ms": 31.5
+   "ms": 31.1
   },
   {
    "source": "A_tap",
@@ -1194,7 +1230,7 @@
    "orig_error": false,
    "head": "FINAL('architect fixed schema')",
    "err": "",
-   "ms": 31.6
+   "ms": 30.6
   },
   {
    "source": "A_tap",
@@ -1211,7 +1247,7 @@
    "orig_error": false,
    "head": "FINAL('fixed by escalation')",
    "err": "",
-   "ms": 31.2
+   "ms": 31.7
   },
   {
    "source": "A_tap",
@@ -1228,7 +1264,7 @@
    "orig_error": false,
    "head": "FINAL(\"revised\")",
    "err": "",
-   "ms": 32.6
+   "ms": 31.4
   },
   {
    "source": "A_tap",
@@ -1247,7 +1283,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 31.6
+   "ms": 30.3
   },
   {
    "source": "A_tap",
@@ -1321,7 +1357,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 32.8
+   "ms": 33.2
   },
   {
    "source": "A_tap",
@@ -1340,7 +1376,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 31.4
+   "ms": 31.3
   },
   {
    "source": "A_tap",
@@ -1359,7 +1395,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 31.9
+   "ms": 31.3
   },
   {
    "source": "A_tap",
@@ -1378,7 +1414,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 29.5
+   "ms": 29.3
   },
   {
    "source": "A_tap",
@@ -1416,7 +1452,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 29.6
+   "ms": 27.6
   },
   {
    "source": "A_tap",
@@ -1435,7 +1471,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 29.8
+   "ms": 104.1
   },
   {
    "source": "A_tap",
@@ -1454,7 +1490,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 31.2
+   "ms": 28.1
   },
   {
    "source": "A_tap",
@@ -1473,7 +1509,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 31.4
+   "ms": 29.7
   },
   {
    "source": "A_tap",
@@ -1492,7 +1528,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15b-short-window-resume/controller-e2",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 30.2
+   "ms": 31.3
   },
   {
    "source": "A_tap",
@@ -1511,7 +1547,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15-decision-cohort-ready/proof-checkp",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 38.8
+   "ms": 31.1
   },
   {
    "source": "A_tap",
@@ -1530,7 +1566,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15-decision-cohort-ready/proof-checkp",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 28.5
+   "ms": 29.9
   },
   {
    "source": "A_tap",
@@ -1549,7 +1585,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/refactor-01a16fc3/hil15-decision-cohort-ready/proof-checkp",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 28.2
+   "ms": 27.6
   },
   {
    "source": "A_tap",
@@ -1568,7 +1604,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/hil15-shared-successor-s0/test_controller_e2e/synthetic-un",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 31.4
+   "ms": 26.4
   },
   {
    "source": "A_tap",
@@ -1587,7 +1623,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/hil15-shared-successor-s0/test_controller_e2e/synthetic-un",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 30.1
+   "ms": 28.7
   },
   {
    "source": "A_tap",
@@ -1606,7 +1642,7 @@
    "orig_error": false,
    "head": "print(file_write_safe('/mnt/raid0/llm/tmp/hil15-shared-successor-s0/test_controller_e2e/synthetic-un",
    "err": "PermissionError: file_write_safe() is not available in the Monty lane (callback denied)",
-   "ms": 29.5
+   "ms": 30.8
   },
   {
    "source": "A_tap",
@@ -1623,7 +1659,7 @@
    "orig_error": false,
    "head": "print(\"\u03b1\" * 6000 + \"MIDDLE-NEEDLE\" + \"z\" * 6000)",
    "err": "",
-   "ms": 34.0
+   "ms": 30.2
   },
   {
    "source": "A_tap",
@@ -1640,7 +1676,7 @@
    "orig_error": true,
    "head": "print(\"X\" * 300 + \"MID-NEEDLE\" + \"Y\" * 300) \\n input()",
    "err": "Dangerous operation not allowed: input(). Hint: input() is not available in the REPL. For competitive programming solutions that read from stdin, wrap your solu",
-   "ms": 0.1
+   "ms": 0.2
   },
   {
    "source": "A_tap",
@@ -1657,7 +1693,7 @@
    "orig_error": false,
    "head": "print(\"X\" * 300 + \"MID-NEEDLE\" + \"Y\" * 300) \\n FINAL(\"done\")",
    "err": "",
-   "ms": 29.9
+   "ms": 27.8
   },
   {
    "source": "A_tap",
@@ -1674,7 +1710,7 @@
    "orig_error": false,
    "head": "print(\"X\" * 300 + \"MID-NEEDLE\" + \"Y\" * 300) \\n FINAL(\"42\")",
    "err": "",
-   "ms": 28.8
+   "ms": 26.4
   },
   {
    "source": "A_tap",
@@ -1691,7 +1727,7 @@
    "orig_error": false,
    "head": "print(\"refused shipment\")",
    "err": "",
-   "ms": 30.6
+   "ms": 28.3
   },
   {
    "source": "A_tap",
@@ -1708,7 +1744,7 @@
    "orig_error": true,
    "head": "print(\"X\" * 300 + \"MID-NEEDLE\" + \"Y\" * 300) \\n read_stdin()",
    "err": "NameError: name 'read_stdin' is not defined",
-   "ms": 29.4
+   "ms": 24.9
   },
   {
    "source": "A_tap",
@@ -1725,7 +1761,7 @@
    "orig_error": true,
    "head": "print(\"X\" * 300 + \"MID-NEEDLE\" + \"Y\" * 300) \\n raise ValueError(\"failure-witness\") \\n FINAL(\"42\")",
    "err": "ValueError: failure-witness",
-   "ms": 30.9
+   "ms": 35.4
   },
   {
    "source": "A_tap",
@@ -1742,7 +1778,7 @@
    "orig_error": false,
    "head": "print(\"retry-action\") \\n FINAL(\"recovered\")",
    "err": "",
-   "ms": 30.0
+   "ms": 24.3
   },
   {
    "source": "A_tap",
@@ -1759,7 +1795,7 @@
    "orig_error": false,
    "head": "FINAL(\"already acted\")",
    "err": "",
-   "ms": 27.7
+   "ms": 31.5
   },
   {
    "source": "A_tap",
@@ -1770,13 +1806,15 @@
    "fixture": false,
    "occurrences": 6,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:CALL"
+   ],
    "verdict": "orig_also_errored",
    "klass": "repl_callable_unbridged:CALL",
    "orig_error": true,
    "head": "FINAL(CALL(\"web_search\", query=\"x\"))",
    "err": "NameError: name 'CALL' is not defined",
-   "ms": 29.4
+   "ms": 41.2
   },
   {
    "source": "A_tap",
@@ -1793,7 +1831,7 @@
    "orig_error": false,
    "head": "x = 41 \\n print(x + 1)",
    "err": "",
-   "ms": 29.2
+   "ms": 51.7
   },
   {
    "source": "A_tap",
@@ -1812,7 +1850,7 @@
    "orig_error": true,
    "head": "FINAL(raise ValueError('EXECUTED-ERROR'))",
    "err": "SyntaxError: Expected `)`, found `raise`",
-   "ms": 0.3
+   "ms": 0.6
   },
   {
    "source": "A_tap",
@@ -1829,7 +1867,7 @@
    "orig_error": true,
    "head": "print(1 / 0)",
    "err": "ZeroDivisionError: division by zero",
-   "ms": 27.8
+   "ms": 88.4
   },
   {
    "source": "A_tap",
@@ -1846,7 +1884,7 @@
    "orig_error": false,
    "head": "print('next')",
    "err": "",
-   "ms": 0.4
+   "ms": 0.8
   },
   {
    "source": "A_tap",
@@ -1863,7 +1901,7 @@
    "orig_error": false,
    "head": "print(7)",
    "err": "",
-   "ms": 25.7
+   "ms": 77.6
   },
   {
    "source": "A_tap",
@@ -1880,7 +1918,7 @@
    "orig_error": false,
    "head": "print('first work')",
    "err": "",
-   "ms": 28.1
+   "ms": 69.9
   },
   {
    "source": "A_tap",
@@ -1897,7 +1935,7 @@
    "orig_error": false,
    "head": "print('second work')",
    "err": "",
-   "ms": 0.3
+   "ms": 0.7
   },
   {
    "source": "A_tap",
@@ -1914,7 +1952,7 @@
    "orig_error": false,
    "head": "FINAL('Test answer')",
    "err": "",
-   "ms": 26.7
+   "ms": 80.5
   },
   {
    "source": "A_tap",
@@ -1931,7 +1969,7 @@
    "orig_error": false,
    "head": "FINAL('C3-104')",
    "err": "",
-   "ms": 29.7
+   "ms": 53.6
   },
   {
    "source": "B_3way_final",
@@ -1950,7 +1988,7 @@
    "orig_error": false,
    "head": "def int_to_words(n): \\n     \"\"\"Convert integer (0-999999) to English words.\"\"\" \\n      \\n     if n == 0: \\n     ",
    "err": "SyntaxError: Expected `,`, found name",
-   "ms": 29.6
+   "ms": 51.0
   },
   {
    "source": "B_3way_final",
@@ -1969,7 +2007,7 @@
    "orig_error": false,
    "head": "def int_to_words(n): \\n     \"\"\"Convert integer (0-999999) to English words.\"\"\" \\n     if n == 0: \\n         r",
    "err": "SyntaxError: Expected `else`, found `:`",
-   "ms": 29.4
+   "ms": 52.1
   },
   {
    "source": "B_3way_final",
@@ -1989,7 +2027,7 @@
    "orig_error": false,
    "head": "import time \\n  \\n class CacheProxy: \\n     def __init__(self, backend, ttl=60): \\n         self.backend = backe",
    "err": "NotImplementedError: The monty syntax parser does not yet support the 'del' statement",
-   "ms": 28.0
+   "ms": 53.9
   },
   {
    "source": "B_3way_final",
@@ -2006,7 +2044,7 @@
    "orig_error": false,
    "head": "def min_Operations(x, y): \\n     # Calculate the absolute difference between x and y \\n     return abs(y -",
    "err": "AssertionError: assert 2 == 1",
-   "ms": 29.6
+   "ms": 54.5
   },
   {
    "source": "B_3way_final",
@@ -2023,7 +2061,7 @@
    "orig_error": false,
    "head": "def power(a, b): \\n     # Base case for exponent 0 \\n     if b == 0: \\n         return 1 \\n     # Recursive call",
    "err": "",
-   "ms": 28.7
+   "ms": 48.4
   },
   {
    "source": "B_3way_final",
@@ -2040,7 +2078,7 @@
    "orig_error": false,
    "head": "def smallest_num(nums): \\n     # Ensure the list is not empty to avoid errors \\n     if not nums: \\n         ",
    "err": "",
-   "ms": 29.0
+   "ms": 57.6
   },
   {
    "source": "B_3way_final",
@@ -2059,7 +2097,7 @@
    "orig_error": false,
    "head": "def surfacearea_cone(r, h): \\n     import math  # Import math module for mathematical functions \\n     l =",
    "err": "",
-   "ms": 30.1
+   "ms": 56.6
   },
   {
    "source": "B_3way_final",
@@ -2078,7 +2116,7 @@
    "orig_error": false,
    "head": "import math \\n  \\n def circle_circumference(radius): \\n     # Calculate the circumference using the formula 2",
    "err": "AssertionError: assert 62.83185307179586 == 62.830000000000005",
-   "ms": 29.2
+   "ms": 85.3
   },
   {
    "source": "B_3way_final",
@@ -2097,7 +2135,7 @@
    "orig_error": false,
    "head": "import math \\n  \\n def circle_circumference(radius): \\n     # Calculate the circumference using the formula 2",
    "err": "AssertionError: assert 62.83185307179586 == 62.830000000000005",
-   "ms": 30.4
+   "ms": 77.4
   },
   {
    "source": "B_3way_final",
@@ -2116,7 +2154,7 @@
    "orig_error": false,
    "head": "def modified_encode(lst): \\n     if not lst:  # Handle empty list case \\n         return [] \\n      \\n     from ",
    "err": "",
-   "ms": 30.5
+   "ms": 84.5
   },
   {
    "source": "B_3way_final",
@@ -2135,7 +2173,7 @@
    "orig_error": false,
    "head": "import re \\n  \\n def match(s): \\n     # Use regex to find a pattern of one uppercase letter followed by lower",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 29.9
+   "ms": 71.4
   },
   {
    "source": "B_3way_final",
@@ -2154,7 +2192,7 @@
    "orig_error": false,
    "head": "def special_factorial(n): \\n     \"\"\"The Brazilian factorial is defined as: \\n     brazilian_factorial(n) =",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 28.8
+   "ms": 77.5
   },
   {
    "source": "B_3way_final",
@@ -2173,7 +2211,7 @@
    "orig_error": false,
    "head": "def special_factorial(n): \\n     \"\"\"The Brazilian factorial is defined as: \\n     brazilian_factorial(n) =",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 28.7
+   "ms": 64.3
   },
   {
    "source": "B_3way_final",
@@ -2190,7 +2228,7 @@
    "orig_error": false,
    "head": "def max_sum_increasing_subseq(arr, n, i, k): \\n     # Initialize dp array where dp[j] stores the maximu",
    "err": "AssertionError: assert 106 == 11",
-   "ms": 31.4
+   "ms": 65.0
   },
   {
    "source": "B_3way_final",
@@ -2207,7 +2245,7 @@
    "orig_error": false,
    "head": "def even_binomial_Coeff_Sum(n): \\n     # Sum of even index binomial coefficients is 2^(n-1) \\n     return ",
    "err": "",
-   "ms": 30.1
+   "ms": 63.1
   },
   {
    "source": "B_3way_final",
@@ -2227,7 +2265,7 @@
    "orig_error": false,
    "head": "import math \\n  \\n def even_binomial_Coeff_Sum(n): \\n     # Calculate the sum of binomial coefficients at eve",
    "err": "",
-   "ms": 29.2
+   "ms": 71.1
   },
   {
    "source": "B_3way_final",
@@ -2244,7 +2282,7 @@
    "orig_error": false,
    "head": "def most_occurrences(strings: list[str]) -> str: \\n     word_count = {} \\n     for string in strings: \\n     ",
    "err": "AttributeError: 'dict' object has no attribute 'get'",
-   "ms": 29.1
+   "ms": 62.1
   },
   {
    "source": "B_3way_final",
@@ -2263,7 +2301,7 @@
    "orig_error": false,
    "head": "def even_bit_set_number(n): \\n     # Initialize result to 0 \\n     result = 0 \\n     # Iterate over bit posit",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 28.2
+   "ms": 67.0
   },
   {
    "source": "B_3way_final",
@@ -2283,7 +2321,7 @@
    "orig_error": false,
    "head": "import math \\n  \\n def sum_squares(lst): \\n     return sum(math.ceil(x)**2 for x in lst) \\n FINAL(\"\"\" \\n import mat",
    "err": "",
-   "ms": 29.3
+   "ms": 81.7
   },
   {
    "source": "B_3way_final",
@@ -2300,7 +2338,7 @@
    "orig_error": false,
    "head": "def find_Average_Of_Cube(n): \\n     # Calculate the sum of cubes using the formula (n(n+1)/2)^2 \\n     sum",
    "err": "",
-   "ms": 28.9
+   "ms": 68.0
   },
   {
    "source": "B_3way_final",
@@ -2317,7 +2355,7 @@
    "orig_error": false,
    "head": "def by_length(arr): \\n     # Filter numbers between 1 and 9 inclusive \\n     filtered = [num for num in ar",
    "err": "",
-   "ms": 28.3
+   "ms": 67.4
   },
   {
    "source": "B_3way_final",
@@ -2336,7 +2374,7 @@
    "orig_error": false,
    "head": "def substract_elements(tuple1: tuple, tuple2: tuple) -> tuple: \\n     # Ensure tuples are of the same l",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 26.5
+   "ms": 63.3
   },
   {
    "source": "B_3way_final",
@@ -2355,7 +2393,7 @@
    "orig_error": false,
    "head": "def snake_to_camel(s): \\n     # Split the string by underscore, capitalize each part, and join them tog",
    "err": "",
-   "ms": 31.5
+   "ms": 53.5
   },
   {
    "source": "B_3way_final",
@@ -2374,7 +2412,7 @@
    "orig_error": false,
    "head": "class TrieNode: \\n     def __init__(self): \\n         self.children = {} \\n         self.is_end_of_word = Fal",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 31.2
+   "ms": 47.7
   },
   {
    "source": "B_3way_final",
@@ -2391,7 +2429,7 @@
    "orig_error": false,
    "head": "def count_first_elements(tup): \\n     # Iterate through the tuple to find the first tuple element \\n     f",
    "err": "",
-   "ms": 69.2
+   "ms": 250.6
   },
   {
    "source": "B_3way_final",
@@ -2410,7 +2448,7 @@
    "orig_error": false,
    "head": "import heapq \\n  \\n def dijkstra(V, edges, source): \\n     # Initialize distance and predecessor dictionaries",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 25.0
+   "ms": 62.1
   },
   {
    "source": "B_3way_final",
@@ -2429,7 +2467,7 @@
    "orig_error": false,
    "head": "def is_palindrome(text: str): \\n     \"\"\" \\n     Checks if given string is a palindrome \\n     >>> is_palindro",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 30.2
+   "ms": 71.0
   },
   {
    "source": "B_3way_final",
@@ -2446,7 +2484,7 @@
    "orig_error": false,
    "head": "def is_multiply_prime(a): \\n     primes = [2, 3, 5, 7] \\n     for i in range(len(primes)): \\n         for j i",
    "err": "",
-   "ms": 30.2
+   "ms": 65.2
   },
   {
    "source": "B_3way_final",
@@ -2465,7 +2503,7 @@
    "orig_error": false,
    "head": "def sum_of_digits(lst): \\n     # Initialize sum to 0 \\n     total = 0 \\n      \\n     # Iterate through each elem",
    "err": "",
-   "ms": 32.3
+   "ms": 68.6
   },
   {
    "source": "B_3way_final",
@@ -2482,7 +2520,7 @@
    "orig_error": false,
    "head": "def sum_of_digits(numbers): \\n     # Flatten the list if it contains nested lists \\n     flat_list = [item",
    "err": "",
-   "ms": 30.6
+   "ms": 62.3
   },
   {
    "source": "B_3way_final",
@@ -2501,7 +2539,7 @@
    "orig_error": false,
    "head": "import math \\n  \\n def binomial_Coeff(n, k): \\n     # Use math.comb if available (Python 3.10+) \\n     if hasatt",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 29.0
+   "ms": 59.3
   },
   {
    "source": "B_3way_final",
@@ -2518,7 +2556,7 @@
    "orig_error": false,
    "head": "def binomial_Coeff(n, k): \\n     # Handle edge cases \\n     if k < 0 or k > n: \\n         return 0 \\n     if k =",
    "err": "",
-   "ms": 27.5
+   "ms": 63.5
   },
   {
    "source": "B_3way_final",
@@ -2537,7 +2575,7 @@
    "orig_error": false,
    "head": "import re \\n  \\n def find_long_word(s): \\n     # Find all five-character long words using regex \\n     return re",
    "err": "",
-   "ms": 33.9
+   "ms": 79.0
   },
   {
    "source": "B_3way_final",
@@ -2556,7 +2594,7 @@
    "orig_error": false,
    "head": "import re \\n  \\n def find_long_word(text): \\n     # Use regex to find all 5-letter words \\n     return re.findal",
    "err": "",
-   "ms": 39.2
+   "ms": 84.8
   },
   {
    "source": "B_3way_final",
@@ -2575,7 +2613,7 @@
    "orig_error": false,
    "head": "def freq_element(lists): \\n     from collections import Counter  # Import Counter from collections modu",
    "err": "",
-   "ms": 33.3
+   "ms": 65.2
   },
   {
    "source": "B_3way_final",
@@ -2592,7 +2630,7 @@
    "orig_error": false,
    "head": "def large_product(list1: list[int], list2: list[int], n: int) -> list[int]: \\n     # Compute all pairwi",
    "err": "",
-   "ms": 48.5
+   "ms": 87.4
   },
   {
    "source": "B_3way_final",
@@ -2609,7 +2647,7 @@
    "orig_error": false,
    "head": "def is_sorted(lst): \\n     if len(lst) <= 1: \\n         return True \\n      \\n     prev = lst[0] \\n     count = 1 \\n  ",
    "err": "",
-   "ms": 33.4
+   "ms": 63.3
   },
   {
    "source": "B_3way_final",
@@ -2626,7 +2664,7 @@
    "orig_error": false,
    "head": "def is_sorted(lst): \\n     if len(lst) <= 1: \\n         return True \\n      \\n     prev = lst[0] \\n     duplicate_c",
    "err": "",
-   "ms": 31.7
+   "ms": 78.0
   },
   {
    "source": "B_3way_final",
@@ -2643,7 +2681,7 @@
    "orig_error": false,
    "head": "def sum_gp(a, n, r): \\n     # Handle the case where the common ratio r is 1 separately \\n     if r == 1: \\n  ",
    "err": "",
-   "ms": 31.0
+   "ms": 73.3
   },
   {
    "source": "B_3way_final",
@@ -2660,7 +2698,7 @@
    "orig_error": false,
    "head": "def sum_gp(a: float, n: int, r: float) -> float: \\n     # Handle the case where the common ratio is 1 \\n  ",
    "err": "",
-   "ms": 30.7
+   "ms": 69.6
   },
   {
    "source": "B_3way_final",
@@ -2679,7 +2717,7 @@
    "orig_error": false,
    "head": "def empty_dit(lst): \\n     # Check if the input is a list, otherwise return True for non-list inputs \\n   ",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 31.1
+   "ms": 64.0
   },
   {
    "source": "B_3way_final",
@@ -2698,7 +2736,7 @@
    "orig_error": false,
    "head": "def empty_dit(lst): \\n     # Ensure the input is a list of dictionaries \\n     if isinstance(lst, dict): \\n  ",
    "err": "",
-   "ms": 31.7
+   "ms": 70.5
   },
   {
    "source": "B_3way_final",
@@ -2717,7 +2755,7 @@
    "orig_error": false,
    "head": "def even_Power_Sum(n): \\n     # Calculate the sum of fifth powers of first n even natural numbers \\n     r",
    "err": "",
-   "ms": 41.1
+   "ms": 72.2
   },
   {
    "source": "B_3way_final",
@@ -2736,7 +2774,7 @@
    "orig_error": false,
    "head": "def encrypt(s): \\n     \"\"\"Create a function encrypt that takes a string as an argument and \\n     returns ",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 30.7
+   "ms": 87.4
   },
   {
    "source": "B_3way_final",
@@ -2753,7 +2791,7 @@
    "orig_error": false,
    "head": "def sum_even_and_even_index(arr, n): \\n     # Initialize sum to 0 \\n     total = 0 \\n      \\n     # Iterate over",
    "err": "",
-   "ms": 33.2
+   "ms": 68.6
   },
   {
    "source": "B_3way_final",
@@ -2772,7 +2810,7 @@
    "orig_error": false,
    "head": "def count_common(words): \\n     from collections import Counter  # Import Counter for counting hashable",
    "err": "AssertionError: assert [('pink', 6), ('black', 5), ('white', 5), ('green', 4), ('orange', 4), ('red', 4), ('eyes', 1)] == [('pink', 6), ('black', 5), ('white', ",
-   "ms": 33.1
+   "ms": 67.5
   },
   {
    "source": "B_3way_final",
@@ -2789,7 +2827,7 @@
    "orig_error": false,
    "head": "def check_monthnum(month): \\n     # Only February has 28 days normally \\n     return month == \"February\" \\n  \\n ",
    "err": "",
-   "ms": 30.2
+   "ms": 74.0
   },
   {
    "source": "B_3way_final",
@@ -2806,7 +2844,7 @@
    "orig_error": false,
    "head": "def check_monthnum(month_name): \\n     # Check if the month name is February, which has 28 days in comm",
    "err": "",
-   "ms": 31.0
+   "ms": 59.8
   },
   {
    "source": "B_3way_final",
@@ -2826,7 +2864,7 @@
    "orig_error": false,
    "head": "from functools import reduce \\n  \\n def common_in_nested_lists(lists): \\n     # Use reduce to apply set inter",
    "err": "",
-   "ms": 33.4
+   "ms": 54.0
   },
   {
    "source": "B_3way_final",
@@ -2845,7 +2883,7 @@
    "orig_error": false,
    "head": "from functools import lru_cache \\n  \\n def get_maxgold(grid, m, n): \\n     @lru_cache(None) \\n     def dp(i, j):",
    "err": "AssertionError: assert 17 == 16",
-   "ms": 32.2
+   "ms": 69.3
   },
   {
    "source": "B_3way_final",
@@ -2864,7 +2902,7 @@
    "orig_error": false,
    "head": "def check_last(arr, n, p): \\n     # Simulate operation p times \\n     for _ in range(p): \\n         last_elem",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 30.1
+   "ms": 54.0
   },
   {
    "source": "B_3way_final",
@@ -2883,7 +2921,7 @@
    "orig_error": false,
    "head": "import re \\n  \\n def replace_max_specialchar(s,n): \\n     # Use regex to replace up to n occurrences of space",
    "err": "AttributeError: module 're' has no attribute 'subn'",
-   "ms": 32.1
+   "ms": 90.8
   },
   {
    "source": "B_3way_final",
@@ -2900,7 +2938,7 @@
    "orig_error": false,
    "head": "def all_Bits_Set_In_The_Given_Range(n, l, r): \\n     # Create a mask with bits set in the range [l, r] \\n ",
    "err": "AssertionError: assert False == True",
-   "ms": 33.1
+   "ms": 56.2
   },
   {
    "source": "B_3way_final",
@@ -2917,7 +2955,7 @@
    "orig_error": false,
    "head": "def sumofFactors(n): \\n     # Initialize sum of even factors \\n     sum_even = 0 \\n      \\n     # Iterate throug",
    "err": "",
-   "ms": 30.8
+   "ms": 70.8
   },
   {
    "source": "B_3way_final",
@@ -2934,7 +2972,7 @@
    "orig_error": false,
    "head": "def count_Odd_Squares(start, end): \\n     # Calculate the number of perfect squares up to end \\n     count",
    "err": "",
-   "ms": 27.6
+   "ms": 72.9
   },
   {
    "source": "B_3way_final",
@@ -2953,7 +2991,7 @@
    "orig_error": false,
    "head": "import re \\n  \\n def text_match_word(text): \\n     # Define regex pattern to match word at end with optional ",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 28.9
+   "ms": 70.7
   },
   {
    "source": "B_3way_final",
@@ -2970,7 +3008,7 @@
    "orig_error": false,
    "head": "def zero_count(arr): \\n     # Count the number of zeroes in the array \\n     zero_count = arr.count(0) \\n    ",
    "err": "AssertionError: assert 0.15384615384615385 == 0.15",
-   "ms": 30.7
+   "ms": 52.2
   },
   {
    "source": "B_3way_final",
@@ -2987,7 +3025,7 @@
    "orig_error": false,
    "head": "def is_happy(s): \\n     if len(s) < 3: \\n         return False \\n     for i in range(len(s) - 2): \\n         if ",
    "err": "",
-   "ms": 28.9
+   "ms": 51.5
   },
   {
    "source": "B_3way_final",
@@ -3006,7 +3044,7 @@
    "orig_error": false,
    "head": "def round_and_sum(nums): \\n     # Round each number, sum them, and multiply by the length of the list \\n  ",
    "err": "",
-   "ms": 29.7
+   "ms": 53.4
   },
   {
    "source": "B_3way_final",
@@ -3025,7 +3063,7 @@
    "orig_error": false,
    "head": "import math \\n  \\n def volume_sphere(r): \\n     # Calculate the volume using the formula (4/3) * pi * r^3 \\n    ",
    "err": "",
-   "ms": 30.5
+   "ms": 53.1
   },
   {
    "source": "B_3way_final",
@@ -3042,7 +3080,7 @@
    "orig_error": false,
    "head": "def surfacearea_cuboid(length, width, height): \\n     # Calculate the surface area using the formula \\n   ",
    "err": "",
-   "ms": 31.7
+   "ms": 51.4
   },
   {
    "source": "B_3way_final",
@@ -3059,7 +3097,7 @@
    "orig_error": false,
    "head": "def check_k_elements(tuple_list, k): \\n     # Iterate over each tuple in the list \\n     for tup in tuple_",
    "err": "",
-   "ms": 30.3
+   "ms": 71.4
   },
   {
    "source": "B_3way_final",
@@ -3078,7 +3116,7 @@
    "orig_error": false,
    "head": "def first_non_repeating_character(s): \\n     from collections import Counter  # Import Counter for freq",
    "err": "",
-   "ms": 30.3
+   "ms": 67.5
   },
   {
    "source": "B_3way_final",
@@ -3095,7 +3133,7 @@
    "orig_error": false,
    "head": "def find_first_duplicate(arr): \\n     seen = set()  # Initialize an empty set to track seen elements \\n   ",
    "err": "",
-   "ms": 33.1
+   "ms": 66.5
   },
   {
    "source": "B_3way_final",
@@ -3115,7 +3153,7 @@
    "orig_error": false,
    "head": "def find_Sum(arr, n): \\n     from collections import Counter  # Import Counter to count occurrences of ",
    "err": "",
-   "ms": 30.8
+   "ms": 66.8
   },
   {
    "source": "B_3way_final",
@@ -3132,7 +3170,7 @@
    "orig_error": false,
    "head": "def median_trapezium(a,b,c) -> float: return (a+b)/2  # c is non-parallel side, ignored in median ca",
    "err": "",
-   "ms": 30.3
+   "ms": 62.0
   },
   {
    "source": "B_3way_final",
@@ -3149,7 +3187,7 @@
    "orig_error": false,
    "head": "def multiply(a, b): \\n     \"\"\"Complete the function that takes two integers and returns  \\n     the produc",
    "err": "",
-   "ms": 30.8
+   "ms": 71.8
   },
   {
    "source": "B_3way_final",
@@ -3166,7 +3204,7 @@
    "orig_error": false,
    "head": "def set_left_most_unset_bit(n): \\n     # Find the leftmost unset bit using bit manipulation \\n     if n ==",
    "err": "AssertionError: assert 11 == 14",
-   "ms": 30.5
+   "ms": 63.4
   },
   {
    "source": "B_tool_compliance",
@@ -3185,7 +3223,7 @@
    "orig_error": false,
    "head": "# Use the ocr_document tool to extract text from the specified PDF path \\n result = ocr_document(path='",
    "err": "PermissionError: ocr_document() is not available in the Monty lane (callback denied)",
-   "ms": 30.0
+   "ms": 133.3
   },
   {
    "source": "B_tool_compliance",
@@ -3204,7 +3242,7 @@
    "orig_error": false,
    "head": "# Use the run_shell tool to execute the git status command \\n result = run_shell(\"git status\") \\n  \\n # Outpu",
    "err": "PermissionError: run_shell() is not available in the Monty lane (callback denied)",
-   "ms": 30.8
+   "ms": 56.9
   },
   {
    "source": "B_tool_compliance",
@@ -3223,7 +3261,7 @@
    "orig_error": false,
    "head": "info = file_info(\"/mnt/raid0/llm/epyc-root/CLAUDE.md\") \\n FINAL(info)",
    "err": "PermissionError: file_info() is not available in the Monty lane (callback denied)",
-   "ms": 30.4
+   "ms": 75.1
   },
   {
    "source": "B_tool_compliance",
@@ -3235,14 +3273,15 @@
    "occurrences": 1,
    "gate": null,
    "static": [
-    "repl_callable:list_dir"
+    "repl_callable:list_dir",
+    "repl_callable:peek_file_path"
    ],
    "verdict": "fail",
    "klass": "repl_callable_denied:list_dir",
    "orig_error": false,
    "head": "# List the files in the specified directory \\n files = list_dir(\"/mnt/raid0/llm/epyc-root/logs/\") \\n  \\n # Ch",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 30.4
+   "ms": 61.4
   },
   {
    "source": "B_tool_compliance",
@@ -3253,13 +3292,15 @@
    "fixture": false,
    "occurrences": 1,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:grep_file_path"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_denied:grep",
    "orig_error": false,
    "head": "# Use grep to find all lines containing 'class ' in the specified file \\n result = grep(pattern=\"class ",
    "err": "PermissionError: grep() in the Monty lane is context-only; unsupported argument(s): ['file_path']",
-   "ms": 30.2
+   "ms": 76.7
   },
   {
    "source": "B_tool_compliance",
@@ -3278,7 +3319,7 @@
    "orig_error": false,
    "head": "# List all files in /tmp using the available list_dir tool \\n files = list_dir(\"/tmp\") \\n FINAL(files)",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 29.4
+   "ms": 58.1
   },
   {
    "source": "B_tool_compliance",
@@ -3289,13 +3330,15 @@
    "fixture": false,
    "occurrences": 1,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:peek_file_path"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_denied:peek",
    "orig_error": false,
    "head": "# Use the peek tool to read the beginning of the file \\n # peek(n, file_path) reads the first n charact",
    "err": "PermissionError: peek() in the Monty lane is context-only; unsupported argument(s): ['file_path']",
-   "ms": 29.7
+   "ms": 74.4
   },
   {
    "source": "B_tool_compliance",
@@ -3314,7 +3357,7 @@
    "orig_error": false,
    "head": "# First, list the directory to see what files are available \\n files = list_dir('.') \\n print(f\"Files foun",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 31.6
+   "ms": 57.0
   },
   {
    "source": "B_tool_compliance",
@@ -3325,13 +3368,15 @@
    "fixture": false,
    "occurrences": 1,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:llm_batch"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:llm_batch",
    "orig_error": false,
    "head": "# Step 1: Get the total size of the context to determine chunking strategy \\n # Since we don't know the",
    "err": "NameError: name 'llm_batch' is not defined",
-   "ms": 39.1
+   "ms": 84.8
   },
   {
    "source": "B_tool_compliance",
@@ -3350,7 +3395,7 @@
    "orig_error": false,
    "head": "# First, let's try to OCR the document \\n ocr_result = ocr_document(\"/mnt/raid0/llm/tmp/document.pdf\") \\n ",
    "err": "PermissionError: ocr_document() is not available in the Monty lane (callback denied)",
-   "ms": 28.9
+   "ms": 49.6
   },
   {
    "source": "B_tool_compliance",
@@ -3369,7 +3414,7 @@
    "orig_error": false,
    "head": "# Attempt to extract text from the PDF document using OCR \\n extracted_text = ocr_document(\"/mnt/raid0/",
    "err": "PermissionError: ocr_document() is not available in the Monty lane (callback denied)",
-   "ms": 28.1
+   "ms": 72.3
   },
   {
    "source": "B_tool_compliance",
@@ -3380,13 +3425,15 @@
    "fixture": false,
    "occurrences": 1,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:llm_batch"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:llm_batch",
    "orig_error": false,
    "head": "# First, let's peek at the context to understand its structure \\n context = peek(1000)  # Get first 100",
    "err": "NameError: name 'llm_batch' is not defined",
-   "ms": 35.3
+   "ms": 89.9
   },
   {
    "source": "B_tool_compliance",
@@ -3405,7 +3452,7 @@
    "orig_error": false,
    "head": "result = run_shell(\"git status\") \\n FINAL(result)",
    "err": "PermissionError: run_shell() is not available in the Monty lane (callback denied)",
-   "ms": 29.0
+   "ms": 73.4
   },
   {
    "source": "B_tool_compliance",
@@ -3424,7 +3471,7 @@
    "orig_error": false,
    "head": "# List files in the specified directory \\n files = list_dir(\"/mnt/raid0/llm/epyc-root/logs/\") \\n  \\n # Check ",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 29.9
+   "ms": 69.9
   },
   {
    "source": "B_tool_compliance",
@@ -3443,7 +3490,7 @@
    "orig_error": false,
    "head": "list_dir(\"/mnt/raid0/llm/epyc-inference-research/\")",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 30.8
+   "ms": 74.9
   },
   {
    "source": "B_tool_compliance",
@@ -3460,7 +3507,7 @@
    "orig_error": false,
    "head": "peek(100, \"/mnt/raid0/llm/epyc-inference-research/README.md\")",
    "err": "ValueError: invalid literal for int() with base 10: '/mnt/raid0/llm/epyc-inference-research/README.md'",
-   "ms": 31.0
+   "ms": 60.9
   },
   {
    "source": "B_tool_compliance",
@@ -3479,7 +3526,7 @@
    "orig_error": false,
    "head": "print(ocr_document('/mnt/raid0/llm/tmp/document.pdf'))",
    "err": "PermissionError: ocr_document() is not available in the Monty lane (callback denied)",
-   "ms": 26.8
+   "ms": 61.2
   },
   {
    "source": "B_tool_compliance",
@@ -3490,13 +3537,15 @@
    "fixture": false,
    "occurrences": 1,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:llm_batch"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:llm_batch",
    "orig_error": false,
    "head": "# Peek at the text to understand its structure and total length \\n print(peek(1000)) \\n  \\n # Split the conte",
    "err": "NameError: name 'llm_batch' is not defined",
-   "ms": 47.9
+   "ms": 112.8
   },
   {
    "source": "B_tool_compliance",
@@ -3515,7 +3564,7 @@
    "orig_error": false,
    "head": "print(file_info('/mnt/raid0/llm/claude/CLAUDE.md'))",
    "err": "PermissionError: file_info() is not available in the Monty lane (callback denied)",
-   "ms": 28.6
+   "ms": 77.2
   },
   {
    "source": "B_tool_compliance",
@@ -3553,7 +3602,7 @@
    "orig_error": false,
    "head": "# List the directory to find files \\n files = list_dir('/mnt/raid0/llm/claude/logs/') \\n # Identify the fi",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 30.5
+   "ms": 74.7
   },
   {
    "source": "B_tool_compliance",
@@ -3572,7 +3621,7 @@
    "orig_error": false,
    "head": "list_dir('/mnt/raid0/llm/claude/tmp') \\n FINAL('files in /mnt/raid0/llm/claude/tmp are: [' + str(list_d",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 30.6
+   "ms": 66.8
   },
   {
    "source": "B_tool_compliance",
@@ -3591,7 +3640,7 @@
    "orig_error": false,
    "head": "print(peek(10, '/mnt/raid0/ll",
    "err": "SyntaxError: missing closing quote in string literal",
-   "ms": 28.1
+   "ms": 62.9
   },
   {
    "source": "B_tool_compliance",
@@ -3610,7 +3659,7 @@
    "orig_error": false,
    "head": "import os \\n # Only used to initialize the list_dir, peek, grep etc. \\n # No import/from statements are al",
    "err": "Dangerous operation not allowed: import os. Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_pytho",
-   "ms": 0.1
+   "ms": 0.2
   },
   {
    "source": "B_tool_compliance",
@@ -3629,7 +3678,7 @@
    "orig_error": false,
    "head": "print(list_dir('.'))",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 29.3
+   "ms": 76.4
   },
   {
    "source": "B_tool_compliance",
@@ -3646,7 +3695,7 @@
    "orig_error": false,
    "head": "print(grep('def test_'))",
    "err": "",
-   "ms": 36.9
+   "ms": 100.8
   },
   {
    "source": "B_tool_compliance",
@@ -3663,7 +3712,7 @@
    "orig_error": false,
    "head": "print(peek('test_api.py'))",
    "err": "ValueError: invalid literal for int() with base 10: 'test_api.py'",
-   "ms": 28.6
+   "ms": 67.0
   },
   {
    "source": "B_tool_compliance",
@@ -3680,7 +3729,7 @@
    "orig_error": false,
    "head": "",
    "err": "",
-   "ms": 28.4
+   "ms": 74.7
   },
   {
    "source": "B_tool_compliance",
@@ -3691,13 +3740,15 @@
    "fixture": false,
    "occurrences": 1,
    "gate": null,
-   "static": [],
+   "static": [
+    "repl_callable:llm_batch"
+   ],
    "verdict": "fail",
    "klass": "repl_callable_unbridged:llm_batch",
    "orig_error": false,
    "head": "# Step 1: Retrieve the context using peek \\n # Adjust the number based on the expected size of the docu",
    "err": "NameError: name 'llm_batch' is not defined",
-   "ms": 41.2
+   "ms": 91.9
   },
   {
    "source": "B_tool_compliance",
@@ -3716,7 +3767,7 @@
    "orig_error": false,
    "head": "run_shell(cmd=\"git status\")",
    "err": "PermissionError: run_shell() is not available in the Monty lane (callback denied)",
-   "ms": 30.8
+   "ms": 70.5
   },
   {
    "source": "B_tool_compliance",
@@ -3735,7 +3786,7 @@
    "orig_error": false,
    "head": "file_info(path=\"/mnt/raid0/llm/claude/CLAUDE.md\")",
    "err": "PermissionError: file_info() is not available in the Monty lane (callback denied)",
-   "ms": 30.1
+   "ms": 58.8
   },
   {
    "source": "B_tool_compliance",
@@ -3747,14 +3798,15 @@
    "occurrences": 1,
    "gate": null,
    "static": [
-    "repl_callable:list_dir"
+    "repl_callable:list_dir",
+    "repl_callable:peek_file_path"
    ],
    "verdict": "fail",
    "klass": "repl_callable_denied:list_dir",
    "orig_error": false,
    "head": "# Step 1: List files in the directory \\n files = list_dir(\"/mnt/raid0/llm/claude/logs/\") \\n print(\"Files f",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 31.0
+   "ms": 59.8
   },
   {
    "source": "B_tool_compliance",
@@ -3773,7 +3825,7 @@
    "orig_error": false,
    "head": "list_dir(path=\"/mnt/raid0/llm/claude/tmp\")",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 29.6
+   "ms": 74.4
   },
   {
    "source": "B_tool_compliance",
@@ -3790,7 +3842,7 @@
    "orig_error": false,
    "head": "peek(100, \"/mnt/raid0/llm/claude/README.md\")",
    "err": "ValueError: invalid literal for int() with base 10: '/mnt/raid0/llm/claude/README.md'",
-   "ms": 30.9
+   "ms": 77.7
   },
   {
    "source": "B_tool_compliance",
@@ -3807,7 +3859,7 @@
    "orig_error": false,
    "head": "grep('def test_')",
    "err": "",
-   "ms": 41.8
+   "ms": 106.4
   },
   {
    "source": "B_tool_compliance",
@@ -3820,14 +3872,16 @@
    "gate": null,
    "static": [
     "generator_expression",
-    "import_statement"
+    "import_statement",
+    "repl_callable:llm_batch",
+    "repl_callable:llm_call"
    ],
    "verdict": "fail",
    "klass": "NameError:pages",
    "orig_error": false,
    "head": "import math \\n  \\n # Step 1: Determine number of pages in document \\n pages_count = len(pages) # pages is a l",
    "err": "NameError: name 'pages' is not defined",
-   "ms": 30.5
+   "ms": 38.4
   },
   {
    "source": "B_tool_compliance",
@@ -3847,7 +3901,7 @@
    "orig_error": false,
    "head": "# List directory to see files in root \\n print(list_dir('/')) \\n # Peek at README.md to understand project",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 30.9
+   "ms": 36.6
   },
   {
    "source": "B_tool_compliance",
@@ -3866,7 +3920,7 @@
    "orig_error": false,
    "head": "# Check /mnt/raid0/llm/claude/ directory contents \\n print(list_dir('/mnt/raid0/llm/claude/')) \\n # Check ",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 43.1
+   "ms": 36.6
   },
   {
    "source": "B_tool_compliance",
@@ -3883,7 +3937,7 @@
    "orig_error": false,
    "head": "# Inspect models.py to understand data models \\n print(peek(2000)) \\n # Check /mnt/raid0/llm/cla",
    "err": "",
-   "ms": 39.8
+   "ms": 48.2
   },
   {
    "source": "B_tool_compliance",
@@ -3903,7 +3957,7 @@
    "orig_error": false,
    "head": "import re \\n from typing import List \\n  \\n def solve(): \\n     # Step 1: List files in root directory \\n     files",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 30.6
+   "ms": 33.8
   },
   {
    "source": "B_tool_compliance",
@@ -3922,7 +3976,7 @@
    "orig_error": false,
    "head": "# Extract text from PDF using OCR \\n text = ocr_document(\"/mnt/raid0/llm/tmp/document.pdf\") \\n print(text)",
    "err": "PermissionError: ocr_document() is not available in the Monty lane (callback denied)",
-   "ms": 29.4
+   "ms": 33.0
   },
   {
    "source": "B_tool_compliance",
@@ -3939,7 +3993,7 @@
    "orig_error": false,
    "head": "python \\n # Code here",
    "err": "NameError: name 'python' is not defined",
-   "ms": 31.8
+   "ms": 31.9
   },
   {
    "source": "B_tool_compliance",
@@ -3959,7 +4013,7 @@
    "orig_error": false,
    "head": "import json \\n  \\n # List files in /mnt/raid0/llm/claude/logs/ \\n files = list_dir(\"/mnt/raid0/llm/claude/log",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 29.9
+   "ms": 30.6
   },
   {
    "source": "B_tool_compliance",
@@ -3978,7 +4032,7 @@
    "orig_error": false,
    "head": "# First, let's list the directory to find the README.md file \\n result = list_dir(\"/mnt/raid0/llm/claud",
    "err": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
-   "ms": 28.3
+   "ms": 28.9
   }
  ]
 }
