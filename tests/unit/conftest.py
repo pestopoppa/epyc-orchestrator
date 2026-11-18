@@ -101,10 +101,10 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "repl_in_process: the test asserts in-process REPL semantics that the opt-in contained child lane "
-        "(ORCHESTRATOR_REPL_CHILD_LANE) legitimately changes (free-form cells refuse mutating/unbounded tools, "
-        "SIGALRM-based timeouts, unencodable injected globals, schema-rendered error text, validator messages); pin the "
-        "lane and the validation flag OFF.",
+        "repl_in_process: the test needs in-process REPL internals that the opt-in contained child lane "
+        "(ORCHESTRATOR_REPL_CHILD_LANE) legitimately replaces (SIGALRM / the in-process deadline handler, mocks of "
+        "the in-process executor, unencodable injected globals, validator message text); pin the lane and the "
+        "validation flag OFF. Not for tool coverage: the lane brokers the full tool surface, so tool tests run in it.",
     )
 
 

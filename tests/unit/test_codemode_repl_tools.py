@@ -95,7 +95,6 @@ def test_install_flags(monkeypatch):
     assert g["describe_tool"]("read_file")["name"] == "read_file"
 
 
-@pytest.mark.repl_in_process
 def test_environment_integration(monkeypatch):
     from src.repl_environment.environment import REPLEnvironment
 

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for REPL external access tools (_ExternalAccessMixin)."""
 
-import pytest
 import subprocess
 from unittest.mock import patch, MagicMock
 
 from src.repl_environment import REPLEnvironment
-
-pytestmark = pytest.mark.repl_in_process  # asserts in-process REPL semantics (see tests/unit/conftest.py)
 
 
 class TestWebFetchTool:
@@ -61,7 +58,9 @@ class TestWebFetchTool:
         result = repl.execute('artifacts["result"] = web_fetch("file:///etc/passwd")')
 
         assert result.error is None
-        assert "[ERROR: Only http/https URLs are allowed]" in repl.artifacts["result"]
+        # the tool's own text, or the argument validator's (the contained lane validates every brokered call)
+        got = repl.artifacts["result"]
+        assert "[ERROR: Only http/https URLs are allowed]" in got or "must be an http(s) URL" in got
 
     @patch("requests.get")
     def test_web_fetch_handles_timeout(self, mock_get):

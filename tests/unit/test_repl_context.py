@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for REPL context management tools (_ContextMixin)."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from src.repl_environment import REPLConfig, REPLEnvironment
@@ -36,7 +35,6 @@ class TestBasicContextTools:
         assert result.is_final is True
         assert result.final_answer == "Result value"
 
-    @pytest.mark.repl_in_process
     def test_mark_finding_adds_to_findings_buffer(self):
         """Test MARK_FINDING() adds to findings buffer."""
         repl = REPLEnvironment(context="test")
@@ -50,7 +48,6 @@ class TestBasicContextTools:
         assert findings[0]["content"] == "Important discovery"
         assert "critical" in findings[0]["tags"]
 
-    @pytest.mark.repl_in_process
     def test_list_findings_returns_marked_findings(self):
         """Test LIST_FINDINGS() returns marked findings."""
         repl = REPLEnvironment(context="test")
@@ -77,7 +74,6 @@ class TestBasicContextTools:
         assert all("text" in c for c in chunks)
         assert all("char_count" in c for c in chunks)
 
-    @pytest.mark.repl_in_process
     def test_list_tools_returns_available_tools(self):
         """Test LIST_TOOLS() returns available tools for role."""
         # Create mock tool registry
@@ -114,7 +110,6 @@ class TestBasicContextTools:
         # Should be capped at 20
         assert len(chunks) <= 20
 
-    @pytest.mark.repl_in_process
     def test_mark_finding_with_source_metadata(self):
         """Test mark_finding with source metadata."""
         repl = REPLEnvironment(context="test")
@@ -135,7 +130,6 @@ artifacts["f"] = mark_finding(
         assert findings[0]["source"]["page"] == 42
         assert findings[0]["source"]["section"] == "Section 3"
 
-    @pytest.mark.repl_in_process
     def test_clear_findings_returns_count(self):
         """Test clear_findings() returns count of cleared findings."""
         repl = REPLEnvironment(context="test")
