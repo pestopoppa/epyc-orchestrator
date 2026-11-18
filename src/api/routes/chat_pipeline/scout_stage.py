@@ -1154,8 +1154,28 @@ def resolve_pool_gate(url: str, *, resolver: Any = None, pool: Any = None) -> tu
 # ── admission: the cap from live /slots ───────────────────────────────────────────────────
 
 
+#: OAB-17 F8: the cap is a one-shot snapshot of /slots behind a 1.5 s TTL cache, so two
+#: scouted requests could both read the same free count and together violate
+#: `reserve_slots`. Scouts this process has admitted but not yet released are counted
+#: against `free`, atomically with the decision. In-process only: concurrent API
+#: workers still need a shared counter (recorded on the OAB-17 box).
+_INFLIGHT: dict[str, int] = {}
+_INFLIGHT_LOCK = threading.Lock()
+
+
+def _release_inflight(url: str | None, n: int) -> None:
+    if not url or n <= 0:
+        return
+    with _INFLIGHT_LOCK:
+        left = _INFLIGHT.get(url, 0) - n
+        if left > 0:
+            _INFLIGHT[url] = left
+        else:
+            _INFLIGHT.pop(url, None)
+
+
 def resolve_cap(url: str, *, max_scouts: int, n_targets: int, reserve_slots: int,
-                resolver: Any = None) -> dict[str, Any]:
+                resolver: Any = None, hold: dict[str, Any] | None = None) -> dict[str, Any]:
     """How many scouts may run at once on ``url``: ``min(max, targets, free - reserve)``,
     ``free = slots - processing`` from the server's live ``/slots``. Unknown occupancy (no
     /slots, down, timeout) runs none — the cap is never a guess."""
@@ -1179,9 +1199,20 @@ def resolve_cap(url: str, *, max_scouts: int, n_targets: int, reserve_slots: int
         return decision
     total = len(occ.slots)
     busy = int(occ.processing)
-    free = max(0, total - busy)
+    if hold is None:
+        free = max(0, total - busy)
+        decision.update(total_slots=total, busy=busy, free=free, source="live_slots",
+                        cap=max(0, min(int(max_scouts), int(n_targets), free - reserve)))
+        return decision
+    with _INFLIGHT_LOCK:                       # decide and reserve atomically
+        mine = _INFLIGHT.get(url, 0)
+        free = max(0, total - busy - mine)
+        cap = max(0, min(int(max_scouts), int(n_targets), free - reserve))
+        if cap:
+            _INFLIGHT[url] = mine + cap
+            hold.update(url=url, n=cap)
     decision.update(total_slots=total, busy=busy, free=free, source="live_slots",
-                    cap=max(0, min(int(max_scouts), int(n_targets), free - reserve)))
+                    inflight_local=mine, cap=cap)
     return decision
 
 
@@ -1234,7 +1265,17 @@ def _role_url(primitives: Any, role: str) -> str:
     return first.rstrip("/")
 
 
-async def run_scouts(
+async def run_scouts(*args: Any, **kwargs: Any) -> "ScoutStageResult":
+    """See `_run_scouts`; this wrapper releases the in-process slot reservation (OAB-17 F8)
+    on every exit path, including cancellation."""
+    held: dict[str, Any] = {}
+    try:
+        return await _run_scouts(*args, _held=held, **kwargs)
+    finally:
+        _release_inflight(held.get("url"), int(held.get("n") or 0))
+
+
+async def _run_scouts(
     spec: Any,
     *,
     scope: Any,
@@ -1247,6 +1288,7 @@ async def run_scouts(
     resolver: Any = None,
     clock: Callable[[], float] = time.monotonic,
     pool_admission: Any = None,
+    _held: dict[str, Any] | None = None,
 ) -> ScoutStageResult:
     """Run the scouts for one request and return the planner block plus provenance.
 
@@ -1280,7 +1322,7 @@ async def run_scouts(
     # resolve_cap does a synchronous /slots HTTP read: keep it off the event loop.
     cap = await _scout_thread(resolve_cap, url or "", max_scouts=config.max_scouts,
                                   n_targets=len(wanted), reserve_slots=config.reserve_slots,
-                                  resolver=resolver)
+                                  resolver=resolver, hold=_held)
     report["cap"] = cap
     budget = float(config.budget_s)
     if request_deadline_s is not None:
