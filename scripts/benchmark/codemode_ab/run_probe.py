@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--model-id", default="mock")
+    ap.add_argument("--model-key", help="35b | 27b | flash: the models_v2.py row; sets --model-id (the three models are run one at a time)")
     ap.add_argument("--url")
     ap.add_argument("--embed-url")
     ap.add_argument("--embed-id", default="bge-large-en-v1.5")
@@ -95,6 +96,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--work", default="/mnt/raid0/llm/tmp/codemode-ab-20261117/work")
     a = ap.parse_args(argv)
+    if a.model_key:
+        from scripts.benchmark.codemode_ab.models_v2 import resolve
+
+        try:
+            a.model_id = resolve(a.model_key)["model_id"]
+        except KeyError as exc:
+            print(exc, file=sys.stderr)
+            return 3
     seeds = [int(x) for x in a.seeds.split(",")]
     arms = tuple(x for x in a.arms.split(",") if x)
     if a.arm_set == "v2":
