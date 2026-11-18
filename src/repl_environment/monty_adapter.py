@@ -53,10 +53,13 @@ import ast
 import atexit
 import copy
 import hashlib
+import importlib
+import importlib.metadata
 import json
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 import weakref
@@ -488,6 +491,38 @@ def screen(adapter: "MontyREPLAdapter", code: str) -> ScreenVerdict:
 
 _LOG_LOCK = threading.Lock()
 
+_LANE_BUILD_LOCK = threading.Lock()
+_LANE_BUILD: str | None = None
+_LANE_BUILD_UNAVAILABLE = "unavailable"
+
+
+def _compute_lane_build() -> str:
+    """``pydantic-monty <version> <sha256[:12] of the loaded native .so>``, or ``unavailable``."""
+    try:
+        version = importlib.metadata.version("pydantic-monty")
+        importlib.import_module("pydantic_monty")
+        native = sys.modules.get("pydantic_monty._monty")
+        so_path = getattr(native, "__file__", None)
+        if not so_path:
+            return _LANE_BUILD_UNAVAILABLE
+        digest = hashlib.sha256()
+        with open(so_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        return f"pydantic-monty {version} {digest.hexdigest()[:12]}"
+    except Exception:  # noqa: BLE001 - provenance stamp must never break telemetry
+        return _LANE_BUILD_UNAVAILABLE
+
+
+def lane_build() -> str:
+    """Build provenance of the Monty lane, computed once per process and cached."""
+    global _LANE_BUILD
+    if _LANE_BUILD is None:
+        with _LANE_BUILD_LOCK:
+            if _LANE_BUILD is None:
+                _LANE_BUILD = _compute_lane_build()
+    return _LANE_BUILD
+
 
 def telemetry_path() -> str:
     env = _env().get(ENV_LOG)
@@ -503,6 +538,7 @@ def _write_telemetry(row: dict[str, Any]) -> None:
         return
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        row = {**row, "lane_build": lane_build()}
         line = json.dumps(row, sort_keys=True, default=str)
         with _LOG_LOCK, open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")

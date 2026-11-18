@@ -46,6 +46,44 @@ def _last(ad):
     return ad.route_log[-1]
 
 
+# ---- telemetry provenance: every lane row carries lane_build ----------------------------------------------------
+def test_telemetry_rows_carry_well_formed_lane_build(tmp_path):
+    import hashlib
+    import importlib.metadata
+
+    from src.repl_environment import monty_adapter as ma
+
+    ma._write_telemetry({"ts": 0, "event": "probe"})
+    rows = [json.loads(line) for line in (tmp_path / "lane.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    build = rows[0]["lane_build"]
+    assert isinstance(build, str)
+    assert build == ma.lane_build()  # cached: the same value on every call
+    if _HAS_MONTY:
+        parts = build.split(" ")
+        assert len(parts) == 3 and parts[0] == "pydantic-monty"
+        assert parts[1] == importlib.metadata.version("pydantic-monty")
+        assert len(parts[2]) == 12 and all(c in "0123456789abcdef" for c in parts[2])
+        so_path = sys.modules["pydantic_monty._monty"].__file__
+        digest = hashlib.sha256(pathlib.Path(so_path).read_bytes()).hexdigest()[:12]
+        assert parts[2] == digest
+    else:
+        assert build == "unavailable"
+
+
+def test_lane_build_is_unavailable_when_package_missing(monkeypatch):
+    import importlib.metadata
+
+    from src.repl_environment import monty_adapter as ma
+
+    def _missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", _missing)
+    monkeypatch.setattr(ma, "_LANE_BUILD", None)
+    assert ma.lane_build() == "unavailable"
+
+
 # ---- flag off: untouched ---------------------------------------------------------------------------------------
 def test_flag_is_default_off_in_test_and_prod():
     spec = next(s for s in _FEATURE_REGISTRY if s.name == "monty_repl")
