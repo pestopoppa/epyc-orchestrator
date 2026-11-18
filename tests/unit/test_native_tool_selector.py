@@ -76,10 +76,14 @@ def test_oneshot_provider_groups_per_tool():
         usage_total = {}
 
         def llm_call(self, *a, **k):
-            return '{"needs_syn_sku_price": true}'
+            import json
+
+            names = [t["function"]["name"] for t in TOOLS]
+            return json.dumps({"answers": {f"needs_{n}": {"noul": n == "syn_weather"} for n in names}})
 
     prov = ts.make_native_provider("oneshot", primitives=P())
-    assert "syn_sku_price" in prov("unit price for sku", [ts.openai_tool_to_dict(t) for t in TOOLS], 2)
+    # the decision model flags only syn_weather; lexical ranking alone would never pick it for this query
+    assert prov("unit price for sku", [ts.openai_tool_to_dict(t) for t in TOOLS], 2) == ["syn_weather"]
 
 
 def test_chat_path_wiring(monkeypatch):
