@@ -154,9 +154,11 @@ def _frontdoor_trace_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
-def _tap_write_repl_exec(code: str, turn: int) -> None:
+def _tap_write_repl_exec(
+    code: str, turn: int, role: object = None, request_id: object = None, task_id: object = None,
+) -> None:
     """Compatibility wrapper for REPL tap execution logging."""
-    _tap_write_repl_exec_impl(code, turn)
+    _tap_write_repl_exec_impl(code, turn, role=role, request_id=request_id, task_id=task_id)
 
 
 def _tap_write_repl_result(
@@ -2186,7 +2188,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     _emit_bep_trace(not _is_comment_only(code), None)
 
     # Write code to inference tap so the TUI shows what's being executed
-    _tap_write_repl_exec(code, state.turns)
+    _tap_rid = None
+    try:
+        _getter = getattr(getattr(ctx.deps, "primitives", None), "get_request_id", None)
+        _tap_rid = _getter() if callable(_getter) else None
+    except Exception:
+        _tap_rid = None
+    _tap_write_repl_exec(code, state.turns, role=str(getattr(role, "value", role)),
+                         request_id=_tap_rid if isinstance(_tap_rid, str) else None,
+                         task_id=getattr(state, "task_id", None) or None)
 
     # REPL execution
     timeout_terminal = False
