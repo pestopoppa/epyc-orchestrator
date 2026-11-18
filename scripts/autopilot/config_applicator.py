@@ -62,6 +62,14 @@ HOT_SWAP_FEATURES = {
     "structured_tool_output",  # Lobster ToolOutput envelope on tool invocations
     "content_cache",            # SHA-256 keyed LLM-response cache
     "model_fallback",           # Same-tier alternatives on circuit-open
+    # Flag surface 2026-11-18: codemode / tool-picker / REPL / document flags that used to be env-only. Each is a
+    # FeatureSpec now (src/features.py) and reads through src.flag_env, so POST /config takes effect with no restart.
+    # exec_containment and untrusted_tool_text are deliberately ABSENT: security flags, pinned observe-only
+    # (species/structural_lab.py PINNED_OBSERVE_ONLY_FLAGS).
+    "tool_selector", "tool_selector_shadow", "repl_explicit_final", "repl_explicit_final_strict",
+    "repl_turn_memory", "codemode_prompt_v2", "codemode_stubs", "repl_tool_search",
+    "structured_read_only", "repl_classify", "repl_handles", "repl_write_dedupe",
+    "pdf_route_lighton", "l3_textrow",
 }
 
 # Parameters applied via env vars (require API restart)
@@ -105,6 +113,24 @@ ENV_PARAMS = {
         "worker_call_budget_cap": "ORCHESTRATOR_WORKER_CALL_BUDGET_CAP",
         "task_token_budget_cap": "ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP",
     },
+}
+
+# Flag surface 2026-11-18: integer knobs that sit beside the new codemode / tool-picker / document flags. /config is
+# bool-only, so these cannot be toggled live; they apply through the env_restart surface (a cheap API reload).
+ENV_PARAMS["codemode"] = {
+    "max_tool_calls": "ORCHESTRATOR_REPL_MAX_TOOL_CALLS",        # per-snippet tool-call bound (default 1000, 0 disables)
+    "max_regenerations": "ORCHESTRATOR_REPL_MAX_REGENERATIONS",  # task-wide failed-turn regeneration cap (default 8, 0 disables)
+    "turn_memory_n": "ORCHESTRATOR_REPL_TURN_MEMORY",            # turns carried when repl_turn_memory is on (default 4 on a runtime flip)
+    "classify_budget": "ORCHESTRATOR_REPL_CLASSIFY_BUDGET",      # classify() items per REPL session (default 2000)
+}
+ENV_PARAMS["tool_selector"] = {
+    "k": "ORCHESTRATOR_TOOL_SELECTOR_K",
+    "k_min": "ORCHESTRATOR_TOOL_SELECTOR_K_MIN",
+    "k_max": "ORCHESTRATOR_TOOL_SELECTOR_K_MAX",
+    "family_cap": "ORCHESTRATOR_TOOL_SELECTOR_FAMILY_CAP",
+}
+ENV_PARAMS["pdf"] = {
+    "lighton_concurrency": "ORCHESTRATOR_PDF_LIGHTON_CONCURRENCY",  # pages in flight; the ocr_pdf_lighton server runs -np 4
 }
 
 

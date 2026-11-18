@@ -30,6 +30,11 @@ AP22_MEMORY = ORCH_ROOT / "orchestration" / "autopilot_short_term_memory.md"
 STRATEGY_STORE_DIR = SKILLS_DIR / "strategies"
 STRATEGY_STORE_CHECKPOINT = "strategy_store"
 
+#: Security flags the autopilot may OBSERVE (they sit in the attested flag summary and the planner flag block) but must never
+#: propose, enable or disable. A trial that "improves" a score by switching containment or tool-text sanitising off is a
+#: security regression, not an optimisation. Only a human operator changes these (POST /config by hand, or the registry default).
+PINNED_OBSERVE_ONLY_FLAGS: frozenset[str] = frozenset({"exec_containment", "untrusted_tool_text"})
+
 AUTOPILOT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 EPISODIC_DB = MEMORY_DIR / "episodic.db"
 
@@ -639,6 +644,14 @@ class StructuralLab:
         try:
             from src.features import Features, _REGISTRY_BY_NAME
 
+            pinned = sorted(set(flags.keys()) & PINNED_OBSERVE_ONLY_FLAGS)
+            if pinned:
+                return {
+                    "status": "invalid",
+                    "errors": [f"Pinned observe-only security flags (autopilot never changes them): {pinned}"],
+                    "proposed_flags": flags,
+                }
+
             # Validate all flags exist in the declarative registry (always
             # trustworthy — registry-based, independent of live state).
             unknown = set(flags.keys()) - set(_REGISTRY_BY_NAME.keys())
@@ -685,6 +698,9 @@ class StructuralLab:
     def apply_flag_experiment(self, flags: dict[str, bool]) -> dict[str, Any]:
         """Apply feature flags via POST /config."""
         import httpx
+        pinned = sorted(set(flags) & PINNED_OBSERVE_ONLY_FLAGS)
+        if pinned:
+            return {"status": "error", "error": f"pinned observe-only security flags refused: {pinned}"}
         try:
             resp = httpx.post(f"{self.url}/config", json=flags, timeout=10)
             resp.raise_for_status()

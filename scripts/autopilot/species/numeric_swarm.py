@@ -89,6 +89,28 @@ SURFACES: dict[str, list[ParamSpec]] = {
         # aggressive (50K — forces tight reasoning) and conservative (500K).
         ParamSpec("repl.task_token_budget_cap", 50000, 500000, "int"),
     ],
+    "codemode_bounds": [
+        # Flag surface 2026-11-18. Env-backed (env_restart: a cheap API reload). The per-snippet tool-call cap
+        # (default 1000) is a runaway-loop bound, not a quality lever: the lower edge stays at 100 so a batch loop of
+        # ~200 items x read+write still fits; 0 (= unbounded) is outside the range on purpose. The regeneration cap
+        # (default 8) bounds REPL turns that failed and were regenerated; 0 (= off) is outside the range.
+        ParamSpec("codemode.max_tool_calls", 100, 2000, "int"),
+        ParamSpec("codemode.max_regenerations", 2, 16, "int"),
+        # Meaningful only while repl_turn_memory is on (the same convention as repl.worker_call_budget_cap).
+        ParamSpec("codemode.turn_memory_n", 1, 8, "int"),
+    ],
+    "tool_selector_picker": [
+        # Meaningful only while tool_selector (+ repl_embedding_pool) is on. Recall-sensitive: watch the picker's
+        # proxy_recall (logs/tool_selector_events.jsonl) alongside the task score; see program.md Tier 2.
+        ParamSpec("tool_selector.k", 4, 16, "int"),
+        ParamSpec("tool_selector.k_min", 2, 8, "int"),
+        ParamSpec("tool_selector.k_max", 6, 24, "int"),
+        ParamSpec("tool_selector.family_cap", 1, 6, "int"),
+    ],
+    "pdf_lighton": [
+        # Pages in flight against the LightOnOCR aux server, which runs -np 4: above 4 only queues.
+        ParamSpec("pdf.lighton_concurrency", 1, 4, "int"),
+    ],
     "kv_compaction": [
         # Expected-Attention KV cache compression knobs (autopilot program.md
         # Tier 4.5). Applied via kv_compress.compress_slot() — NOT env-restart.

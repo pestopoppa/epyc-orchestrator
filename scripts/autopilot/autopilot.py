@@ -122,6 +122,7 @@ import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST, new_file_mutation_root_labels
 from species.structural_lab import CHECKPOINT_DIR as STRUCTURAL_CHECKPOINT_DIR
+from species.structural_lab import PINNED_OBSERVE_ONLY_FLAGS
 import species.prompt_forge as _prompt_forge_module
 from eval_leakage_monitor import EvalLeakageMonitor
 from digest import generate_digest, should_generate_today
@@ -4879,6 +4880,11 @@ def _build_feature_flags_block(
             + ", ".join(sorted(denylisted_flags))
             + " (do not propose structural_experiment for these flags)"
         )
+    lines.append(
+        "Pinned observe-only security flags: "
+        + ", ".join(sorted(PINNED_OBSERVE_ONLY_FLAGS))
+        + " (never propose a change to these; the validator refuses it)"
+    )
     lines.append("")
     lines.append(
         "Flags WITH dependencies (single-variable rule, AP-9: enable a missing "
