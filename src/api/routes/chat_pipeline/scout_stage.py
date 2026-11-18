@@ -95,6 +95,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -373,6 +374,9 @@ class ScopedReader:
         self.root = Path(scope.root)
         #: Checked between files by every tree walk; the stage points it at its stop flag.
         self.should_stop: Callable[[], bool] = should_stop or (lambda: False)
+        #: OAB-17 F15: alternatives found by the LAST locate(), per thread (scouts share
+        #: one reader across threads; an instance attribute raced between them).
+        self._alt = threading.local()
 
     def resolve(self, path: str) -> tuple[Path | None, str | None]:
         raw = (path or "").strip().strip("'\"`")
@@ -392,7 +396,11 @@ class ScopedReader:
             return str(path)
 
     def _text(self, path: Path) -> str:
-        if path.stat().st_size > FILE_MAX_BYTES:
+        st = path.stat()
+        # OAB-17 F15: a FIFO or device with a source suffix would block read_text.
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"{self.display(path)} is not a regular file")
+        if st.st_size > FILE_MAX_BYTES:
             raise ValueError(f"{self.display(path)} is larger than {FILE_MAX_BYTES} bytes")
         return path.read_text(encoding="utf-8", errors="replace")
 
@@ -490,6 +498,8 @@ class ScopedReader:
         kernel), and a definition before a bare declaration."""
         found: list[tuple[Path, int, bool]] = []
         for p in self._walk(self.root):
+            if self.scope.read_denial(os.path.realpath(p)):     # OAB-17 F15
+                continue
             try:
                 text = self._text(p)
             except (OSError, ValueError):
@@ -528,13 +538,13 @@ class ScopedReader:
         if not ident:
             return None, None
         hits = self.definitions(ident)
-        self._last_alternatives = hits[1:]
+        self._alt.value = hits[1:]
         return hits[0] if hits else (None, None)
 
     def seed(self, target: ScoutTarget) -> tuple[str, str | None]:
         """Deterministic first evidence for a scout: the definition window of its symbol (or
         the head of its file). Returns (text, located 'path:line' or None)."""
-        self._last_alternatives = []
+        self._alt.value = []
         path, line_no = self.locate(target)
         if path is None:
             what = target.file or target.symbol or "target"
@@ -543,7 +553,7 @@ class ScopedReader:
         first = max(1, (line_no or 1) - SEED_WINDOW_BEFORE)
         text, _ = self.read(str(path), first, first + SEED_WINDOW_LINES - 1)
         located = f"{self.display(path)}:{line_no}" if line_no else self.display(path)
-        others = getattr(self, "_last_alternatives", [])
+        others = getattr(self._alt, "value", [])
         if others:
             text += "\n\nOther definitions of this symbol in the tree: " + ", ".join(
                 f"{self.display(p)}:{n}" for p, n in others[:8])
