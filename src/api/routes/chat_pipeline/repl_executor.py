@@ -32,6 +32,7 @@ from src.graph import run_task, GraphConfig, TaskDeps, TaskState
 from src.llm_primitives import LLMPrimitives
 from src.constants import TOOL_OUTPUT_MATCH_LEN
 from src.repl_environment import REPLEnvironment
+from src.repl_environment.child_lane import closes_lanes
 from src.session.lease import HeldSessionLease, SessionLeaseManager
 from src.session.models import Checkpoint
 from src.session.protocol import normalize_checkpoint_for_repl_restore
@@ -352,6 +353,7 @@ async def _execute_repl(
         )
 
 
+@closes_lanes
 async def _execute_repl_body(
     request: ChatRequest,
     routing: RoutingResult,
@@ -454,6 +456,10 @@ async def _execute_repl_body(
             hybrid_router=state.hybrid_router,
             tool_context=_tool_context,
         )
+    if session_lease is not None and session_lease.lease is not None:
+        # D-RI-CONTAIN-T2: a contained child lane revalidates THIS request's lease (fencing token,
+        # release, expiry) while a cell runs and is killed if it is lost.
+        repl._lane_lease_validator = session_lease.validator()
     # An explicitly enabled observer owns only a private registry copy.  Unsupported
     # registry variants leave coverage unknown and preserve the original registry.
     _tool_validation_observer = None

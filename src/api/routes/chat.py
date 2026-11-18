@@ -61,6 +61,7 @@ from src.api.services.memrl import (
 )
 from src.llm_primitives import LLMPrimitives
 from src.repl_environment import REPLEnvironment
+from src.repl_environment.child_lane import closes_lanes
 from src.escalation import (
     EscalationPolicy,
     EscalationContext,
@@ -1420,6 +1421,7 @@ async def chat_stream(
     # Generate task ID for MemRL tracking (outside generator for closure)
     task_id = f"stream-{uuid.uuid4().hex[:8]}"
 
+    @closes_lanes
     async def generate() -> AsyncGenerator[dict, None]:
         start_time = time.perf_counter()
         use_mock = request.mock_mode and not request.real_mode

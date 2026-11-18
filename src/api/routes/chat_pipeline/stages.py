@@ -27,6 +27,7 @@ from src.llm_primitives import LLMPrimitives
 from src.roles import Role, get_escalation_chain
 
 from src.repl_environment import REPLEnvironment
+from src.repl_environment.child_lane import closes_lanes
 from src.api.routes.chat_review import (
     _detect_output_quality_issue,
 )
@@ -187,6 +188,7 @@ def _execute_mock(
 # ── Stage 8: ReAct mode ─────────────────────────────────────────────────
 
 
+@closes_lanes
 def _execute_react(
     request: ChatRequest,
     routing: RoutingResult,

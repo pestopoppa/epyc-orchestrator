@@ -440,6 +440,46 @@ class HeldSessionLease:
     def token(self) -> int | None:
         return self.lease.fencing_token if self.lease is not None else None
 
+    def validator(self, min_interval_s: float = 0.5):
+        """A thread-safe ``() -> bool``: True while this holder still owns the LIVE lease.
+
+        Used by the contained REPL child lane (``env._lane_lease_validator``) to revoke callback
+        admission and kill the child when the lease is lost mid-cell. It combines the heartbeat
+        task's ``lost`` flag with a real read of the lease row (same fencing token, not released,
+        not expired by the manager's clock), rate-limited to one read per ``min_interval_s``. A
+        transient read error keeps the last verdict for at most one TTL, then fails closed."""
+        import threading
+
+        lock = threading.Lock()
+        state = {"checked": 0.0, "ok": True, "verified": time.monotonic()}
+
+        def check() -> bool:
+            lease = self.lease
+            if lease is None or self.lost:
+                return False
+            now = time.monotonic()
+            with lock:
+                if now - state["checked"] < min_interval_s:
+                    return state["ok"]
+                state["checked"] = now
+            try:
+                record = self.manager.get(self.session_id)
+                ok = (
+                    record is not None
+                    and record.fencing_token == lease.fencing_token
+                    and record.released_at is None
+                    and record.expires_at > self.manager._clock()
+                )
+                if ok:
+                    state["verified"] = now
+            except Exception:  # noqa: BLE001 - unreadable lease row
+                ok = (now - state["verified"]) < self.ttl_s
+            with lock:
+                state["ok"] = ok
+            return ok
+
+        return check
+
     async def __aenter__(self) -> "HeldSessionLease":
         import asyncio
 

@@ -31,6 +31,7 @@ from src.prompt_builders import (
 )
 from src.prompt_builders.builder import build_corpus_context
 from src.repl_environment import REPLEnvironment
+from src.repl_environment.child_lane import closes_lanes
 from src.roles import Role
 from src.runtime import routing_stage_timing
 from src.sse_utils import (
@@ -139,6 +140,7 @@ async def _stream_mock(
 # ── Real-mode REPL streaming ──────────────────────────────────────────
 
 
+@closes_lanes
 async def _stream_repl(
     request: ChatRequest,
     routing,

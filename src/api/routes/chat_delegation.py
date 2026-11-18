@@ -31,6 +31,7 @@ from src.env_parsing import env_int as _env_int
 from src.exceptions import InferenceError
 from src.security.control_tokens import neutralise_control_tokens
 from src.repl_environment import REPLEnvironment
+from src.repl_environment.child_lane import closes_lanes
 
 # Phase-1/2/3 extractions (2026-05-22 Task C). chat_delegation.py keeps the
 # loop functions in place (Phase 4 deferred to keep test patches working at
@@ -91,6 +92,7 @@ _VALID_DELEGATE_ROLES = _valid_delegate_roles()
 
 
 
+@closes_lanes
 def _run_architect_decision(
     prompt_text: str,
     question: str,
@@ -305,6 +307,7 @@ def _maybe_dcp_seed_context(
     return base_ctx
 
 
+@closes_lanes
 def _run_specialist_loop(
     question: str,
     context: str,

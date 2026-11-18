@@ -38,6 +38,7 @@ from src.repl_environment.parallel_dispatch import (
 )
 from src.repl_environment.security import ASTSecurityVisitor, harden_exception_handlers
 from src.repl_environment.unicode_sanitizer import sanitize_code_unicode
+from src.repl_environment import exception_schema as _exception_schema
 from src.repl_environment.combined_ops import _CombinedOpsMixin
 from src.repl_environment.suggestions import _SuggestionsMixin
 from src.repl_environment.file_tools import _FileToolsMixin
@@ -1429,6 +1430,12 @@ class REPLEnvironment(
                     self._active_tool_chain_meta["mode_used"] = "seq"
             # Fall through to sequential exec()
 
+        # D-RI-CONTAIN-T2: the contained lane runs this fall-through cell too (flag default OFF).
+        from src.repl_environment import child_lane as _child_lane
+
+        if _child_lane.enabled():
+            return _child_lane.execute_structured_in_lane(self, code, start_time, tool_calls)
+
         # Execute the code (single tool or simple expression)
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
@@ -1514,7 +1521,7 @@ class REPLEnvironment(
                 return ExecutionResult(
                     output=self._bundle_cap_output(stdout_capture.getvalue()),
                     is_final=False,
-                    error=f"{type(e).__name__}: {e}{hint}",
+                    error=_exception_schema.format_exception(e, hint=hint),
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
 
@@ -1897,7 +1904,7 @@ class REPLEnvironment(
                     # would otherwise carry a pulled value into the root prompt uncapped).
                     output=self._bundle_cap_output(stdout_capture.getvalue()),
                     is_final=False,
-                    error=self._error_text_for_result(f"{type(e).__name__}: {e}{hint}"),
+                    error=self._error_text_for_result(_exception_schema.format_exception(e, hint=hint)),
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
 

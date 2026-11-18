@@ -30,11 +30,16 @@ CONTEXT = "alpha beta gamma\nline two beta\nline three delta"
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
+    from src.features import reset_features
+
+    reset_features()
     for k in list(os.environ):
         if k.startswith("ORCHESTRATOR_REPL_CHILD") or k in ("ORCHESTRATOR_REPL_CHILD_LANE",
                                                           "ORCHESTRATOR_REPL_TOOL_ARG_VALIDATION"):
             monkeypatch.delenv(k, raising=False)
     monkeypatch.delenv("ORCHESTRATOR_REPL_MAX_TOOL_CALLS", raising=False)
+    yield
+    reset_features()
 
 
 @pytest.fixture
@@ -135,7 +140,17 @@ def test_lane_result_matches_in_process(code, monkeypatch, make_env):
     monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_CGROUP", "off")
     env = make_env()
     got = env.execute(code)
-    assert (got.output, got.is_final, got.final_answer, got.error) == (ref.output, ref.is_final, ref.final_answer, ref.error)
+    want_error = ref.error
+    if want_error and not want_error.startswith("SyntaxError") and want_error.partition(": ")[0].isidentifier():
+        # the lane implies the structured exception schema (item (a)); same type and message, schema-rendered
+        from src.repl_environment import exception_schema
+
+        etype, _, rest = want_error.partition(": ")
+        msg, sep, hint = rest.partition("\n--- Tool Usage Hint")
+        want_error = exception_schema.render(etype, msg, "model_code", (sep + hint) if sep else "")
+        if "FINAL" in code:  # FINAL/FINAL_VAR errors are raised by the brokered parent tool
+            want_error = want_error.replace('"model_code"', '"tool:%s"' % ("FINAL_VAR" if "FINAL_VAR" in code else "FINAL"))
+    assert (got.output, got.is_final, got.final_answer, got.error) == (ref.output, ref.is_final, ref.final_answer, want_error)
     assert type(got) is type(ref)
 
 
@@ -362,9 +377,9 @@ def test_bundle_context_is_refused(lane_on, make_env):
 @needs_kernel
 def test_unsupported_restored_state_is_refused(lane_on, make_env):
     env = make_env()
-    env._globals["s"] = {1, 2}
+    env._globals["s"] = (i for i in range(2))
     r = env.execute("print('hi')")
-    assert r.error and "unsupported REPL state" in r.error and "s (set)" in r.error
+    assert r.error and "unsupported REPL state" in r.error and "s (generator)" in r.error
     assert env._child_lane.pid is None
 
 
@@ -375,8 +390,8 @@ def test_unsupported_restored_state_is_refused(lane_on, make_env):
 def test_unsupported_new_state_rolls_the_cell_back(lane_on, make_env):
     env = make_env()
     env.execute("keep = 1")
-    r = env.execute("keep = 2\nt = (1, 2)\nprint('out stays')")
-    assert r.output == "out stays\n" and "REPLLaneStateError" in r.error and "t (tuple)" in r.error
+    r = env.execute("keep = 2\nt = (i for i in range(3))\nprint('out stays')")
+    assert r.output == "out stays\n" and "REPLLaneStateError" in r.error and "t: generator" in r.error
     assert env._globals["keep"] == 1 and "t" not in env._globals
     assert env.execute("print(keep)").output == "1\n"  # the child was re-seeded from the parent's state
     assert env._child_lane.respawns == 0  # a deliberate rollback is not a crash
@@ -391,9 +406,9 @@ def test_reset_and_restore_reseed_the_child(lane_on, make_env):
 
 
 @needs_kernel
-def test_user_defined_function_is_refused_with_a_reason(lane_on, make_env):
-    r = make_env().execute("def helper():\n    return 1")
-    assert "helper (function)" in r.error
+def test_nested_definitions_are_refused_with_a_reason(lane_on, make_env):
+    r = make_env().execute("h = [].append")
+    assert "h: builtin_function_or_method" in r.error and "top-level def" in r.error
 
 
 # ── crash isolation ──────────────────────────────────────────────────────────
