@@ -776,22 +776,58 @@ def auto_wrap_final(code: str) -> str:
             "print(",
         ]
         if not any(first_line.startswith(p) for p in non_final_patterns) and not _is_assignment_statement(first_line):
-            if _explicit_final_only() and not _is_final_answer_value(first_line):
+            mode = _explicit_final_mode()
+            if mode == "strict" and not _is_final_answer_value(first_line):
+                return code
+            if mode == "tools" and _is_repl_tool_call(first_line):
                 return code
             return f"FINAL({first_line})"
 
     return code
 
 
-# codemode reliability fix 1 (ORCHESTRATOR_REPL_EXPLICIT_FINAL, DEFAULT OFF): a one-line TOOL CALL such as
+# codemode reliability fix 1 (ORCHESTRATOR_REPL_EXPLICIT_FINAL). Modes:
+#   unset / "tools" (DEFAULT): a one-line call to a known REPL tool/exploration function is never wrapped;
+#                              everything else keeps the legacy wrap (comparisons, computed answers, names).
+#   "1"/"true"/"on"/"strict":  only an obvious answer VALUE is wrapped (probe v2 arms B1+).
+#   "0"/"false"/"off"/"no":    legacy wrap of every single-line expression.
+# Background: a one-line TOOL CALL such as
 # ``list_dir("data")`` / ``CALL("x", ...)`` is exploration for the next turn, never an answer; auto-wrapping it
 # as FINAL(...) ended code-mode episodes on turn 1. With the flag on only an obvious answer VALUE is wrapped.
 ENV_EXPLICIT_FINAL = "ORCHESTRATOR_REPL_EXPLICIT_FINAL"
 _FINAL_NAME_RE = re.compile(r"^(?:final_?)?(?:answer|result|response|output|summary)s?$|^.+_(?:answer|result)$", re.IGNORECASE)
 
 
+def _explicit_final_mode() -> str:
+    v = os.environ.get(ENV_EXPLICIT_FINAL, "").strip().lower()
+    if v in ("0", "false", "off", "no"):
+        return "legacy"
+    if v in ("1", "true", "on", "yes", "strict"):
+        return "strict"
+    return "tools"
+
+
 def _explicit_final_only() -> bool:
-    return os.environ.get(ENV_EXPLICIT_FINAL, "").strip().lower() in ("1", "true", "on", "yes")
+    return _explicit_final_mode() == "strict"
+
+
+# REPL tool / exploration helpers whose one-line call is exploration for the next turn, not an answer.
+_REPL_TOOL_NAMES = frozenset({
+    "CALL", "TOOL", "list_dir", "list_tools", "search_tools", "describe_tool", "read_file", "peek",
+    "file_info", "grep", "find_files", "run_shell", "run_python_code", "web_search", "web_fetch",
+    "SCRIPT", "find_scripts",
+})
+
+
+def _is_repl_tool_call(line: str) -> bool:
+    try:
+        tree = ast.parse(line)
+    except SyntaxError:
+        return False
+    if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
+        return False
+    v = tree.body[0].value
+    return isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id in _REPL_TOOL_NAMES
 
 
 def _is_final_answer_value(line: str) -> bool:

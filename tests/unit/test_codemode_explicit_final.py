@@ -22,7 +22,7 @@ OFF_WRAPPED = TOOL_CALLS + [v for v in ANSWER_VALUES if "=" not in v or v.starts
 
 @pytest.fixture(autouse=True)
 def _flag_off(monkeypatch):
-    monkeypatch.delenv(ENV_EXPLICIT_FINAL, raising=False)
+    monkeypatch.setenv(ENV_EXPLICIT_FINAL, "0")
 
 
 @pytest.mark.parametrize("code", OFF_WRAPPED)
@@ -30,10 +30,15 @@ def test_flag_off_is_the_legacy_wrap(code):
     assert auto_wrap_final(code) == f"FINAL({code})"
 
 
-@pytest.mark.parametrize("val", ["0", "", "off", "garbage"])
-def test_non_truthy_values_are_off(monkeypatch, val):
+@pytest.mark.parametrize("val", ["0", "off", "false", "no"])
+def test_off_values_restore_legacy(monkeypatch, val):
     monkeypatch.setenv(ENV_EXPLICIT_FINAL, val)
     assert auto_wrap_final('list_dir("d")') == 'FINAL(list_dir("d"))'
+
+
+def test_default_is_explicit_final(monkeypatch):
+    monkeypatch.delenv(ENV_EXPLICIT_FINAL, raising=False)
+    assert auto_wrap_final('list_dir("d")') == 'list_dir("d")'
 
 
 @pytest.mark.parametrize("code", TOOL_CALLS)
@@ -75,4 +80,16 @@ def test_every_call_site_goes_through_the_one_function():
              "src/api/routes/chat_delegation.py"]
     for rel in sites:
         assert "auto_wrap_final" in (root / rel).read_text(), rel
-    assert "_explicit_final_only()" in inspect.getsource(auto_wrap_final)
+    assert "_explicit_final_mode()" in inspect.getsource(auto_wrap_final)
+
+
+@pytest.mark.parametrize("code", ["x == 5", "result = compute_answer()", "json.loads(raw)", "len(items)", "total"])
+def test_default_tools_mode_keeps_legacy_wrap_for_non_tool_lines(monkeypatch, code):
+    monkeypatch.delenv(ENV_EXPLICIT_FINAL, raising=False)
+    assert auto_wrap_final(code) == f"FINAL({code})"
+
+
+@pytest.mark.parametrize("code", ['list_dir("d")', "list_tools()", 'CALL("t", a=1)', 'peek(5, file_path="f")'])
+def test_default_tools_mode_never_wraps_repl_tool_calls(monkeypatch, code):
+    monkeypatch.delenv(ENV_EXPLICIT_FINAL, raising=False)
+    assert auto_wrap_final(code) == code
