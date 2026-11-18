@@ -689,27 +689,55 @@ def test_both_flags_are_registered_default_off():
     assert "repl_child_lane" in summary and "repl_tool_arg_validation" in summary
 
 
-def test_runtime_toggle_via_the_feature_registry_drives_the_lane(monkeypatch):
+@pytest.fixture
+def runtime_flags(tmp_path, monkeypatch):
+    """A private runtime-flag file (what POST /config writes) and a helper to set overrides in it."""
+    from src import flag_env
+    from src.features import RUNTIME_FLAGS_ENV, write_runtime_flag_overrides
+
+    path = tmp_path / "runtime_flags.json"
+    monkeypatch.setenv(RUNTIME_FLAGS_ENV, str(path))
+    flag_env.reset_cache()
+    reset_features()
+
+    def set_overrides(**flags):
+        write_runtime_flag_overrides(flags, set_by="unit-test")
+        flag_env.reset_cache()
+        reset_features()
+
+    yield set_overrides
+    flag_env.reset_cache()
+
+
+def test_runtime_toggle_through_the_runtime_flag_file_drives_the_lane(runtime_flags, monkeypatch):
     assert child_lane.enabled() is False and tav.flag_enabled() is False
-    set_features(Features(repl_child_lane=True))  # what POST /config does
+    runtime_flags(repl_child_lane=True)  # what POST /config does
     assert child_lane.enabled() is True and tav.flag_enabled() is True and exception_schema.enabled() is True
-    set_features(Features(repl_tool_arg_validation=True))
+    runtime_flags(repl_child_lane=False, repl_tool_arg_validation=True)
     assert child_lane.enabled() is False and tav.flag_enabled() is True
-    set_features(Features())
+    runtime_flags(repl_tool_arg_validation=False)
+    assert child_lane.enabled() is False and tav.flag_enabled() is False
+    monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_LANE", "1")  # env on, but the runtime override is off: override wins
     assert child_lane.enabled() is False
-    monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_LANE", "0")  # an explicit env value wins over the registry
-    set_features(Features(repl_child_lane=True))
-    assert child_lane.enabled() is False
+    runtime_flags(repl_child_lane=True)
+    monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_LANE", "0")  # env off, runtime override on: override wins
+    assert child_lane.enabled() is True
+    assert get_features().repl_child_lane is True  # and the registry agrees
+
+
+def test_features_spelling_of_the_env_var_also_works(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_FEATURE_REPL_CHILD_LANE", "1")
+    assert child_lane.enabled() is True
 
 
 @needs_kernel
-def test_runtime_toggle_takes_effect_on_the_next_cell(make_env, monkeypatch):
+def test_runtime_toggle_takes_effect_on_the_next_cell(runtime_flags, make_env, monkeypatch):
     monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_CGROUP", "off")
     env = make_env()
     assert env.execute("a = 1").error is None and not hasattr(env, "_child_lane")
-    set_features(Features(repl_child_lane=True))
+    runtime_flags(repl_child_lane=True)
     assert env.execute("print(a + 1)").output == "2\n" and env._child_lane.pid  # state seeded from the parent
-    set_features(Features())
+    runtime_flags(repl_child_lane=False)
     assert env.execute("print(a + 2)").output == "3\n"  # and back to the in-process path
 
 

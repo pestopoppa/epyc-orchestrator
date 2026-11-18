@@ -46,17 +46,17 @@ class ToolArgumentError(ValueError):
 
 
 def feature_on(name: str, env_name: str) -> bool:
-    """A REPL-hardening flag: an explicitly set env var decides; otherwise the live feature
-    registry (``POST /config`` / runtime flags file) does. Unreadable registry == off."""
-    raw = os.environ.get(env_name)
-    if raw is not None and raw.strip():
-        return raw.strip().lower() in _TRUE
+    """A REPL-hardening flag, read through ``flag_env()``: the env var (``=1`` / ``=true`` ...), with a
+    live runtime override (``POST /config`` -> the shared runtime-flag file) winning over it, exactly
+    like ``features()``. Both flags are registered with ``env_on="1"``/``env_off="0"`` so the overlay
+    applies. Unreadable overlay == the env alone == off by default (these flags guard NEW enforcement)."""
     try:
-        from src.features import features
+        from src.flag_env import flag_env
 
-        return bool(getattr(features(), name, False))
-    except Exception:  # noqa: BLE001 - these flags guard NEW enforcement; absence is the old behaviour
-        return False
+        raw = flag_env().get(env_name)
+    except Exception:  # noqa: BLE001
+        raw = os.environ.get(env_name)
+    return raw is not None and raw.strip().lower() in _TRUE
 
 
 def flag_enabled() -> bool:
