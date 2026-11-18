@@ -134,17 +134,18 @@ def run_cpython_warm(case: Case, reps: int = WARM_REPS) -> dict[str, Any]:
     return out
 
 
-def run_monty(case: Case, reps: int = WARM_REPS, *, ast_gate: bool = True, pool: Any = None) -> dict[str, Any]:
+def run_monty(case: Case, reps: int = WARM_REPS, *, ast_gate: bool = True, pool: Any = None,
+              contain_worker: bool | None = None) -> dict[str, Any]:
     t0 = time.perf_counter()
     env = _mk_parent(case)
-    ad = MontyREPLAdapter(env, ast_gate=ast_gate, pool=pool)
+    ad = MontyREPLAdapter(env, ast_gate=ast_gate, pool=pool, contain_worker=contain_worker)
     try:
         res = [ad.execute(c) for c in case.cells]
         cold = time.perf_counter() - t0
         out = {"cells": [_rec(r) for r in res], "oracle": bool(case.oracle(res, env)), "state": _state(env),
                "cold_ms": round(cold * 1000, 3), "sessions_started": ad.sessions_started,
                "unavailable": dict(ad.unavailable), "denied": len(ad.denied_log),
-               "callbacks": [n for n, _ in ad.callback_log]}
+               "callbacks": [n for n, _ in ad.callback_log], "worker_contained": ad.worker_contained}
         pid = ad.worker_pids[-1] if ad.worker_pids else None
         if pid:
             try:
@@ -484,13 +485,15 @@ def s8_startup() -> dict[str, Any]:
 
     out: dict[str, Any] = {}
     reps = 8
-    t_env, t_own, t_sess = [], [], []
+    t_env, t_own, t_unc, t_sess = [], [], [], []
     for _ in range(reps):
         t = time.perf_counter(); env = REPLEnvironment(context="c"); t_env.append((time.perf_counter() - t) * 1000)
-        t = time.perf_counter()
-        a = MontyREPLAdapter(env); a.execute("x = 1")
-        t_own.append((time.perf_counter() - t) * 1000)
-        a.close()
+        for contain, acc in ((True, t_own), (False, t_unc)):
+            env = REPLEnvironment(context="c")
+            t = time.perf_counter()
+            a = MontyREPLAdapter(env, contain_worker=contain); a.execute("x = 1")
+            acc.append((time.perf_counter() - t) * 1000)
+            a.close()
     with pm.Monty(min_processes=2, max_processes=2, max_checkouts_per_worker=1) as pool:
         time.sleep(0.5)
         for _ in range(reps):
@@ -500,8 +503,9 @@ def s8_startup() -> dict[str, Any]:
             t_sess.append((time.perf_counter() - t) * 1000)
             a.dispose_session(); time.sleep(0.4)  # let the pool refill a spare worker
     out["parent_env_ctor_ms_median"] = round(statistics.median(t_env), 2)
-    out["adapter_own_pool_first_cell_ms_median"] = round(statistics.median(t_own), 2)
-    out["adapter_shared_pool_first_cell_ms_median"] = round(statistics.median(t_sess), 2)
+    out["adapter_own_pool_contained_worker_first_cell_ms_median"] = round(statistics.median(t_own), 2)
+    out["adapter_own_pool_uncontained_worker_first_cell_ms_median"] = round(statistics.median(t_unc), 2)
+    out["adapter_shared_uncontained_pool_first_cell_ms_median"] = round(statistics.median(t_sess), 2)
     return out
 
 
@@ -518,10 +522,12 @@ def main() -> int:
                               "cases": {}}
     for case in CASES:
         cp = run_cpython_warm(case, args.reps)
-        mo = run_monty(case, args.reps)
+        mo = run_monty(case, args.reps)  # default: worker under the SEC-EXEC Landlock+seccomp shim
+        mo_unc = run_monty(case, args.reps, contain_worker=False)
         cn = run_contained(case)
-        result["cases"][case.id] = {"test": case.test, "cpython_warm": cp, "monty": mo, "cpython_contained": cn,
-                                    "compare": compare(cp, mo)}
+        result["cases"][case.id] = {"test": case.test, "cpython_warm": cp, "monty": mo,
+                                    "monty_uncontained_worker": {k: mo_unc[k] for k in ("cold_ms", "warm_ms_median", "warm_ms_p95", "oracle") if k in mo_unc},
+                                    "cpython_contained": cn, "compare": compare(cp, mo)}
         print(f"{case.id} {case.test}: cpython_oracle={cp['oracle']} monty_oracle={mo['oracle']} "
               f"identical={result['cases'][case.id]['compare']['all_equal']} "
               f"warm_ms cp={cp['warm_ms_median']} monty={mo['warm_ms_median']}", flush=True)

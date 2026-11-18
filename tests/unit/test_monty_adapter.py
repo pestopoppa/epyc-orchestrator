@@ -258,3 +258,52 @@ def test_output_is_bounded_before_accumulation():
         r = a.execute("for i in range(100000):\n    print('x' * 50)")
         assert r.error is None
         assert "OUTPUT TRUNCATED" in r.output or "→" in r.output  # spill summary or in-band notice
+
+
+# ---- worker containment (defense in depth) ------------------------------------------------------------------------
+def _proc_status(pid: int, key: str) -> str:
+    with open(f"/proc/{pid}/status") as fh:
+        return next(ln.split(":", 1)[1].strip() for ln in fh if ln.startswith(key + ":"))
+
+
+def test_worker_runs_under_the_sec_exec_shim_by_default():
+    from src.repl_environment import exec_sandbox
+
+    if not exec_sandbox.capabilities()["landlock"]:
+        pytest.skip("Landlock unavailable on this host (the adapter fails closed, see next test)")
+    env = REPLEnvironment(context="c")
+    a = MontyREPLAdapter(env)
+    assert a.execute("x = 1").error is None and a.worker_contained
+    pid = a.worker_pids[-1]
+    assert _proc_status(pid, "Seccomp") == "2" and _proc_status(pid, "NoNewPrivs") == "1"
+    launcher = a._launcher_dir
+    assert launcher and os.path.isdir(launcher) and (os.stat(launcher).st_mode & 0o077) == 0
+    a.close()
+    assert not os.path.exists(launcher)  # launcher dir removed on close
+
+
+def test_uncontained_worker_is_opt_out_only():
+    env = REPLEnvironment(context="c")
+    with MontyREPLAdapter(env, contain_worker=False) as a:
+        a.execute("x = 1")
+        assert a.worker_contained is False and _proc_status(a.worker_pids[-1], "Seccomp") == "0"
+
+
+def test_fails_closed_when_containment_is_unavailable(monkeypatch):
+    from src.repl_environment import exec_sandbox
+
+    monkeypatch.setattr(exec_sandbox, "capabilities", lambda: {"abi": 0, "landlock": False, "netdeny": False, "ts": 0})
+    env = REPLEnvironment(context="c")
+    a = MontyREPLAdapter(env)
+    with pytest.raises(MontyUnavailable, match="refusing to run unconfined"):
+        a.execute("x = 1")
+    a.close()
+
+
+def test_worker_environment_has_no_inherited_secrets(monkeypatch):
+    monkeypatch.setenv("CANARY_API_KEY", "sekrit-canary")
+    env = REPLEnvironment(context="c")
+    with MontyREPLAdapter(env) as a:
+        a.execute("x = 1")
+        with open(f"/proc/{a.worker_pids[-1]}/environ", "rb") as fh:
+            assert b"CANARY" not in fh.read()

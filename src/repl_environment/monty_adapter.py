@@ -176,6 +176,7 @@ class MontyREPLAdapter:
         limits: MontyLimits | None = None,
         ast_gate: bool = True,
         require_flag: bool = True,
+        contain_worker: bool | None = None,
     ) -> None:
         if require_flag and not monty_enabled():
             raise MontyUnavailable(f"monty_repl is OFF (set {ENV_FLAG}=1); the adapter is an opt-in experiment lane")
@@ -193,6 +194,12 @@ class MontyREPLAdapter:
         self.parent = parent
         self.limits = limits or MontyLimits()
         self.ast_gate = ast_gate
+        # Defense in depth: Monty is a language-level sandbox (no seccomp/VM; its own docs). ``None`` = follow the
+        # ``exec_containment`` flag (default ON): the worker is launched under the SEC-EXEC Landlock + seccomp shim
+        # (no sockets, credential read-deny, RLIMIT_AS) and the adapter FAILS CLOSED if that cannot be applied.
+        self._contain = contain_worker
+        self._launcher_dir: str | None = None
+        self.worker_contained = False
         self._own_pool = pool is None
         self._pool = pool
         self._pool_cm: Any = None
@@ -207,20 +214,63 @@ class MontyREPLAdapter:
         self._final: list[str] = []
         self._deadline = 0.0
         self._deadline_hit = False
-        self._calls = 0
         self._call_cap = 0
 
     # ---- lifecycle -------------------------------------------------------------------------------------
     def _timeout(self) -> float:
         return float(self.parent.config.timeout_seconds)
 
+    @staticmethod
+    def _monty_binary() -> str:
+        import shutil
+        import sys
+
+        env = os.environ.get("MONTY_BIN")
+        for cand in (env, os.path.join(os.path.dirname(sys.executable), "monty"), shutil.which("monty")):
+            if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand
+        raise MontyUnavailable("the `monty` worker binary was not found (pydantic-monty-runtime)")
+
+    def _contained_launcher(self) -> str | None:
+        """A private launcher script that execs the worker under the exec_sandbox shim, or None if containment is off.
+
+        Raises ``MontyUnavailable`` (fail closed) when containment is requested/enabled but cannot be applied.
+        """
+        import shlex
+        import stat
+        import tempfile
+
+        from src.repl_environment import exec_sandbox
+
+        policy = exec_sandbox.current_policy() if self._contain is None else (exec_sandbox.Policy() if self._contain else None)
+        if policy is None:
+            return None
+        try:
+            argv, extra = exec_sandbox.wrap([self._monty_binary()], policy=policy, extra_allow=[tempfile.gettempdir()])
+        except exec_sandbox.ContainmentUnavailable as exc:
+            raise MontyUnavailable(f"worker containment unavailable, refusing to run unconfined: {exc}") from exc
+        self._launcher_dir = tempfile.mkdtemp(prefix="monty-launch-")  # mode 0700
+        path = os.path.join(self._launcher_dir, "monty-contained")
+        lines = ["#!/bin/sh"] + [f"export {k}={shlex.quote(v)}" for k, v in extra.items()]
+        lines.append("exec " + " ".join(shlex.quote(a) for a in argv) + ' "$@"')
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        os.chmod(path, stat.S_IRWXU)
+        self.worker_contained = True
+        return path
+
     def _ensure_pool(self) -> None:
         if self._pool is None:
+            kw: dict[str, Any] = {}
+            launcher = self._contained_launcher()
+            if launcher:
+                kw["binary_path"] = launcher
             self._pool_cm = self._pm.Monty(
                 min_processes=1,
                 max_processes=1,
                 request_timeout=self._timeout() + self.limits.request_grace_s,
                 max_checkouts_per_worker=1,  # every session in a fresh worker
+                **kw,
             )
             self._pool = self._pool_cm.__enter__()
 
@@ -300,6 +350,11 @@ class MontyREPLAdapter:
                 pass
             self._pool_cm = None
             self._pool = None
+        if self._launcher_dir:
+            import shutil
+
+            shutil.rmtree(self._launcher_dir, ignore_errors=True)
+            self._launcher_dir = None
         end = time.monotonic() + verify_s
         while time.monotonic() < end and any(self.worker_alive(p) for p in self.worker_pids if p):
             time.sleep(0.05)
@@ -340,12 +395,11 @@ class MontyREPLAdapter:
         if time.monotonic() > self._deadline:
             self._deadline_hit = True
             raise TimeoutError(f"cell deadline exceeded before {name}()")
-        self._calls += 1
-        if self._call_cap and self._calls > self._call_cap:
+        try:
+            self.parent._charge_tool_call(name)  # the REPL's own per-snippet budget, same message
+        except RuntimeError:
             self._deny(name, "per-snippet tool-call budget")
-            raise RuntimeError(
-                f"Tool-call budget exceeded: more than {self._call_cap} tool calls in one snippet (at {name})"
-            )
+            raise
 
     def _deny(self, name: str, reason: str) -> None:
         self.denied_log.append({"name": name, "reason": reason, "t": time.time()})
@@ -452,8 +506,7 @@ class MontyREPLAdapter:
             tree, new_names = None, []
 
         self._final = []
-        self._calls = 0
-        self._call_cap = p._max_tool_calls()
+        self._call_cap = p._max_tool_calls()  # only sizes max_suspensions; the budget itself is the parent's
         self._deadline = time.monotonic() + self._timeout()
         self._deadline_hit = False
         cell = _Cell()

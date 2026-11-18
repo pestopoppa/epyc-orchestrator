@@ -1,0 +1,1693 @@
+{
+ "pydantic_monty": "1.6.0",
+ "python": "3.11.17",
+ "reps": 50,
+ "cases": {
+  "C01": {
+   "test": "TestPeekFunction::test_peek_default",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "500\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 185.1693
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 188.108,
+    "ctor_ms": 2.924,
+    "warm_ms_median": 6.2928,
+    "warm_ms_p95": 8.2579
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "500\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 84.2071
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 84.513,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [
+     "peek"
+    ],
+    "worker_contained": true,
+    "worker_rss_kb": 11576,
+    "warm_ms_median": 6.4805,
+    "warm_ms_p95": 9.553,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 8.675,
+    "warm_ms_median": 5.6183,
+    "warm_ms_p95": 8.9051,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (peek); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C02": {
+   "test": "TestGrepFunction::test_grep_regex_pattern",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "['test123', 'test456']\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 5.6628
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 5.917,
+    "ctor_ms": 0.247,
+    "warm_ms_median": 5.463,
+    "warm_ms_p95": 8.6521
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "['test123', 'test456']\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 31.2762
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 31.487,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [
+     "grep"
+    ],
+    "worker_contained": true,
+    "worker_rss_kb": 11520,
+    "warm_ms_median": 5.6847,
+    "warm_ms_p95": 8.9245,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 69.239,
+    "warm_ms_median": 5.6147,
+    "warm_ms_p95": 8.6209,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (grep); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C03": {
+   "test": "TestGrepFunction::test_grep_truncation",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "['match line 0', 'match line 1', 'match line 2', 'match line 3', 'match line 4', 'match line 5', 'match line 6', 'match line 7', 'match line 8', 'match line 9', 'match line 10', 'match line 11', 'match line 12', 'match line 13', 'match line 14', 'match line 15', 'match line 16', 'match line 17', 'match line 18', 'match line 19', 'match line 20', 'match line 21', 'match line 22', 'match line 23', 'match line 24', 'match line 25', 'match line 26', 'match line 27', 'match line 28', 'match line 29', 'match line 30', 'match line 31', 'match line 32', 'match line 33', 'match line 34', 'match line 35', 'match line 36', 'match line 37', 'match line 38', 'match line 39', 'match line 40', 'match line 41', 'match line 42', 'match line 43', 'match line 44', 'match line 45', 'match line 46', 'match line 47', 'match line 48', 'match line 49', '[... truncated at 50 results]']\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 5.6394
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 5.917,
+    "ctor_ms": 0.271,
+    "warm_ms_median": 5.5467,
+    "warm_ms_p95": 8.7769
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "['match line 0', 'match line 1', 'match line 2', 'match line 3', 'match line 4', 'match line 5', 'match line 6', 'match line 7', 'match line 8', 'match line 9', 'match line 10', 'match line 11', 'match line 12', 'match line 13', 'match line 14', 'match line 15', 'match line 16', 'match line 17', 'match line 18', 'match line 19', 'match line 20', 'match line 21', 'match line 22', 'match line 23', 'match line 24', 'match line 25', 'match line 26', 'match line 27', 'match line 28', 'match line 29', 'match line 30', 'match line 31', 'match line 32', 'match line 33', 'match line 34', 'match line 35', 'match line 36', 'match line 37', 'match line 38', 'match line 39', 'match line 40', 'match line 41', 'match line 42', 'match line 43', 'match line 44', 'match line 45', 'match line 46', 'match line 47', 'match line 48', 'match line 49', '[... truncated at 50 results]']\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 33.2484
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 33.486,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [
+     "grep"
+    ],
+    "worker_contained": true,
+    "worker_rss_kb": 11272,
+    "warm_ms_median": 5.7707,
+    "warm_ms_p95": 9.0069,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 11.71,
+    "warm_ms_median": 5.7766,
+    "warm_ms_p95": 9.056,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (grep (bounded result)); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C04": {
+   "test": "TestAllowedBuiltins::test_dict_comprehension_works",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "{0: 0, 1: 2, 2: 4}\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.2893
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.574,
+    "ctor_ms": 0.277,
+    "warm_ms_median": 0.1187,
+    "warm_ms_p95": 0.1276
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "{0: 0, 1: 2, 2: 4}\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 26.1236
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 26.334,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11752,
+    "warm_ms_median": 0.1938,
+    "warm_ms_p95": 0.2183,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.42,
+    "warm_ms_median": 0.1981,
+    "warm_ms_p95": 0.2129,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": true,
+    "cells": [
+     {
+      "output": "{0: 0, 1: 2, 2: 4}\n",
+      "ms": 32.903
+     }
+    ],
+    "cold_ms": 32.907,
+    "per_cell_ms_median": 32.903
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C05": {
+   "test": "TestAllowedBuiltins::test_try_except_works",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "caught\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.2948
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.646,
+    "ctor_ms": 0.341,
+    "warm_ms_median": 0.1148,
+    "warm_ms_p95": 0.1271
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "caught\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 26.0403
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 26.261,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11520,
+    "warm_ms_median": 0.2162,
+    "warm_ms_p95": 0.287,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.109,
+    "warm_ms_median": 0.2128,
+    "warm_ms_p95": 0.2364,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": true,
+    "cells": [
+     {
+      "output": "caught\n",
+      "ms": 31.153
+     }
+    ],
+    "cold_ms": 31.157,
+    "per_cell_ms_median": 31.153
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C06": {
+   "test": "TestREPLBasicExecution::test_runtime_error_captured",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": "ZeroDivisionError: division by zero",
+      "ms": 0.5965
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.972,
+    "ctor_ms": 0.361,
+    "warm_ms_median": 0.0313,
+    "warm_ms_p95": 0.0395
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": "ZeroDivisionError: division by zero",
+      "ms": 25.1185
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 25.376,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 10932,
+    "warm_ms_median": 0.1727,
+    "warm_ms_p95": 0.3597,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.787,
+    "warm_ms_median": 0.1271,
+    "warm_ms_p95": 0.2076,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": true,
+    "cells": [
+     {
+      "output": "\n[STDERR]\nTraceback (most recent call last):\n  File \"/mnt/raid0/llm/tmp/tmpu_m1l7i1.py\", line 1, in <module>\n    x = 1 / 0\n        ~~^~~\nZeroDivisionError: division by zero\n",
+      "ms": 32.371
+     }
+    ],
+    "cold_ms": 32.38,
+    "per_cell_ms_median": 32.371
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C07": {
+   "test": "TestREPLBasicExecution::test_syntax_error_captured",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": "SyntaxError: '(' was never closed (<string>, line 1)",
+      "ms": 0.0884
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.462,
+    "ctor_ms": 0.363,
+    "warm_ms_median": 0.0123,
+    "warm_ms_p95": 0.0138
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": "SyntaxError: unexpected EOF while parsing",
+      "ms": 25.7129
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 26.1,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11148,
+    "warm_ms_median": 0.0862,
+    "warm_ms_p95": 0.1053,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.457,
+    "warm_ms_median": 0.0871,
+    "warm_ms_p95": 0.0938,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": true,
+    "cells": [
+     {
+      "output": "\n[STDERR]\n  File \"/mnt/raid0/llm/tmp/tmpm7o75ckt.py\", line 1\n    print(\n         ^\nSyntaxError: '(' was never closed\n",
+      "ms": 31.058
+     }
+    ],
+    "cold_ms": 31.062,
+    "per_cell_ms_median": 31.058
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     false
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": false
+   }
+  },
+  "C08": {
+   "test": "TestREPLBasicExecution::test_artifacts_can_be_modified",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.2008
+     },
+     {
+      "output": "42\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.1294
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {
+      "result": 42
+     },
+     "user_globals": {}
+    },
+    "cold_ms": 0.657,
+    "ctor_ms": 0.314,
+    "warm_ms_median": 0.1696,
+    "warm_ms_p95": 0.18
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 25.0104
+     },
+     {
+      "output": "42\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.2832
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {
+      "result": 42
+     },
+     "user_globals": {}
+    },
+    "cold_ms": 25.57,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11416,
+    "warm_ms_median": 0.3484,
+    "warm_ms_p95": 0.4368,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.737,
+    "warm_ms_median": 0.3379,
+    "warm_ms_p95": 0.356,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (artifacts (state to parent)); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true,
+     true
+    ],
+    "error_exact": [
+     true,
+     true
+    ],
+    "error_class": [
+     true,
+     true
+    ],
+    "final": [
+     true,
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C09": {
+   "test": "TestFinalFunction::test_output_before_final_captured",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "before final\n",
+      "is_final": true,
+      "final_answer": "done",
+      "error": null,
+      "ms": 0.1197
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.368,
+    "ctor_ms": 0.239,
+    "warm_ms_median": 0.0391,
+    "warm_ms_p95": 0.0488
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "before final\n",
+      "is_final": true,
+      "final_answer": "done",
+      "error": null,
+      "ms": 24.0307
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 24.245,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11780,
+    "warm_ms_median": 0.1316,
+    "warm_ms_p95": 0.2126,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.461,
+    "warm_ms_median": 0.1361,
+    "warm_ms_p95": 0.2257,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (FINAL); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C10": {
+   "test": "TestFinalFunction::test_final_var_returns_artifact",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.1714
+     },
+     {
+      "output": "",
+      "is_final": true,
+      "final_answer": "computed value",
+      "error": null,
+      "ms": 0.0502
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {
+      "result": "computed value"
+     },
+     "user_globals": {}
+    },
+    "cold_ms": 0.462,
+    "ctor_ms": 0.231,
+    "warm_ms_median": 0.1138,
+    "warm_ms_p95": 0.1235
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 26.066
+     },
+     {
+      "output": "",
+      "is_final": true,
+      "final_answer": "computed value",
+      "error": null,
+      "ms": 0.351
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {
+      "result": "computed value"
+     },
+     "user_globals": {}
+    },
+    "cold_ms": 26.617,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11564,
+    "warm_ms_median": 0.3098,
+    "warm_ms_p95": 0.3997,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.996,
+    "warm_ms_median": 0.3028,
+    "warm_ms_p95": 0.3891,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (FINAL_VAR + artifacts); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true,
+     true
+    ],
+    "error_exact": [
+     true,
+     true
+    ],
+    "error_class": [
+     true,
+     true
+    ],
+    "final": [
+     true,
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C11": {
+   "test": "TestREPLState::test_state_persists_across_executions",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.3931
+     },
+     {
+      "output": "42\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.1244
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {
+      "x": 42
+     }
+    },
+    "cold_ms": 0.773,
+    "ctor_ms": 0.246,
+    "warm_ms_median": 0.1527,
+    "warm_ms_p95": 0.1588
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 24.0658
+     },
+     {
+      "output": "42\n",
+      "is_final": false,
+      "final_answer": null,
+      "error": null,
+      "ms": 0.3698
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {
+      "x": 42
+     }
+    },
+    "cold_ms": 24.636,
+    "sessions_started": 1,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": true,
+    "worker_rss_kb": 11352,
+    "warm_ms_median": 0.3315,
+    "warm_ms_p95": 0.3681,
+    "disposed": true
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 2.427,
+    "warm_ms_median": 0.3384,
+    "warm_ms_p95": 0.3617,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": false,
+    "why": "needs REPL surface (state continuity across cells); the existing contained child has none (D-RI-CONTAIN-T2 not built)"
+   },
+   "compare": {
+    "output": [
+     true,
+     true
+    ],
+    "error_exact": [
+     true,
+     true
+    ],
+    "error_class": [
+     true,
+     true
+    ],
+    "final": [
+     true,
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  },
+  "C12": {
+   "test": "TestSecuritySandbox::test_import_os_blocked",
+   "cpython_warm": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": "Dangerous operation not allowed: import os. Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_python_code\", code=your_code_string, stdin_data=test_input) to test it, then FINAL(your_code_string) to submit.",
+      "ms": 0.0271
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.266,
+    "ctor_ms": 0.234,
+    "warm_ms_median": 0.0051,
+    "warm_ms_p95": 0.0069
+   },
+   "monty": {
+    "cells": [
+     {
+      "output": "",
+      "is_final": false,
+      "final_answer": null,
+      "error": "Dangerous operation not allowed: import os. Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_python_code\", code=your_code_string, stdin_data=test_input) to test it, then FINAL(your_code_string) to submit.",
+      "ms": 0.0118
+     }
+    ],
+    "oracle": true,
+    "state": {
+     "artifacts": {},
+     "user_globals": {}
+    },
+    "cold_ms": 0.293,
+    "sessions_started": 0,
+    "unavailable": {},
+    "denied": 0,
+    "callbacks": [],
+    "worker_contained": false,
+    "warm_ms_median": 0.005,
+    "warm_ms_p95": 0.0058,
+    "disposed": null
+   },
+   "monty_uncontained_worker": {
+    "cold_ms": 0.194,
+    "warm_ms_median": 0.0048,
+    "warm_ms_p95": 0.0054,
+    "oracle": true
+   },
+   "cpython_contained": {
+    "supported": true,
+    "cells": [
+     {
+      "output": "",
+      "ms": 30.529
+     }
+    ],
+    "cold_ms": 30.532,
+    "per_cell_ms_median": 30.529
+   },
+   "compare": {
+    "output": [
+     true
+    ],
+    "error_exact": [
+     true
+    ],
+    "error_class": [
+     true
+    ],
+    "final": [
+     true
+    ],
+    "state_equal": true,
+    "all_equal": true
+   }
+  }
+ },
+ "S1_checkpoint_roundtrip": {
+  "user_globals_equal_cpython": true,
+  "artifacts_equal_cpython": true,
+  "json_bytes": 1493,
+  "restore_reconciliation": {
+   "restored": [
+    "x",
+    "d",
+    "s",
+    "cnt"
+   ],
+   "unavailable": {},
+   "claimed": 4,
+   "dropped_at_save": []
+  },
+  "continue_cell": {
+   "output": "[0, 1, 4, 9, 16] {'a': 1, 'b': [1, 2]} hi {'k': [0, 1, 4, 9, 16]} 4\n",
+   "is_final": false,
+   "error": null,
+   "ms": 19.73
+  },
+  "second_cell": {
+   "output": "14 14\n",
+   "is_final": false,
+   "error": null,
+   "ms": 0.31
+  },
+  "state_after": {
+   "cnt": 14,
+   "artifacts": {
+    "k": [
+     0,
+     1,
+     4,
+     9,
+     16
+    ],
+    "k2": 14
+   }
+  },
+  "restored_into_new_worker": true,
+  "sessions_b": 1
+ },
+ "S2_denied_callbacks": {
+  "peek_file_path": {
+   "cpython_warm": {
+    "output": "[ERROR: Path not in allowed locations: ['/mnt/raid0/llm/', '/tmp/']]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.34
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "PermissionError: peek() in the Monty lane is context-only; unsupported argument(s): ['file_path']",
+    "ms": 24.62
+   },
+   "monty_denied_log": [
+    "unsupported argument(s) ['file_path'] (context-only in the Monty lane)"
+   ]
+  },
+  "grep_file_path": {
+   "cpython_warm": {
+    "output": "[\"[ERROR: Path not in allowed locations: ['/mnt/raid0/llm/', '/tmp/']]\"]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.39
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "PermissionError: grep() in the Monty lane is context-only; unsupported argument(s): ['file_path']",
+    "ms": 23.39
+   },
+   "monty_denied_log": [
+    "unsupported argument(s) ['file_path'] (context-only in the Monty lane)"
+   ]
+  },
+  "run_shell": {
+   "cpython_warm": {
+    "output": "hi\n\n",
+    "is_final": false,
+    "error": null,
+    "ms": 22.24
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "PermissionError: run_shell() is not available in the Monty lane (callback denied)",
+    "ms": 27.66
+   },
+   "monty_denied_log": [
+    "callback not bridged in the Monty lane"
+   ]
+  },
+  "web_fetch": {
+   "cpython_warm": {
+    "output": "[ERROR: Request failed: HTTPConnectionPool(host='127.0.0.1', port=1): Max retries exceeded with url: / (Caused by NewConnectionError(\"HTTPConnection(host='127.0",
+    "is_final": false,
+    "error": null,
+    "ms": 2.09
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "PermissionError: web_fetch() is not available in the Monty lane (callback denied)",
+    "ms": 24.16
+   },
+   "monty_denied_log": [
+    "callback not bridged in the Monty lane"
+   ]
+  },
+  "list_dir": {
+   "cpython_warm": {
+    "output": "[ERROR: Path not in allowed locations: ['/mnt/raid0/llm/', '/tmp/']]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.3
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "PermissionError: list_dir() is not available in the Monty lane (callback denied)",
+    "ms": 25.04
+   },
+   "monty_denied_log": [
+    "callback not bridged in the Monty lane"
+   ]
+  },
+  "unknown_name": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "NameError: name 'totally_not_a_tool' is not defined",
+    "ms": 0.13
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "NameError: name 'totally_not_a_tool' is not defined",
+    "ms": 26.3
+   },
+   "monty_denied_log": []
+  },
+  "tool_call_budget_5": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "RuntimeError: Tool-call budget exceeded: more than 5 tool calls in one snippet (at peek); split the work across turns or batch it.",
+    "ms": 33.32
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "RuntimeError: Tool-call budget exceeded: more than 5 tool calls in one snippet (at peek); split the work across turns or batch it.",
+    "ms": 64.4
+   }
+  }
+ },
+ "S3_delayed_callbacks": {
+  "delay_0.2s_inside_5s": {
+   "cpython_warm": {
+    "output": "10\n",
+    "is_final": false,
+    "error": null,
+    "ms": 206.84
+   },
+   "monty": {
+    "output": "10\n",
+    "is_final": false,
+    "error": null,
+    "ms": 207.92
+   }
+  },
+  "delay_1.6s_outruns_1s": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "REPLTimeout: Execution timed out after 1s",
+    "ms": 1000.15,
+    "terminal": true,
+    "followup": {
+     "output": "",
+     "is_final": false,
+     "error": "REPLTimeout: Execution timed out after 1s",
+     "ms": 0.0
+    }
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "REPLTimeout: Execution timed out after 1s",
+    "ms": 1001.01,
+    "terminal": true,
+    "followup": {
+     "output": "",
+     "is_final": false,
+     "error": "REPLTimeout: Execution timed out after 1s",
+     "ms": 0.0
+    },
+    "worker_dead": true
+   }
+  },
+  "redos_in_bridged_grep_1s": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "REPLTimeout: Execution timed out after 1s",
+    "ms": 1000.18,
+    "terminal": true,
+    "wall_ms": 1000
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "REPLTimeout: Execution timed out after 1s",
+    "ms": 1000.97,
+    "terminal": true,
+    "wall_ms": 1001
+   }
+  }
+ },
+ "S4_terminal_resource_errors": {
+  "cpu_loop_1s": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "REPLTimeout: Execution timed out after 1s",
+    "ms": 1000.12,
+    "terminal": true,
+    "followup": {
+     "output": "",
+     "is_final": false,
+     "error": "REPLTimeout: Execution timed out after 1s",
+     "ms": 0.0
+    }
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "REPLTimeout: Execution timed out after 1s",
+    "ms": 1000.97,
+    "terminal": true,
+    "followup": {
+     "output": "",
+     "is_final": false,
+     "error": "REPLTimeout: Execution timed out after 1s",
+     "ms": 0.0
+    },
+    "worker_dead": true
+   }
+  },
+  "memory_bomb_64MiB": {
+   "cpython_warm": "NOT RUN by design: in-process, dynamic sizes are unguarded (security.py documents the limit)",
+   "cpython_contained": {
+    "output": "\n[STDERR]\nTraceback (most recent call last):\n  File \"/mnt/raid0/llm/tmp/tmprxk9omfh.py\", line 2, in <module>\n    x = [0] * n\n        ~~~~^~~\nMemoryError\n",
+    "note": "child under RLIMIT_AS (16 GiB)"
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "MemoryError: memory limit exceeded: 32000071008 bytes > 67108864 bytes",
+    "ms": 0.31,
+    "followup_resumed_from_checkpoint": {
+     "output": "[1, 2, 3] {'k': 'v'}\n",
+     "is_final": false,
+     "error": null,
+     "ms": 24.32
+    },
+    "new_worker": true,
+    "old_worker_dead": true,
+    "sessions": 2,
+    "parent_terminal": false
+   }
+  },
+  "recursion": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "RecursionError: maximum recursion depth exceeded",
+    "ms": 0.6
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "RecursionError: maximum recursion depth exceeded",
+    "ms": 23.3,
+    "followup": {
+     "output": "still alive\n",
+     "is_final": false,
+     "error": null,
+     "ms": 0.32
+    }
+   }
+  },
+  "output_flood_10MB": {
+   "cpython_warm": {
+    "output": "[Output: 10200000 chars, 200000 lines \u2192 /mnt/raid0/llm/tmp/repl_output/3be18fd9/turn_1.txt]\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxx",
+    "is_final": false,
+    "error": null,
+    "ms": 37.48,
+    "wall_ms": 37.6,
+    "output_chars": 1313
+   },
+   "monty": {
+    "output": "[Output: 1007668 chars, 19759 lines \u2192 /mnt/raid0/llm/tmp/repl_output/a7933fa1/turn_1.txt]\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxx",
+    "is_final": false,
+    "error": null,
+    "ms": 115.89,
+    "wall_ms": 115.9,
+    "output_chars": 1269
+   }
+  }
+ },
+ "S5_disposal_and_crash": {
+  "external_kill_then_cells": {
+   "killed_pid_dead": true,
+   "cell_after_kill": {
+    "output": "",
+    "is_final": false,
+    "error": "[ERROR: Monty worker crashed: monty worker crashed while sending a request (signal: 9 (SIGKILL))] (worker discarded; the next cell resumes from the last checkpoint)",
+    "ms": 0.18
+   },
+   "next_cell": {
+    "output": "[1, 2, 3] {'k': 'v'}\n",
+    "is_final": false,
+    "error": null,
+    "ms": 23.24
+   },
+   "sessions_started": 2
+  },
+  "close_proof": {
+   "pids_captured": 2,
+   "all_dead_after_close": true,
+   "per_pid": {
+    "4046346": true,
+    "4046348": true
+   }
+  }
+ },
+ "S6_security_probes": {
+  "import os": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: import os. Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_python_code\", code=your_code_string, stdin_da",
+    "ms": 0.03
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: import os. Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_python_code\", code=your_code_string, stdin_da",
+    "ms": 0.01
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": null,
+    "ms": 24.83
+   },
+   "cpython_contained": ""
+  },
+  "from os import system": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: from os import .... Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_python_code\", code=your_code_string,",
+    "ms": 0.03
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: from os import .... Hint: for competitive programming solutions that need sys/os, wrap your solution in a string and use CALL(\"run_python_code\", code=your_code_string,",
+    "ms": 0.01
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "ImportError: cannot import name 'system' from 'os' (unknown location)",
+    "ms": 21.1
+   },
+   "cpython_contained": ""
+  },
+  "__import__('os')": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: __import__().",
+    "ms": 0.03
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: __import__().",
+    "ms": 0.02
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "NameError: name '__import__' is not defined",
+    "ms": 19.67
+   },
+   "cpython_contained": ""
+  },
+  "eval('1+1')": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: eval(). Hint: use run_python_code(code_string, stdin_data) to test code, or write code directly (it is executed automatically). Do NOT use exec()/eval().",
+    "ms": 0.04
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: eval(). Hint: use run_python_code(code_string, stdin_data) to test code, or write code directly (it is executed automatically). Do NOT use exec()/eval().",
+    "ms": 0.02
+   },
+   "monty_native_no_gate": {
+    "output": "2\n",
+    "is_final": false,
+    "error": null,
+    "ms": 19.29
+   },
+   "cpython_contained": "2\n"
+  },
+  "exec('x=1')": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: exec(). Hint: use run_python_code(code_string, stdin_data) to test code, or write code directly (it is executed automatically). Do NOT use exec()/eval().",
+    "ms": 0.06
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: exec(). Hint: use run_python_code(code_string, stdin_data) to test code, or write code directly (it is executed automatically). Do NOT use exec()/eval().",
+    "ms": 0.02
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": null,
+    "ms": 21.56
+   },
+   "cpython_contained": ""
+  },
+  "open('/etc/hostname')": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: open(). Hint: use peek(path) to read files or file_write_safe(path, content) to write.",
+    "ms": 0.07
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: open(). Hint: use peek(path) to read files or file_write_safe(path, content) to write.",
+    "ms": 0.03
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "PermissionError: Permission denied: '/etc/hostname'",
+    "ms": 20.85
+   },
+   "cpython_contained": "Beelzebub\n\n"
+  },
+  "''.__class__": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: .__class__.",
+    "ms": 0.06
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: .__class__.",
+    "ms": 0.02
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "AttributeError: 'str' object has no attribute '__class__'",
+    "ms": 22.87
+   },
+   "cpython_contained": "<class 'str'>\n"
+  },
+  "getattr(object,'__class__')": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: getattr().",
+    "ms": 0.06
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: getattr().",
+    "ms": 0.03
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "AttributeError: type object 'object' has no attribute '__class__'",
+    "ms": 21.16
+   },
+   "cpython_contained": "<class 'type'>\n"
+  },
+  "object.__subclasses__()": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: .__subclasses__().",
+    "ms": 0.06
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: .__subclasses__().",
+    "ms": 0.02
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "AttributeError: type object 'object' has no attribute '__subclasses__'",
+    "ms": 20.75
+   },
+   "cpython_contained": " <class 'collections.abc.Callable'>, <class 'genericpath.ALLOW_MISSING'>, <class 'os._wrap_close'>, <class '_sitebuiltins.Quitter'>, <class '_sitebuiltins._Printer'>, <class '_sitebuiltins._Helper'>]\n"
+  },
+  "globals()": {
+   "cpython_warm": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: globals().",
+    "ms": 0.08
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "Dangerous operation not allowed: globals().",
+    "ms": 0.03
+   },
+   "monty_native_no_gate": {
+    "output": "",
+    "is_final": false,
+    "error": "NameError: name 'globals' is not defined",
+    "ms": 21.41
+   },
+   "cpython_contained": "['__name__', '__doc__', '__package__']\n"
+  }
+ },
+ "S7_coverage": {
+  "statistics.mean": {
+   "cpython_warm": {
+    "output": "2\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.3
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "NameError: name 'statistics' is not defined",
+    "ms": 21.35
+   },
+   "same": false
+  },
+  "numpy (preloaded name)": {
+   "cpython_warm": {
+    "output": "[0, 1, 2]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.23
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "NameError: name 'numpy' is not defined",
+    "ms": 23.0
+   },
+   "same": false
+  },
+  "import fractions": {
+   "cpython_warm": {
+    "output": "1/3\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.23
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "ModuleNotFoundError: No module named 'fractions'",
+    "ms": 23.72
+   },
+   "same": false
+  },
+  "generator": {
+   "cpython_warm": {
+    "output": "[1]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.23
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "NotImplementedError: The monty syntax parser does not yet support yield expressions",
+    "ms": 21.98
+   },
+   "same": false
+  },
+  "exception subclass": {
+   "cpython_warm": {
+    "output": "caught\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.26
+   },
+   "monty": {
+    "output": "",
+    "is_final": false,
+    "error": "NotImplementedError: The monty syntax parser does not yet support class inheritance and metaclasses",
+    "ms": 20.77
+   },
+   "same": false
+  },
+  "set + sorted + f-string": {
+   "cpython_warm": {
+    "output": "[1, 2, 3]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.23
+   },
+   "monty": {
+    "output": "[1, 2, 3]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 20.52
+   },
+   "same": true
+  },
+  "json round trip": {
+   "cpython_warm": {
+    "output": "{'a': [1, 2]}\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.23
+   },
+   "monty": {
+    "output": "{'a': [1, 2]}\n",
+    "is_final": false,
+    "error": null,
+    "ms": 20.14
+   },
+   "same": true
+  },
+  "re + collections": {
+   "cpython_warm": {
+    "output": "['aa'] [('a', 2)]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 0.37
+   },
+   "monty": {
+    "output": "['aa'] [('a', 2)]\n",
+    "is_final": false,
+    "error": null,
+    "ms": 18.82
+   },
+   "same": true
+  }
+ },
+ "S8_startup": {
+  "parent_env_ctor_ms_median": 0.19,
+  "adapter_own_pool_contained_worker_first_cell_ms_median": 20.3,
+  "adapter_own_pool_uncontained_worker_first_cell_ms_median": 1.77,
+  "adapter_shared_uncontained_pool_first_cell_ms_median": 0.99
+ }
+}
