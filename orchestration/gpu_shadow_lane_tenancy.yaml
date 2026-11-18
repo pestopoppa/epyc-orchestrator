@@ -211,7 +211,7 @@ tenants:
       # would plan a shape no cell measured — and the np_ceiling table has no
       # mtp_off rows for this tenant, so it would refuse anyway.
       mtp: true
-      draft_n_max: 4
+      draft_n_max: 2  # 2026-11-18 operator: D=2 per rka-verify-tile-a3b-gpu-e2e-20261118 (+17% at 32k)
       reasoning: false
     co_residency: forbidden  # 35.2 GiB + D2 resident set > 64 GiB
     role_bindings:

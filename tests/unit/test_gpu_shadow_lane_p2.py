@@ -431,7 +431,8 @@ class TestLaunchPlanIsDataDriven:
             slot_context_tokens=2048,
         )
         argv = list(plan.launch_argv)
-        assert argv[-4:] == ["--spec-type", "draft-mtp", "--spec-draft-n-max", "4"]
+        # 2026-11-18 operator: D=2 per rka-verify-tile-a3b-gpu-e2e-20261118 (+17% at 32k)
+        assert argv[-4:] == ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
 
     def test_mtp_without_depth_is_a_programming_error(self):
         with pytest.raises(ValueError, match="draft_n_max"):

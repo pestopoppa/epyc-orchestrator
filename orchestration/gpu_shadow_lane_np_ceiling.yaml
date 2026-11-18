@@ -267,7 +267,7 @@ tenants:
     per_seq_overhead_gib: null
     compute_reserve_gib: 2.0
     np_throughput_saturation: 16  # np32 regresses at L2048 (231.6 vs 269.8 t/s)
-    draft_n_max: 4
+    draft_n_max: 2  # 2026-11-18 operator: D=2 per rka-verify-tile-a3b-gpu-e2e-20261118 (+17% at 32k); NOTE the ceiling/throughput cells below were MEASURED at D=4 (A4 bridge grid)
     measured_aggregate_decode_tok_s:
       "2048": {"1": 97.6, "2": 123.1, "4": 173.2, "8": 226.0, "16": 269.8, "32": 231.6}
       "8192": {"1": 98.1, "2": 119.1, "4": 158.4, "8": 183.7, "16": 191.6}
