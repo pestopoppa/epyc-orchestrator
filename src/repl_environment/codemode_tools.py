@@ -7,6 +7,8 @@ so with no flag set nothing here is installed and the REPL globals are byte-iden
 * CM-4 ``ORCHESTRATOR_REPL_CLASSIFY=1``      -> ``classify(items, labels, instruction="")`` labels N items with one
   typed-decision (CHOICE) call per item through the LLM primitives, so the items never enter the root prompt; only the
   returned labels do. Items that fail to parse are labelled ``None`` (never a silent default).
+* Fix 4 ``ORCHESTRATOR_CODEMODE_STUBS=1``    -> every registry tool the REPL does not already define is bound as a direct Python
+  function that returns a Python object (``objectify``), matching the typed stubs of ``prompt_builders.codemode_stubs``.
 * CM-5 ``ORCHESTRATOR_REPL_HANDLES=1``       -> ``store(name, value) -> handle`` / ``load(handle_or_name)`` /
   ``handles()``: a named JSON store capped at 256 KiB per value and 1 MiB total, written only by cells that
   SUCCEED (a failing cell's writes are rolled back) and snapshotted into REPL checkpoints so a restored/branched
@@ -24,6 +26,7 @@ from typing import Any
 ENV_SEARCH = "ORCHESTRATOR_REPL_TOOL_SEARCH"
 ENV_CLASSIFY = "ORCHESTRATOR_REPL_CLASSIFY"
 ENV_HANDLES = "ORCHESTRATOR_REPL_HANDLES"
+ENV_STUBS = "ORCHESTRATOR_CODEMODE_STUBS"
 MAX_VALUE_BYTES = 256 * 1024
 MAX_TOTAL_BYTES = 1024 * 1024
 DETAILS = ("names", "brief", "full")
@@ -140,6 +143,71 @@ class HandleStore:
         self._data, self._staged = dict(snap or {}), {}
 
 
+# --- fix 4: stub-bound tools returning Python objects -----------------------------------------------
+class ToolCallError(RuntimeError):
+    """A bound tool failed; the message is the tool's own reason (a CM-3 envelope with ok=False, or the exception)."""
+
+
+def objectify(result: Any, returns: str | None = None) -> Any:
+    """Python object for a tool result. A CM-3 envelope (``ORCHESTRATOR_STRUCTURED_READ_ONLY``) is unwrapped, a failed one
+    raises ``ToolCallError``. JSON *text* is parsed only when the stub PROMISES an object (``returns`` is not ``str``/``Any``),
+    so a ``-> str`` tool such as ``read_file`` keeps returning the raw text."""
+    if hasattr(result, "to_machine") and hasattr(result, "ok"):
+        if not result.ok:
+            raise ToolCallError(str(getattr(result, "output", "") or "tool failed"))
+        result = result.output
+    if isinstance(result, str) and returns and returns not in ("str", "Any"):
+        t = result.lstrip()
+        if t[:1] in ("[", "{"):
+            try:
+                return json.loads(t)
+            except ValueError:
+                return result
+    return result
+
+
+def _param_order(tool: Mapping[str, Any]) -> list[str]:
+    params = tool.get("parameters") or {}
+    return [k for k, v in params.items() if v.get("required")] + [k for k, v in params.items() if not v.get("required")]
+
+
+def make_stub_callable(tool: Mapping[str, Any], invoke: Callable[..., Any]) -> Callable[..., Any]:
+    """``f(*args, **kw)`` for one tool: positional args follow the stub's signature order (required first)."""
+    name, order, returns = str(tool["name"]), _param_order(tool), tool.get("returns")
+
+    def f(*args: Any, **kw: Any) -> Any:
+        if len(args) > len(order):
+            raise TypeError(f"{name}() takes at most {len(order)} arguments ({', '.join(order)}), got {len(args)}")
+        merged = dict(zip(order, args))
+        dup = set(merged) & set(kw)
+        if dup:
+            raise TypeError(f"{name}() got multiple values for {sorted(dup)}")
+        merged.update(kw)
+        missing = [k for k, v in (tool.get("parameters") or {}).items() if v.get("required") and k not in merged]
+        if missing:
+            raise TypeError(f"{name}() missing required argument(s): {', '.join(missing)}")
+        return objectify(invoke(name, **merged), returns)
+
+    f.__name__ = name
+    return f
+
+
+def bind_stub_tools(globals_dict: dict[str, Any], invoke: Callable[..., Any], tools: Sequence[Mapping[str, Any]],
+                    names: Sequence[str] | None = None, *, override: bool = False) -> list[str]:
+    """Bind ``names`` (default: all) from ``tools`` into ``globals_dict``. Existing globals are kept unless ``override``;
+    returns the names bound."""
+    bound: list[str] = []
+    for t in tools:
+        n = str(t.get("name", ""))
+        if not n.isidentifier() or (names is not None and n not in names):
+            continue
+        if n in globals_dict and not override:
+            continue
+        globals_dict[n] = make_stub_callable(t, invoke)
+        bound.append(n)
+    return bound
+
+
 def install(env: Any, globals_dict: dict[str, Any], environ: Mapping[str, str] | None = None) -> list[str]:
     """Add the flagged functions to a REPL globals dict. Returns the names added (empty when everything is off)."""
     added: list[str] = []
@@ -151,6 +219,8 @@ def install(env: Any, globals_dict: dict[str, Any], environ: Mapping[str, str] |
         globals_dict["classify"] = lambda items, labels, instruction="": classify_items(
             env.llm_primitives, items, labels, instruction)
         added.append("classify")
+    if flag(ENV_STUBS, environ) and getattr(env, "tool_registry", None) is not None:
+        added += bind_stub_tools(globals_dict, env._invoke_tool, env._list_tools())
     if flag(ENV_HANDLES, environ):
         hs = getattr(env, "_handle_store", None)
         if hs is None:

@@ -211,6 +211,10 @@ class OneShotToolSelector:
 
 def render_tools_block(tools: Sequence[Mapping[str, Any]], selected: Sequence[str]) -> str:
     """The selected-tools replacement for the static tools text (same ``CALL`` convention)."""
+    from src.prompt_builders.codemode_stubs import render_stubs_block, stubs_enabled
+
+    if stubs_enabled():  # codemode fix 4 (ORCHESTRATOR_CODEMODE_STUBS, default off): typed Python stubs
+        return render_stubs_block(tools, selected)
     by = {t["name"]: t for t in tools}
     lines = ["## Tools (selected for this request)", *CORE_REPL_LINES, "", "**Selected tools** (call via CALL(name, **kw)):"]
     for name in selected:

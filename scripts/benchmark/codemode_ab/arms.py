@@ -148,7 +148,11 @@ def _dispatch_a(world: World, call: dict[str, Any], rec: dict[str, Any]) -> Any:
 
 
 # --- arms B / C (REPL) -----------------------------------------------------------------------------
-def make_repl(world: World) -> Any:
+PEEK_NO_FILE_ERROR = ("peek(n, file_path) needs a file_path: it reads a FILE. The task input is the variable `context`; "
+                      "use read_file(path) or peek(n, file_path=path) for files")
+
+
+def make_repl(world: World, bind_names: Any = None) -> Any:
     from src.repl_environment.environment import REPLEnvironment
     from src.repl_environment.types import REPLConfig
 
@@ -167,6 +171,26 @@ def make_repl(world: World) -> Any:
     for n in ("run_shell", "run_python_code", "fetch_docs", "ocr_document", "analyze_figure", "extract_figure"):
         if n in g:
             g[n] = blocked
+    from src.prompt_builders.codemode_stubs import stubs_enabled
+
+    if stubs_enabled():  # fix 4 (ORCHESTRATOR_CODEMODE_STUBS): picked tools are direct functions returning Python objects
+        from src.repl_environment.codemode_tools import bind_stub_tools
+
+        if bind_names:
+            bind_stub_tools(g, world.call, world.stub_tool_dicts(), names=set(bind_names), override=True)
+        inner_peek = g["peek"]
+
+        def strict_peek(n: Any, file_path: Any = None) -> Any:
+            if not file_path:
+                raise ValueError(PEEK_NO_FILE_ERROR)
+            return inner_peek(n, file_path)
+
+        g["peek"] = strict_peek
+    from src.prompt_builders.codemode_prompt import prompt_v2_enabled
+
+    if (stubs_enabled() or prompt_v2_enabled()) and "read_file" not in (bind_names or ()):
+        # the sandboxed read_file, so the v2 prompt's / stub's read_file(path) reads the world, not the host
+        g["read_file"] = lambda path: world.call("read_file", path=path)
     return env
 
 

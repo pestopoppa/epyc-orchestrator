@@ -218,6 +218,11 @@ class World:
     def tool_dicts(self) -> list[dict[str, Any]]:
         return self.registry.list_tools(role=PROBE_ROLE)
 
+    def stub_tool_dicts(self) -> list[dict[str, Any]]:
+        """``tool_dicts()`` plus ``returns`` / ``returns_doc`` for the typed stubs (fix 4). A separate method so
+        ``tool_dicts()`` (catalog hashes, A's list_tools, selector docs) stays exactly what v1 recorded."""
+        return [{**t, **RETURNS.get(t["name"], {})} for t in self.tool_dicts()]
+
     def call(self, name: str, **kwargs: Any) -> Any:
         """The path used by direct (arm A) calls and by REPL builtins: real registry.invoke."""
         return self.registry.invoke(name, PROBE_ROLE, **kwargs)
@@ -241,6 +246,24 @@ class AuditedRegistry(ToolRegistry):
             self.world.audit.append(rec)
             raise
 
+
+# Return types of the probe's tools, as the registry handlers actually produce them (list_dir / file_info return JSON
+# TEXT today; the stub binding parses them because the stub promises an object).
+RETURNS: dict[str, dict[str, str]] = {
+    "list_dir": {"returns": "list[str]", "returns_doc": "file names"},
+    "file_info": {"returns": "dict", "returns_doc": '{"path", "size", "type"}'},
+    "peek": {"returns": "str", "returns_doc": "first n chars; file_path is required"},
+    "read_file": {"returns": "str"},
+    "grep": {"returns": "list[str]", "returns_doc": "matching lines"},
+    "file_write_safe": {"returns": "str", "returns_doc": "confirmation text"},
+    "write_file": {"returns": "str", "returns_doc": "confirmation text"},
+    "json_parse": {"returns": "Any"},
+    "calculate": {"returns": "Any"},
+    "statistics": {"returns": "dict", "returns_doc": "{metric: value}"},
+    "csv_to_json": {"returns": "list[dict]", "returns_doc": "one dict per row"},
+    "syn_sku_price": {"returns": "dict", "returns_doc": '{"sku", "price_cents", "currency"}'},
+    "syn_ledger_post": {"returns": "dict", "returns_doc": '{"ok", "memo"}'},
+}
 
 _REAL_GROUP = {
     "http_get": "web", "http_post": "web", "web_search": "web", "web_research": "web", "fetch_wikipedia": "reference_search",
