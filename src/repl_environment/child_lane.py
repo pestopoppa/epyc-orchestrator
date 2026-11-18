@@ -842,7 +842,7 @@ class ChildLane:
             raise LaneUnavailable("context is not a string; unsupported in the contained lane")
         if len(ctx) > self.cfg.context_cap_chars:
             raise LaneUnavailable(f"context of {len(ctx)} chars exceeds the lane cap of {self.cfg.context_cap_chars}")
-        base = env._builtin_global_keys
+        base = tool_broker.tool_names(env)
         pctx = _make_ctx(env, allow_opaque=True)
         state: dict[str, Any] = {}
         bad: list[str] = []
@@ -947,7 +947,7 @@ class ChildLane:
         """Mirror the child's live variables into ``env._globals`` BEFORE a tool that reads them runs
         (best effort per key: a value that cannot cross keeps the parent's copy; nothing is deleted)."""
         m = _codec()
-        base = env._builtin_global_keys
+        base = tool_broker.tool_names(env)
         pctx = _make_ctx(env, allow_opaque=True)
         for key, val in state.items():
             if key in base or key == "__builtins__" or not isinstance(key, str):
@@ -1068,7 +1068,7 @@ class ChildLane:
     def sync_state(self, env: Any, done: dict) -> None:
         """Mirror the child's variables and artifacts into the parent (the authoritative copy)."""
         m = _codec()
-        base = env._builtin_global_keys
+        base = tool_broker.tool_names(env)
         pctx = _make_ctx(env, allow_opaque=True)
         state = done.get("state") or {}
         decoded = {key: m.decode(val, pctx) for key, val in state.items()}  # may raise Unsupported

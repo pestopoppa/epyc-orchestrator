@@ -115,12 +115,11 @@ _STATE_READING_TOOLS = frozenset({"remember", "SCRIPT", "checkpoint_create", "ch
 
 
 def tool_names(parent: Any) -> frozenset[str]:
-    """Every REPL-provided global: the construction-time keys plus methods added later (e.g. document tools)."""
-    names = set(getattr(parent, "_builtin_global_keys", frozenset()))
-    for k, v in parent._globals.items():
-        if getattr(v, "__self__", None) is parent or getattr(getattr(v, "__wrapped__", None), "__self__", None) is parent:
-            names.add(k)
-    return frozenset(names)
+    """Every REPL-provided global: the construction-time keys plus methods added later (e.g. document tools).
+    One definition shared with the contained child lane (``tool_broker.tool_names``)."""
+    from src.repl_environment.tool_broker import tool_names as _shared_tool_names
+
+    return _shared_tool_names(parent)
 
 _PRELUDE = '''\
 import json, math, re, collections, itertools, functools, datetime, copy, decimal

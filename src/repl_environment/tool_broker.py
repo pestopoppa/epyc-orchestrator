@@ -6,17 +6,18 @@ be reachable from there as a *callback the parent executes*, through exactly the
 call takes. This module is that single definition:
 
 * ``bridged_tools(env)`` enumerates the surface FROM THE IN-PROCESS GLOBALS BUILDER
-  (``env._globals`` / ``env._builtin_global_keys``, i.e. what ``REPLEnvironment._build_globals``
-  produced), never from a hand-kept table. A tool added to ``_build_globals`` (or installed by a
-  flag-gated ``codemode_tools.install``) is bridged automatically; a test asserts that the bridged
-  set equals the in-process set minus ``EXCLUDED`` (below), so a miss is loud.
+  (``tool_names``: ``env._builtin_global_keys``, i.e. what ``REPLEnvironment._build_globals``
+  produced, plus environment methods installed later), never from a hand-kept table. A tool added
+  to ``_build_globals`` (or installed by a flag-gated ``codemode_tools.install``) is bridged
+  automatically; a test asserts that the bridged set equals the in-process set minus ``EXCLUDED``
+  (below), so a miss is loud.
 * The callables are the in-process ones: the bound-method wrapper that charges the per-snippet tool
   budget (``_count_tool_calls``), the per-tool argument validator when that flag is on, the
   write-dedupe in ``_invoke_tool`` / ``file_write_safe``, the untrusted-text handling inside each
   tool, ``llm_call``'s argument neutralisation, ``run_shell`` / ``run_python_code`` launching their
   own ``exec_sandbox`` child. Nothing is reimplemented here: ``call`` just invokes them.
-* ``ReplyCodec`` is the parent-side typed-JSON encoder for results (adds the ``obj`` record for
-  dataclass / ``SimpleNamespace`` results such as the ``ToolOutput`` envelope).
+* ``reply_ctx`` / ``error_record`` are the parent-side wire forms for results (the ``obj`` record for
+  dataclass / ``SimpleNamespace`` results such as the ``ToolOutput`` envelope) and tool exceptions.
 
 The lane owns transport, deadline, lease and result-size policy; this module owns *what* is
 callable and *how* it is invoked, so two lanes cannot drift apart.
@@ -47,11 +48,22 @@ EXCLUDED: dict[str, str] = {
 }
 
 
+def tool_names(env: Any) -> frozenset[str]:
+    """Every REPL-PROVIDED global (as opposed to a model-defined one): the construction-time keys plus
+    bound methods of the environment installed into ``_globals`` afterwards (e.g. document tools).
+    The one definition every lane uses (``monty_adapter.tool_names`` delegates here)."""
+    names = set(getattr(env, "_builtin_global_keys", frozenset()))
+    for k, v in env._globals.items():
+        if getattr(v, "__self__", None) is env or getattr(getattr(v, "__wrapped__", None), "__self__", None) is env:
+            names.add(k)
+    return frozenset(names)
+
+
 def bridged_tools(env: Any) -> dict[str, Callable[..., Any]]:
     """name -> the in-process callable, captured NOW from the parent's own globals so nothing the
     child sends can rebind what a name resolves to. Includes everything callable in the
     builder's globals except the core preloads and the control signals."""
-    base = getattr(env, "_builtin_global_keys", frozenset())
+    base = tool_names(env)
     out: dict[str, Callable[..., Any]] = {}
     for key in sorted(base):
         if key in CORE_NAMES or key in CONTROL or key in EXCLUDED:
@@ -65,14 +77,12 @@ def bridged_tools(env: Any) -> dict[str, Callable[..., Any]]:
 def refused_names(env: Any, bridged: dict[str, Callable[..., Any]]) -> list[str]:
     """Builder globals that are neither core, control nor bridged: the sandbox stubs these so a use
     raises a named error instead of a confusing NameError."""
-    base = getattr(env, "_builtin_global_keys", frozenset())
-    return sorted(k for k in base if k not in CORE_NAMES and k not in CONTROL and k not in bridged)
+    return sorted(k for k in tool_names(env) if k not in CORE_NAMES and k not in CONTROL and k not in bridged)
 
 
 def exposed_surface(env: Any) -> frozenset[str]:
     """Every tool-like name the in-process REPL exposes (builder globals minus core preloads)."""
-    base = getattr(env, "_builtin_global_keys", frozenset())
-    return frozenset(k for k in base if k not in CORE_NAMES)
+    return frozenset(k for k in tool_names(env) if k not in CORE_NAMES)
 
 
 def call(name: str, fn: Callable[..., Any], args: list[Any], kwargs: dict[str, Any]) -> Any:

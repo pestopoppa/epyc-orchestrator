@@ -165,6 +165,17 @@ def test_a_tool_added_to_the_builder_is_bridged_without_touching_the_lane(envs):
     assert "brand_new_tool" in init["allow"] and "brand_new_tool" not in init["refuse"]
 
 
+def test_one_enumeration_is_shared_with_the_monty_lane_including_late_installed_methods(envs):
+    from src.repl_environment import monty_adapter
+
+    env = _full_env(envs)
+    env._globals["late_tool"] = env._context_len  # a bound method of the env installed after construction
+    assert "late_tool" not in env._builtin_global_keys
+    assert monty_adapter.tool_names(env) == tool_broker.tool_names(env) and "late_tool" in tool_broker.tool_names(env)
+    init = child_lane.ChildLane(env)._build_init(env)
+    assert "late_tool" in init["allow"]  # bridged, and not mistaken for model state
+
+
 def test_a_new_non_callable_global_is_refused_by_name_not_dropped(envs):
     env = _full_env(envs)
     env._globals["some_handle"] = object()
