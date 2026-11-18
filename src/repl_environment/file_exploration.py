@@ -9,6 +9,8 @@ import logging
 import os
 import re
 
+from src.repl_environment import safe_regex as _safe_regex
+
 logger = logging.getLogger(__name__)
 
 
@@ -273,7 +275,7 @@ class _FileExplorationMixin:
         """
         self._increment_exploration()
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
+            regex = _safe_regex.compile(pattern, re.IGNORECASE)
         except re.error as e:
             return [f"[REGEX ERROR: {e}]"]
 

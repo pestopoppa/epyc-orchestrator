@@ -45,6 +45,8 @@ import copy
 import hashlib
 import json
 import re
+
+from src.repl_environment import safe_regex as _safe_regex
 import threading
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
@@ -534,7 +536,7 @@ class ContextBundle:
         """Regex (case-insensitive) over the sections; up to ``k`` hits as
         ``{"section", "line", "text"}`` (``text`` clipped to 400 chars)."""
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
+            regex = _safe_regex.compile(pattern, re.IGNORECASE)
         except re.error as exc:
             raise ValueError(f"context.grep: bad regex {pattern!r}: {exc}") from exc
         k = max(1, min(int(k), GREP_MAX_K))

@@ -199,6 +199,7 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 - Graph router vs classifier-only routing
 - Episodic memory configurations (retrieval weights, confidence thresholds)
 - Factual risk mode (off/shadow/enforce) — RI-7 A/B test was underpowered, needs larger sample
+- REPL contained child lane (`repl_child_lane`, default off) — runtime-toggleable via `POST /config`; runs REPL cells in a warm, killable, resource-limited child (fails closed, never inline). Safety/latency axis, not a quality lever: judge it by REPL cell error and timeout rate and per-cell overhead against the flag-off baseline. Free-form cells get read-only callbacks only (arms that call mutating tools from free-form code refuse by design); structured-mode tool calls stay parent-owned and keep working
 
 ### Tier 2b: Codemode / Tool-Picker / REPL / Document Flags (hot-swap via `POST /config`; added 2026-11-18)
 

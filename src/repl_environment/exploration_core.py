@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
+
+from src.repl_environment import safe_regex as _safe_regex
 import stat
 from typing import Callable
 MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -149,7 +151,7 @@ def grep_file(
     compiled = None
     if not compile_after_read:
         try:
-            compiled = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+            compiled = _safe_regex.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
             raise ExplorationError(f"invalid regex pattern: {exc}") from exc
     try:
@@ -163,7 +165,7 @@ def grep_file(
         text = text.replace("\r\n", "\n").replace("\r", "\n")
     if compiled is None:
         try:
-            compiled = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+            compiled = _safe_regex.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as exc:
             raise ExplorationError(f"invalid regex pattern: {exc}") from exc
     lines = text.splitlines() if splitlines else text.split("\n")

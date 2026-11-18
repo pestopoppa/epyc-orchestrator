@@ -45,10 +45,25 @@ class ToolArgumentError(ValueError):
     """A tool received an argument that fails its declared contract."""
 
 
+def feature_on(name: str, env_name: str) -> bool:
+    """A REPL-hardening flag: an explicitly set env var decides; otherwise the live feature
+    registry (``POST /config`` / runtime flags file) does. Unreadable registry == off."""
+    raw = os.environ.get(env_name)
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in _TRUE
+    try:
+        from src.features import features
+
+        return bool(getattr(features(), name, False))
+    except Exception:  # noqa: BLE001 - these flags guard NEW enforcement; absence is the old behaviour
+        return False
+
+
 def flag_enabled() -> bool:
-    if os.environ.get(FLAG_ENV, "").strip().lower() in _TRUE:
+    """Argument validation + structured exception schema + bounded regex: its own flag, or the lane's."""
+    if feature_on("repl_tool_arg_validation", FLAG_ENV):
         return True
-    return os.environ.get("ORCHESTRATOR_REPL_CHILD_LANE", "").strip().lower() in _TRUE
+    return feature_on("repl_child_lane", "ORCHESTRATOR_REPL_CHILD_LANE")
 
 
 @dataclass(frozen=True)
