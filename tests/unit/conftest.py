@@ -103,7 +103,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "repl_in_process: the test asserts in-process REPL semantics that the opt-in contained child lane "
         "(ORCHESTRATOR_REPL_CHILD_LANE) legitimately changes (free-form cells refuse mutating/unbounded tools, "
-        "SIGALRM-based timeouts, unencodable injected globals, schema-rendered error text); pin the lane OFF.",
+        "SIGALRM-based timeouts, unencodable injected globals, schema-rendered error text, validator messages); pin the "
+        "lane and the validation flag OFF.",
     )
 
 
@@ -111,6 +112,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def _repl_in_process_pin(request, monkeypatch):
     if request.node.get_closest_marker("repl_in_process") is not None:
         monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_LANE", "0")
+        monkeypatch.setenv("ORCHESTRATOR_REPL_TOOL_ARG_VALIDATION", "0")  # also: validator/schema text differs
     yield
 
 
