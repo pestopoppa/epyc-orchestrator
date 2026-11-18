@@ -432,6 +432,7 @@ class REPLEnvironment(
         "route_advice", "list_procedures", "get_procedure_status",
         "context_len", "find_scripts", "benchmark_compare", "fetch_report",
         "code_search", "doc_search",
+        "search_tools", "describe_tool", "handles", "load",  # codemode CM-2/CM-5 (flag-gated)
     })
     _CHAINABLE_REPL_TOOLS: frozenset[str] = frozenset({
         "run_shell",
@@ -593,6 +594,11 @@ class REPLEnvironment(
             globals_dict["TOOL"] = self._invoke_tool
             globals_dict["CALL"] = self._call_tool
             globals_dict["list_tools"] = self._list_tools
+
+        # codemode CM-2/4/5: flag-gated additions (nothing is added unless an ORCHESTRATOR_REPL_* flag is on)
+        from src.repl_environment.codemode_tools import install as _install_codemode_tools
+
+        _install_codemode_tools(self, globals_dict)
 
         # Add script registry functions if available
         if self.script_registry is not None:
@@ -1705,8 +1711,18 @@ class REPLEnvironment(
             )
         self._in_execute = True
         self._snippet_tool_calls = 0
+        _hs = getattr(self, "_handle_store", None)
+        if _hs is not None:
+            _hs.begin_cell()
         try:
-            return self._execute_impl(code)
+            _res = self._execute_impl(code)
+            if _hs is not None:  # CM-5: only a cell that succeeded may write handles
+                _hs.rollback() if getattr(_res, "error", None) else _hs.commit()
+            return _res
+        except BaseException:
+            if _hs is not None:
+                _hs.rollback()
+            raise
         finally:
             self._in_execute = False
 

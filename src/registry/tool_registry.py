@@ -536,6 +536,12 @@ class ToolRegistry:
         from src.features import features as _get_features
 
         use_structured = _get_features().structured_tool_output
+        # CM-3: envelope for read-only tools only (ORCHESTRATOR_STRUCTURED_READ_ONLY=1, default off), so a read-only
+        # tool never returns a bare string on success while write tools keep today's shape.
+        if not use_structured and SideEffect.READ_ONLY in tool.side_effects and os.environ.get(
+            "ORCHESTRATOR_STRUCTURED_READ_ONLY", ""
+        ).strip().lower() in ("1", "true", "on", "yes"):
+            use_structured = True
 
         # AP-54 eval knowledge fence. A no-op unless the request carried
         # `eval_fence`; production chat never installs a carrier. A denial is an

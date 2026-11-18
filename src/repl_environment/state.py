@@ -528,6 +528,7 @@ class _StateMixin:
             "curated": curated,
             "code_log": self.get_code_log(),
             "code_log_metrics": self.code_log_metrics(),
+            **({"handle_store": self._handle_store.snapshot()} if getattr(self, "_handle_store", None) is not None else {}),
             "user_globals": user_globals,
             "pickled_globals": pickled_globals,
             "variable_lineage": variable_lineage,
@@ -609,6 +610,13 @@ class _StateMixin:
                     key=lambda n: n.timestamp,
                 )
                 self._last_research_node = most_recent.id
+
+        if "handle_store" in checkpoint:  # CM-5: replay the store along the branch
+            from src.repl_environment.codemode_tools import HandleStore
+
+            if getattr(self, "_handle_store", None) is None:
+                self._handle_store = HandleStore()
+            self._handle_store.restore(checkpoint["handle_store"])
 
         # Rebuild globals with restored artifacts
         self._globals = self._build_globals()
