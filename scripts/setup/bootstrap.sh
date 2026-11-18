@@ -206,10 +206,12 @@ install_python_deps() {
   # Check for uv first
   if command -v uv &>/dev/null; then
     log_info "Using uv for installation..."
-    uv sync
+    # The API venv carries the `monty` extra (operator 2026-11-18: monty_repl lane is on the
+    # autopilot surface); a bare `uv sync` would uninstall it. --all-extras is unusable (README).
+    uv sync --extra monty
   elif [[ -f "pyproject.toml" ]]; then
     log_info "Using pip for installation..."
-    pip install -e ".[dev]"
+    pip install -e ".[dev,monty]"
   elif [[ -f "requirements.txt" ]]; then
     log_info "Using pip with requirements.txt..."
     pip install -r requirements.txt
