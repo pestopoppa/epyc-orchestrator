@@ -69,6 +69,20 @@ def _record_session_turn(
     """
     from src.features import features as _get_features
 
+    try:  # codemode fix 2 (ORCHESTRATOR_REPL_TURN_MEMORY, default off): remember this turn's code + result
+        from src.prompt_builders.turn_memory import TurnMemory, turn_memory_n
+
+        _n = turn_memory_n()
+        if _n:
+            _mem = getattr(state, "turn_memory", None)
+            if not isinstance(_mem, TurnMemory) or _mem.n != _n:
+                _mem = TurnMemory(_n)
+                state.turn_memory = _mem  # type: ignore[attr-defined]
+            _mem.add(max(0, state.turns - 1), code, verbatim_output if verbatim_output is not None else output,
+                     (verbatim_error if verbatim_error is not None else error) or "")
+    except Exception:  # noqa: BLE001 - memory must never break a turn
+        pass
+
     experimental = _get_features().context_arm_ab is True
     observed_output = verbatim_output if experimental and verbatim_output is not None else output
     observed_error = verbatim_error if experimental and verbatim_error is not None else error

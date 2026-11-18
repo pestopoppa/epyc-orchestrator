@@ -1389,6 +1389,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         _drop_stale_layout()
     else:
         from src.prompt_builders.builder import PromptBuilder, build_corpus_context
+        from src.prompt_builders.turn_memory import turn_memory_kwargs as _turn_memory_kwargs
         from src.prompt_builders.types import PromptConfig, PromptStyle
 
         repl_state = deps.repl.get_state()
@@ -1476,6 +1477,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             corpus_context=corpus_ctx,
             solution_file=sol_file,
             role=str(role),
+            # codemode fix 2: only passed with ORCHESTRATOR_REPL_TURN_MEMORY>0 (else the call is byte-identical)
+            **_turn_memory_kwargs(state),
         )
         # Programmatic feedback uses the existing request-local StepEventLog. It is default-off
         # with step-event logging; consumed facts are bounded and carry evidence, not diagnoses.

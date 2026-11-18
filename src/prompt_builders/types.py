@@ -84,6 +84,10 @@ class RootLMPrompt:
 
     Empty (the default) renders nothing, so every existing prompt is byte-identical."""
 
+    history: str = ""
+    """Codemode fix 2 (``ORCHESTRATOR_REPL_TURN_MEMORY``): the previous-turns block, APPENDED after every other
+    section (never inserted before them) so the cacheable prefix is unchanged. Empty renders nothing."""
+
     def to_string(self, prefix_stable: bool = False) -> str:
         """Convert to a single prompt string.
 
@@ -140,6 +144,8 @@ class RootLMPrompt:
                 parts.extend([("task", ""), ("task", "## Your Code"), ("task", self.instruction)])
         if self.turn_tail:  # RTE-PFX-3: volatile tail, after every section in both orders
             parts.extend([("state", ""), ("state", self.turn_tail)])
+        if self.history:  # codemode fix 2: appended last, after the turn tail
+            parts.extend([("history", ""), ("history", self.history)])
         return parts
 
     def section_spans(self, prefix_stable: bool = False) -> list[tuple[str, int, int]]:

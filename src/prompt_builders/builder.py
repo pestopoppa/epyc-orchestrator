@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import logging
 from pathlib import Path
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
@@ -249,6 +250,7 @@ class PromptBuilder:
         as_structured: bool = False,
         solution_file: str = "",
         role: str = "",
+        turn_history: Sequence[Mapping[str, Any]] | None = None,
     ) -> str | RootLMPrompt:
         """Build the prompt for the Root LM (frontdoor).
 
@@ -262,10 +264,19 @@ class PromptBuilder:
             last_error: Error from the last code execution (if any)
             turn: Current turn number (0-indexed)
             as_structured: Return RootLMPrompt instead of string
+            turn_history: prior ``{"turn","code","output","error"}`` entries. Rendered (as an appended
+                ``## Previous Turns`` block) only when ``ORCHESTRATOR_REPL_TURN_MEMORY=N`` > 0; ignored otherwise.
 
         Returns:
             Prompt string or RootLMPrompt if as_structured=True
         """
+        # Codemode fix 2: with turn memory on, the previous turns (code + output/error, ~4000-char previews)
+        # replace the separate Last Output / Last Error text, which they already contain.
+        from src.prompt_builders.turn_memory import render_turn_memory, turn_memory_n
+
+        _mem_n = turn_memory_n()
+        _history_block = render_turn_memory(list(turn_history or ()), _mem_n)
+        _last_in_history = bool(_history_block)
         # CT-12.3a: user task, REPL output/error, state previews and retrieved
         # corpus context are untrusted; the system/tools/rules text is ours.
         state = _ct_neutralise(state)
@@ -292,7 +303,12 @@ class PromptBuilder:
         # Build context section based on last output/error
         context_parts = []
         _tool_output_block = ""  # RTE-LOG-1: the Last Error / Last Output block, for the layout log
-        if last_error:
+        if last_error and _last_in_history:
+            context_parts.append(
+                "Fix ONLY the broken part of your previous code (shown under Previous Turns). "
+                "Do NOT rewrite from scratch — make targeted fixes."
+            )
+        elif last_error:
             error_preview = last_error[: self.config.max_error_preview]
             if len(last_error) > self.config.max_error_preview:
                 error_preview += "..."
@@ -323,7 +339,7 @@ class PromptBuilder:
                     "Fix ONLY the broken part of your previous code. "
                     "Do NOT rewrite from scratch — make targeted fixes."
                 )
-        elif last_output:
+        elif last_output and not _last_in_history:
             output_preview = last_output[: self.config.max_output_preview]
             if len(last_output) > self.config.max_output_preview:
                 output_preview += "..."
@@ -357,6 +373,8 @@ class PromptBuilder:
 
         if context_parts:
             prompt.context = "\n".join(context_parts)
+        if _history_block:
+            prompt.history = _history_block
 
         if as_structured:
             return prompt

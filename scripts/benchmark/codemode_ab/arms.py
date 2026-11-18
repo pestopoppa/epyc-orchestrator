@@ -188,6 +188,9 @@ def run_arm_repl(task: Task, world: World, llm: Any, seed: int, arm: str, select
         os.environ.pop(ts.ENV_FLAG, None)
         ts.set_selector_provider(None)
     last_out = last_err = ""
+    from src.prompt_builders.turn_memory import TurnMemory, turn_memory_n
+
+    mem = TurnMemory(turn_memory_n())  # ORCHESTRATOR_REPL_TURN_MEMORY=N (default 0 = stateless, as in v1)
     t0 = time.perf_counter()
     try:
         for turn in range(MAX_TURNS_REPL):
@@ -195,7 +198,8 @@ def run_arm_repl(task: Task, world: World, llm: Any, seed: int, arm: str, select
                 rec["end_reason"] = "wall_cap"
                 break
             prompt = builder.build_root_lm_prompt(state=env.get_state(), original_prompt=task.prompt, last_output=last_out,
-                                                  last_error=last_err, turn=turn)
+                                                  last_error=last_err, turn=turn,
+                                                  **({"turn_history": mem.entries()} if mem.n and mem.entries() else {}))
             if turn == 0:
                 rec["tools_prompt_chars"] = len(builder._resolve_tools()) if selection_block is None else len(selection_block)  # noqa: SLF001
             rep = llm.chat([{"role": "user", "content": prompt}], max_tokens=3072, seed=seed + turn)
@@ -210,9 +214,11 @@ def run_arm_repl(task: Task, world: World, llm: Any, seed: int, arm: str, select
             if not code.strip():
                 rec["failed_snippets"] += 1
                 last_out, last_err = "", "No code found in your response. Write Python code and end with FINAL()."
+                mem.add(turn, rep.content or "", "", last_err)
                 continue
             res = env.execute(code)
             last_out, last_err = res.output or "", res.error or ""
+            mem.add(turn, code, last_out, last_err)
             if res.error:
                 rec["failed_snippets"] += 1
             if res.is_final:
