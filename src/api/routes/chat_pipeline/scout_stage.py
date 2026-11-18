@@ -97,6 +97,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
@@ -110,6 +111,32 @@ TRANSPORT_NAME = "direct_chat_completions"
 
 # Per-thread admission data must not leak across concurrent scouts.
 _SCOUT_ADMISSION = contextvars.ContextVar("scout_admission", default=None)
+
+#: OAB-17 F9: scouts ran on the event loop's DEFAULT executor, shared with chat.py's own
+#: `to_thread` handlers, so several scouted requests (each up to 8 scouts) could starve
+#: unrelated handlers. They get a dedicated bounded pool instead. Bounded, not sized to
+#: demand: excess scouts queue here rather than taking threads from the shared pool.
+SCOUT_EXECUTOR_WORKERS = 16
+_SCOUT_EXECUTOR: "ThreadPoolExecutor | None" = None
+_SCOUT_EXECUTOR_LOCK = threading.Lock()
+
+
+def _scout_executor() -> "ThreadPoolExecutor":
+    global _SCOUT_EXECUTOR
+    with _SCOUT_EXECUTOR_LOCK:
+        if _SCOUT_EXECUTOR is None:
+            _SCOUT_EXECUTOR = ThreadPoolExecutor(
+                max_workers=SCOUT_EXECUTOR_WORKERS, thread_name_prefix="scout")
+        return _SCOUT_EXECUTOR
+
+
+def _scout_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "asyncio.Future[Any]":
+    """`asyncio.to_thread` on the dedicated scout executor (contextvars are copied, as
+    to_thread does, so the per-scout admission context still propagates)."""
+    ctx = contextvars.copy_context()
+    return asyncio.get_running_loop().run_in_executor(
+        _scout_executor(), lambda: ctx.run(fn, *args, **kwargs))
+
 
 def _payload_sha256(payload: dict[str, Any]) -> str:
     """Hash canonical client payload, without claiming it is the rendered server prompt."""
@@ -1251,7 +1278,7 @@ async def run_scouts(
             r.status, r.skip_reason = "skipped", "no task scope"
         return _finish(report, results, t0, clock, "", role, 0)
     # resolve_cap does a synchronous /slots HTTP read: keep it off the event loop.
-    cap = await asyncio.to_thread(resolve_cap, url or "", max_scouts=config.max_scouts,
+    cap = await _scout_thread(resolve_cap, url or "", max_scouts=config.max_scouts,
                                   n_targets=len(wanted), reserve_slots=config.reserve_slots,
                                   resolver=resolver)
     report["cap"] = cap
@@ -1271,7 +1298,7 @@ async def run_scouts(
 
     transport = transport or ChatCompletionsTransport(url or "", enable_thinking=config.enable_thinking)
     # Token-aware admission on a shared KV pool: slots bound concurrency, tokens bound load.
-    pool_limit, pool = await asyncio.to_thread(resolve_pool_gate, url or "",
+    pool_limit, pool = await _scout_thread(resolve_pool_gate, url or "",
                                                resolver=resolver, pool=pool_admission)
     if pool is not None:
         report["pool_gate"] = {"gated": True, "pool_tokens": int(pool_limit.pool_tokens),
@@ -1306,7 +1333,7 @@ async def run_scouts(
         claim_report.update(status="error", error=f"{type(exc).__name__}: {exc}"[:500])
     if claim is not None:
         claim_started = clock()
-        acquire = asyncio.ensure_future(asyncio.to_thread(claim.__enter__))
+        acquire = asyncio.ensure_future(_scout_thread(claim.__enter__))
         try:
             await asyncio.shield(acquire)
         except asyncio.CancelledError:
@@ -1388,7 +1415,7 @@ async def run_scouts(
                 active -= 1
 
     try:
-        tasks = [asyncio.ensure_future(asyncio.to_thread(_one, i)) for i in range(n_run)]
+        tasks = [asyncio.ensure_future(_scout_thread(_one, i)) for i in range(n_run)]
         try:
             # The threads watch the deadline and the cancel flag themselves; this wait only
             # bounds a thread stuck in a blocking read (connect/read timeouts bound those).
