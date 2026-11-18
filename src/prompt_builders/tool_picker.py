@@ -51,6 +51,9 @@ CORE_VOCAB = frozenset({"read", "write", "edit", "ls", "list", "glob", "cat"})
 CORE_MAX = 6
 SERVER_TOOLS = ("list_tools", "search_tools", "describe_tool")  # executed by the server, always sent when the pick narrows
 
+# Logged on every selection row so a log reader can tell which policy produced it; bump when the ladder/plateau/family logic changes.
+PICKER_VERSION = "hardened-c1-v1"
+
 DEFAULTS = {"k_min": 4, "k_max": 12, "delta": 0.05, "family_cap": 3, "full_list_max": 40, "budget_ms": 500.0}
 
 
@@ -369,7 +372,9 @@ def selection_row(req_id: str, conv: str, variant: str, role: str, res: PickResu
                   query: str, *, frozen_hit: bool) -> dict[str, Any]:
     top = sorted(res.scores.items(), key=lambda kv: -kv[1])[:16]
     return {"type": "selection", "request_id": req_id, "conversation": conv, "variant": variant, "role": role, "mode": res.mode,
-            "rung": res.rung, "n_tools_in": n_in, "n_tools_out": len(sent), "k_min": cfg.k_min, "k_max": cfg.k_max, "k_effective": res.k_eff,
+            "rung": res.rung, "n_tools_in": n_in, "n_tools_out": len(sent), "picker_version": PICKER_VERSION,
+            "k_min": cfg.k_min, "k_max": cfg.k_max, "delta": cfg.delta, "family_cap": cfg.family_cap, "full_list_max": cfg.full_list_max,
+            "k_effective": res.k_eff,
             "plateau": res.plateau, "core": res.core, "selected": list(res.picks), "sent": list(sent), "scores_top16": [[n, round(s, 4)] for n, s in top],
             "elapsed_ms": round(res.elapsed_ms, 2), "embedder": res.embedder, "frozen_hit": frozen_hit,
             "query_hash": hashlib.sha1(query.encode()).hexdigest()[:12], "query_head": query[:120], "detail": res.detail}

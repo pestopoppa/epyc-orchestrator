@@ -197,6 +197,11 @@ def test_selection_row_logs_scores_k_rung_latency_and_outcome_called_not_selecte
     sel = [r for r in rows(tmp_path) if r["type"] == "selection"][0]
     assert sel["rung"] == "none" and sel["k_effective"] == 4 and sel["role"] == "frontdoor" and sel["embedder"] == "fake-emb"
     assert sel["scores_top16"][0][0] == "syn_sku_price" and sel["elapsed_ms"] >= 0 and "read_file" in sel["core"]
+    # the effective picker config rides on every selection row (the vidya tool_selector_events adapter reads these)
+    cfg = tp.PickerConfig.from_env(ON)
+    assert sel["picker_version"] == tp.PICKER_VERSION and sel["picker_version"]
+    assert (sel["k_min"], sel["k_max"], sel["delta"], sel["family_cap"], sel["full_list_max"]) == (
+        cfg.k_min, cfg.k_max, cfg.delta, cfg.family_cap, cfg.full_list_max)
     tp.record_outcome(ctx, ["syn_sku_price", "syn_t9_x9", "list_tools"])
     out = [r for r in rows(tmp_path) if r["type"] == "outcome"][0]
     assert out["called_not_selected"] == ["syn_t9_x9"] and out["called"] == ["syn_sku_price", "syn_t9_x9"]
