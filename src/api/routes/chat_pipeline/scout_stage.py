@@ -112,6 +112,9 @@ TRANSPORT_NAME = "direct_chat_completions"
 
 # Per-thread admission data must not leak across concurrent scouts.
 _SCOUT_ADMISSION = contextvars.ContextVar("scout_admission", default=None)
+#: OAB-16: the request that spawned the scouts; stamped on every scout's serving_call
+#: record so a scout's tokens sit next to the planner turn that asked for them.
+_SCOUT_PARENT = contextvars.ContextVar("scout_parent_request_id", default=None)
 
 #: OAB-17 F9: scouts ran on the event loop's DEFAULT executor, shared with chat.py's own
 #: `to_thread` handlers, so several scouted requests (each up to 8 scouts) could starve
@@ -740,6 +743,9 @@ def _record_scout_call(method: str, url: str, messages: list[dict[str, str]], ma
     try:
         from src.backends import serving_calls
 
+        parent = _SCOUT_PARENT.get()
+        if parent:
+            notes = {**(notes or {}), "parent_request_id": parent}
         prompt = "\n".join(str(m.get("content") or "") for m in messages)
         serving_calls.record_http_call(
             method=method, role="scout", base_url=url, endpoint="/v1/chat/completions",
@@ -1275,13 +1281,17 @@ def _role_url(primitives: Any, role: str) -> str:
     return first.rstrip("/")
 
 
-async def run_scouts(*args: Any, **kwargs: Any) -> "ScoutStageResult":
+async def run_scouts(*args: Any, parent_request_id: str | None = None,
+                     **kwargs: Any) -> "ScoutStageResult":
     """See `_run_scouts`; this wrapper releases the in-process slot reservation (OAB-17 F8)
-    on every exit path, including cancellation."""
+    on every exit path, including cancellation, and tags the scouts' serving_call records
+    with the parent request id (OAB-16)."""
     held: dict[str, Any] = {}
+    token = _SCOUT_PARENT.set(parent_request_id)
     try:
         return await _run_scouts(*args, _held=held, **kwargs)
     finally:
+        _SCOUT_PARENT.reset(token)
         _release_inflight(held.get("url"), int(held.get("n") or 0))
 
 

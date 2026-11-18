@@ -781,6 +781,7 @@ async def _run_scout_stage(
             primitives=primitives,
             cancel_event=cancel_event,
             request_deadline_s=request_deadline_s,
+            parent_request_id=getattr(request, "request_id", None),
         )
     except asyncio.CancelledError:
         raise
