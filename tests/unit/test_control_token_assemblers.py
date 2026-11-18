@@ -54,6 +54,7 @@ ACCOUNTED_ELSEWHERE = {
     "api/routes/chat_pipeline/proactive_stage.py::_request_plan_steps": "plan_prompt comes from build_task_decomposition_prompt (called in _execute_proactive), which neutralises",
     "api/routes/openai_compat.py::openai_chat_completions": "OpenAIChatRequest messages neutralised (CT-12.3a)",
     "api/routes/openai_compat.py::_run_client_tool_completion": "messages come from OpenAIChatRequest (content + tool_calls neutralised, CT-12.3a)",
+    "api/routes/openai_compat.py::_call": "closure inside _run_client_tool_completion (picker re-call): sends the same already-neutralised OpenAIChatRequest messages, plus server-executed list_tools/search_tools/describe_tool results rendered from the CLIENT's own tool definitions (names/descriptions the same client already supplied in this request; no tool-output text)",
     "api/routes/openai_compat.py::generate_stream": "OpenAIChatRequest messages neutralised (CT-12.3a)",
     "api/routes/chat_utils.py::_formalize_output": "build_formalizer_prompt neutralises",
     "api/routes/voice.py::response_events": "prompt neutralised in voice_turn before templating",
