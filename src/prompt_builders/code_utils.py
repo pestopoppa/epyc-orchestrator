@@ -703,6 +703,10 @@ def extract_code_from_response(response: str) -> str:
     return ""
 
 
+_CONTEXT_PULL_RE = re.compile(
+    r"(?<![\w.])context(?:\.(?:get|json|index|search)\(|\[\s*[\"'])")
+
+
 def auto_wrap_final(code: str) -> str:
     """Auto-wrap code in FINAL() if it looks like a final answer.
 
@@ -746,17 +750,16 @@ def auto_wrap_final(code: str) -> str:
         "llm_call(",  # Delegating to sub-LM
         "llm_batch(",  # Batch delegation
         "artifacts[",  # Storing intermediate results
-        # INF-78 OAB-7: pulls from a request's context bundle (`context.grep(` is
-        # already caught by "grep(")
-        "context.get(",
-        "context.json(",
-        "context.index(",
-        "context.search(",  # UFH-12: returns pointers; the pull comes next turn
-        "context[",
     ]
     for pattern in exploration_patterns:
         if pattern in code:
             return code
+    # INF-78 OAB-7 pulls from a request's context bundle (`context.grep(` is already
+    # caught by "grep("). OAB-17 F10: anchored, so an unrelated `my_context.get(` or the
+    # slicing idiom `context[:5000]` does not read as a bundle pull; only a string-keyed
+    # subscript does. `context.search(` is UFH-12: pointers, the pull comes next turn.
+    if _CONTEXT_PULL_RE.search(code):
+        return code
 
     # Get non-empty, non-comment lines
     lines = [
