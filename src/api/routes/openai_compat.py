@@ -762,10 +762,13 @@ def _run_client_tool_completion(
     Output size: ``llm_call``'s ``output_cap`` (8192-char truncation) does NOT
     apply in client mode; ``max_tokens`` is the only bound.
     """
+    # codemode-ab CM-1: per-request tool selection on the DIRECT native path (flag ORCHESTRATOR_TOOL_SELECTOR, default off).
+    from src.prompt_builders.tool_selector import select_native_tools
+
     result = primitives.chat_completion_call(
         messages,
         role=role,
-        tools=request.tools,
+        tools=select_native_tools(request.tools, messages, request.tool_choice),
         tool_choice=request.tool_choice,
         n_tokens=request.max_tokens,
         on_chunk=on_chunk,

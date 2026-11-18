@@ -243,3 +243,133 @@ def maybe_selected_tools_block(task: str, environ: Mapping[str, str] | None = No
         return _PROVIDER(task)
     except Exception:  # noqa: BLE001 - a broken selector must never break prompt building
         return None
+
+
+# --- DIRECT native-tool-call path (CM-1 follow-through: the probe found direct calls beat REPL code mode) ----
+# The client-supplied OpenAI ``tools`` list of a ``x_tool_mode="client"`` chat completion is narrowed to the
+# per-request top-k BEFORE it reaches the backend. Same flag, same variants, DEFAULT OFF.
+NativeProvider = Callable[[str, "list[dict[str, Any]]", int], "list[str] | None"]
+_NATIVE_PROVIDER: NativeProvider | None = None
+_NATIVE_CACHE: dict[tuple[str, str, tuple[str, ...], int], list[str]] = {}
+_NATIVE_CACHE_MAX = 128
+# Last decision, for observability/tests (never read by production logic).
+LAST_NATIVE_SELECTION: dict[str, Any] = {}
+
+
+def set_native_selector_provider(provider: NativeProvider | None) -> None:
+    """Register ``provider(query, tool_dicts, k) -> selected names | None``. ``None`` unregisters and clears the cache."""
+    global _NATIVE_PROVIDER
+    _NATIVE_PROVIDER = provider
+    _NATIVE_CACHE.clear()
+
+
+def _native_name(tool: Mapping[str, Any]) -> str | None:
+    fn = tool.get("function") if isinstance(tool, Mapping) else None
+    name = fn.get("name") if isinstance(fn, Mapping) else None
+    return name if isinstance(name, str) and name else None
+
+
+def openai_tool_to_dict(tool: Mapping[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``{"type":"function","function":{...}}`` -> the selector's ``{name, description, parameters}``."""
+    name = _native_name(tool)
+    if name is None:
+        return None
+    fn = tool["function"]
+    props = (fn.get("parameters") or {}).get("properties") or {}
+    req = set((fn.get("parameters") or {}).get("required") or [])
+    params = {pn: {"type": (ps or {}).get("type", "string"), "required": pn in req} for pn, ps in props.items()}
+    return {"name": name, "description": str(fn.get("description") or ""), "parameters": params}
+
+
+def last_user_query(messages: Sequence[Mapping[str, Any]]) -> str:
+    """Text of the latest user message ('' when none); content parts are joined."""
+    for m in reversed(list(messages)):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return " ".join(str(p.get("text", "")) for p in c if isinstance(p, Mapping))
+    return ""
+
+
+def _forced_name(tool_choice: Any) -> str | None:
+    if isinstance(tool_choice, Mapping):
+        fn = tool_choice.get("function")
+        if isinstance(fn, Mapping) and isinstance(fn.get("name"), str):
+            return fn["name"]
+    return None
+
+
+def _history_tool_names(messages: Sequence[Mapping[str, Any]]) -> set[str]:
+    used: set[str] = set()
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            n = (tc.get("function") or {}).get("name") if isinstance(tc, Mapping) else None
+            if isinstance(n, str):
+                used.add(n)
+    return used
+
+
+def select_native_tools(
+    tools: list[dict[str, Any]] | None,
+    messages: Sequence[Mapping[str, Any]],
+    tool_choice: Any = None,
+    environ: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]] | None:
+    """Narrow a client ``tools`` list to the per-request top-k. Returns ``tools`` itself (same object) whenever
+    the flag is off, the list is already <= k, there is no user query, ``tool_choice`` is
+    ``"none"``, or anything fails. With the flag on and no provider registered the lexical ranker is used and recorded. Original order is kept; a forced ``tool_choice`` function and any tool already
+    called earlier in the conversation always stay (so the prompt prefix is stable across turns and history stays valid)."""
+    if not tools or selector_variant(environ) == "off" or tool_choice == "none":
+        return tools
+    k = selector_k(environ)
+    if len(tools) <= k:
+        return tools
+    query = last_user_query(messages).strip()
+    if not query:
+        return tools
+    try:
+        dicts = [d for d in (openai_tool_to_dict(t) for t in tools) if d is not None]
+        names = tuple(d["name"] for d in dicts)
+        key = (selector_variant(environ), query, names, k)
+        chosen = _NATIVE_CACHE.get(key)
+        fallback = None
+        if chosen is None:
+            provider = _NATIVE_PROVIDER
+            if provider is None:  # flag on, nothing registered: lexical top-k, recorded (never silent)
+                provider, fallback = make_native_provider("lexical"), "lexical:no_provider"
+            chosen = provider(query, dicts, k)
+            if not chosen:
+                return tools
+            if len(_NATIVE_CACHE) >= _NATIVE_CACHE_MAX:
+                _NATIVE_CACHE.pop(next(iter(_NATIVE_CACHE)))
+            _NATIVE_CACHE[key] = list(chosen)
+        keep = set(chosen) | _history_tool_names(messages)
+        forced = _forced_name(tool_choice)
+        if forced:
+            keep.add(forced)
+        narrowed = [t for t in tools if _native_name(t) is None or _native_name(t) in keep]
+        LAST_NATIVE_SELECTION.clear()
+        LAST_NATIVE_SELECTION.update(variant=key[0], k=k, n_in=len(tools), n_out=len(narrowed), selected=list(chosen), fallback=fallback)
+        return narrowed or tools
+    except Exception:  # noqa: BLE001 - a broken selector must never break the request
+        return tools
+
+
+def make_native_provider(variant: str, *, embedder: Any = None, primitives: Any = None, role: str = "worker") -> NativeProvider:
+    """Provider for :func:`set_native_selector_provider`. ``embed``: C1 over the request's own tools (needs an embedder).
+    ``oneshot``: C2 with one NOUL question per tool (the request's tools have no groups), the decision model is
+    ``primitives``. A missing dependency falls back to lexical top-k (never silent: it is logged via LAST_NATIVE_SELECTION)."""
+
+    def provider(query: str, tools: list[dict[str, Any]], k: int) -> list[str] | None:
+        if variant == VARIANT_EMBED and embedder is not None:
+            return EmbeddingToolSelector(embedder, tools).select(query, k).selected
+        if variant == VARIANT_ONESHOT and primitives is not None:
+            groups = {t["name"]: [t["name"]] for t in tools}
+            desc = {t["name"]: t["description"][:120] for t in tools}
+            return OneShotToolSelector(primitives, tools, groups, desc, role=role).select(query, k).selected
+        return _topk(lexical_scores(query, tools), [t["name"] for t in tools], k)
+
+    return provider
