@@ -52,6 +52,7 @@ def test_bare_except_still_runs_and_catches_valueerror(handler):
     assert res.error is None and "caught" in res.output
 
 
+@pytest.mark.repl_in_process
 def test_traceback_line_numbers_preserved():
     res = _env(5).execute("x = 1\ntry:\n    pass\nexcept:\n    pass\n\n\nraise ValueError('boom')\n")
     assert res.error and "ValueError: boom" in res.error
@@ -62,6 +63,7 @@ def test_traceback_line_numbers_preserved():
     assert ei.value.__traceback__.tb_next.tb_lineno == 6
 
 
+@pytest.mark.repl_in_process
 def test_swallowed_deadline_reported_even_if_code_finishes():
     # simulate a library that swallowed the first alarm: flag is set, code returns normally
     env = _env(5)

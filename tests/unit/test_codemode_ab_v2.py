@@ -110,6 +110,7 @@ def test_syn_sku_price_is_visible_inside_every_v2_cap(work):
     assert len(names_only) < arms.V2_PREVIEW_CHARS and "syn_sku_price" in names_only and "syn_ledger_post" in names_only
 
 
+@pytest.mark.repl_in_process
 def test_repl_list_tools_is_compact_only_for_v2_arms(work):
     w = World(work / "r", ORCH)
     assert "parameters" in arms.make_repl(w).execute("print(list_tools()[0].keys())").output
@@ -129,6 +130,7 @@ def test_every_arm_returns_a_transcript_and_reason_enum(work, selectors, arm):
 
 
 @pytest.mark.parametrize("arm", ["B1", "B2", "C3"])
+@pytest.mark.repl_in_process
 def test_v2_repl_arms_serve_the_v2_prompt_and_end_explicitly(work, selectors, arm):
     rec = episode(work, selectors, arm)
     first = rec["_transcript"][0]["prompt"]
@@ -152,6 +154,7 @@ def test_b2_and_c3_carry_turn_memory_b1_does_not(work, selectors):
         assert p2.index("## Previous Turns") > p2.index("## Task")  # appended after every other section
 
 
+@pytest.mark.repl_in_process
 def test_c3_binds_picked_tools_and_renders_stubs(work, selectors):
     rec = episode(work, selectors, "C3", tid="N-QUOTE-s0")
     assert "def " in rec["_transcript"][0]["prompt"] and "list_tools()" in rec["_transcript"][0]["prompt"]

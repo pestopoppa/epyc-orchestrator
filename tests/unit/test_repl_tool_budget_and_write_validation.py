@@ -5,6 +5,8 @@ import pytest
 from src.repl_environment.environment import REPLEnvironment
 from src.repl_environment.types import REPLConfig
 
+pytestmark = pytest.mark.repl_in_process  # asserts in-process REPL semantics (see tests/unit/conftest.py)
+
 
 def _env():
     return REPLEnvironment(context="alpha beta gamma", config=REPLConfig(timeout_seconds=20))

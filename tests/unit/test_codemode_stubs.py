@@ -122,6 +122,7 @@ def test_harness_repl_flag_off_keeps_v1_behaviour(world):
     assert res.error is None and "str" in res.output  # JSON text, and peek() with no file is silently ''
 
 
+@pytest.mark.repl_in_process
 def test_harness_repl_stubs_return_objects_and_peek_raises(monkeypatch, world):
     from scripts.benchmark.codemode_ab.arms import PEEK_NO_FILE_ERROR, make_repl
 

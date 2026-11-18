@@ -124,6 +124,7 @@ def test_install_binds_functions_and_shares_one_budget(monkeypatch):
     assert set(cm.install(env2, g2)) == {"route_classify", "risk_bands"}  # no retriever: no q_scores
 
 
+@pytest.mark.repl_in_process
 def test_environment_exposes_functions_to_repl_code(monkeypatch):
     monkeypatch.setenv(cm.ENV_CLASSIFY, "1")
     env = REPLEnvironment(context="c")
@@ -162,6 +163,7 @@ def test_environment_records_by_default_only_when_handles_on(monkeypatch):
     assert rec is None and steps is None
 
 
+@pytest.mark.repl_in_process
 def test_handles_survive_checkpoint_restore_and_branch(monkeypatch):
     monkeypatch.setenv(cm.ENV_HANDLES, "1")
     reset_features()

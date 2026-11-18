@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Unit tests for the REPL archive tools (_ArchiveToolsMixin)."""
 
+import pytest
 from unittest.mock import Mock, patch
 from pathlib import Path
 
 from src.repl_environment import REPLEnvironment
+
+pytestmark = pytest.mark.repl_in_process  # asserts in-process REPL semantics (see tests/unit/conftest.py)
 
 
 class TestArchiveOpen:

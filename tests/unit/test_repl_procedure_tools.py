@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for the REPL procedure tools (_ProcedureToolsMixin)."""
 
+import pytest
 from unittest.mock import Mock, patch, mock_open
 
 from src.repl_environment import REPLEnvironment
+
+pytestmark = pytest.mark.repl_in_process  # asserts in-process REPL semantics (see tests/unit/conftest.py)
 
 
 class TestRunProcedure:

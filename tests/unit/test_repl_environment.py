@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for the REPL environment."""
 
+import pytest
 from src.repl_environment import (
     REPLConfig,
     REPLEnvironment,
@@ -763,6 +764,7 @@ class TestRoutingMixin:
         # my_role() should return output wrapped in tool delimiters
         assert "True" in result.output or result.error is None
 
+    @pytest.mark.repl_in_process
     def test_escalate_sets_artifacts(self):
         """Test escalate() sets escalation artifacts."""
         repl = REPLEnvironment(context="test")
@@ -771,6 +773,7 @@ class TestRoutingMixin:
         assert repl.artifacts.get("_escalation_requested") is True
         assert "need help" in repl.artifacts.get("_escalation_reason", "")
 
+    @pytest.mark.repl_in_process
     def test_escalate_returns_message(self):
         """Test escalate() returns acknowledgment message."""
         repl = REPLEnvironment(context="test")
@@ -1185,6 +1188,7 @@ class TestExecuteTimeout:
         result = repl.execute("x = 1 + 1")
         assert result.error is None
 
+    @pytest.mark.repl_in_process
     def test_alarm_timeout_marks_terminal_and_refuses_later_execute(self, monkeypatch):
         import builtins
         import signal
@@ -1219,6 +1223,7 @@ class TestExecuteTimeout:
         repl.reset()
         assert repl.execute("print('after reset')").error == result.error
 
+    @pytest.mark.repl_in_process
     def test_structured_alarm_timeout_is_sticky(self, monkeypatch):
         import builtins
         import signal
@@ -1253,6 +1258,7 @@ class TestExecuteTimeout:
         assert repl.timed_out is True
         assert repl.execute("FINAL('late')").error == result.error
 
+    @pytest.mark.repl_in_process
     def test_restricted_timeout_result_marks_terminal_without_executor_import(self):
         from types import SimpleNamespace
 

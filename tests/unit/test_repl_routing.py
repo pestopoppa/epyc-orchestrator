@@ -9,6 +9,8 @@ import pytest
 from src.llm_primitives import LLMPrimitives
 from src.repl_environment import REPLEnvironment
 
+pytestmark = pytest.mark.repl_in_process  # asserts in-process REPL semantics (see tests/unit/conftest.py)
+
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 

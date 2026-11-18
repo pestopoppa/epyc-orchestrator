@@ -99,6 +99,19 @@ def pytest_configure(config: pytest.Config) -> None:
         "real_inference_tap: opt out of the tests/unit/ hermetic inference-tap "
         "fixture (real INFERENCE_TAP_* env + real on-disk tap sentinel).",
     )
+    config.addinivalue_line(
+        "markers",
+        "repl_in_process: the test asserts in-process REPL semantics that the opt-in contained child lane "
+        "(ORCHESTRATOR_REPL_CHILD_LANE) legitimately changes (free-form cells refuse mutating/unbounded tools, "
+        "SIGALRM-based timeouts, unencodable injected globals, schema-rendered error text); pin the lane OFF.",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _repl_in_process_pin(request, monkeypatch):
+    if request.node.get_closest_marker("repl_in_process") is not None:
+        monkeypatch.setenv("ORCHESTRATOR_REPL_CHILD_LANE", "0")
+    yield
 
 
 @pytest.fixture(scope="session")

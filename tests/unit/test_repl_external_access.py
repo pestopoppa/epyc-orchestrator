@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Unit tests for REPL external access tools (_ExternalAccessMixin)."""
 
+import pytest
 import subprocess
 from unittest.mock import patch, MagicMock
 
 from src.repl_environment import REPLEnvironment
+
+pytestmark = pytest.mark.repl_in_process  # asserts in-process REPL semantics (see tests/unit/conftest.py)
 
 
 class TestWebFetchTool:
