@@ -499,21 +499,34 @@ def test_child_has_no_secrets_no_network_and_a_private_scratch(monkeypatch, lane
 @needs_kernel
 @pytest.mark.parametrize(
     "call",
-    ["web_search('x')", "web_fetch('http://example.com')", "run_shell('echo hi')", "run_python_code('1')",
-     "file_write_safe('/tmp/x', 'y')", "log_append('l', 'm')", "TOOL('anything')", "CALL('anything')",
+    ["web_fetch('http://127.0.0.1:1/')", "run_shell('echo hi')", "run_python_code('1')",
+     "file_write_safe('/nonexistent-root/x', 'y')", "TOOL('anything')", "CALL('anything')",
      "list_tools()", "llm_call('hi')", "llm_batch(['hi'])", "delegate('b')", "mark_finding('f')",
-     "registry_update('a', 1)", "numpy.array([1])", "remember('x')", "STUCK('why')"],
+     "remember('x')", "STUCK('why')"],
 )
-def test_mutating_and_unbounded_tools_are_refused(call, lane_on):
+def test_mutating_and_unbounded_tools_are_brokered_not_refused(call, lane_on):
+    """Every one of these used to be a stub that raised ``not available in the contained REPL lane``.
+    They now reach the parent (what each returns or raises is the tool's own business; the exact
+    in-process equivalence is asserted in test_repl_child_lane_tools.py)."""
     from unittest.mock import MagicMock
 
     env = REPLEnvironment(context=CONTEXT, config=REPLConfig(timeout_seconds=15),
                           tool_registry=MagicMock(), llm_primitives=MagicMock())
     try:
-        r = env.execute(f"print({call})")
+        r = env.execute(f"try:\n    print({call})\nexcept Exception as e:\n    print('RAISED', type(e).__name__, e)")
+        assert "not available in the contained REPL lane" not in (r.error or "") + r.output
+    finally:
+        env.close_child_lane()
+
+
+@needs_kernel
+def test_non_tool_module_preloads_stay_refused(lane_on):
+    env = REPLEnvironment(context=CONTEXT, config=REPLConfig(timeout_seconds=15))
+    try:
+        if "numpy" not in env._globals:
+            pytest.skip("numpy is not installed")
+        r = env.execute("print(numpy.array([1]))")
         assert r.error and "not available in the contained REPL lane" in r.error
-        env.tool_registry.invoke.assert_not_called()
-        env.llm_primitives.call.assert_not_called()
     finally:
         env.close_child_lane()
 
@@ -552,6 +565,7 @@ def test_oversized_reply_is_refused_not_streamed(monkeypatch, lane_on, make_env)
 def test_callbacks_outside_an_admitted_cell_are_rejected(lane_on, make_env):
     env = make_env()
     lane = child_lane.ChildLane(env)
+    lane._build_init(env)  # captures the brokered callables, as a started lane does
     frame = {"t": "call", "id": "x", "seq": 1, "name": "peek", "args": [3], "kwargs": {}}
     with pytest.raises(child_lane.LaneCrash):
         lane._serve_call(env, frame, time.monotonic() + 5)  # no admitted cell: a late/forged reply path

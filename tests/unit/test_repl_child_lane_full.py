@@ -533,7 +533,7 @@ def test_blocking_callback_hits_the_deadline_on_any_thread(from_worker_thread, l
         finally:
             ended.set()
 
-    env._peek = slow_peek
+    env._globals["peek"] = slow_peek  # the callable the lane captures is the in-process global
     env.execute("x = 1")
     pid = env._child_lane.pid
     result = {}
@@ -568,7 +568,7 @@ def test_callbacks_keep_the_requests_contextvars(lane_on, make_env):
         seen.append(var.get())
         return real()
 
-    env._context_len = spy
+    env._globals["context_len"] = spy
     var.set("req-42")
     assert env.execute("print(context_len())").output == f"{len(CONTEXT)}\n"
     assert seen == ["req-42"]
@@ -621,11 +621,12 @@ def test_structured_lane_keeps_the_per_snippet_budget_and_the_deadline(monkeypat
 
 
 @needs_kernel
-def test_free_mode_still_refuses_the_same_tool(lane_on, make_env):
+def test_free_mode_brokers_the_same_tool_as_structured_mode(lane_on, make_env):
     env = make_env()
-    env._globals["registry_update"] = lambda *a: "x"
-    r = env.execute("registry_update('a', 1)")
-    assert r.error and "not available in the contained REPL lane" in r.error
+    calls = []
+    env._globals["registry_update"] = lambda *a: calls.append(a) or "x"
+    r = env.execute("print(registry_update('a', 1))")
+    assert r.error is None and r.output == "x\n" and calls == [("a", 1)]
 
 
 # ── item 6: the structured exception schema ──────────────────────────────────
@@ -745,10 +746,15 @@ def test_flag_is_in_the_autopilot_hot_swap_set_and_program_md_and_spec():
     root = Path(__file__).resolve().parents[2]
     ns: dict = {}
     src = (root / "scripts/autopilot/config_applicator.py").read_text()
-    assert '"repl_child_lane",' not in src  # pinned observe-only until the lane brokers the full tool surface
+    assert '"repl_child_lane",' in src
     prog = (root / "scripts/autopilot/program.md").read_text()
     tier2 = prog.split("### Tier 2")[1].split("### Tier 3")[0]
     assert "`repl_child_lane`" in tier2 and "POST /config" in tier2
+    bullet = next(line for line in tier2.splitlines() if "`repl_child_lane`" in line)
+    assert "PINNED" not in bullet and "do not trial" not in bullet and "read-only callbacks only" not in bullet
+    from scripts.autopilot.species.structural_lab import PINNED_OBSERVE_ONLY_FLAGS
+
+    assert "repl_child_lane" not in PINNED_OBSERVE_ONLY_FLAGS
     spec = (root / "orchestration/runtime_flags.spec.yaml").read_text()
     assert "  repl_child_lane: baseline" in spec and "  repl_tool_arg_validation: baseline" in spec
     del ns
@@ -785,7 +791,7 @@ def test_artifacts_written_by_a_brokered_tool_survive_the_cells_merge(lane_on, m
         env.artifacts.setdefault("_tool_outputs", []).append(["peek", n])
         return "x" * n
 
-    env._peek = noting_peek
+    env._globals["peek"] = noting_peek
     env.artifacts["_unencodable"] = object()  # parent-only: never shown to the child, never lost
     env.execute("artifacts['mine'] = 1\nprint(peek(2))")
     assert env.artifacts["_tool_outputs"] == [["peek", 2]] and env.artifacts["mine"] == 1

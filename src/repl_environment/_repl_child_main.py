@@ -171,6 +171,32 @@ class LaneOpaque:
         return "<lane %s instance>" % (e.get("cls"),)
 
 
+class LaneObject:
+    """Child-side stand-in for a parent tool result that is a dataclass / ``SimpleNamespace`` (the
+    ``ToolOutput`` envelope, ...). Its fields are plain attributes; ``str``/``repr`` and the
+    envelope's ``to_human`` / ``to_machine`` renderings were computed by the parent and are carried,
+    so ``r.ok``, ``r.output`` and ``print(r)`` behave as in-process. It crosses back (to a later cell,
+    or into the parent's state) as the same ``obj`` record."""
+
+    def __init__(self, meta, fields):
+        self.__dict__.update(fields)
+        object.__setattr__(self, "_lane_meta", meta)
+
+    def __repr__(self):
+        return self._lane_meta.get("repr") or "<%s>" % self._lane_meta.get("cls")
+
+    def __str__(self):
+        text = self._lane_meta.get("str")
+        return text if isinstance(text, str) else repr(self)
+
+    def __getattr__(self, item):
+        meta = self.__dict__.get("_lane_meta") or {}
+        if item in ("to_human", "to_machine") and item in meta:
+            value = meta[item]
+            return lambda: json.loads(json.dumps(value))
+        raise AttributeError("%r object has no attribute %r" % (meta.get("cls", "object"), item))
+
+
 _ATOM = (type(None), bool, int, float, str)
 _FACTORIES = {"list": list, "int": int, "float": float, "str": str, "dict": dict, "set": set, "tuple": tuple}
 
@@ -286,6 +312,15 @@ def encode(v, ctx=NO_CTX, _d=0, _b=None):
         return {"$t": "timedelta", "v": [v.days, v.seconds, v.microseconds]}
     if isinstance(v, LaneOpaque):
         return v.enc
+    if t is LaneObject:
+        meta = v._lane_meta
+        rec = {"$t": "obj", "cls": meta.get("cls"),
+               "v": {k: encode(x, ctx, d, _b) for k, x in v.__dict__.items() if k != "_lane_meta"},
+               "str": meta.get("str"), "repr": meta.get("repr")}
+        for k in ("to_human", "to_machine"):
+            if k in meta:
+                rec[k] = meta[k]
+        return rec
     ref = _ref_of(v, ctx.safe_modules)
     if ref is not None:
         return ref
@@ -372,7 +407,7 @@ def decode(v, ctx=NO_CTX, _d=0, _b=None):
             if str(mod).split(".")[0] in ctx.safe_modules and not str(name).startswith("_"):
                 return getattr(importlib.import_module(mod), name)
             raise Unsupported("reference %s.%s is not allowlisted" % (mod, name))
-        if tag in ("def", "defref", "inst"):
+        if tag in ("def", "defref", "inst", "obj"):
             return ctx.opaque_decode(tag, v)
     except Unsupported:
         raise
@@ -393,9 +428,25 @@ def contains_tag(v, tag, _d=0):
     return False
 
 
+def make_object(enc, ctx):
+    """Build a ``LaneObject`` from an ``obj`` record (decoded fields, carried renderings)."""
+    fields = enc.get("v")
+    if type(fields) is not dict or not all(type(k) is str for k in fields):
+        raise Unsupported("malformed obj record")
+    meta = {"cls": str(enc.get("cls"))[:100], "str": enc.get("str"), "repr": enc.get("repr")}
+    for k in ("to_human", "to_machine"):
+        if k in enc:
+            meta[k] = enc[k]
+    return LaneObject(meta, {k: decode(x, ctx, 1) for k, x in fields.items()})
+
+
 # ── the child ────────────────────────────────────────────────────────────────
 
 MAX_DEF_SOURCE = 200_000
+#: Tools whose parent-side implementation reads the model's variables (``SCRIPT`` runs a registered
+#: script with ``sandbox_globals=env._globals``; ``remember`` checks the variable exists in the REPL
+#: namespace); the child ships its live state with the call.
+STATE_TOOLS = frozenset({"SCRIPT", "remember"})
 
 
 def _trackable(o):
@@ -429,6 +480,8 @@ class _ChildCtx(_Ctx):
 
     def opaque_decode(self, tag, enc):
         g = self.c.g
+        if tag == "obj":
+            return make_object(enc, self)
         if tag == "defref":
             name = enc.get("name")
             if name in self.c.def_objs:
@@ -445,6 +498,41 @@ class _ChildCtx(_Ctx):
             obj.__dict__.update(state)
             return obj
         raise Unsupported("unexpected %s record" % tag)
+
+
+_EXC_CACHE = {}
+_NO_REBUILD = (UnicodeDecodeError, UnicodeEncodeError, UnicodeTranslateError, SyntaxError)
+
+
+def _remote_exception(name, err):
+    """The exception a parent tool raised, rebuilt so the model's ``except`` clauses behave as
+    in-process: the nearest builtin ancestor the sandbox has (``ValueError``, ``PermissionError``,
+    ...) under the tool's own type name, carrying the original args and message."""
+    tname = err.get("type")
+    tname = tname if type(tname) is str and tname.isidentifier() and len(tname) <= 80 else "Error"
+    base = None
+    for cand in list(err.get("mro") or []) + [tname]:
+        b = getattr(_builtins, cand, None) if type(cand) is str else None
+        if isinstance(b, type) and issubclass(b, Exception) and b not in _NO_REBUILD:
+            base = b
+            break
+    msg = err.get("msg", "")
+    msg = msg if type(msg) is str else str(msg)
+    if base is None:
+        base, eargs = RuntimeError, ["%s: %s" % (tname, msg)]
+    else:
+        eargs = err.get("args") if isinstance(err.get("args"), list) else [msg]
+    cls = base
+    if tname != base.__name__ and tname != "Error":
+        cls = _EXC_CACHE.get((tname, base))
+        if cls is None:
+            cls = _EXC_CACHE[(tname, base)] = type(tname, (base,), {"__module__": "builtins"})
+    try:
+        exc = cls(*eargs)
+    except Exception:  # noqa: BLE001 - odd constructor signatures: fall back to the message
+        exc = cls(msg)
+    exc._epyc_tool = name
+    return exc
 
 
 class _Child:
@@ -543,16 +631,7 @@ class _Child:
         if "final" in rep:
             raise _Final(rep["final"])
         if not rep.get("ok"):
-            err = rep.get("err") or {}
-            cls = {"ValueError": ValueError, "KeyError": KeyError, "TypeError": TypeError, "IndexError": IndexError,
-                   "RuntimeError": RuntimeError, "OSError": OSError}.get(err.get("type"))
-            eargs = err.get("args")
-            if cls is None:
-                exc = RuntimeError("%s: %s" % (err.get("type", "Error"), err.get("msg", "")))
-            else:
-                exc = cls(*(eargs if isinstance(eargs, list) else [err.get("msg", "")]))
-            exc._epyc_tool = name
-            raise exc
+            raise _remote_exception(name, rep.get("err") or {})
         try:
             return decode(rep.get("value"), _Ctx_with_modules(self.safe_modules))
         except Unsupported as exc:
@@ -560,7 +639,10 @@ class _Child:
 
     def _stub(self, name):
         def stub(*args, **kwargs):
-            return self._call(name, list(args), kwargs)
+            extra = None
+            if name in STATE_TOOLS:  # the parent hands its own globals to the callee: show it the live ones
+                extra = {"state": self._snapshot()["state"]}
+            return self._call(name, list(args), kwargs, extra=extra)
 
         stub.__name__ = name
         return stub
@@ -694,6 +776,11 @@ class _Ctx_with_modules(_Ctx):
     def __init__(self, safe_modules):
         self.safe_modules = safe_modules
 
+    def opaque_decode(self, tag, enc):
+        if tag == "obj":
+            return make_object(enc, self)
+        return _Ctx.opaque_decode(self, tag, enc)
+
 
 
 class _HandlerHardener(ast.NodeTransformer):
@@ -739,8 +826,8 @@ class _RefusedTool:
 
 def _lane_error(name):
     return NotImplementedError(
-        "%s is not available in the contained REPL lane (only bounded read-only callbacks, "
-        "context/artifacts and pure-Python work are supported)" % name
+        "%s is not available in the contained REPL lane (it is a preloaded module, not a tool; every REPL "
+        "tool is brokered to the parent and pure-Python work runs in the contained child)" % name
     )
 
 

@@ -21,8 +21,12 @@ Design
 * The child holds no authority. Every callback is a bounded JSON value message that the parent
   authorises against a parent-owned table (``BROKER``): request identity (a per-cell nonce),
   monotonic sequence, deadline, optional lease validator, per-snippet tool-call budget, argument
-  validation, and result size. Anything else the REPL exposes is a stub that raises. Mutating
-  tools, TOOL/CALL, llm_call/llm_batch and every other unbounded callback are refused.
+  validation, and result size. EVERY callable the in-process REPL exposes is bridged (file writers,
+  TOOL/CALL, llm_call/llm_batch, run_shell/run_python_code (each in its own exec_sandbox child),
+  SCRIPT, web, list/search/describe_tool, the CM-2..CM-5 helpers when their flags are on...): the
+  surface is enumerated from the in-process globals builder by ``tool_broker.bridged_tools`` (shared
+  with other lanes) and each call runs in the parent through the very callable an in-process cell
+  would call. Only non-callable preloads (numpy/scipy modules) are stubs that raise.
 * State lives in the parent. After every cell the child returns its variables and artifacts through
   a typed JSON codec (``_repl_child_main.encode``/``decode``): plain JSON values; tuple, set,
   frozenset, bytes, complex, Counter, OrderedDict, defaultdict, deque, Decimal, Fraction,
@@ -80,32 +84,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from src.repl_environment import tool_broker
+
 logger = logging.getLogger(__name__)
 
 FLAG_ENV = "ORCHESTRATOR_REPL_CHILD_LANE"
 _TRUE = {"1", "true", "yes", "on"}
 CHILD_SCRIPT = Path(__file__).with_name("_repl_child_main.py")
 
-#: Parent-owned callback table: REPL name -> REPLEnvironment method. Read-only, bounded.
-BROKER: dict[str, str] = {
-    "peek": "_peek",
-    "grep": "_grep",
-    "context_len": "_context_len",
-    "chunk_context": "_chunk_context",
-    "peek_grep": "_peek_grep",
-    "list_dir": "_list_dir",
-    "file_info": "_file_info",
-    "read_file": "_read_session_file",
-    "my_role": "_my_role",
-    "list_findings": "_list_findings",
-    "FINAL": "_final",
-    "FINAL_VAR": "_final_var",
-}
-_CHILD_DEFINED = frozenset({"FINAL", "FINAL_VAR"})
-_CORE_NAMES = frozenset({
-    "__builtins__", "__name__", "context", "artifacts", "json", "math", "re", "collections",
-    "itertools", "functools", "statistics", "datetime", "fractions", "decimal", "copy",
-})
+#: The two control signals the child implements itself (they end the cell); the parent executes the
+#: matching REPLEnvironment method. Every other tool is enumerated by ``tool_broker.bridged_tools``.
+BROKER: dict[str, str] = dict(tool_broker.CONTROL)
+_CHILD_DEFINED = frozenset(tool_broker.CONTROL)
+_CORE_NAMES = tool_broker.CORE_NAMES
 
 
 def enabled() -> bool:
@@ -603,9 +594,11 @@ def _canon(enc: Any) -> str:
     return json.dumps(enc, sort_keys=True, ensure_ascii=True, allow_nan=True)
 
 
-def _make_ctx(env: Any, allow_opaque: bool):
+def _make_ctx(env: Any, allow_opaque: bool, obj_fields: bool = False):
     """Parent-side codec context. Carried definitions are only ever STORED (as ``LaneOpaque``),
-    never executed here, and their source must pass the REPL's own AST security gate first."""
+    never executed here, and their source must pass the REPL's own AST security gate first.
+    An ``obj`` record (a tool-result object the child holds) is inert data: it is stored as
+    ``LaneOpaque`` anywhere, or, with ``obj_fields`` (tool ARGUMENTS), flattened to its field dict."""
     m = _codec()
 
     class ParentCtx(m._Ctx):
@@ -615,6 +608,13 @@ def _make_ctx(env: Any, allow_opaque: bool):
             raise m.Unsupported(m._why(v))
 
         def opaque_decode(self, tag, enc):
+            if tag == "obj":
+                if obj_fields:
+                    fields = enc.get("v")
+                    if type(fields) is not dict:
+                        raise m.Unsupported("malformed obj record")
+                    return m.decode(fields, self, 1)
+                return m.LaneOpaque(enc)
             if not allow_opaque:
                 raise m.Unsupported("a %s record cannot appear here" % tag)
             if tag == "def":
@@ -861,22 +861,14 @@ class ChildLane:
                 "unsupported REPL state cannot be restored into the contained lane: " + ", ".join(sorted(bad)[:10])
             )
         self._structured = bool(getattr(env, "_structured_mode", False))
-        self._tool_fns = {}
-        if self._structured:
-            # Structured (React) mode: the model's one-tool-per-turn calls are real tool calls, so the
-            # lane brokers every callable the in-process path would expose. The parent still owns each
-            # call (budget, argument validation, write dedupe); the child only contains the Python
-            # around it. The callables are captured NOW from the parent's own globals, so nothing the
-            # child sends can rebind what a name resolves to.
-            for key in base:
-                fn = env._globals.get(key)
-                if key not in _CORE_NAMES and key not in _CHILD_DEFINED and callable(fn):
-                    self._tool_fns[key] = fn
-            allow = sorted(self._tool_fns)
-        else:
-            allow = sorted(k for k in BROKER if k not in _CHILD_DEFINED)
-        allowed = set(allow) | _CHILD_DEFINED
-        refuse = sorted(k for k in base if k not in _CORE_NAMES and k not in allowed)
+        # Free-form AND structured (React) mode broker the same surface: every callable the in-process
+        # path exposes. The parent still owns each call (budget, argument validation, write dedupe,
+        # untrusted-text handling, deadline, lease); the child only contains the Python around it.
+        # The callables are captured NOW from the parent's own globals, so nothing the child sends
+        # can rebind what a name resolves to.
+        self._tool_fns = tool_broker.bridged_tools(env)
+        allow = sorted(self._tool_fns)
+        refuse = tool_broker.refused_names(env, self._tool_fns)
         return {
             "t": "init", "context": ctx, "state": state, "artifacts": arts,
             "builtins": sorted(env.config.allowed_builtins), "safe_modules": sorted(env.SAFE_IMPORT_MODULES),
@@ -906,9 +898,9 @@ class ChildLane:
         known = isinstance(name, str) and (name in BROKER or name in self._tool_fns)
         if not known:
             return err("NotImplementedError", f"{name!r} is not available in the contained REPL lane")
-        try:
-            args = m.decode(frame.get("args"), _make_ctx(env, allow_opaque=False))
-            kwargs = m.decode(frame.get("kwargs"), _make_ctx(env, allow_opaque=False))
+        try:  # tool ARGUMENTS: a tool-result object the model passes back crosses as its field dict
+            args = m.decode(frame.get("args"), _make_ctx(env, allow_opaque=False, obj_fields=True))
+            kwargs = m.decode(frame.get("kwargs"), _make_ctx(env, allow_opaque=False, obj_fields=True))
         except m.Unsupported as exc:
             return err("TypeError", f"{name}(): bad argument encoding ({exc})")
         if not isinstance(args, list) or not isinstance(kwargs, dict) or not all(isinstance(k, str) for k in kwargs):
@@ -916,38 +908,34 @@ class ChildLane:
         if self.lease_validator is not None and not self._lease_ok():
             raise LaneRevoked("lease lost")
         try:
-            from src.repl_environment.tool_arg_validation import call_validated
             from src.repl_environment.types import FinalSignal
 
             if name in self._tool_fns:
-                fn, charged = self._tool_fns[name], True  # the bound-method wrapper already charges the budget
+                # The in-process callable: its wrapper charges the snippet budget (``_invoke_tool`` charges
+                # TOOL/CALL itself), and ``tool_broker.call`` enforces argument validation.
+                fn = self._tool_fns[name]
             else:
-                fn, charged = getattr(env, BROKER[name]), False
+                fn = getattr(env, BROKER[name])  # FINAL / FINAL_VAR: control signals, not charged
             if name == "FINAL_VAR":
                 arts = frame.get("artifacts")
                 if not isinstance(arts, dict):
                     return err("ValueError", "FINAL_VAR requires the artifact snapshot")
                 self._merge_artifacts(env, arts)
-            if not charged and name not in _CHILD_DEFINED:
-                env._charge_tool_call(name)
-            thunk = lambda: call_validated(name, fn, args, kwargs)  # noqa: E731
+            if isinstance(frame.get("state"), dict):  # SCRIPT & co: the callee reads the live variables
+                self._apply_live_state(env, frame["state"])
+            thunk = lambda: tool_broker.call(name, fn, args, kwargs)  # noqa: E731
             if name in _CHILD_DEFINED:
                 value = thunk()
             else:
                 value = self._run_bounded(thunk, deadline)
         except FinalSignal as fs:
             return {"t": "reply", "id": nonce, "seq": seq, "ok": True, "final": fs.answer}
-        except LaneDeadline:
+        except (LaneDeadline, LaneRevoked):
             raise
         except Exception as exc:  # noqa: BLE001 - tool errors are data for the child's cell, never fatal
-            try:
-                json.dumps(list(exc.args))
-                eargs = list(exc.args)
-            except (TypeError, ValueError):
-                eargs = None
-            return err(type(exc).__name__, str(exc), eargs)
+            return {"t": "reply", "id": nonce, "seq": seq, "ok": False, "err": tool_broker.error_record(exc)}
         try:
-            enc = m.encode(value, m.NO_CTX)
+            enc = m.encode(value, tool_broker.reply_ctx(m))
             blob = json.dumps(enc, ensure_ascii=True, allow_nan=True)
         except (m.Unsupported, TypeError, ValueError) as exc:
             return err("TypeError", f"{name}() returned a value the contained lane cannot carry: {exc}")
@@ -955,9 +943,24 @@ class ChildLane:
             return err("ValueError", f"{name}() result of {len(blob)} chars exceeds the lane reply cap of {self.cfg.max_reply_bytes}")
         return {"t": "reply", "id": nonce, "seq": seq, "ok": True, "value": enc}
 
-    @staticmethod
-    def _run_bounded(thunk: Callable[[], Any], deadline: float) -> Any:
-        """Run a callback on a worker thread and wait for it at most until ``deadline``.
+    def _apply_live_state(self, env: Any, state: dict) -> None:
+        """Mirror the child's live variables into ``env._globals`` BEFORE a tool that reads them runs
+        (best effort per key: a value that cannot cross keeps the parent's copy; nothing is deleted)."""
+        m = _codec()
+        base = env._builtin_global_keys
+        pctx = _make_ctx(env, allow_opaque=True)
+        for key, val in state.items():
+            if key in base or key == "__builtins__" or not isinstance(key, str):
+                continue
+            try:
+                env._globals[key] = m.decode(val, pctx)
+            except m.Unsupported:
+                continue
+
+    def _run_bounded(self, thunk: Callable[[], Any], deadline: float) -> Any:
+        """Run a callback on a worker thread and wait for it at most until ``deadline``. While it runs
+        the wait is sliced so a cancel or a lost session lease kills the cell promptly (a long
+        ``llm_call`` must not outlive its lease), exactly as between callbacks.
 
         Thread-safe on any calling thread (unlike SIGALRM, which only exists on the main thread and,
         like an async exception, cannot interrupt a C-level call such as a pathological regex; that
@@ -981,10 +984,25 @@ class ChildLane:
 
         worker = threading.Thread(target=target, name="repl-lane-callback", daemon=True)
         worker.start()
-        worker.join(left)
+        revoked = ""
+        while worker.is_alive():
+            slice_s = min(0.1, deadline - time.monotonic())
+            if slice_s <= 0:
+                break
+            worker.join(slice_s)
+            if not worker.is_alive():
+                break
+            if self._cancel.is_set():
+                revoked = "cancelled"
+            elif self.lease_validator is not None and not self._lease_ok():
+                revoked = "lease lost"
+            if revoked:
+                break
         if worker.is_alive():
             if worker.ident is not None:
                 ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(worker.ident), ctypes.py_object(_CallbackAbort))
+            if revoked:
+                raise LaneRevoked(revoked)
             raise LaneDeadline("deadline reached inside a callback")
         if "e" in box:
             raise box["e"]
