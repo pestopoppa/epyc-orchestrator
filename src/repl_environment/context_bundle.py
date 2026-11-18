@@ -198,6 +198,23 @@ class Section:
         return self.start + len(self.text)
 
 
+#: OAB-17 F11: the pulled-span list was unbounded (~125 B per span). Past this many
+#: entries overlapping/adjacent spans merge; the union (all the accounting reads) is
+#: unchanged, so unique-coverage bytes stay exact.
+SPAN_MERGE_THRESHOLD = 1000
+
+
+def _merge_intervals(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            if b > merged[-1][1]:
+                merged[-1] = (merged[-1][0], b)
+        else:
+            merged.append((a, b))
+    return merged
+
+
 def _intervals_union_bytes(text: str, spans: list[tuple[int, int]]) -> int:
     """UTF-8 bytes of the union of char spans [a, b) of ``text``."""
     if not spans:
@@ -974,6 +991,8 @@ class ContextBundle:
                 for sp in spans or ():
                     if sp[1] > sp[0]:
                         per["spans"].append(sp)
+                if len(per["spans"]) > SPAN_MERGE_THRESHOLD:
+                    per["spans"] = _merge_intervals(per["spans"])
             rec = self._current_turn()
             rec["bytes_pulled"] += nbytes
             if len(rec["pulls"]) < TURN_PULLS_KEPT:
