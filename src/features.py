@@ -245,6 +245,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # fence after </think>). Default OFF = byte-identical; the diag counter
     # turn_ended_in_unclosed_think is recorded regardless.
     FeatureSpec("repl_think_fence_continue", False, False, "REPL_THINK_FENCE_CONTINUE", "UFH14-LB11.1: continue a REPL turn once when the fence stop sequence cut it inside an unclosed <think> (thinking roles on raw /completion); default off"),
+    FeatureSpec("monty_repl", False, False, "MONTY_REPL", "D-RI-MONTY-SLICE: restricted pydantic-monty execution adapter for the REPL (src/repl_environment/monty_adapter.py); opt-in experiment lane, default off in test AND prod; needs the optional `monty` extra"),
     FeatureSpec("thinking_roles_chat_lane", False, False, "THINKING_ROLES_CHAT_LANE", "RI-23: thinking-on roles (jinja + enable_thinking) route through /v1/chat/completions so chat_template_kwargs apply and reasoning_content is split and surfaced; short structured calls (review verdict, plan review/plan JSON) run thinking-off per call; default off pending the RI-23b A/B"),
     FeatureSpec("repl_thinking_budget", False, False, "REPL_THINKING_BUDGET", "Opt-in request and router-selected reasoning/generation budgets on chat turns; default off"),
     # Q38-T10 / Q38-T10.1 (operator ruling 2026-10-20, per-role parity): eval, judge, replay and
@@ -752,6 +753,7 @@ class Features:
     v1_escalation: bool = False  # TE-1: opt-in /v1 frontdoor escalation via /chat's post-answer hooks (explicit x_escalation); default off
     thinking_roles_chat_lane: bool = False  # RI-23: thinking-on roles on /v1/chat/completions (kwargs + reasoning_content); default off
     repl_think_fence_continue: bool = False  # UFH14-LB11.1: continue a turn cut inside an unclosed <think> by the fence stop; default off
+    monty_repl: bool = False  # D-RI-MONTY-SLICE: restricted pydantic-monty REPL adapter (opt-in experiment lane); default off
     spec_off_bitwise_roles: bool = False  # Q38-T10: bitwise-required roles send per-request speculative.n_max=0; prod default ON (registry), Q38-T10.1 control arm passed 2026-10-20
 
     # Web research reranking (ColBERT snippet pre-fetch filtering)

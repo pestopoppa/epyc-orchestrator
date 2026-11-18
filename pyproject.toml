@@ -112,6 +112,12 @@ sandbox = [
     # Python sandboxing for REPL code execution
     "RestrictedPython>=7.0",
 ]
+monty = [
+    # D-RI-MONTY-SLICE: restricted Rust-based Python interpreter for the opt-in ORCHESTRATOR_MONTY_REPL adapter
+    # (src/repl_environment/monty_adapter.py). Optional and default-off: not installed in the shared venv.
+    # Pinned to the version of the reviewed clone (86fb685c, workspace version 1.6.0).
+    "pydantic-monty==1.6.0",
+]
 graph = [
     # Kuzu embedded graph DB for FailureGraph / HypothesisGraph / BipartiteRoutingGraph
     # (orchestration/repl_memory/*_graph.py) -> GraphEnhancedRetriever under
