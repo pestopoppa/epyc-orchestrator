@@ -110,11 +110,22 @@ def cell(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
     seed_signs = {s: (1 if statistics.fmean(v) > 0 else -1 if statistics.fmean(v) < 0 else 0) for s, v in by_seed.items()}
     d_mean = statistics.fmean(ds)
     tok_med = statistics.median(tok)
-    if d_ci[0] > 0 or (d_ci[0] <= 0 <= d_ci[1] and tok_ci[1] < 0):
-        verdict = "X_better"
-    elif d_ci[1] < 0 or (d_ci[0] <= 0 <= d_ci[1] and tok_ci[0] > 0):
-        verdict = "Y_better"
-    elif abs(d_mean) < DELTA_SUCC and abs(tok_med) < math.log(1 + RATIO_EPS):
+    # Success-direction verdict needs evidence of a success difference: the paired-bootstrap CI excludes 0 (the sign
+    # test is reported alongside and must not contradict it). A token-only verdict (the predeclared "X cheaper at equal
+    # success") additionally needs a cost gap of at least RATIO_EPS: below it the predeclaration says "no cost gap".
+    # Tied success with a sign-test p of 1.0 therefore never yields a success-direction verdict.
+    eps = math.log(1 + RATIO_EPS)
+    ci_straddles = d_ci[0] <= 0 <= d_ci[1]
+    basis = "none"
+    if d_ci[0] > 0:
+        verdict, basis = "X_better", "success"
+    elif d_ci[1] < 0:
+        verdict, basis = "Y_better", "success"
+    elif ci_straddles and tok_ci[1] < 0 and tok_med <= -eps:
+        verdict, basis = "X_better", "tokens_only"
+    elif ci_straddles and tok_ci[0] > 0 and tok_med >= eps:
+        verdict, basis = "Y_better", "tokens_only"
+    elif abs(d_mean) < DELTA_SUCC and abs(tok_med) < eps:
         verdict = "no_difference"
     else:
         verdict = "inconclusive"
@@ -133,7 +144,7 @@ def cell(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
         "duplicate_writes_x": mean(lambda r: r["duplicate_writes"], xs), "duplicate_writes_y": mean(lambda r: r["duplicate_writes"], ys),
         "selector_recall_x": mean(lambda r: (r.get("selector") or {}).get("recall"), xs),
         "selector_all_in_topk_x": mean(lambda r: float((r.get("selector") or {}).get("needed_all_in_topk")) if r.get("selector") else None, xs),
-        "seed_signs": {str(k): v for k, v in sorted(seed_signs.items())}, "verdict": verdict,
+        "seed_signs": {str(k): v for k, v in sorted(seed_signs.items())}, "verdict": verdict, "verdict_basis": basis,
     }
 
 
