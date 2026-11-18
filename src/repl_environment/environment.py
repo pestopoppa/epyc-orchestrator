@@ -392,6 +392,12 @@ class REPLEnvironment(
 
         return deadline_handler
 
+    def close_child_lane(self) -> dict[str, Any]:
+        """Kill and reap this request's contained child, if one was started (D-RI-CONTAIN-T2)."""
+        from src.repl_environment import child_lane as _child_lane
+
+        return _child_lane.close_lane(self)
+
     def mark_timed_out(self) -> str:
         """Make timeout terminal for this environment and return its error."""
         self._timeout_terminal = True
@@ -658,6 +664,15 @@ class REPLEnvironment(
                 return counted
 
             globals_dict[key] = _make(key, fn)
+
+        # D-RI-CONTAIN (e): per-tool argument validation (flag default OFF; a no-op returning the
+        # same objects when off). Applied last so a bad argument is refused before it is charged.
+        from src.repl_environment import tool_arg_validation as _tav
+
+        if _tav.flag_enabled():
+            for key in _tav.TOOL_SPECS:
+                if key in globals_dict:
+                    globals_dict[key] = _tav.wrap_tool(key, globals_dict[key])
 
     def _register_session_artifact(self, path: str, task_id: str) -> bool:
         """Record one graph-produced tmp file for this REPL, never a directory grant."""
@@ -1793,6 +1808,12 @@ class REPLEnvironment(
         # Recording only — the log is NOT injected into any prompt today.
         self._record_code_log(code, ok=True)
 
+        # D-RI-CONTAIN-T2: opt-in killable child lane (ORCHESTRATOR_REPL_CHILD_LANE, default OFF).
+        from src.repl_environment import child_lane as _child_lane
+
+        if _child_lane.enabled():
+            return _child_lane.execute_in_lane(self, code, start_time)
+
         # Set up timeout handler
         _deadline_state: dict = {"hit": False}
         timeout_handler = self._make_deadline_handler(_deadline_state)
@@ -1998,6 +2019,11 @@ class _RestrictedREPLEnvironment(REPLEnvironment):
 
         if self.timed_out:
             return self._timeout_result(time.perf_counter())
+
+        from src.repl_environment import child_lane as _child_lane
+
+        if _child_lane.enabled():  # D-RI-CONTAIN-T2: the contained lane has its own gates
+            return REPLEnvironment.execute(self, code)
 
         # Use the restricted executor
         result = self._restricted_executor.execute(code)
