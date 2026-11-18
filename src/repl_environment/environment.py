@@ -1975,7 +1975,7 @@ def create_repl_environment(
             pass  # Fall back to standard REPL
 
     # Standard REPL environment
-    return REPLEnvironment(
+    return install_monty_lane(REPLEnvironment(
         context=context,
         artifacts=artifacts,
         config=config,
@@ -1986,7 +1986,29 @@ def create_repl_environment(
         progress_logger=progress_logger,
         task_id=task_id,
         structured_mode=structured_mode,
-    )
+    ))
+
+
+def install_monty_lane(env: REPLEnvironment) -> REPLEnvironment:
+    """D-RI-MONTY-LANE: route this environment's cells through the Monty lane when ``monty_repl`` is ON.
+
+    Flag OFF (the default): returns ``env`` untouched without importing the lane. Flag ON: installs the lane on
+    ``env`` (same object, ``execute``/``restore`` overridden per instance) or, if the lane cannot be built
+    (package missing, containment or worker caps unavailable, pool will not start), leaves ``env`` on CPython.
+    """
+    try:
+        from src.features import features
+
+        if not getattr(features(), "monty_repl", False):
+            return env
+        from src.repl_environment.monty_adapter import maybe_monty_adapter
+
+        maybe_monty_adapter(env)
+    except Exception:  # noqa: BLE001 - the experiment lane must never break environment construction
+        import logging
+
+        logging.getLogger(__name__).warning("monty lane install failed; CPython kept", exc_info=True)
+    return env
 
 
 class _RestrictedREPLEnvironment(REPLEnvironment):

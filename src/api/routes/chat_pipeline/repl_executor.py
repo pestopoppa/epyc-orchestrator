@@ -460,6 +460,10 @@ async def _execute_repl_body(
         # D-RI-CONTAIN-T2: a contained child lane revalidates THIS request's lease (fencing token,
         # release, expiry) while a cell runs and is killed if it is lost.
         repl._lane_lease_validator = session_lease.validator()
+    # D-RI-MONTY-LANE: opt-in Monty execution lane (monty_repl, default OFF; fails open to CPython).
+    from src.repl_environment.environment import install_monty_lane
+
+    install_monty_lane(repl)
     # An explicitly enabled observer owns only a private registry copy.  Unsupported
     # registry variants leave coverage unknown and preserve the original registry.
     _tool_validation_observer = None
