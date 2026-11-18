@@ -20,6 +20,7 @@ dependencies = [
     # Parsing
     "liteparse==2.12.0",  # PDF route (ORCHESTRATOR_PDF_ROUTE_LIGHTON=1): non-OCR docs; pinned to the PIP-04 held-out PASS
     "py-cpuinfo>=9.0.0",  # liteparse runtime import
+    "pymupdf>=1.24.0",  # LiteParse-route figure boxes (PDFRouter._extract_figures_pymupdf); absent => figures == []
     "markdown-it-py>=3.0.0",  # Proper markdown parsing for code extraction
 
     # Configuration
