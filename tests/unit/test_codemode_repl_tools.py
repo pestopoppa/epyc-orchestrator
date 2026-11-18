@@ -18,6 +18,8 @@ FLAGS = (cm.ENV_SEARCH, cm.ENV_CLASSIFY, cm.ENV_HANDLES, "ORCHESTRATOR_STRUCTURE
 def _clean(monkeypatch):
     for f in FLAGS:
         monkeypatch.delenv(f, raising=False)
+    # CM-5 makes replay recording default-on with handles; these tests must not write the real trace store / CAS
+    monkeypatch.setenv("ORCHESTRATOR_REPLAY_RECORDING", "0")
 
 
 # CM-2

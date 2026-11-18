@@ -617,6 +617,9 @@ class _StateMixin:
             if getattr(self, "_handle_store", None) is None:
                 self._handle_store = HandleStore()
             self._handle_store.restore(checkpoint["handle_store"])
+        elif getattr(self, "_handle_store", None) is not None:
+            # a checkpoint taken without handles: a branch restored from it must not inherit this session's store
+            self._handle_store.restore(None)
 
         # Rebuild globals with restored artifacts
         self._globals = self._build_globals()

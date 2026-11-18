@@ -132,6 +132,16 @@ def entry_node_name() -> str | None:
     return lg
 
 
+def _handle_store_seed(repl: Any, cas: Any) -> dict[str, Any]:
+    """CM-5: the committed handle store at the start of a recorded run (a branched/restored session does not start
+    empty), by CAS address. ``{}`` when the REPL has no handle store, so a handles-off seed is byte-identical."""
+    hs = getattr(repl, "_handle_store", None)
+    if hs is None:
+        return {}
+    snap = hs.snapshot()
+    return {"handle_store_cas": cas.put(json.dumps(snap, sort_keys=True))} if snap else {"handle_store_cas": None}
+
+
 def capture_seed(state: Any, deps: Any, role: Any, cas: Any) -> dict[str, Any]:
     from src.trace.replay.record import prompt_env_snapshot
 
@@ -156,6 +166,7 @@ def capture_seed(state: Any, deps: Any, role: Any, cas: Any) -> dict[str, Any]:
             "config": {k: getattr(cfg, k) for k in REPL_CONFIG_KEYS if cfg is not None and hasattr(cfg, k)},
             "artifacts": arts if arts_ok else {},
             **repl_construction(repl),     # HIL-16c
+            **_handle_store_seed(repl, cas),   # CM-5 (empty dict unless the REPL has a handle store)
         },
         "env": prompt_env_snapshot(),
         "features": feature_snapshot(),

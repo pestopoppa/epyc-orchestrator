@@ -283,6 +283,11 @@ class REPLEnvironment(
         self._step_events = None
         self._replay_recorder = None
         _replay_on = bool(getattr(self._features, "replay_recording", False))   # HIL-16, default OFF
+        if not _replay_on:
+            # CM-5: handles on => a handle-using run is recorded for replay unless REPLAY_RECORDING is set explicitly
+            from src.repl_environment.codemode_tools import replay_default_on
+
+            _replay_on = replay_default_on()
         if getattr(self._features, "step_event_logging", False) or _replay_on:
             from src.trace.step_events import StepEventLog, trace_store_sink as _step_sink
 

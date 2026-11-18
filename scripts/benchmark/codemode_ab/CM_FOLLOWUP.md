@@ -30,11 +30,19 @@ real handlers and fixtures, not inference. Acceptance: no read-only tool returns
 (REPL code, prompts) tolerate the envelope; note errors become envelopes rather than exceptions.
 
 ## CM-4 (classify in the REPL) - code done, `ORCHESTRATOR_REPL_CLASSIFY=1`
-Remaining code: expose the q_scorer and routing classifiers as REPL functions (not done). Measure (live): label N items
+Code now also exposes the existing classifiers read-only, typed and capped (same flag): `route_classify(items)` (rule
+routing + Trinity role), `risk_bands(items, role="")` (factual-risk and difficulty bands) and, when the REPL has a MemRL
+retriever, `q_scores(items, k=3)` (the routing q-values QScorer writes, read via `retrieve_for_routing` only). Cap: 200
+items per call, `ORCHESTRATOR_REPL_CLASSIFY_BUDGET` (default 2000) per session, 4000 chars per item. The QScorer reward
+function is a write-path computation over progress logs and is deliberately not exposed. No code remains for CM-4.
+Measure (live): label N items
 (N in 20, 100, 500) by script `classify` vs the model labelling in-prompt; compare accuracy against a gold labelling,
 prompt tokens, and wall time. Gate as CM-2.
 
 ## CM-5 (handles, branch-replayed store) - code done, `ORCHESTRATOR_REPL_HANDLES=1`
-Remaining code: default-on replay recording (`environment.py:283-297`) was not changed. Measure (live): tasks with large
+Code now records for replay by default while handles are on (`environment.py`, `codemode_tools.replay_default_on`; any
+explicit `REPLAY_RECORDING` setting wins in both directions). The recorded seed carries the handle store the run started
+from (`repl.handle_store_cas`) and `GraphHarness` restores it into the rebuilt REPL; a checkpoint taken without handles
+clears the store on restore. No code remains for CM-5. Measure (live): tasks with large
 intermediate results, handle reference vs `peek` re-read; tokens and success. Confirm handles survive a real branch
 checkpoint/restore in the live session store (unit-tested at the REPL level only).

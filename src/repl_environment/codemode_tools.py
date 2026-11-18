@@ -7,12 +7,16 @@ so with no flag set nothing here is installed and the REPL globals are byte-iden
 * CM-4 ``ORCHESTRATOR_REPL_CLASSIFY=1``      -> ``classify(items, labels, instruction="")`` labels N items with one
   typed-decision (CHOICE) call per item through the LLM primitives, so the items never enter the root prompt; only the
   returned labels do. Items that fail to parse are labelled ``None`` (never a silent default).
+  Under the same flag the EXISTING deterministic classifiers are exposed read-only, in batch, with typed returns and
+  a cost cap (``route_classify``, ``risk_bands``, and ``q_scores`` when a MemRL retriever is present); see CM-4b below.
 * Fix 4 ``ORCHESTRATOR_CODEMODE_STUBS=1``    -> every registry tool the REPL does not already define is bound as a direct Python
   function that returns a Python object (``objectify``), matching the typed stubs of ``prompt_builders.codemode_stubs``.
 * CM-5 ``ORCHESTRATOR_REPL_HANDLES=1``       -> ``store(name, value) -> handle`` / ``load(handle_or_name)`` /
   ``handles()``: a named JSON store capped at 256 KiB per value and 1 MiB total, written only by cells that
   SUCCEED (a failing cell's writes are rolled back) and snapshotted into REPL checkpoints so a restored/branched
   session replays it. ``peek`` is not needed to re-read a large value; the model passes the handle.
+  With the handles flag on, replay recording (HIL-16) defaults ON unless ``REPLAY_RECORDING`` is set explicitly
+  (``replay_default_on``); the seed of a recorded run carries the handle store so a replay starts from it.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ ENV_SEARCH = "ORCHESTRATOR_REPL_TOOL_SEARCH"
 ENV_CLASSIFY = "ORCHESTRATOR_REPL_CLASSIFY"
 ENV_HANDLES = "ORCHESTRATOR_REPL_HANDLES"
 ENV_STUBS = "ORCHESTRATOR_CODEMODE_STUBS"
+ENV_CLASSIFY_BUDGET = "ORCHESTRATOR_REPL_CLASSIFY_BUDGET"
 MAX_VALUE_BYTES = 256 * 1024
 MAX_TOTAL_BYTES = 1024 * 1024
 DETAILS = ("names", "brief", "full")
@@ -82,6 +87,97 @@ def classify_items(primitives: Any, items: Sequence[Any], labels: Sequence[str],
                                   max_retries=0, value_only=True)
         v = next((d.value for d in res.decisions if d.question_id == "label"), None)
         out.append(v if v in labels else None)
+    return out
+
+
+# --- CM-4b: read-only, capped, typed access to the existing classifiers / q-scorer reads ---------------
+# Cost cap: at most MAX_CLASSIFIER_ITEMS_PER_CALL items per call and ``ORCHESTRATOR_REPL_CLASSIFY_BUDGET`` items per REPL
+# session (default DEFAULT_CLASSIFIER_BUDGET) across route_classify / risk_bands / q_scores; each item is cut to
+# MAX_ITEM_CHARS before scoring. Read-only: none of these write the episodic store, the q-values or any registry.
+MAX_CLASSIFIER_ITEMS_PER_CALL = 200
+DEFAULT_CLASSIFIER_BUDGET = 2000
+MAX_ITEM_CHARS = 4000
+
+
+class ClassifierBudget:
+    """Per-session item budget shared by the read-only classifier functions."""
+
+    def __init__(self, limit: int = DEFAULT_CLASSIFIER_BUDGET, per_call: int = MAX_CLASSIFIER_ITEMS_PER_CALL):
+        self.limit, self.per_call, self.used = int(limit), int(per_call), 0
+
+    def take(self, n: int, fn: str) -> None:
+        if n > self.per_call:
+            raise ValueError(f"{fn} is capped at {self.per_call} items per call (got {n})")
+        if self.used + n > self.limit:
+            raise ValueError(f"{fn}: classifier budget exhausted ({self.used}/{self.limit} items used this session)")
+        self.used += n
+
+    @classmethod
+    def from_env(cls, environ: Mapping[str, str] | None = None) -> "ClassifierBudget":
+        raw = (os.environ if environ is None else environ).get(ENV_CLASSIFY_BUDGET, "")
+        try:
+            limit = int(raw) if str(raw).strip() else DEFAULT_CLASSIFIER_BUDGET
+        except ValueError:
+            limit = DEFAULT_CLASSIFIER_BUDGET
+        return cls(limit=max(0, limit))
+
+
+def _texts(items: Sequence[Any], budget: ClassifierBudget, fn: str) -> list[str]:
+    if isinstance(items, (str, bytes)) or not isinstance(items, Sequence):
+        raise TypeError(f"{fn} takes a list of items, not {type(items).__name__}")
+    budget.take(len(items), fn)
+    return [str(i)[:MAX_ITEM_CHARS] for i in items]
+
+
+def route_classify(items: Sequence[Any], budget: ClassifierBudget | None = None) -> list[dict[str, Any]]:
+    """Rule-based routing label per item. Typed row: ``{role, strategy, confidence, matched_keywords, trinity_role,
+    trinity_reason}`` (``classify_and_route`` + ``classify_role``; deterministic, no model call)."""
+    from src.classifiers.keyword_matcher import classify_and_route
+    from src.classifiers.role_classifier import classify_role
+
+    out: list[dict[str, Any]] = []
+    for t in _texts(items, budget or ClassifierBudget(), "route_classify"):
+        d = classify_and_route(t)
+        r = classify_role(t)
+        out.append({"role": str(d.role), "strategy": str(d.strategy), "confidence": float(d.confidence),
+                    "matched_keywords": [str(k) for k in d.matched_keywords],
+                    "trinity_role": str(r.role), "trinity_reason": str(r.reason)})
+    return out
+
+
+def risk_bands(items: Sequence[Any], role: str = "", budget: ClassifierBudget | None = None) -> list[dict[str, Any]]:
+    """Factual-risk and difficulty bands per item. Typed row: ``{risk_band, risk_score, difficulty_band,
+    difficulty_score}`` (``assess_risk`` + ``assess_difficulty``; regex-only, deterministic)."""
+    from src.classifiers.difficulty_signal import assess_difficulty
+    from src.classifiers.factual_risk import assess_risk
+
+    out: list[dict[str, Any]] = []
+    for t in _texts(items, budget or ClassifierBudget(), "risk_bands"):
+        rk, df = assess_risk(t, role), assess_difficulty(t, role)
+        out.append({"risk_band": str(rk.risk_band), "risk_score": float(rk.adjusted_risk_score),
+                    "difficulty_band": str(df.difficulty_band), "difficulty_score": float(df.difficulty_score)})
+    return out
+
+
+def q_scores(retriever: Any, items: Sequence[Any], k: int = 3, budget: ClassifierBudget | None = None) -> list[list[dict[str, Any]]]:
+    """Read the MemRL routing q-values (the ones QScorer writes) for each item: the top ``k`` roles by mean q-value of the
+    retrieved similar memories, as typed rows ``{role, q_value, count}``. Retrieval only; nothing is scored or written."""
+    from src.constants import TASK_IR_OBJECTIVE_LEN
+    from src.task_ir import canonicalize_task_ir
+
+    if retriever is None:
+        raise RuntimeError("q_scores is unavailable: this REPL has no MemRL retriever")
+    k = max(1, min(int(k), 10))
+    out: list[list[dict[str, Any]]] = []
+    for t in _texts(items, budget or ClassifierBudget(), "q_scores"):
+        ir = canonicalize_task_ir({"task_type": "chat", "objective": t[:TASK_IR_OBJECTIVE_LEN], "priority": "interactive"})
+        stats: dict[str, list[float]] = {}
+        for r in retriever.retrieve_for_routing(ir):
+            role = str((r.memory.context or {}).get("role", r.memory.action))
+            stats.setdefault(role, []).append(float(r.q_value))
+        rows = [{"role": ro, "q_value": round(sum(v) / len(v), 3), "count": len(v)} for ro, v in stats.items()]
+        rows.sort(key=lambda x: (-x["q_value"], x["role"]))
+        out.append(rows[:k])
     return out
 
 
@@ -141,6 +237,23 @@ class HandleStore:
 
     def restore(self, snap: Mapping[str, str] | None) -> None:
         self._data, self._staged = dict(snap or {}), {}
+
+
+def replay_default_on(environ: Mapping[str, str] | None = None) -> bool:
+    """CM-5: replay recording (HIL-16) is ON by default while handles are on, so a handle-using run can be replayed.
+    Any explicit ``REPLAY_RECORDING`` setting (env in either spelling, runtime flags file, override) wins in BOTH
+    directions; with the handles flag off this is always False and nothing changes."""
+    if not flag(ENV_HANDLES, environ):
+        return False
+    env = os.environ if environ is None else environ
+    if any(k in env for k in ("ORCHESTRATOR_REPLAY_RECORDING", "ORCHESTRATOR_FEATURE_REPLAY_RECORDING")):
+        return False
+    try:
+        from src.features import feature_sources
+
+        return str(feature_sources().get("replay_recording", "default")).startswith("default")
+    except Exception:
+        return True
 
 
 # --- fix 4: stub-bound tools returning Python objects -----------------------------------------------
@@ -223,6 +336,17 @@ def install(env: Any, globals_dict: dict[str, Any], environ: Mapping[str, str] |
         globals_dict["classify"] = lambda items, labels, instruction="": classify_items(
             env.llm_primitives, items, labels, instruction)
         added.append("classify")
+    if flag(ENV_CLASSIFY, environ):
+        budget = getattr(env, "_classifier_budget", None)
+        if budget is None:
+            budget = env._classifier_budget = ClassifierBudget.from_env(environ)
+        globals_dict["route_classify"] = lambda items: route_classify(items, budget)
+        globals_dict["risk_bands"] = lambda items, role="": risk_bands(items, role, budget)
+        added += ["route_classify", "risk_bands"]
+        retr = getattr(env, "_retriever", None) or getattr(getattr(env, "_hybrid_router", None), "retriever", None)
+        if retr is not None:
+            globals_dict["q_scores"] = lambda items, k=3: q_scores(retr, items, k, budget)
+            added.append("q_scores")
     if flag(ENV_STUBS, environ) and getattr(env, "tool_registry", None) is not None:
         added += bind_stub_tools(globals_dict, env._invoke_tool, env._list_tools())
     if flag(ENV_HANDLES, environ):
@@ -234,7 +358,8 @@ def install(env: Any, globals_dict: dict[str, Any], environ: Mapping[str, str] |
     return added
 
 
-READ_ONLY_NAMES: frozenset[str] = frozenset({"search_tools", "describe_tool", "handles", "load"})
+READ_ONLY_NAMES: frozenset[str] = frozenset({"search_tools", "describe_tool", "handles", "load",
+                                             "route_classify", "risk_bands", "q_scores"})
 
 
 # --- CM-3 consistency check ----------------------------------------------------------------------

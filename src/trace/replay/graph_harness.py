@@ -264,6 +264,11 @@ class GraphHarness:
                 os.environ[k] = want[k]
             else:
                 os.environ.pop(k, None)
+        from src.repl_environment.codemode_tools import ENV_HANDLES, flag as _cm_flag
+
+        if _cm_flag(ENV_HANDLES, want):
+            # CM-5: handles on makes recording default-on; a replay must not record itself, so say "off" explicitly
+            os.environ["ORCHESTRATOR_REPLAY_RECORDING"] = "0"
         pinned = (seed.get("env") or {}).get("PYTHONHASHSEED")
         if pinned is None:
             self.warnings.append("recording process did not pin PYTHONHASHSEED: str-set reprs in REPL state may not replay")
@@ -332,6 +337,23 @@ class GraphHarness:
                        "make_production_harness)")
         return out
 
+    def _restore_handles(self, seed: dict) -> list[str]:
+        """CM-5: start the replayed REPL from the handle store the recorded run started from (store/load are pure REPL
+        builtins, so re-executing the cells reproduces every later write). No ``handle_store_cas`` key == the recorded
+        REPL had no handle store (nothing to do, byte-identical to before); a recorded store the rebuilt REPL cannot
+        hold is drift, never hidden."""
+        r = seed.get("repl") or {}
+        if "handle_store_cas" not in r:
+            return []
+        hs = getattr(self.repl, "_handle_store", None)
+        if hs is None:
+            return ["REPL handle store: recorded present, replay has none"]
+        try:
+            hs.restore(json.loads(self.cas.get_text(r["handle_store_cas"])) if r["handle_store_cas"] else None)
+        except Exception as e:   # noqa: BLE001 - a lost blob is drift
+            return [f"REPL handle store: cannot restore ({type(e).__name__})"]
+        return []
+
     # ----------------------------------------------------------------------------- state
     def _build(self, seed: dict) -> None:
         from pydantic_graph import GraphRunContext
@@ -361,7 +383,7 @@ class GraphHarness:
         except UnsupportedReplClass as e:
             self._div = self._div or PrefixDivergence(0, "environment_drift", str(e))
             self.repl = default_repl_factory(seed, context)   # a harmless REPL; the divergence is already set
-        drift = self._construction_drift(seed)
+        drift = self._construction_drift(seed) + self._restore_handles(seed)
         if drift:
             self._div = self._div or PrefixDivergence(0, "environment_drift", "; ".join(drift))
         tap = _BuiltinTap(self._on_builtin)
