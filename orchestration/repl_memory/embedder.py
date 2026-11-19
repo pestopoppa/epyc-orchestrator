@@ -239,7 +239,7 @@ class TaskEmbedder:
         if self._http_client is None:
             import httpx
 
-            self._http_client = httpx.Client(timeout=10.0)
+            self._http_client = httpx.Client(timeout=float(self.config.timeout))
         return self._http_client
 
     def _generate_embedding_http(self, text: str) -> np.ndarray:
