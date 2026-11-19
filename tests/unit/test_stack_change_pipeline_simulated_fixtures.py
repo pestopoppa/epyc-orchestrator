@@ -49,6 +49,35 @@ gen_system_card = importlib.import_module("gen_system_card")
 
 
 @pytest.fixture(autouse=True)
+def _restore_evicted_lean_derived_modules():
+    """Undo ``pipeline._evict_lean_derived_modules`` after each test.
+
+    ``update`` against the default repo lean pops ``scripts.server.stack_manifest``
+    from ``sys.modules`` so later steps re-import it. Left evicted, the next
+    import creates a SECOND module object while ``orchestrator_stack`` keeps
+    functions bound to the first, so a later test that monkeypatches the new
+    module is invisible to ``oss.resolve_instance_slots`` (order-dependent
+    failure in test_stack_priors_compiler). Restore the original objects.
+    """
+    import sys
+
+    names = pipeline._LEAN_DERIVED_MODULES
+    saved = {n: sys.modules[n] for n in names if n in sys.modules}
+    parent = sys.modules.get("scripts.server")
+    saved_attr = (
+        vars(parent).get("stack_manifest") if parent is not None else None
+    )
+    yield
+    for n in names:
+        if n in saved:
+            sys.modules[n] = saved[n]
+        else:
+            sys.modules.pop(n, None)
+    if parent is not None and saved_attr is not None:
+        parent.stack_manifest = saved_attr
+
+
+@pytest.fixture(autouse=True)
 def _clean_runtime_attestation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline, "_runtime_attestation_warnings", lambda: [])
     # Unit tests never read the live /proc: pin the declared-env attestation to a clean result.

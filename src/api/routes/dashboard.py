@@ -367,7 +367,10 @@ def _latest_matching_file(root: Path, pattern: str) -> Path | None:
         return None
     if not candidates:
         return None
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+    # Tie-break on name: dated report names sort chronologically, and files
+    # written within one filesystem timestamp tick would otherwise tie on mtime
+    # and resolve by glob order (nondeterministic).
+    return max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
 
 
 def _load_json_file(path: Path | None) -> dict[str, Any]:

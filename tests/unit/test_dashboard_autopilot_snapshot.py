@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 
 from fastapi.responses import JSONResponse
 
@@ -26,6 +27,13 @@ from src.api.routes import dashboard as d
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _bump_mtime(path, delta_ns: int = 10_000_000) -> None:
+    """Advance mtime explicitly: same-size rewrites within one filesystem
+    timestamp tick otherwise yield an identical (mtime_ns, size) token."""
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + delta_ns))
 
 
 def _body(resp) -> dict:
@@ -51,12 +59,14 @@ def test_state_generation_changes_when_state_or_journal_changes(tmp_path, monkey
 
     # A state.json write flips the token (the lost-update class the lock guards).
     state.write_text(json.dumps({"trial_counter": 101}))
+    _bump_mtime(state)
     gen2 = d._autopilot_state_generation()
     assert gen2 != gen1
 
     # A journal append flips the token too (the rotating-journal source).
     with journal.open("a") as fh:
         fh.write(json.dumps({"trial_id": 101}) + "\n")
+    _bump_mtime(journal)
     gen3 = d._autopilot_state_generation()
     assert gen3 != gen2
 
@@ -73,6 +83,7 @@ def test_state_generation_tracks_newest_rotation_shard(tmp_path, monkeypatch):
     # Appending to the live (rotation) shard must change the token.
     with rot.open("a") as fh:
         fh.write(json.dumps({"trial_id": 1001}) + "\n")
+    _bump_mtime(rot)
     assert d._autopilot_state_generation() != gen1
 
 

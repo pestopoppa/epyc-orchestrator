@@ -18,6 +18,40 @@ from scripts.autopilot import config_applicator as applicator
 from scripts.autopilot import kv_compress
 
 
+_REAL_AP3_RESTART_BLOCK = applicator._ap3_restart_block
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_ap3_restart_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep restart tests independent of live host state.
+
+    ``restart_role`` consults ``_ap3_restart_block`` (MI210 window file and the
+    gpu-quiet lock), so a live GPU bench holding gpu-quiet exclusive made every
+    ``test_restart_role_*`` return ``refused``. Stub the gate to "no block" for
+    all tests here; the gate itself is tested hermetically below via
+    ``_REAL_AP3_RESTART_BLOCK`` with its own inputs injected.
+    """
+    monkeypatch.setattr(applicator, "_ap3_restart_block", lambda: None)
+
+
+def test_ap3_restart_block_refuses_when_gpu_quiet_exclusive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from src.runtime import gpu_quiet_lock, gpu_window
+
+    monkeypatch.setattr(gpu_window, "window_path", lambda: tmp_path / "absent-window.json")
+    monkeypatch.setattr(
+        gpu_quiet_lock,
+        "holders",
+        lambda: {"held": True, "mode": gpu_quiet_lock.GPU_QUIET_EXCLUSIVE, "holders": ["bench"]},
+    )
+    block = _REAL_AP3_RESTART_BLOCK()
+    assert block is not None and block["gate"] == "gpu_quiet"
+
+    monkeypatch.setattr(gpu_quiet_lock, "holders", lambda: {"held": False})
+    assert _REAL_AP3_RESTART_BLOCK() is None
+
+
 def test_try_cheap_first_q_threshold_maps_to_live_env_alias() -> None:
     env_changes = applicator.EnvRestartApplicator(restart=False).env_changes_for(
         {"chat.try_cheap_first_q_threshold": 0.78}
