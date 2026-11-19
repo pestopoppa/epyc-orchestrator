@@ -23,6 +23,8 @@ async def test_chat_batch_activity_stays_unresolved_until_handler_exit() -> None
     state = MagicMock()
 
     class _FakeRequest:
+        headers: dict = {}
+
         async def is_disconnected(self) -> bool:
             return False
 

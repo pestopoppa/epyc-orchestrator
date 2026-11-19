@@ -200,6 +200,8 @@ def test_discovery_finds_api_tree_and_configured_llama_servers(tmp_path):
 
 
 class _FakeHttpRequest:
+    headers: dict = {}
+
     async def is_disconnected(self) -> bool:
         return False
 
