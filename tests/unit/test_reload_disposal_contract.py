@@ -55,8 +55,11 @@ REGISTRY_MARKERS = ("disposer", "AsyncExitStack", "weakref.finalize", "register_
 #   monty_adapter.py (66c62a4a, 2026-11-18): a per-adapter GC finalizer that hands ONE
 #   request's worker lease back when that adapter object is collected. It registers no
 #   component effects and is not invoked by reload, so the reload gap is unchanged.
+#   child_lane.py (e66ac1a9, 2026-11-18): the same pattern -- a per-environment finalizer
+#   that closes ONE killable child lane when its REPL environment is collected.
 NON_REGISTRY_USES = {
     ("weakref.finalize", "repl_environment/monty_adapter.py"),
+    ("weakref.finalize", "repl_environment/child_lane.py"),
 }
 
 
