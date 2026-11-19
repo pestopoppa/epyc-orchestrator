@@ -19,6 +19,9 @@ client:
   oversize_max_halvings: 3
   cache_max_entries: 20000
   poll_interval_s: 0.02
+  # Mirrors the live file (STACKCHG-EMBEDPLACE-20261118, d2be521c): the overlay differs
+  # only on the EG-2 keys above.
+  prefer_device: gpu
 
 neighbour_cap:
   enabled: true
