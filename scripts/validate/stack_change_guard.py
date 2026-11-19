@@ -2069,11 +2069,29 @@ def _candidate_paths(repo_root: Path, rule: HardcodedSurfaceRule) -> list[Path]:
     return [paths[key] for key in sorted(paths)]
 
 
+def _record_scan_skip(
+    errors: list[str] | None, rule_id: str, path: Path, reason: str
+) -> None:
+    """Report a surface-scan input that was NOT examined.
+
+    A file the scanner could not read contributes zero findings, which is
+    indistinguishable from a clean file. Callers that gate pass ``errors`` and
+    get a COULD-NOT-CHECK line per skipped file; ``None`` keeps the legacy
+    findings-only return for report-only callers.
+    """
+    if errors is not None:
+        errors.append(
+            f"{COULD_NOT_CHECK}: surface scan rule {rule_id!r} could not examine "
+            f"{path} ({reason}); its findings were skipped, not passed"
+        )
+
+
 def scan_hardcoded_surfaces(
     repo_root: Path = REPO_ROOT,
     *,
     rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
     categories: frozenset[str] | None = None,
+    errors: list[str] | None = None,
 ) -> list[SurfaceFinding]:
     """Find curated hardcoded model/stack surfaces that can drift.
 
@@ -2100,9 +2118,13 @@ def scan_hardcoded_surfaces(
         for path in _candidate_paths(repo_root, rule):
             try:
                 if path.stat().st_size > SURFACE_SCAN_MAX_FILE_BYTES:
+                    _record_scan_skip(errors, rule.rule_id, path, "exceeds the scan size limit")
                     continue
                 lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
+                _record_scan_skip(
+                    errors, rule.rule_id, path, f"{type(exc).__name__}: {exc}"
+                )
                 continue
             rel_path = path.relative_to(repo_root)
             for line_no, line in enumerate(lines, start=1):
@@ -2223,6 +2245,7 @@ def scan_role_fact_surfaces(
     *,
     rules: tuple[RoleFactSurfaceRule, ...] = ROLE_FACT_SURFACE_RULES,
     categories: frozenset[str] | None = None,
+    errors: list[str] | None = None,
 ) -> list[SurfaceFinding]:
     """Compare role-keyed config tables against the compiled stack priors.
 
@@ -2249,15 +2272,23 @@ def scan_role_fact_surfaces(
         ):
             try:
                 if path.stat().st_size > SURFACE_SCAN_MAX_FILE_BYTES:
+                    _record_scan_skip(errors, rule.rule_id, path, "exceeds the scan size limit")
                     continue
                 text = path.read_text(encoding="utf-8")
                 declared_doc = yaml.safe_load(text)
-            except (OSError, UnicodeDecodeError, yaml.YAMLError):
+            except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+                _record_scan_skip(
+                    errors, rule.rule_id, path, f"{type(exc).__name__}: {exc}"
+                )
                 continue
             if not isinstance(declared_doc, dict):
+                _record_scan_skip(errors, rule.rule_id, path, "not a YAML mapping")
                 continue
             declared_roles = declared_doc.get(rule.roles_key)
             if not isinstance(declared_roles, dict):
+                _record_scan_skip(
+                    errors, rule.rule_id, path, f"no mapping-valued {rule.roles_key!r}"
+                )
                 continue
             lines = text.splitlines()
             rel_path = path.relative_to(repo_root)
@@ -3131,10 +3162,16 @@ def validate_stack_priors(
                 errors.extend(exception_errors)
                 if not allow_production_blocker_waivers:
                     errors.extend(_production_blocker_waiver_errors(surface_exceptions))
-        surface_findings = scan_hardcoded_surfaces(repo_root, categories=surface_categories)
-        surface_findings.extend(
-            scan_role_fact_surfaces(priors, repo_root, categories=surface_categories)
+        scan_errors: list[str] = []
+        surface_findings = scan_hardcoded_surfaces(
+            repo_root, categories=surface_categories, errors=scan_errors
         )
+        surface_findings.extend(
+            scan_role_fact_surfaces(
+                priors, repo_root, categories=surface_categories, errors=scan_errors
+            )
+        )
+        errors.extend(dict.fromkeys(scan_errors))
         # Validate waiver staleness against a full-category scan. Otherwise a
         # documented legacy_test / historical_doc exception would be reported as
         # a stale waiver whenever the surface report is scoped to

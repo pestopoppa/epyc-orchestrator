@@ -3602,3 +3602,70 @@ def test_declared_fact_without_view_counterpart_is_could_not_check(
     errors = stack_change_guard.validate_launch_manifest_serving_alignment(_real_priors())
 
     assert any(f"declares serving.{fact}" in e for e in _could_not_check(errors))
+
+
+# ---------------------------------------------------------------------------
+# INF-45 W6: the surface scanners must not turn "could not read" into "clean".
+# A candidate file that is unreadable / unparseable contributes zero findings,
+# which is indistinguishable from a clean file unless the skip is reported.
+# ---------------------------------------------------------------------------
+
+
+def test_w6_scan_hardcoded_surfaces_reports_unreadable_candidate(tmp_path: Path) -> None:
+    active = tmp_path / "scripts" / "benchmark"
+    active.mkdir(parents=True)
+    (active / "seeding_types.py").write_bytes(b"\xff\xfe\x00 not utf-8 architect_coding\n")
+
+    errors: list[str] = []
+    findings = scan_hardcoded_surfaces(tmp_path, errors=errors)
+
+    assert findings == []
+    assert any(
+        e.startswith(stack_change_guard.COULD_NOT_CHECK) and "seeding_types.py" in e
+        for e in errors
+    ), errors
+
+
+def test_w6_scan_role_fact_surfaces_reports_malformed_and_non_mapping(
+    tmp_path: Path,
+) -> None:
+    templates = tmp_path / "stack_templates"
+    templates.mkdir()
+    (templates / "bad.yaml").write_text("roles: [unclosed\n", encoding="utf-8")
+    (templates / "list.yaml").write_text("- a\n- b\n", encoding="utf-8")
+    (templates / "noroles.yaml").write_text("name: x\n", encoding="utf-8")
+
+    errors: list[str] = []
+    findings = scan_role_fact_surfaces(
+        _compiled_priors_doc(), tmp_path, rules=(_ROLE_FACT_RULE,), errors=errors
+    )
+
+    assert findings == []
+    joined = "\n".join(errors)
+    for name in ("bad.yaml", "list.yaml", "noroles.yaml"):
+        assert name in joined, errors
+    assert all(e.startswith(stack_change_guard.COULD_NOT_CHECK) for e in errors)
+
+
+def test_w6_validate_stack_priors_fails_when_surface_scan_skips_a_file(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    active = tmp_path / "scripts" / "benchmark"
+    active.mkdir(parents=True)
+    (active / "seeding_rewards.py").write_bytes(b"\xff\xfe\x00 DEFAULT = 1\n")
+
+    result = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
+    )
+
+    assert not result.ok
+    assert any(
+        e.startswith(stack_change_guard.COULD_NOT_CHECK) and "seeding_rewards.py" in e
+        for e in result.errors
+    ), result.errors
