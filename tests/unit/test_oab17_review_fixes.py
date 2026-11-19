@@ -162,7 +162,7 @@ def _scouted(lane, prompt):
 def test_select_mode_receives_the_original_short_question(lane, pipeline):
     seen: dict = {}
 
-    def recorder(prompt, context, state):
+    def recorder(prompt, context, state, **_kwargs):
         seen["prompt"] = prompt
         return "repl"
 
