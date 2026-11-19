@@ -78,6 +78,8 @@ HOT_SWAP_FEATURES = {
     # OFF skips the episodic routing/mode/Q-gate lookups. Read live per request; a per-request override exists
     # (ChatRequest.episodic_lookups=false) so a measurement can interleave arms on one server.
     "episodic_routing_lookups",
+    # TD-29.M2 (2026-11-19): validate-first in the tool-argument shadow (needs typed_decisions_tool_args on).
+    "typed_decisions_validate_first",
 }
 
 # Parameters applied via env vars (require API restart)

@@ -104,6 +104,7 @@ from src.typed_decisions.tool_args import (
     ToolQuestionMapping,
     assemble_arguments,
     tool_schema_to_questions,
+    validate_original_kwargs,
 )
 from src.typed_decisions.types import DecisionResult
 
@@ -246,6 +247,19 @@ def propose_shadow_typed_arguments(
     try:
         schema = dict(full_schema)
         Draft202012Validator.check_schema(schema)
+        if features().typed_decisions_validate_first:
+            # TD-29.M2: validate the ORIGINAL kwargs against the lossless schema first. Valid
+            # calls cost zero repair calls; a violation the closed-set projection cannot
+            # express is refused (never dropped); only a repair-eligible call reaches the
+            # one typed repair proposal below.
+            verdict = validate_original_kwargs(schema, original_kwargs)
+            if verdict.status == "valid":
+                return ShadowArgumentProposal("abstained", None, "original_valid")
+            if verdict.status == "refused_unsupported":
+                return ShadowArgumentProposal(
+                    "abstained", None,
+                    ("refused_unsupported: " + ",".join(verdict.unsupported_constraints))[:160],
+                )
         mapping = tool_schema_to_questions(tool_name, schema)
         required = set(schema.get("required", ()))
         properties = schema.get("properties", {})

@@ -175,6 +175,7 @@ flags:
   typed_decisions: baseline
   typed_decisions_shadow: baseline
   typed_decisions_tool_args: baseline
+  typed_decisions_validate_first: baseline
   unified_streaming: baseline
   untrusted_tool_text: baseline
   ure_uncertainty_shadow_log: baseline

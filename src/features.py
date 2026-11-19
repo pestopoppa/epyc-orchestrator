@@ -377,6 +377,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # REPL tool dispatch chokepoint (src/repl_environment/context.py). The
     # typed arm is fail-open: any decline keeps the model-provided arguments.
     FeatureSpec("typed_decisions_tool_args", False, False, "TYPED_DECISIONS_TOOL_ARGS", "TD-4: closed-set typed selection of tool-call arguments; fail-open to the model-provided arguments"),
+    # TD-29.M2: validate-first for the tool-argument shadow. Only meaningful with typed_decisions_tool_args on.
+    FeatureSpec("typed_decisions_validate_first", False, False, "TYPED_DECISIONS_VALIDATE_FIRST", "TD-29.M2: validate the original tool kwargs against the lossless schema before any typed repair call; valid = zero repair calls, unsupported constraints refused, shadow only"),
     # UFH-12 REPL-EMB-1.1/1.4: placement-aware pooled embedding client with the
     # neighbour in-flight cap (src/embedding_pool/). Default OFF in BOTH test and
     # prod; with it off the factories return None and no consumer is migrated.
@@ -886,6 +888,9 @@ class Features:
     # dispatch chokepoint. Default OFF in both test and prod; fail-open — any
     # decline keeps the model-provided arguments.
     typed_decisions_tool_args: bool = False
+
+    # TD-29.M2: validate-first before any typed repair call (shadow). Default OFF.
+    typed_decisions_validate_first: bool = False
 
     # UFH-12 REPL-EMB-1.1/1.4: pooled embedding client (src/embedding_pool/).
     # Default OFF in both test and prod; get_pooled_embedder()/get_sync_embedder()
