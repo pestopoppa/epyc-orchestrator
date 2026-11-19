@@ -337,6 +337,14 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Off = deterministic index, no LLM call (the bug fix). On = the old LLM
     # index with its input capped to the worker's window, for a future renderer.
     FeatureSpec("session_compaction_llm_index", False, False, "SESSION_COMPACTION_LLM_INDEX", "UFH14-B1: LLM-written compaction index (worker_general, input capped to its window); off = deterministic index, since TaskState.context is not rendered into turn prompts"),
+    # OAB-19 (operator decision 2026-11-18): REPL turns keep their full context. Session compaction
+    # rewrites TaskState.context, which no REPL turn prompt renders, so on a REPL turn it only produced
+    # an externalised file and a rewritten field nobody reads. Retired by default (like the worker
+    # summarisation in UFH14-B1). On = the old per-turn compaction call, still reachable. Runtime-toggleable
+    # (POST /config) and on the autopilot surface; never pin it observe-only. A prompt that would
+    # overflow the window is NOT silently trimmed: the server refuses it and the turn fails with an
+    # explicit ContextOverflowError (graph/helpers._execute_turn).
+    FeatureSpec("repl_compaction", False, False, "REPL_COMPACTION", "OAB-19: run session compaction on REPL turns (off = retired; REPL turns keep full context, since TaskState.context is not rendered into turn prompts)"),
     FeatureSpec("repl_answer_force", False, False, "REPL_ANSWER_FORCE", "UFH14-B1 F2: wall-time forced-answer turn (FINAL now at a fraction of the request budget; no compaction on that turn)"),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
@@ -891,6 +899,8 @@ class Features:
     derived_prefill_timeout: bool = False
     # UFH14-B1: LLM-written session-compaction index (off = deterministic).
     session_compaction_llm_index: bool = False
+    # OAB-19: session compaction on REPL turns (off = retired, full context kept).
+    repl_compaction: bool = False
     # UFH14-B1 F2: wall-time forced-answer turn in the REPL graph.
     repl_answer_force: bool = False
 

@@ -59,7 +59,7 @@ async def _run(ctx, turns: int) -> None:
 async def test_task_state_context_never_reaches_the_turn_prompt(graph_ctx):
     """The DESIGN-NOTE finding, as a test: two runs that differ ONLY in
     TaskState.context (one compacting from turn 5) send byte-identical turn prompts."""
-    set_features(Features(session_compaction=True))
+    set_features(Features(session_compaction=True, repl_compaction=True))
     small_ctx, _, small_deps = _ctx(graph_ctx, context_override="short")
     big_ctx, big_state, big_deps = _ctx(graph_ctx, context_override=BIG)
     await _run(small_ctx, 6)
@@ -75,7 +75,7 @@ async def test_task_state_context_never_reaches_the_turn_prompt(graph_ctx):
 async def test_compaction_makes_no_index_llm_call_by_default(graph_ctx):
     """The fix: an index of a field no prompt renders is not worth a worker_general
     call (which carried the whole unbounded context as input)."""
-    set_features(Features(session_compaction=True))
+    set_features(Features(session_compaction=True, repl_compaction=True))
     ctx, state, deps = _ctx(graph_ctx, context_override=BIG)
     await _run(ctx, 6)
     assert state.compaction_count >= 1
@@ -87,7 +87,7 @@ async def test_compaction_makes_no_index_llm_call_by_default(graph_ctx):
 async def test_llm_index_flag_restores_the_call_with_capped_input(graph_ctx):
     from src.graph import compaction
 
-    set_features(Features(session_compaction=True, session_compaction_llm_index=True))
+    set_features(Features(session_compaction=True, repl_compaction=True, session_compaction_llm_index=True))
     huge = "z" * 400_000
     ctx, state, deps = _ctx(graph_ctx, context_override=huge)
     await _run(ctx, 5)
@@ -102,7 +102,7 @@ async def test_llm_index_flag_restores_the_call_with_capped_input(graph_ctx):
 async def test_context_overflow_no_longer_claims_a_compaction(graph_ctx):
     """The overflow path used to force-compact TaskState.context (never rendered)
     and reply 'context compacted; retry the turn' with nothing that overflowed shrunk."""
-    set_features(Features(session_compaction=True, session_compaction_llm_index=True))
+    set_features(Features(session_compaction=True, repl_compaction=True, session_compaction_llm_index=True))
     ctx, state, deps = _ctx(graph_ctx, context_override=BIG)
 
     def _overflow(prompt, role="worker", **kwargs):
@@ -149,7 +149,7 @@ def test_answer_force_frac_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_forced_answer_turn_demands_final_and_skips_compaction(graph_ctx):
-    set_features(Features(session_compaction=True))
+    set_features(Features(session_compaction=True, repl_compaction=True))
     ctx, state, deps = _ctx(graph_ctx, context_override=BIG)
     state.turns = 8                                       # past the compaction min-turns gate
     state.answer_force_at_s = time.perf_counter() - 1.0   # budget point already passed
@@ -170,6 +170,81 @@ async def test_no_forced_answer_before_the_point_or_when_unset(graph_ctx):
     prompts = [c.args[0] for c in _calls(deps, str(Role.FRONTDOOR))]
     assert len(prompts) == 2 and not any(ANSWER_FORCE_MESSAGE in p for p in prompts)
     assert state.answer_forced_turns == 0
+
+
+# ── OAB-19: REPL compaction retired by default ───────────────────────────────
+
+
+def test_repl_compaction_flag_is_retired_by_default_and_on_the_runtime_surface():
+    from src.features import _FEATURE_REGISTRY, get_features
+
+    (spec,) = [s for s in _FEATURE_REGISTRY if s.name == "repl_compaction"]
+    assert (spec.default_test, spec.default_prod) == (False, False)
+    assert get_features(production=True).repl_compaction is False
+    assert Features().repl_compaction is False
+    # read through features(), so POST /config runtime overrides reach it (never observe-only)
+    assert "repl_compaction" in Features().summary()
+
+
+@pytest.mark.asyncio
+async def test_oab19_acceptance_compaction_fires_only_where_it_changes_the_root_prompt(graph_ctx):
+    """OAB-19 acceptance: a compaction that fires must change the next root prompt.
+
+    TaskState.context is rendered into no turn prompt, so the compaction can never meet that
+    bar on a REPL turn; it is therefore retired there. Retired (default): compaction does not
+    fire at all, the oversized context is kept whole, and the root prompts do not depend on it.
+    The flag keeps the old path reachable (it fires, and the prompt is still unchanged, which
+    is the reason it stays off)."""
+    set_features(Features(session_compaction=True))        # compaction asked for, REPL path retired
+    ctx, state, deps = _ctx(graph_ctx, context_override=BIG)
+    ref_ctx, _, ref_deps = _ctx(graph_ctx, context_override="short")
+    await _run(ctx, 6)
+    await _run(ref_ctx, 6)
+    assert state.compaction_count == 0 and state.context == BIG      # full context kept
+    assert state.context_file_paths == []                             # nothing externalised
+    assert [c.args[0] for c in _calls(deps, str(Role.FRONTDOOR))] == [
+        c.args[0] for c in _calls(ref_deps, str(Role.FRONTDOOR))]
+
+    set_features(Features(session_compaction=True, repl_compaction=True))
+    on_ctx, on_state, _ = _ctx(graph_ctx, context_override=BIG)
+    await _run(on_ctx, 6)
+    assert on_state.compaction_count >= 1 and on_state.context != BIG  # path still reachable
+
+
+def test_oab19_runtime_override_toggles_the_flag(monkeypatch, tmp_path):
+    """POST /config writes the runtime-flag file; features() must honour it for repl_compaction."""
+    import src.features as feature_module
+    from src.features import features, write_runtime_flag_overrides
+
+    monkeypatch.setenv("ORCHESTRATOR_RUNTIME_FLAGS_PATH", str(tmp_path / "runtime_flags.json"))
+    monkeypatch.setattr(feature_module, "RUNTIME_FLAGS_TTL_S", 0.0)
+    reset_features()
+    assert features().repl_compaction is False
+    write_runtime_flag_overrides({"repl_compaction": True}, set_by="oab19-test")
+    assert features().repl_compaction is True
+
+
+@pytest.mark.asyncio
+async def test_oab19_full_context_overflow_fails_explicitly_and_loses_nothing(graph_ctx):
+    """With compaction retired a turn can send more than the window. The server refuses it;
+    the turn must fail with an explicit overflow error, not crash, and must not truncate or
+    drop the tool result / context it was holding."""
+    set_features(Features(session_compaction=True))
+    ctx, state, deps = _ctx(graph_ctx, context_override=BIG)
+    state.last_output = "TOOL-RESULT-" + "y" * 40_000
+    kept = state.last_output
+
+    def _overflow(prompt, role="worker", **kwargs):
+        raise ContextOverflowError("too big", kind=ContextOverflowError.REQUEST_TOO_LARGE,
+                                   role=str(role), n_prompt_tokens=90_000, n_ctx=65_536)
+
+    deps.primitives.llm_call.side_effect = _overflow
+    state.turns = 8
+    output, error, is_final, _ = await _execute_turn(ctx, Role.FRONTDOOR)
+    assert (output, is_final) == ("", False)
+    assert error.startswith("LLM call failed:")
+    assert state.context == BIG and state.last_output == kept
+    assert state.compaction_count == 0
 
 
 def test_answer_force_fields_survive_the_langgraph_round_trip():

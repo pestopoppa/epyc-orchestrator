@@ -112,6 +112,7 @@ flags:
   repl_answer_force: baseline
   repl_child_lane: baseline
   repl_classify: baseline
+  repl_compaction: baseline
   repl_embedding_pool: baseline
   repl_explicit_final: baseline
   repl_explicit_final_strict: baseline

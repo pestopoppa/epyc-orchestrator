@@ -1361,8 +1361,13 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             state.turns, _answer_force_frac() * 100,
         )
 
-    # Session compaction before execution
-    if not force_answer or _get_features().context_arm_ab is True:
+    # Session compaction before execution. OAB-19: retired for REPL turns by default (they keep
+    # full context); ``repl_compaction`` keeps the old path reachable. The context-arm A/B owns
+    # its own boundary and is unaffected.
+    _feats = _get_features()
+    if getattr(_feats, "context_arm_ab", False) is True or (
+        getattr(_feats, "repl_compaction", False) is True and not force_answer
+    ):
         await _maybe_compact_context(ctx)
 
     if deps.primitives is None or deps.repl is None:
