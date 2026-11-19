@@ -120,6 +120,22 @@ class AdmissionController:
 
     Uses threading.Semaphore (not asyncio.Semaphore) because inference calls
     happen in thread pool via asyncio.to_thread / inference_lock (fcntl).
+
+    SCOPE (multi-worker audit, 2026-11): production runs ``uvicorn --workers 6`` and this
+    controller is built per process (``AppState.admission``), so its semaphores and
+    ``_waiting`` counters are PER PROCESS: an ``n``-slot backend can have up to ``6n``
+    requests past this gate. That is deliberate and safe, because this gate is NOT where the
+    per-backend execution cap is enforced. The cap that matters (concurrent inference on one
+    server) is held host-wide by the downstream flocks every dispatch takes before touching
+    the server: ``src.runtime.cpu_region_lock`` (exclusive ``LOCK_EX`` per atomic region, one
+    holder per serving instance across all processes; shared leases only for the certified
+    native-batch cohort, width-capped and tracked in the crash-pruned occupancy registry) and,
+    with per-region locks off, the global ``src.runtime.inference_lock``. Requests admitted
+    here in excess of ``n`` simply wait on those flocks (bounded by their timeout/deadline);
+    they never run concurrently. ``tests/unit/test_admission_xproc_cap.py`` proves the cap
+    holds across processes. This controller is therefore a per-process burst/priority
+    damper (interactive-before-background, early 429), not the host-wide cap; do not tighten
+    it to a host-wide counter without a reason the region flocks do not already cover.
     """
 
     def __init__(self, limits: dict[str, int] | None = None):

@@ -5,12 +5,15 @@ See the block comment below for the failure it prevents and the design.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import math
 import threading
 import time
 from typing import Any, Callable
+
+from src.runtime.xproc_reservations import ReservationStore, ReservationUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +176,26 @@ KV_POOL_LONG_PREFILL_OBSERVE_ENV = "ORCHESTRATOR_KV_POOL_LONG_PREFILL_OBSERVE_TO
 DEFAULT_LONG_PREFILL_OBSERVE_TOKENS = 4096
 # KVU-15a: host-wide lease (flock per server). "0"/"false"/"off" = per-process.
 KV_POOL_CROSS_PROCESS_LEASE_ENV = "ORCHESTRATOR_KV_POOL_CROSS_PROCESS_LEASE"
+# Host-wide token reservations and queue depth (``uvicorn --workers N`` = N
+# processes, each with its own ``SharedKVPoolAdmission``). Every worker publishes
+# its in-flight reserved tokens and queue depth into one flock-guarded file per
+# server (``src.runtime.xproc_reservations``) and admits / enqueues against the
+# SUM of the other processes' numbers plus its own, check-and-publish atomic under
+# that flock. "0"/"false"/"off" = per-process (single-worker dev, legacy).
+# FAIL CLOSED: store unavailable => admit nothing (the request keeps waiting until
+# its deadline), never over-admit; queue entry falls back to the local bound.
+KV_POOL_CROSS_PROCESS_RESERVE_ENV = "ORCHESTRATOR_KV_POOL_CROSS_PROCESS_RESERVE"
+KV_POOL_RESERVE_DIR_ENV = "EPYC_KVPOOL_RESERVE_DIR"
+KV_POOL_RESERVE_TTL_ENV = "EPYC_KVPOOL_RESERVE_TTL_S"
+# A worker's aggregate entry is refreshed on every change and reaped when its
+# owner dies; the TTL only backstops pid-reuse races, so it is long (a request
+# can hold the pool for many minutes).
+DEFAULT_KV_POOL_RESERVE_TTL_S = 6 * 3600.0
+_XP_INFLIGHT = "inflight"
+_XP_QUEUE = "queue"
+_XP_STORE = ReservationStore(
+    "kvpool-reserve", dir_env=KV_POOL_RESERVE_DIR_ENV, ttl_env=KV_POOL_RESERVE_TTL_ENV,
+    default_ttl_s=DEFAULT_KV_POOL_RESERVE_TTL_S)
 # KVU-15a: tokens added back to the uncached-suffix estimate when a cached
 # prefix is credited (< 0 disables the credit: whole-prompt sizing).
 KV_POOL_CACHE_CREDIT_MARGIN_ENV = "ORCHESTRATOR_KV_POOL_CACHE_CREDIT_MARGIN_TOKENS"
@@ -241,8 +264,15 @@ class SharedKVPoolAdmission:
         cross_process: bool | None = None,
         history: Any = None,
         fork_caps: Callable[[str], Any] | None = None,
+        cross_process_reserve: bool | None = None,
     ) -> None:
         self._cond = threading.Condition()
+        # Host-wide reservations (see KV_POOL_CROSS_PROCESS_RESERVE_ENV). None =
+        # decided per call from the env. ``_foreign_inflight`` is the other
+        # processes' reserved tokens, set under ``_cond`` AND the store flock just
+        # before a verdict and read only by ``_fits``.
+        self._cross_process_reserve = cross_process_reserve
+        self._foreign_inflight: dict[str, int] = {}
         self._inflight: dict[str, dict[int, int]] = {}
         self._queue: dict[str, list[int]] = {}
         self._ratio: dict[str, float] = {}
@@ -630,16 +660,45 @@ class SharedKVPoolAdmission:
         return (projected, int(occ.processing), long_prefills, cached_chars, slots_reason,
                 native_capacity)
 
-    def _queue_full(self, queue: list[int], max_queued: int) -> bool:
-        """The queue bound. Trunk-held waiters (RTG-58 P2, flag on) do not count
-        toward it, so a fan-out wave of up to ``TRUNK_QUEUE_FACTOR x max_queued``
-        siblings held behind one trunk is not refused (KPF-26); the total stays
-        bounded by that factor. Flag off: ``_trunk_held`` is empty, so this is
-        ``len(queue) >= max_queued``. Caller holds the lock."""
+    def cross_process_reserve(self) -> bool:
+        if self._cross_process_reserve is not None:
+            return bool(self._cross_process_reserve)
+        return os.environ.get(KV_POOL_CROSS_PROCESS_RESERVE_ENV, "1").strip().lower() not in {
+            "0", "false", "no", "off"}
+
+    def _xp_publish(self, slate: Any, url: str) -> None:
+        """Write this process's reserved tokens and queue depth into the locked
+        store view. Caller holds ``_cond`` and the slate's flock."""
+        slate.set_own(_XP_INFLIGHT, sum(self._inflight.get(url, {}).values()))
+        slate.set_own(_XP_QUEUE, len(self._queue.get(url, [])))
+
+    def _xp_publish_best_effort(self, url: str) -> None:
+        """Re-publish after a local change that is not itself an admission
+        (release, queue leave, fork-credit re-inflation). An unavailable store is
+        logged, not raised: a stale entry is bounded (next publish overwrites it, the
+        owner's death or the TTL reaps it) and only ever errs toward under-admission
+        on release paths. Caller holds ``_cond``."""
+        if not self.cross_process_reserve():
+            return
+        try:
+            with _XP_STORE.locked(url) as slate:
+                self._xp_publish(slate, url)
+        except ReservationUnavailable as exc:
+            logger.warning("KV pool admission: host-wide reservation store unavailable "
+                           "for %s (publish skipped): %s", url, exc)
+
+    def _queue_full(self, queue: list[int], max_queued: int, foreign: int = 0) -> bool:
+        """The queue bound. ``foreign`` = the OTHER worker processes' queued
+        requests for this server (host-wide bound; counted whole, their trunk-held
+        status is not known here). Trunk-held waiters (RTG-58 P2, flag on) do not
+        count toward it, so a fan-out wave of up to ``TRUNK_QUEUE_FACTOR x
+        max_queued`` siblings held behind one trunk is not refused (KPF-26); the
+        total stays bounded by that factor. Flag off: ``_trunk_held`` is empty, so
+        this is ``len(queue) + foreign >= max_queued``. Caller holds the lock."""
         if not self._trunk_held:
-            return len(queue) >= max_queued
-        active = sum(1 for t in queue if t not in self._trunk_held)
-        return active >= max_queued or len(queue) >= max_queued * TRUNK_QUEUE_FACTOR
+            return len(queue) + foreign >= max_queued
+        active = sum(1 for t in queue if t not in self._trunk_held) + foreign
+        return active >= max_queued or len(queue) + foreign >= max_queued * TRUNK_QUEUE_FACTOR
 
     def fork_caps(self, url: str) -> dict[str, Any] | None:
         """The server's ``/props.slot_fork`` (KPF-27e), or None. Never raises."""
@@ -652,7 +711,10 @@ class SharedKVPoolAdmission:
 
     def _fits(self, url: str, tokens: int, pool_tokens: int, observed: tuple | None) -> bool:
         reserved = self._inflight.get(url, {})
-        own = sum(reserved.values())
+        # Host-wide: this process's tickets plus every OTHER worker's published
+        # reservations (0 when cross-process reservations are off).
+        foreign = self._foreign_inflight.get(url, 0)
+        own = sum(reserved.values()) + foreign
         seen, processing = (observed[0], observed[1]) if observed is not None else (0, 0)
         native_capacity = observed[5] if observed is not None and len(observed) > 5 else None
         if native_capacity is not None:
@@ -663,7 +725,7 @@ class SharedKVPoolAdmission:
             # reserved twice, but external cells plus pending tickets never
             # disappear behind max(own, seen). The candidate is added once.
             return seen + own + tokens <= min(pool_tokens, native_capacity)
-        if not reserved and processing == 0:
+        if not reserved and foreign == 0 and processing == 0:
             return True  # a lone request is always admitted; the server decides
         return max(own, seen) + tokens <= pool_tokens
 
@@ -739,12 +801,39 @@ class SharedKVPoolAdmission:
         pview: dict[str, Any] | None = None
         with self._cond:
             queue = self._queue.setdefault(url, [])
-            if max_queued > 0 and self._queue_full(queue, max_queued):
-                raise KVPoolQueueFull(url, len(queue), max_queued)
-            self._next_ticket += 1
-            ticket = self._next_ticket
-            queue.append(ticket)
-            self._waiting[ticket] = (want, is_long)
+            # Host-wide queue bound: check the other workers' queue depth and publish
+            # ours under ONE flock so six workers cannot each fill a full queue. An
+            # unavailable store falls back to the local bound (logged); admission
+            # itself still fails closed below.
+            try:
+                if self.cross_process_reserve():
+                    with _XP_STORE.locked(url) as xp:
+                        foreign_q = xp.foreign_total(_XP_QUEUE)
+                        if max_queued > 0 and self._queue_full(queue, max_queued, foreign_q):
+                            if not queue:
+                                self._queue.pop(url, None)
+                            raise KVPoolQueueFull(url, len(queue) + foreign_q, max_queued)
+                        self._next_ticket += 1
+                        ticket = self._next_ticket
+                        queue.append(ticket)
+                        self._waiting[ticket] = (want, is_long)
+                        self._xp_publish(xp, url)
+                else:
+                    raise ReservationUnavailable("cross-process reservations off")
+            except ReservationUnavailable as exc:
+                if self.cross_process_reserve():
+                    logger.warning("KV pool admission: host-wide reservation store unavailable "
+                                   "for %s (local queue bound only): %s", url, exc)
+                if max_queued > 0 and self._queue_full(queue, max_queued):
+                    if not queue:
+                        self._queue.pop(url, None)
+                    raise KVPoolQueueFull(url, len(queue), max_queued)
+                self._next_ticket += 1
+                ticket = self._next_ticket
+                queue.append(ticket)
+                self._waiting[ticket] = (want, is_long)
+        xp_stack = contextlib.ExitStack()
+        xp_warned = False
         logged = False
         waited_on_lease = False
         lease_wait_observed_s = 0.0
@@ -781,7 +870,26 @@ class SharedKVPoolAdmission:
                             self._trunk_since.setdefault(ticket, time.perf_counter())
                         else:
                             self._trunk_held.pop(ticket, None)
-                    if pview is not None and pview["trunk_hold"]:
+                    # Host-wide fit: hold the store flock from the verdict through
+                    # the reservation publish, so two workers cannot both read the
+                    # same free tokens. Fail CLOSED: no store => no admission.
+                    xp_slate = None
+                    xp_down = False
+                    self._foreign_inflight.pop(url, None)
+                    if self.cross_process_reserve():
+                        try:
+                            xp_slate = xp_stack.enter_context(_XP_STORE.locked(url))
+                            self._foreign_inflight[url] = xp_slate.foreign_total(_XP_INFLIGHT)
+                        except ReservationUnavailable as exc:
+                            xp_down = True
+                            if not xp_warned:
+                                xp_warned = True
+                                logger.warning(
+                                    "KV pool admission: host-wide reservation store unavailable "
+                                    "for %s; failing closed (admitting nothing): %s", url, exc)
+                    if xp_down:
+                        verdict = "store"
+                    elif pview is not None and pview["trunk_hold"]:
                         verdict = "trunk"  # an earlier sibling is prefilling our trunk
                     else:
                         verdict = self._admissible(url, ticket, queue, want_eff, is_long,
@@ -792,6 +900,10 @@ class SharedKVPoolAdmission:
                     if verdict in ("head", "pass", "pass_trunk", "lpm"):
                         want = want_eff
                         self._inflight.setdefault(url, {})[ticket] = want
+                        if xp_slate is not None:
+                            # The queue entry we leave in the ``finally`` is published
+                            # there; here only the new reservation matters.
+                            self._xp_publish(xp_slate, url)
                         if fork_src is not None and pview is not None:
                             # Review D3: when the source releases first, its shared
                             # cells live on in this ticket: release re-attributes.
@@ -871,7 +983,11 @@ class SharedKVPoolAdmission:
                                 url, want, waited,
                                 " (waited for the long-prefill lease)" if waited_on_lease else "",
                             )
+                        xp_stack.close()  # publishes the reservation, drops the flock
+                        self._foreign_inflight.pop(url, None)
                         break
+                    xp_stack.close()  # not admitted: drop the store flock before waiting
+                    self._foreign_inflight.pop(url, None)
                     if verdict == "lease":
                         waited_on_lease = True
                     now = time.perf_counter()
@@ -913,6 +1029,8 @@ class SharedKVPoolAdmission:
             # Leave the queue whether admitted or abandoned, and wake the next
             # waiter (the head may have changed).
             with self._cond:
+                xp_stack.close()  # any flock still held by an early exit/exception
+                self._foreign_inflight.pop(url, None)
                 try:
                     queue.remove(ticket)
                 except ValueError:
@@ -929,6 +1047,7 @@ class SharedKVPoolAdmission:
                     self._stat(url)["abandoned"] += 1
                 if not queue and self._queue.get(url) is queue:
                     self._queue.pop(url, None)
+                self._xp_publish_best_effort(url)  # queue depth left
                 self._cond.notify_all()
 
     def _prefill_lease_rate(self, url: str, context_tokens: int) -> float:
@@ -1273,6 +1392,7 @@ class SharedKVPoolAdmission:
                 self._drop_lease(url)
             if success:
                 self._decay(url)
+            self._xp_publish_best_effort(url)  # host-wide: tokens returned
             self._cond.notify_all()
         if reattributed:
             try:
@@ -1316,6 +1436,8 @@ class SharedKVPoolAdmission:
                 info = (self._admission_info.get(t) or {}).get("prefix_index")
                 if isinstance(info, dict):
                     info["fork_credit_reinflated"] = credit
+            if total:
+                self._xp_publish_best_effort(url)  # reservations grew: tell the other workers
         if total:
             try:
                 from src.inference import prefix_index as pi
