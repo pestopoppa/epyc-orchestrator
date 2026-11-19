@@ -52,6 +52,12 @@ _spec.loader.exec_module(window)
 # ── (1) EV-4 calibration metrics — concrete fixtures, no inference ────────────
 
 
+requires_math_verify = pytest.mark.skipif(
+    importlib.util.find_spec("math_verify") is None,
+    reason="math-verify package not installed",
+)
+
+
 def test_calibration_metric_keys_are_the_six_ev4_metrics() -> None:
     assert CALIBRATION_METRIC_KEYS == (
         "ece",
@@ -147,6 +153,7 @@ def _tiny_math_set() -> list[dict]:
     ]
 
 
+@requires_math_verify
 def test_score_math_rebaseline_answers_uses_real_math_verify() -> None:
     questions = _tiny_math_set()
     # First answer correct (boxed 2), second wrong (boxed 99 vs 100).
@@ -165,6 +172,7 @@ def test_score_math_rebaseline_answers_uses_real_math_verify() -> None:
     assert scored2 == [True, True]
 
 
+@requires_math_verify
 def test_score_math_rebaseline_handles_nested_boxed_latex() -> None:
     questions = [
         {
@@ -763,6 +771,7 @@ class _MathAdapter:
         return [dict(q) for q in _MATH_QS]
 
 
+@requires_math_verify
 def test_eval_math_rebaseline_threads_real_confidence_provenance(monkeypatch) -> None:
     tower = EvalTower(url="http://127.0.0.1:1", timeout=1)
     monkeypatch.setattr(tower, "_load_dataset_adapter", lambda _s: _MathAdapter())
@@ -780,6 +789,7 @@ def test_eval_math_rebaseline_threads_real_confidence_provenance(monkeypatch) ->
     assert arm["confidence_source_counts"] == {"completion_probabilities_geomean": 4}
 
 
+@requires_math_verify
 def test_eval_math_rebaseline_straddled_confidence_emits_none_not_zero(monkeypatch) -> None:
     # One binary-proxy row among real ones ⇒ fail-closed: whole arm's ECE/AUROC
     # become None (not a 0.0 placeholder) and confidence_is_real=False.

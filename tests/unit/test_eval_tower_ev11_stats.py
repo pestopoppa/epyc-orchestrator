@@ -13,6 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import importlib.util
+
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +32,13 @@ from src.llm_primitives.stat_tests import (
 # ── (i) math_verify hard-fail ────────────────────────────────────────────────
 
 
+requires_math_verify = pytest.mark.skipif(
+    importlib.util.find_spec("math_verify") is None,
+    reason="math-verify package not installed",
+)
+
+
+@requires_math_verify
 def test_require_math_verify_present_does_not_raise() -> None:
     # math-verify is installed in the eval venv; the guard must be a no-op.
     assert _require_math_verify() is None

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import importlib.util
+
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +32,12 @@ import eval_tower  # noqa: E402
 N_WRONG, N_RIGHT = 4, 4
 
 # ── fixtures ──────────────────────────────────────────────────────────────
+
+
+requires_math_verify = pytest.mark.skipif(
+    importlib.util.find_spec("math_verify") is None,
+    reason="math-verify package not installed",
+)
 
 
 def _questions(n: int = 12) -> list[dict[str, Any]]:
@@ -242,6 +250,7 @@ def test_recipes_pin_champion_gpu_and_spec_state() -> None:
 # ── run ───────────────────────────────────────────────────────────────────
 
 
+@requires_math_verify
 def test_arm_a_writes_scored_sidecar_with_token_trace(world: dict[str, Any]) -> None:
     wrong = {world["manifest"]["rows"][0]["question_id"]}
     server = FakeServer(wrong_on=wrong)
@@ -284,6 +293,7 @@ def test_arm_a_writes_scored_sidecar_with_token_trace(world: dict[str, Any]) -> 
     assert rep["sources"]["answer_span_geomean"]["n"] == N_WRONG + N_RIGHT
 
 
+@requires_math_verify
 def test_resume_skips_done_rows_and_retries_errors(world: dict[str, Any]) -> None:
     server = FakeServer(fail_first=1)
     s1 = _run(world, server, "A-specoff", limit=3)
@@ -299,6 +309,7 @@ def test_resume_skips_done_rows_and_retries_errors(world: dict[str, Any]) -> Non
     assert len(json.loads((world["out"] / "serving_identity.A-specoff.json").read_text())["segments"]) == 2
 
 
+@requires_math_verify
 def test_resume_refuses_foreign_batch(world: dict[str, Any]) -> None:
     world["out"].mkdir(parents=True)
     (world["out"] / "question_results.A-specoff.jsonl").write_text(
@@ -308,6 +319,7 @@ def test_resume_refuses_foreign_batch(world: dict[str, Any]) -> None:
         _run(world, FakeServer(), "A-specoff")
 
 
+@requires_math_verify
 def test_arm_a_fails_on_placeholder_tokens(world: dict[str, Any]) -> None:
     # /slots is disabled and timings carry no draft counters; only placeholders reveal spec.
     server = FakeServer(slots=False, placeholders=True)
@@ -320,6 +332,7 @@ def test_arm_a_fails_on_placeholder_tokens(world: dict[str, Any]) -> None:
     assert cp.SpecDecodingDetected.exit_code == 3
 
 
+@requires_math_verify
 def test_arm_a_fails_preflight_when_slots_declare_spec(world: dict[str, Any]) -> None:
     server = FakeServer(spec=True)
     with pytest.raises(cp.SpecDecodingDetected, match="speculative=true"):
@@ -327,12 +340,14 @@ def test_arm_a_fails_preflight_when_slots_declare_spec(world: dict[str, Any]) ->
     assert server.chat_payloads == []
 
 
+@requires_math_verify
 def test_arm_a_fails_on_draft_counters_without_placeholders(world: dict[str, Any]) -> None:
     server = FakeServer(spec=True, slots=False, placeholders=False)
     with pytest.raises(cp.SpecDecodingDetected, match="draft_n=2"):
         _run(world, server, "A-specoff")
 
 
+@requires_math_verify
 def test_arm_b_records_placeholders(world: dict[str, Any]) -> None:
     summary = _run(world, FakeServer(spec=True), "B-mtp")
     assert summary["complete"]
@@ -342,6 +357,7 @@ def test_arm_b_records_placeholders(world: dict[str, Any]) -> None:
     assert rep["token_trace"]["placeholder_fraction_median"] == 0.5
 
 
+@requires_math_verify
 def test_arm_b_refuses_a_spec_off_server(world: dict[str, Any]) -> None:
     with pytest.raises(cp.ProbeError, match="not the MTP arm"):
         _run(world, FakeServer(spec=False), "B-mtp")
@@ -349,6 +365,7 @@ def test_arm_b_refuses_a_spec_off_server(world: dict[str, Any]) -> None:
         _run(world, FakeServer(spec=False, slots=False), "B-mtp")
 
 
+@requires_math_verify
 def test_missing_logprobs_refuses(world: dict[str, Any]) -> None:
     class NoLogprobs(FakeServer):
         def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -363,6 +380,7 @@ def test_missing_logprobs_refuses(world: dict[str, Any]) -> None:
         _run(world, NoLogprobs(), "A-specoff")
 
 
+@requires_math_verify
 def test_cli_end_to_end_with_questions_jsonl(world: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     server = FakeServer()
     real_client = httpx.Client

@@ -946,6 +946,13 @@ def get_config() -> OrchestratorConfigData:
         return _load_from_env()
 
 
+# The real lru_cache wrapper. ``reset_config`` must clear THIS object, not
+# whatever the module-global name ``get_config`` currently points at: tests
+# (and callers) legitimately replace ``src.config.get_config`` with a plain
+# function, and ``get_config.cache_clear()`` then raised AttributeError.
+_get_config_cached = get_config
+
+
 def reset_config() -> None:
     """Reset the cached configuration.
 
@@ -953,7 +960,7 @@ def reset_config() -> None:
     """
     reset_runtime_defaults_cache()
     reset_stack_prior_server_url_cache()
-    get_config.cache_clear()
+    _get_config_cached.cache_clear()
 
 
 # Backwards compatibility aliases

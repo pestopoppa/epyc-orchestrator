@@ -12,7 +12,7 @@ from src.typed_decisions.types import Question, QuestionKind
 FIXTURES = Path(__file__).parent / "fixtures" / "utm_v3"
 CASES_PATH = FIXTURES / "synthetic_cases.json"
 RUBRIC_PATH = FIXTURES / "rubric.json"
-GENERATED_OUTPUT = Path("ni07_utm_v3_synthetic_readout.json")
+GENERATED_OUTPUT_NAME = "ni07_utm_v3_synthetic_readout.json"
 AXES = ("source_resolution", "privacy", "scope", "freshness", "poisoning", "manipulation")
 
 
@@ -121,9 +121,10 @@ def test_eight_synthetic_classes_have_only_source_supported_store_expectations(t
     }
     assert set(rubric["required_readout"]) <= set(readout)
     encoded = json.dumps(readout, sort_keys=True, separators=(",", ":")) + "\n"
-    with GENERATED_OUTPUT.open("x", encoding="utf-8") as output:
+    generated_output = tmp_path / GENERATED_OUTPUT_NAME
+    with generated_output.open("x", encoding="utf-8") as output:
         output.write(encoded)
-    assert GENERATED_OUTPUT.read_text(encoding="utf-8") == encoded
+    assert generated_output.read_text(encoding="utf-8") == encoded
 
 
 class _FakePrimitives:
