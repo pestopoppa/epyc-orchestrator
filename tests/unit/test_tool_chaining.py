@@ -90,9 +90,22 @@ def test_dependency_mode_falls_back_to_seq_exec_on_non_call_stmt(monkeypatch):
 
 
 def test_dependency_mode_parallel_mutations_reduce_latency(monkeypatch):
+    # SEC-EXEC-2 (644c6530) removed python3 from the run_shell allowlist, so
+    # the slow step is now an allowlisted command whose subprocess is given a
+    # fixed 0.2s latency. Allowlist, containment and the dependency scheduler
+    # all stay real; only the child's runtime is made deterministic.
+    import src.repl_environment.external_access as external_access
+
+    real_run = external_access.subprocess.run
+
+    def _slow_run(*args, **kwargs):
+        time.sleep(0.2)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(external_access.subprocess, "run", _slow_run)
     code = (
-        'a = run_shell("python3 -c \\"import time; time.sleep(0.2); print(1)\\"")\n'
-        'b = run_shell("python3 -c \\"import time; time.sleep(0.2); print(2)\\"")'
+        'a = run_shell("echo 1")\n'
+        'b = run_shell("echo 2")'
     )
 
     monkeypatch.setenv("ORCHESTRATOR_TOOL_CHAIN_MODE", "dep")
