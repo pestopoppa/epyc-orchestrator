@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,6 +22,11 @@ from scripts.server.runtime_facts_manifest import (
     write_runtime_facts_manifest,
 )
 from scripts.server.stack_state import ProcessInfo
+
+
+def _age_manifest(manifest_path: Path, state_file: Path) -> None:
+    state_mtime = state_file.stat().st_mtime
+    os.utime(manifest_path, (state_mtime - 10, state_mtime - 10))
 
 
 def _write_yaml(path: Path, text: str) -> Path:
@@ -364,6 +370,10 @@ def test_read_runtime_stack_selected_servers_rejects_malformed_or_stale_manifest
         encoding="utf-8",
     )
     state_file.write_text("{}", encoding="utf-8")
+    # Stale = manifest mtime older than the state file. Writing the two back to
+    # back can give them the same mtime on coarse-timestamp filesystems, so age
+    # the manifest explicitly rather than racing the clock.
+    _age_manifest(manifest_path, state_file)
     assert (
         read_runtime_stack_selected_servers(
             manifest_path=manifest_path,
@@ -417,6 +427,10 @@ def test_read_runtime_stack_numa_mode_rejects_malformed_stale_or_unknown_mode(
         encoding="utf-8",
     )
     state_file.write_text("{}", encoding="utf-8")
+    # Stale = manifest mtime older than the state file. Writing the two back to
+    # back can give them the same mtime on coarse-timestamp filesystems, so age
+    # the manifest explicitly rather than racing the clock.
+    _age_manifest(manifest_path, state_file)
     assert (
         read_runtime_stack_numa_mode(
             manifest_path=manifest_path,
