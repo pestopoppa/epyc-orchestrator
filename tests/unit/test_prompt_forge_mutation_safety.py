@@ -557,7 +557,8 @@ def test_apply_in_context_refuses_stale_preimage(tmp_path: Path, monkeypatch) ->
     target.parent.mkdir(parents=True)
     target.write_text("parallel edit\n")
     monkeypatch.setattr(prompt_forge_mod, "PROJECT_ROOT", root)
-    monkeypatch.setattr(prompt_forge_mod, "CODE_MUTATION_ALLOWLIST", {"src/tool_policy.py"})
+    # src/tool_policy.py is already in the real CODE_MUTATION_ALLOWLIST (which moved to
+    # mutation_guards, S2); patching it on prompt_forge is forbidden by the seam guard.
 
     class _Ctx:
         worktree_path = tmp_path
