@@ -56,6 +56,7 @@ class World:
         root.mkdir(parents=True, exist_ok=True)
         self.root = root
         self.audit: list[dict[str, Any]] = []
+        self.blocked: set[str] = set()  # CM probe: tools withdrawn mid-episode (phase 2 of a two-phase task); empty for every base task
         self.ledger_path = root / "state" / "ledger.jsonl"
         self.synthetic: set[str] = set()
         self.groups: dict[str, list[str]] = {}
@@ -236,6 +237,8 @@ class AuditedRegistry(ToolRegistry):
     def invoke(self, tool_name: str, role: str, *a: Any, **kwargs: Any) -> Any:
         rec = {"tool": tool_name, "args": {k: v for k, v in kwargs.items() if k not in ("caller_type", "chain_id", "chain_index", "context")}}
         try:
+            if tool_name in self.world.blocked:
+                raise ToolError(f"{tool_name}: no longer available in this phase")
             out = super().invoke(tool_name, role, *a, **kwargs)
             rec["ok"] = True
             self.world.audit.append(rec)
