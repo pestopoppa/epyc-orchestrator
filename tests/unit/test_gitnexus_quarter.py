@@ -293,7 +293,7 @@ class SupervisorSafety(unittest.TestCase):
 
     def test_term_int_hup_reap_captured_child_and_restore_handlers(self):
         for sig in W.QUARTER_SIGNALS:
-            with self.subTest(signal=sig):
+            with self.subTest(signal=sig.name):  # xdist cannot serialize a Signals enum in reports
                 class Child:
                     pid = NODE_PID
                     returncode = None
