@@ -44,6 +44,9 @@ EA_HYBRID_EXCLUDED_PORTS: frozenset[int] = frozenset({8083})
 # Ladder-approved floor. None = override disabled (8083 always excluded for EA).
 # Set ONLY after a ratio ladder approves a safe keep_ratio; then 8083 is
 # admitted for EA only when keep_ratio >= this floor.
+# 2026-11-19 ladder am-port-ea-ladder-gpu-20261119 (autokernel): NO safe EA
+# ratio on the hybrid 27B. keep 0.8 scored 1/32 vs FULL 60/60 (5x: 0/60);
+# per-token eviction drops single-digit needle tokens. Keep None.
 EA_HYBRID_MIN_KEEP_RATIO: float | None = None
 
 
