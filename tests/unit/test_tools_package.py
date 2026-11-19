@@ -764,29 +764,42 @@ class TestWebSearchTool:
     """Tests for web_search tool."""
 
     def test_web_search_success(self):
-        """Test web search successfully."""
+        """Test web search successfully via the default SearXNG JSON backend.
+
+        The old fixture fed DDG-style HTML to urlopen; SearXNG (the default
+        since SX-6) failed to parse it and the DDG fallback shells out to curl,
+        so the test silently depended on the live network. Results must also
+        overlap the query terms or the 7c3771b9 relevance guard rejects them.
+        """
+        import json
+
+        import src.tools.web.search as search_mod
         from src.tools.web.search import web_search
 
-        html_response = b"""
-        <html>
-            <a class="result__a" href="https://example.com/page1">Example Page 1</a>
-            <a class="result__snippet">This is a snippet for page 1</a>
-            <a class="result__a" href="https://example.com/page2">Example Page 2</a>
-            <a class="result__snippet">This is a snippet for page 2</a>
-        </html>
-        """
-
+        payload = {
+            "results": [
+                {"title": "Test Query Page 1", "url": "https://example.com/page1",
+                 "content": "A test query snippet for page 1", "score": 1.0, "engines": ["x"]},
+                {"title": "Test Query Page 2", "url": "https://example.com/page2",
+                 "content": "A test query snippet for page 2", "score": 0.9, "engines": ["x"]},
+            ],
+            "unresponsive_engines": [],
+        }
         mock_response = MagicMock()
-        mock_response.read.return_value = html_response
+        mock_response.read.return_value = json.dumps(payload).encode("utf-8")
         mock_response.__enter__.return_value = mock_response
         mock_response.__exit__.return_value = None
 
-        with patch("urllib.request.urlopen", return_value=mock_response):
+        with patch.object(search_mod, "_SEARXNG_DEFAULT", True), \
+                patch("urllib.request.urlopen", return_value=mock_response), \
+                patch("subprocess.run", side_effect=AssertionError("DDG fallback must not run")):
             result = web_search(query="test query", max_results=5)
 
         assert result["success"] is True
         assert result["query"] == "test query"
-        assert result["result_count"] >= 0
+        assert result["backend"] == "searxng"
+        assert result["result_count"] == 2
+        assert result["results"][0]["url"] == "https://example.com/page1"
 
     def test_web_search_with_domain_filter(self):
         """Test web search with domain filter (curl subprocess)."""
