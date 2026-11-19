@@ -102,7 +102,11 @@ class TestReplTimeoutTerminal:
             state=state,
             deps=SimpleNamespace(repl=repl, primitives=primitives),
         )
-        flags = SimpleNamespace(
+        # A real Features() so flags added to _execute_turn later get their declared
+        # defaults instead of AttributeError on a hand-built namespace.
+        from src.features import Features
+
+        flags = Features(
             state_history_snapshots=False,
             generalized_interrupts=False,
             session_token_budget=False,
@@ -112,28 +116,28 @@ class TestReplTimeoutTerminal:
         )
         monkeypatch.setattr("src.features.features", lambda: flags)
         monkeypatch.setattr("src.graph.helpers._use_inline_calls_in_tests", lambda: False)
-        monkeypatch.setattr("src.graph.helpers._answer_force_due", lambda _state: False)
-        monkeypatch.setattr("src.graph.helpers._init_session_log", lambda _state: None)
-        monkeypatch.setattr("src.graph.helpers._clear_stale_tool_outputs", lambda _state: 0)
+        monkeypatch.setattr("src.graph.helpers._answer_force_due", lambda _state, **_kwargs: False)
+        monkeypatch.setattr("src.graph.helpers._init_session_log", lambda _state, **_kwargs: None)
+        monkeypatch.setattr("src.graph.helpers._clear_stale_tool_outputs", lambda _state, **_kwargs: 0)
         monkeypatch.setattr("src.graph.helpers._maybe_compact_context", _async_none)
-        monkeypatch.setattr("src.graph.helpers._auto_seed_tasks_from_task_ir", lambda _state: None)
-        monkeypatch.setattr("src.graph.helpers._auto_gather_context", lambda *_args: "")
+        monkeypatch.setattr("src.graph.helpers._auto_seed_tasks_from_task_ir", lambda _state, **_kwargs: None)
+        monkeypatch.setattr("src.graph.helpers._auto_gather_context", lambda *_args, **_kwargs: "")
         monkeypatch.setattr("src.graph.helpers._check_anti_pattern", lambda _ctx: "")
         monkeypatch.setattr("src.graph.helpers._maybe_refresh_session_summary", _async_none)
-        monkeypatch.setattr("src.graph.helpers._session_log_prompt_block", lambda _state: "")
-        monkeypatch.setattr("src.graph.helpers._budget_pressure_warnings", lambda _state: "")
+        monkeypatch.setattr("src.graph.helpers._session_log_prompt_block", lambda _state, **_kwargs: "")
+        monkeypatch.setattr("src.graph.helpers._budget_pressure_warnings", lambda _state, **_kwargs: "")
         monkeypatch.setattr("src.graph.helpers._maybe_compress_for_escalation", lambda prompt, _state: prompt)
         monkeypatch.setattr("src.graph.helpers._call_llm_capturing_meta", _async_final_late)
         monkeypatch.setattr("src.graph.helpers._bep_turn_trace", lambda *_args, **_kwargs: None)
         monkeypatch.setattr("src.graph.helpers._backend_infra_sentinel", lambda _text: None)
-        monkeypatch.setattr("src.graph.helpers._check_reasoning_length_alarm", lambda *_args: False)
+        monkeypatch.setattr("src.graph.helpers._check_reasoning_length_alarm", lambda *_args, **_kwargs: False)
         monkeypatch.setattr("src.graph.helpers._maybe_batch_edit_turn", _async_none)
         monkeypatch.setattr("src.graph.helpers._repl_loop_guard_enabled", lambda: False)
-        monkeypatch.setattr("src.graph.helpers._persist_solution_file", lambda *_args: None)
+        monkeypatch.setattr("src.graph.helpers._persist_solution_file", lambda *_args, **_kwargs: None)
         monkeypatch.setattr("src.graph.helpers._update_workspace_from_turn", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr("src.graph.helpers._tap_write_repl_exec", lambda *_args: None)
-        monkeypatch.setattr("src.graph.helpers._tap_write_repl_result", lambda *_args: None)
-        monkeypatch.setattr("src.graph.helpers._get_exploration_tool_calls", lambda *_args: [])
+        monkeypatch.setattr("src.graph.helpers._tap_write_repl_exec", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("src.graph.helpers._tap_write_repl_result", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("src.graph.helpers._get_exploration_tool_calls", lambda *_args, **_kwargs: [])
         monkeypatch.setattr("src.graph.helpers._record_session_turn", Mock())
 
         worker = asyncio.create_task(_execute_turn(ctx, "worker_general"))
