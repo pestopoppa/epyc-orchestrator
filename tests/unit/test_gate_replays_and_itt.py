@@ -54,6 +54,29 @@ def test_seq5_counts_opened_and_finalized():
     assert out["fingerprints_confirmed"] == 2
 
 
+def test_seq5_pqp_followup_k_opened_by_quarter_and_monitor_m1():
+    def conf(tid, cand, ts):
+        return {"trial_id": tid, "timestamp": ts,
+                "seq": {"candidate": cand, "confirmed": True, "state": "confirmed"}}
+
+    rows = [conf(1, "a", "2026-01-10T00:00:00+00:00"), conf(2, "b", "2026-02-10T00:00:00+00:00"),
+            conf(3, "c", "2026-04-02T00:00:00+00:00"),
+            {"trial_id": 4, "seq": {"candidate": "d", "confirmed": True}}]  # no timestamp
+    out = promotion_attempt_ledger(rows)
+    assert out["promotion_attempts_opened_by_quarter"] == {"2026-Q1": 2, "2026-Q2": 1}
+    assert out["promotion_attempts_opened_untimed"] == 1
+    m1 = out["monitor_m1"]
+    assert m1["decided"] is True and m1["peak_quarter_k_opened"] == 2
+    assert m1["reopen_dp_a_option_b"] is False
+
+
+def test_seq5_pqp_followup_reopens_above_five_per_quarter():
+    rows = [{"trial_id": i, "timestamp": "2026-05-01T00:00:00+00:00",
+             "seq": {"candidate": f"c{i}", "confirmed": True}} for i in range(6)]
+    m1 = promotion_attempt_ledger(rows)["monitor_m1"]
+    assert m1["peak_quarter_k_opened"] == 6 and m1["reopen_dp_a_option_b"] is True
+
+
 def test_seq7_flags_insignificant_keep_and_counts_missing_vectors():
     rows = [_row(1, [1, 0, 1, 0, 1, 0, 1, 0]), _row(2, [1, 0, 1, 0, 1, 0, 1, 1]),
             {"trial_id": 3, "tier": 1, "keep_revert_decision": "keep", "eval_details": {}}]

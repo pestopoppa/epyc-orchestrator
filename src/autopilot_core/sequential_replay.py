@@ -35,6 +35,25 @@ BUCKET_RUN_WARN_LENGTH = 3
 SEED_PROFILE_ROWS = 3
 
 
+PQP_REOPEN_K_OPENED_PER_QUARTER = 5
+
+
+def _note_first_ts(store: dict, key: Any, row: Mapping[str, Any]) -> None:
+    ts = parse_journal_ts(row.get("timestamp"))
+    prev = store.get(key)
+    if key not in store or (ts is not None and (prev is None or ts < prev)):
+        store[key] = ts
+
+
+def _quarter_label(ts: float | None) -> str | None:
+    if ts is None:
+        return None
+    from datetime import datetime, timezone
+
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return f"{dt.year}-Q{(dt.month - 1) // 3 + 1}"
+
+
 # --------------------------------------------------------------------------- helpers
 def outcome_map(question_results: Any) -> dict[str, bool]:
     """Same normalization as autopilot._question_outcome_map (CJ-8 disposition filter)."""
@@ -145,6 +164,7 @@ def promotion_attempt_ledger(
     """
     rows = [r for r in rows if isinstance(r, Mapping)]
     opened: set[tuple[str, Any]] = set()
+    opened_first_ts: dict[tuple[str, Any], float | None] = {}
     finalized: set[tuple[str, Any]] = set()
     confirmed_fps: set[str] = set()
     tested_fps: set[str] = set()
@@ -158,16 +178,29 @@ def promotion_attempt_ledger(
             if seq.get("confirmed") is True or str(seq.get("state") or "") == "confirmed":
                 confirmed_fps.add(cand)
                 if not seq.get("baseline_promotion_fresh_eval"):
-                    opened.add((cand, row.get("trial_id")))
+                    okey = (cand, row.get("trial_id"))
+                    opened.add(okey)
+                    _note_first_ts(opened_first_ts, okey, row)
         if seq.get("baseline_promotion_fresh_eval"):
             ref = seq.get("baseline_promotion_fresh_eval_for")
             ref = ref if isinstance(ref, Mapping) else {}
             key = (str(ref.get("candidate") or cand), ref.get("source_trial_id"))
             opened.add(key)
+            _note_first_ts(opened_first_ts, key, row)
             if seq.get("baseline_promotion_finalized") is True:
                 finalized.add(key)
     k_opened = len(opened)
     k_final = len(finalized)
+    by_quarter: dict[str, int] = {}
+    untimed = 0
+    for okey in opened:
+        label = _quarter_label(opened_first_ts.get(okey))
+        if label is None:
+            untimed += 1
+        else:
+            by_quarter[label] = by_quarter.get(label, 0) + 1
+    by_quarter = dict(sorted(by_quarter.items()))
+    peak_quarter_k = max(by_quarter.values(), default=0)
     per_attempt_alpha = 1.0 / final_confirm_e if final_confirm_e > 0 else float("nan")
     r = len(confirmed_fps)
     expected_false_confirms = len(confirmed_fps) * policy.alpha
@@ -190,6 +223,17 @@ def promotion_attempt_ledger(
         "promotion_attempts_finalized": k_final,
         "promotion_attempts_failed_or_interrupted": k_opened - k_final,
         "promotion_attempts_opened_is_lower_bound": True,
+        "promotion_attempts_opened_by_quarter": by_quarter,
+        "promotion_attempts_opened_untimed": untimed,
+        "monitor_m1": {
+            "decided": True,
+            "decision": "OP-PQP (a) status quo + ledger (DP-A, operator 2026-11-11)",
+            "instrument": "this ledger is the standing lifetime-budget instrument",
+            "k_opened_reopen_threshold_per_quarter": PQP_REOPEN_K_OPENED_PER_QUARTER,
+            "peak_quarter_k_opened": peak_quarter_k,
+            "reopen_dp_a_option_b": peak_quarter_k > PQP_REOPEN_K_OPENED_PER_QUARTER,
+            "note": "K_opened is a lower bound; report-only, no gate change",
+        },
         "promotion_alpha_per_attempt": round(per_attempt_alpha, 6),
         "lifetime_false_promotion_bound": round(per_attempt_alpha * k_opened, 6),
         "promotion_alpha_per_attempt_for_declared_delta_life": (

@@ -211,6 +211,15 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "an instrument-era boundary resets the charged fingerprint set"
         ),
         (
+            "- Monitor M1 (decided: OP-PQP status quo + ledger; K_opened is a lower bound): "
+            f"K_opened_by_quarter="
+            f"{report.get('alpha_wealth', {}).get('promotion_attempts_opened_by_quarter')}, "
+            f"untimed={report.get('alpha_wealth', {}).get('promotion_attempts_opened_untimed')}, "
+            f"reopen_dp_a_option_b="
+            f"{(report.get('alpha_wealth', {}).get('monitor_m1') or {}).get('reopen_dp_a_option_b')} "
+            "(re-open only if K_opened exceeds about 5 per quarter)"
+        ),
+        (
             "- Thresholds: "
             f"trusted_vectors>={thresholds['min_trusted_vector_trials']}, "
             f"seq_shadow>={thresholds['min_seq_shadow_rows']}, "
