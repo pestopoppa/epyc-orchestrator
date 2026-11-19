@@ -110,6 +110,18 @@ def _install(monkeypatch, name: str) -> MagicMock:
         result = {"content": _ANSWER, "tool_calls": [], "finish_reason": "stop"}
     primitives.chat_completion_call.return_value = {**result, "usage": dict(_BACKEND_USAGE)}
     primitives.llm_call.return_value = "UNEXPECTED llm_call"
+    # c2650210: response usage comes from the per-request call records
+    # (get_request_usage), not the chat_completion_call return value. A real
+    # primitives object records the backend's counts there; the double does
+    # the same so the golden still pins server-reported usage.
+    primitives.get_request_usage.return_value = {
+        "prompt_tokens": _BACKEND_USAGE["prompt_tokens"],
+        "completion_tokens": _BACKEND_USAGE["completion_tokens"],
+        "total_tokens": _BACKEND_USAGE["prompt_tokens"] + _BACKEND_USAGE["completion_tokens"],
+        "prompt_tokens_details": {"cached_tokens": _BACKEND_USAGE["cached_tokens"]},
+        "usage_status": "reported",
+        "usage_provenance": ["server_reported"],
+    }
 
     import src.llm_primitives as llm_primitives_module
 

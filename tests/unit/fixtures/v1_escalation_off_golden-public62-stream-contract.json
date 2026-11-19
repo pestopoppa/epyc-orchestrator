@@ -65,7 +65,11 @@
         "prompt_tokens_details": {
           "cached_tokens": 64
         },
-        "total_tokens": 108
+        "total_tokens": 108,
+        "usage_provenance": [
+          "server_reported"
+        ],
+        "usage_status": "reported"
       },
       "x_orchestrator_metadata": {
         "elapsed_seconds": "<elapsed>",
@@ -152,7 +156,11 @@
         "prompt_tokens_details": {
           "cached_tokens": 64
         },
-        "total_tokens": 108
+        "total_tokens": 108,
+        "usage_provenance": [
+          "server_reported"
+        ],
+        "usage_status": "reported"
       },
       "x_orchestrator_metadata": null
     },
@@ -234,7 +242,11 @@
         "prompt_tokens_details": {
           "cached_tokens": 64
         },
-        "total_tokens": 108
+        "total_tokens": 108,
+        "usage_provenance": [
+          "server_reported"
+        ],
+        "usage_status": "reported"
       },
       "x_orchestrator_metadata": {
         "elapsed_seconds": "<elapsed>",
@@ -300,7 +312,7 @@
       }
     ],
     "llm_calls": [],
-    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"The answer is B) Nitrogen, which is about 78 percent of the atmosphere by volume.\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 17, \"sampling\": {\"seed\": 42, \"temperature\": 0.0}, \"native_tool_contract\": \"client_execution\", \"response_tool_calls\": \"none\", \"tool_calls_emitted\": [], \"request_keys\": {\"x_session_id\": \"ses_te1_golden\", \"x_tool_mode\": \"client\"}}}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [], \"usage\": {\"prompt_tokens\": 91, \"completion_tokens\": 17, \"total_tokens\": 108, \"prompt_tokens_details\": {\"cached_tokens\": 64}}}\n\ndata: [DONE]\n\n",
+    "sse": "data: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"The answer is B) Nitrogen, which is about 78 percent of the atmosphere by volume.\"}, \"finish_reason\": null}], \"x_role\": \"frontdoor\"}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"x_orchestrator_metadata\": {\"role\": \"frontdoor\", \"elapsed_seconds\": \"<elapsed>\", \"tokens\": 17, \"sampling\": {\"seed\": 42, \"temperature\": 0.0}, \"native_tool_contract\": \"client_execution\", \"response_tool_calls\": \"none\", \"tool_calls_emitted\": [], \"request_keys\": {\"x_session_id\": \"ses_te1_golden\", \"x_tool_mode\": \"client\"}}}\n\ndata: {\"id\": \"<id>\", \"object\": \"chat.completion.chunk\", \"created\": \"<created>\", \"model\": \"orchestrator\", \"choices\": [], \"usage\": {\"prompt_tokens\": 91, \"completion_tokens\": 17, \"total_tokens\": 108, \"usage_status\": \"reported\", \"usage_provenance\": [\"server_reported\"], \"prompt_tokens_details\": {\"cached_tokens\": 64}}}\n\ndata: [DONE]\n\n",
     "status": 200
   }
 }
