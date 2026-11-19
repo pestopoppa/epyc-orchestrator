@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
+import signal
 import time
 from pathlib import Path
 
@@ -290,6 +291,10 @@ def _nested_worker(tmp_dir: str, role: str, regions: list[str], result_path: str
 
 
 def _sigterm_ticket_worker(tmp_dir: str, ready_path: str) -> None:
+    # A fork of a pytest-xdist worker inherits the harness's SIGTERM handler, which
+    # install_ticket_sigterm_cleanup correctly chains to -- and which does not exit a
+    # forked child. Start from the plain-process default the contract is about.
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     os.environ["ORCHESTRATOR_TMP_DIR"] = tmp_dir
     import src.runtime.lock_queue as lq2
 
