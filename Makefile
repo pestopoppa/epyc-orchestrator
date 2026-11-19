@@ -21,6 +21,9 @@ endif
 
 # Shell scripts to check (limit to key directories)
 SHELL_SCRIPTS := $(shell find scripts/ -name '*.sh' 2>/dev/null)
+# shfmt must never rewrite operator-ratified candidates: their bytes are sha256-pinned
+# (e.g. final_c1_retry.WRAPPER_SHA256), and 1aaac554 broke that pin by reformatting.
+SHFMT_SCRIPTS := $(filter-out scripts/benchmark/operator_candidates/%,$(SHELL_SCRIPTS))
 
 # Markdown files (limit to key directories, avoid tmp/cache/research subprojects)
 MD_FILES := $(shell find . -maxdepth 2 -name '*.md' -not -path './tmp/*' -not -path './cache/*' 2>/dev/null)
@@ -114,7 +117,7 @@ shfmt:
 	@echo "==> shfmt (format shell scripts)"
 	@if command -v shfmt >/dev/null 2>&1; then \
 		if [ -n "$(SHELL_SCRIPTS)" ]; then \
-			shfmt -w -i 2 -ci $(SHELL_SCRIPTS) && echo "  ✓ shfmt applied"; \
+			shfmt -w -i 2 -ci $(SHFMT_SCRIPTS) && echo "  ✓ shfmt applied"; \
 		else \
 			echo "  (no .sh files found)"; \
 		fi \
@@ -125,7 +128,7 @@ shfmt:
 shfmt-check:
 	@echo "==> shfmt (check shell formatting)"
 	@command -v shfmt >/dev/null 2>&1 || { echo "  ERROR: shfmt not installed" >&2; exit 1; }
-	@if [ -n "$(SHELL_SCRIPTS)" ]; then shfmt -d -i 2 -ci $(SHELL_SCRIPTS); fi
+	@if [ -n "$(SHELL_SCRIPTS)" ]; then shfmt -d -i 2 -ci $(SHFMT_SCRIPTS); fi
 
 # ── Markdown Gates ────────────────────────────────────────────────────────────
 

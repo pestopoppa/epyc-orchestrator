@@ -49,7 +49,7 @@ shellcheck:
 shfmt:
     @echo "==> shfmt"
     @if command -v shfmt >/dev/null 2>&1; then \
-        find . -name '*.sh' -not -path './vendor/*' -exec shfmt -w -i 2 -ci {} + && echo "  ✓ shfmt applied"; \
+        find . -name '*.sh' -not -path './vendor/*' -not -path './scripts/benchmark/operator_candidates/*' -exec shfmt -w -i 2 -ci {} + && echo "  ✓ shfmt applied"; \
     else \
         echo "  ⚠ shfmt not installed"; \
     fi
