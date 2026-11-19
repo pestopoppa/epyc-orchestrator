@@ -85,9 +85,10 @@ def test_cancel_mid_read_does_not_leak_the_reservation(lane, monkeypatch):
         asyncio.run(go())
         assert finished.is_set()
         assert decisions and decisions[0]["cap"] == 0 and decisions[0]["source"] == "released"
-        assert not S._INFLIGHT.get(url), "a cancelled request must not leave slots reserved"
+        with S.scout_reservations.locked(url) as slate:
+            assert slate.inflight() == 0, "a cancelled request must not leave slots reserved"
     finally:
-        S._INFLIGHT.pop(url, None)
+        pass
 
 
 def test_resolve_cap_refuses_once_released():
@@ -95,7 +96,9 @@ def test_resolve_cap_refuses_once_released():
     hold = {"released": True}
     out = S.resolve_cap(url, max_scouts=8, n_targets=8, reserve_slots=1,
                         resolver=FakeResolver(total=6, busy=0), hold=hold)
-    assert out["cap"] == 0 and not S._INFLIGHT.get(url) and "url" not in hold
+    with S.scout_reservations.locked(url) as slate:
+        assert slate.inflight() == 0
+    assert out["cap"] == 0 and "url" not in hold
 
 
 # ── F9: claim acquire and resolve_cap do not share the (full) scout pool ─────────────────

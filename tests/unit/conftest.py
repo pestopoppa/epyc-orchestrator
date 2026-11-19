@@ -116,6 +116,13 @@ def _repl_in_process_pin(request, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_scout_reserve_dir(tmp_path, monkeypatch):
+    """Scout slot reservations are a shared on-disk store; never touch the live one."""
+    monkeypatch.setenv("EPYC_SCOUT_RESERVE_DIR", str(tmp_path / "scout-reserve"))
+    yield
+
+
 @pytest.fixture(scope="session")
 def _hermetic_inference_tap_dir(tmp_path_factory):
     return tmp_path_factory.mktemp("hermetic_inference_tap")

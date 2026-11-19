@@ -103,6 +103,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
+from src.api.routes.chat_pipeline import scout_reservations
 from src.security.control_tokens import neutralise_control_tokens
 
 log = logging.getLogger(__name__)
@@ -1203,21 +1204,15 @@ def resolve_pool_gate(url: str, *, resolver: Any = None, pool: Any = None) -> tu
 #: OAB-17 F8: the cap is a one-shot snapshot of /slots behind a 1.5 s TTL cache, so two
 #: scouted requests could both read the same free count and together violate
 #: `reserve_slots`. Scouts this process has admitted but not yet released are counted
-#: against `free`, atomically with the decision. In-process only: concurrent API
-#: workers still need a shared counter (recorded on the OAB-17 box).
-_INFLIGHT: dict[str, int] = {}
-_INFLIGHT_LOCK = threading.Lock()
+#: against `free`, atomically with the decision. Production runs several API worker
+#: processes, so the counter is shared across them: a per-URL flock-guarded file with the
+#: owner pid per reservation (dead owners and TTL-expired entries are reaped), see
+#: `scout_reservations`. If that store is unavailable the cap is 0 (fail safe).
+_INFLIGHT_LOCK = threading.Lock()   # guards the per-request `hold` dict (released flag)
 
 
-def _release_inflight(url: str | None, n: int) -> None:
-    if not url or n <= 0:
-        return
-    with _INFLIGHT_LOCK:
-        left = _INFLIGHT.get(url, 0) - n
-        if left > 0:
-            _INFLIGHT[url] = left
-        else:
-            _INFLIGHT.pop(url, None)
+def _release_inflight(url: str | None, token: str | None) -> None:
+    scout_reservations.release(url, token)
 
 
 def resolve_cap(url: str, *, max_scouts: int, n_targets: int, reserve_slots: int,
@@ -1254,12 +1249,18 @@ def resolve_cap(url: str, *, max_scouts: int, n_targets: int, reserve_slots: int
         if hold.get("released"):               # the request already ended (cancelled mid-read)
             decision.update(total_slots=total, busy=busy, source="released")
             return decision
-        mine = _INFLIGHT.get(url, 0)
-        free = max(0, total - busy - mine)
-        cap = max(0, min(int(max_scouts), int(n_targets), free - reserve))
-        if cap:
-            _INFLIGHT[url] = mine + cap
-            hold.update(url=url, n=cap)
+        try:
+            with scout_reservations.locked(url) as slate:
+                mine = slate.inflight()        # every worker's live reservations
+                free = max(0, total - busy - mine)
+                cap = max(0, min(int(max_scouts), int(n_targets), free - reserve))
+                if cap:
+                    hold.update(url=url, n=cap, token=slate.add(cap))
+        except scout_reservations.ReservationUnavailable as exc:
+            log.warning("scouts: reservation store unavailable for %s (%s); admitting 0",
+                        url, exc)
+            decision.update(total_slots=total, busy=busy, source="reserve_unavailable")
+            return decision
     decision.update(total_slots=total, busy=busy, free=free, source="live_slots",
                     inflight_local=mine, cap=cap)
     return decision
@@ -1333,8 +1334,8 @@ async def run_scouts(*args: Any, parent_request_id: str | None = None,
         # (request cancelled mid-read) cannot reserve afterwards and leak the slots.
         with _INFLIGHT_LOCK:
             held["released"] = True
-            url, n = held.get("url"), int(held.get("n") or 0)
-        _release_inflight(url, n)
+            url, token = held.get("url"), held.get("token")
+        _release_inflight(url, token)
 
 
 async def _run_scouts(
