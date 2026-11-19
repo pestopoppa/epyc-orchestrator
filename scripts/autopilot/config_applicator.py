@@ -74,6 +74,10 @@ HOT_SWAP_FEATURES = {
     # D-RI-MONTY-LANE (2026-11-18): REPL cells routed to a confined Monty worker with CPython fallback.
     # Read live per REPL construction and per cell; telemetry in logs/monty_lane.jsonl.
     "monty_repl",
+    # M-12k (2026-11-19): memory-off switch for the frontdoor answer-quality A/B. Default ON = unchanged;
+    # OFF skips the episodic routing/mode/Q-gate lookups. Read live per request; a per-request override exists
+    # (ChatRequest.episodic_lookups=false) so a measurement can interleave arms on one server.
+    "episodic_routing_lookups",
 }
 
 # Parameters applied via env vars (require API restart)

@@ -92,6 +92,7 @@ from src.api.routes.chat_review import (
 from src.api.routes.chat_routing import (
     _select_mode,
 )
+from src.api.services.episodic_switch import episodic_lookups_enabled
 from src.features import features
 
 if TYPE_CHECKING:
@@ -533,7 +534,11 @@ async def _try_cheap_first(
 
     # Phase B/C: check Q-value before attempting
     if cfg.try_cheap_first_phase in ("B", "C"):
-        if hasattr(state, "hybrid_router") and state.hybrid_router is not None:
+        if (
+            episodic_lookups_enabled(request)  # M-12k: off skips the Q-value lookup
+            and hasattr(state, "hybrid_router")
+            and state.hybrid_router is not None
+        ):
             try:
                 task_ir = {
                     "task_type": "chat",
@@ -1064,7 +1069,12 @@ async def _handle_chat(
         elif forced_mode:
             execution_mode = forced_mode
         else:
-            execution_mode = _select_mode(mode_prompt, request.context or "", state)
+            execution_mode = _select_mode(
+                mode_prompt,
+                request.context or "",
+                state,
+                episodic_lookups=episodic_lookups_enabled(request),
+            )
 
         # INF-78 scoped exception (operator 2026-09-25): the architect may run REPL only
         # for task-scoped requests. Unscoped architect REPL keeps today's behaviour (the

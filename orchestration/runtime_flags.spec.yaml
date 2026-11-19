@@ -59,6 +59,7 @@ flags:
   deferred_tool_results: baseline
   depth_model_overrides: baseline
   derived_prefill_timeout: baseline
+  episodic_routing_lookups: baseline
   escalation_compression: baseline
   eval_batch_serving: baseline
   exec_containment: baseline

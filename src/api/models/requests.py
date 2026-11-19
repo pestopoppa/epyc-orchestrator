@@ -176,6 +176,13 @@ class ChatRequest(BaseModel):
     role: str = Field(
         default="", description="Initial role to use (empty = auto-route via _classify_and_route)"
     )
+    episodic_lookups: bool | None = Field(
+        default=None,
+        description="M-12k memory-off switch. False = skip the episodic (HybridRouter/MemRL) "
+        "lookups for THIS request (initial-role routing, mode selection, Q-value gates); the "
+        "rules classifier and REPL-default mode apply instead. None/True = follow the "
+        "episodic_routing_lookups feature flag (default on = unchanged). Writes are unaffected.",
+    )
     force_role: str | None = Field(
         default=None,
         description="Force routing to a specific role, bypassing all routing logic. "

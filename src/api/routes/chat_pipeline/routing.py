@@ -11,6 +11,7 @@ import uuid
 from fastapi import HTTPException
 
 from src.api.models import ChatRequest
+from src.api.services.episodic_switch import episodic_lookups_enabled
 from src.api.services.memrl import ensure_memrl_initialized
 from src.config import get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
@@ -643,7 +644,12 @@ def _plan_review_gate(
             ),
         )
     risk_forced = routing.factual_risk_band == "high" and factual_risk_mode == "enforce"
-    needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
+    needs_review = _needs_plan_review(
+        routing.task_ir,
+        routing.routing_decision,
+        state,
+        episodic_lookups=episodic_lookups_enabled(request),
+    )
     if request.real_mode and features().plan_review and (needs_review or risk_forced):
         plan_review_result = _architect_plan_review(
             routing.task_ir, routing.routing_decision, primitives, state, routing.task_id

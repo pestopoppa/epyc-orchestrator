@@ -11,6 +11,7 @@ from typing import Any
 from src.api.models import ChatRequest
 from src.api.routes.chat_routing import _classify_and_route
 from src.api.routes.chat_utils import LONG_CONTEXT_CONFIG, role_timeout_for
+from src.api.services.episodic_switch import episodic_lookups_enabled
 from src.api.structured_logging import task_extra
 from src.backends.context_limits import (
     CONSERVATIVE_CHARS_PER_TOKEN,
@@ -305,7 +306,9 @@ def select_initial_route(
     # role (those returned above). The learned/hybrid router and the rules
     # classifier can still emit a vision-only role for a text prompt, which a
     # VL server rejects with HTTP 400 — fence text traffic off those roles.
-    if state.hybrid_router and request.real_mode:
+    # M-12k memory-off switch: episodic_lookups_enabled() False skips the learned/episodic router and
+    # falls through to the rules classifier below (default True = byte-identical to before).
+    if state.hybrid_router and request.real_mode and episodic_lookups_enabled(request):
         if hasattr(state.hybrid_router, "route_with_skills") and features().skillbank:
             routing_decision, routing_strategy, skill_context = (
                 state.hybrid_router.route_with_skills(task_ir)

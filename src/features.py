@@ -402,6 +402,14 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("repl_write_dedupe", True, True, "REPL_WRITE_DEDUPE", "REPL: an identical write call that already succeeded in this request is skipped, not re-run (ORCHESTRATOR_REPL_WRITE_DEDUPE=0 is the kill switch)", env_on="1", env_off="0"),
     FeatureSpec("pdf_route_lighton", False, False, "PDF_ROUTE_LIGHTON", "PDF ingest: needs_ocr documents go to the LightOnOCR-2-1B aux server, the rest to LiteParse (PIP-04 held-out rule); the stack launcher sets ORCHESTRATOR_PDF_ROUTE_LIGHTON=1", env_on="1", env_off="0"),
     FeatureSpec("l3_textrow", False, False, "L3_TEXTROW", "L3 empty-table fallback: text-row table extraction on pages with no parser table (method=textrow); the stack launcher sets ORCHESTRATOR_L3_TEXTROW=1", env_parse=_env_in("1"), env_on="1", env_off="0"),
+    # M-12k (2026-11-19): the memory-off arm of the frontdoor answer-quality A/B. ON (default) = today's
+    # behaviour: the learned HybridRouter (episodic KNN over MemRL memories) picks the initial role, the
+    # execution mode, the try-cheap-first Q-value gate and the plan-review Q-value gate. OFF = those four
+    # episodic LOOKUPS are skipped (routing falls to the rules classifier / REPL-default mode / no Q gate);
+    # episodic WRITES (task-start logging, Q-scoring) are untouched. The same switch exists per request as
+    # ChatRequest.episodic_lookups (False = off for that request only; absent/None = follow this flag), so
+    # two arms can interleave on one server. Read LIVE per request, so POST /config toggles it with no restart.
+    FeatureSpec("episodic_routing_lookups", True, True, "EPISODIC_ROUTING_LOOKUPS", "M-12k: episodic (MemRL/HybridRouter) lookups feed initial-role routing, mode selection and the Q-value gates; off = those lookups are skipped (rules routing), writes unchanged; per-request override ChatRequest.episodic_lookups=false"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -921,6 +929,7 @@ class Features:
     repl_write_dedupe: bool = True
     pdf_route_lighton: bool = False
     l3_textrow: bool = False
+    episodic_routing_lookups: bool = True  # M-12k: False skips episodic lookups in routing (see registry)
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety

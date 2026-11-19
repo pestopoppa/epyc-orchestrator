@@ -64,6 +64,8 @@ def _needs_plan_review(
     task_ir: dict,
     routing_decision: list,
     state: "AppState",
+    *,
+    episodic_lookups: bool = True,
 ) -> bool:
     """Determine whether the plan needs architect review before execution.
 
@@ -117,7 +119,7 @@ def _needs_plan_review(
             return False
 
     # Bypass 5: Phase B — Q-value gating
-    if phase == "B" and state.hybrid_router:
+    if phase == "B" and state.hybrid_router and episodic_lookups:  # M-12k: off skips the Q lookup
         try:
             retriever = state.hybrid_router.retriever
             results = retriever.retrieve_for_routing(task_ir)

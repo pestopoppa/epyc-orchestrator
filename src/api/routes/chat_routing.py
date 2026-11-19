@@ -147,6 +147,8 @@ def _select_mode(
     prompt: str,
     context: str,
     state: "Any",
+    *,
+    episodic_lookups: bool = True,
 ) -> str:
     """Select execution mode: direct or repl.
 
@@ -172,7 +174,8 @@ def _select_mode(
         return "direct"
 
     # Try MemRL-based mode selection if available
-    if hasattr(state, "hybrid_router") and state.hybrid_router is not None:
+    # (M-12k: episodic_lookups=False skips this lookup; the caller computes it via episodic_lookups_enabled.)
+    if episodic_lookups and hasattr(state, "hybrid_router") and state.hybrid_router is not None:
         try:
             task_ir = {
                 "task_type": "chat",
