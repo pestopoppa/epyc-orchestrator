@@ -20,7 +20,8 @@ def capacity_clone(tmp_path_factory):
     # Copy current source, not NI63's independently pinned historical closure.
     # Inputs stay private; no model, live state, host policy or source pin changes.
     root = tmp_path_factory.mktemp("explicit-capacity")
-    for name in ("scripts", "src", "orchestration"):
+    # stack_templates: cmd_start validates the active profile first (c01e72bf).
+    for name in ("scripts", "src", "orchestration", "stack_templates"):
         shutil.copytree(ROOT / name, root / name, ignore=shutil.ignore_patterns("__pycache__"))
     return root
 
