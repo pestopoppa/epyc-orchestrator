@@ -704,7 +704,7 @@ def extract_code_from_response(response: str) -> str:
 
 
 _CONTEXT_PULL_RE = re.compile(
-    r"(?<![\w.])context(?:\.(?:get|json|index|search)\(|\[\s*[\"'])")
+    r"(?<![\w.])context(?:\.(?:get|json|index|search|item|page|keys)\(|\[\s*[\"'A-Za-z_])")
 
 
 def auto_wrap_final(code: str) -> str:

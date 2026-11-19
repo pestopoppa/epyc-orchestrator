@@ -47,3 +47,34 @@ def test_non_container_values_pass_through_and_blocks_map():
     assert jd.slim_json_block("text") == "text"
     out = jd.slim_context_blocks({"a": [1, 2], "b": "s"})
     assert out == {"a": [1, 2], "b": "s"}
+
+
+def test_non_json_input_fails_open_unchanged():
+    class Opaque:
+        pass
+
+    block = {"rows": [Opaque(), {"pad": "p" * 5000}]}
+    assert jd.slim_json_block(block) is block            # TypeError -> unchanged
+    loop: dict = {"pad": "p" * 5000}
+    loop["self"] = loop
+    assert jd.slim_json_block(loop) is loop              # circular ValueError -> unchanged
+    bad_keys = {(1, 2): "p" * 5000}
+    assert jd.slim_json_block(bad_keys) is bad_keys
+    assert jd.slim_json_block(b"raw") == b"raw" and jd.slim_json_block(None) is None
+
+
+def test_nested_repeats_point_at_first_copy_and_order_is_preserved():
+    sub = {"z": "q" * 150, "a": ["r" * 150]}
+    block = {"zeta": {"deep": {"copy": sub}}, "alpha": [sub, {"again": sub}], "pad": "p" * 5000}
+    slim = jd.slim_json_block(block)
+    assert list(slim) == ["zeta", "alpha", "pad"], "key order is preserved, never sorted"
+    assert slim["zeta"]["deep"]["copy"] == sub                    # first copy kept intact
+    assert slim["alpha"][0] == "<same as $.zeta.deep.copy>"
+    assert slim["alpha"][1]["again"] == "<same as $.zeta.deep.copy>"
+    assert list(slim["zeta"]["deep"]["copy"]) == ["z", "a"]
+
+
+def test_dedupe_subtrees_does_not_sort_keys():
+    out = jd.dedupe_subtrees({"b": 1, "a": {"y": "k" * 300, "x": 2}, "c": {"y": "k" * 300, "x": 2}})
+    assert list(out) == ["b", "a", "c"] and list(out["a"]) == ["y", "x"]
+    assert out["c"] == "<same as $.a>"

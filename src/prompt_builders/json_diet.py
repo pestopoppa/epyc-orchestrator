@@ -27,8 +27,9 @@ def dedupe_subtrees(value: Any, *, min_chars: int = DEDUPE_MIN_CHARS,
                     _seen: dict[str, str] | None = None, _path: str = "$") -> Any:
     """Replace every repeat of a large subtree with `<same as $.path>`.
 
-    Keys come out sorted (as in the seat) ONLY when something was replaced; use
-    `slim_json_block` for the byte-identical-when-unchanged guarantee.
+    Key and list order are PRESERVED (the sorted dump is only the equality key used to
+    spot repeats; the output is never re-sorted). Use `slim_json_block` for the
+    same-object-when-unchanged guarantee.
     """
     seen = {} if _seen is None else _seen
     if isinstance(value, (dict, list)):
@@ -65,15 +66,22 @@ def slim_json_block(value: Any, *, min_bytes: int = DEFAULT_MIN_BLOCK_BYTES,
                     id_fields: Iterable[str] = DEFAULT_ID_FIELDS,
                     prose_chars: int = PROSE_CLIP_CHARS,
                     dedupe_min_chars: int = DEDUPE_MIN_CHARS) -> Any:
-    """Apply the diet to one JSON block; identity when it would change nothing."""
+    """Apply the diet to one JSON block; identity when it would change nothing.
+
+    Fails open: a block that is not JSON-serialisable (TypeError) or is circular
+    (ValueError) is returned unchanged rather than breaking prompt assembly.
+    """
     if not isinstance(value, (dict, list)):
         return value
-    original = json.dumps(value, sort_keys=True)
-    if len(original) < min_bytes:
+    try:
+        original = json.dumps(value, sort_keys=True)
+        if len(original) < min_bytes:
+            return value
+        slim = _walk(value, id_fields=frozenset(id_fields), limit=prose_chars)
+        slim = dedupe_subtrees(slim, min_chars=dedupe_min_chars)
+        return value if json.dumps(slim, sort_keys=True) == original else slim
+    except (TypeError, ValueError):
         return value
-    slim = _walk(value, id_fields=frozenset(id_fields), limit=prose_chars)
-    slim = dedupe_subtrees(slim, min_chars=dedupe_min_chars)
-    return value if json.dumps(slim, sort_keys=True) == original else slim
 
 
 def reduction(before: Any, after: Any) -> dict[str, float]:

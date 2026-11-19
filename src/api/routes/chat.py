@@ -1039,6 +1039,8 @@ async def _handle_chat(
         # Stage 6.8 (INF-78 OAB-8): orchestrator-run read-only scouts, concurrently, BEFORE
         # the planner turn; their labelled summaries head the planner's root context. Off
         # unless the request enables them — the default path never enters this branch.
+        # OAB-17 F15: mode selection judges the CALLER's prompt, not the scout block.
+        mode_prompt = request.prompt
         if request.scouts is not None and request.scouts.enabled and request.real_mode:
             request = await _run_scout_stage(
                 request, primitives, initial_role, cancel_event, request_deadline_s,
@@ -1062,7 +1064,7 @@ async def _handle_chat(
         elif forced_mode:
             execution_mode = forced_mode
         else:
-            execution_mode = _select_mode(request.prompt, request.context or "", state)
+            execution_mode = _select_mode(mode_prompt, request.context or "", state)
 
         # INF-78 scoped exception (operator 2026-09-25): the architect may run REPL only
         # for task-scoped requests. Unscoped architect REPL keeps today's behaviour (the

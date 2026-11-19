@@ -87,8 +87,6 @@ class _ContextMixin:
                     end = ws
 
             chunk_text = text[start:end]
-            if bundle is not None:  # INF-78 OAB-7: every chunk is a counted pull
-                bundle.span_pull(start, end, op="chunk_context")
             chunks.append(
                 {
                     "index": i,
@@ -98,6 +96,11 @@ class _ContextMixin:
                     "char_count": len(chunk_text),
                 }
             )
+
+        if bundle is not None:
+            # INF-78 OAB-7: every chunk is a counted pull. OAB-17 F16: charged as one
+            # all-or-nothing batch, so a refused chunk_context leaves the budget untouched.
+            bundle.span_pulls([(c["start"], c["end"]) for c in chunks], op="chunk_context")
 
         self._exploration_log.add_event(
             "chunk_context",

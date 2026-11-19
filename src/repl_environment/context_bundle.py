@@ -246,9 +246,15 @@ class ContextBundle:
     ) -> None:
         placed: list[Section] = []
         offset = 0
+        total_bytes = 0
         for s in sections:
             placed.append(Section(s.name, s.text, s.kind, s.inline, s.description, offset))
             offset += len(s.text)
+            total_bytes += _nbytes(s.text)
+        # OAB-17 F16: the size cap runs BEFORE any JSON section is parsed, so a direct
+        # construction cannot make the process parse an oversized document.
+        if total_bytes > MAX_BUNDLE_BYTES:
+            raise ValueError(f"context_bundle exceeds {MAX_BUNDLE_BYTES} bytes of section text")
         self._sections = placed
         self._by_name = {s.name: s for s in placed}
         self._json: dict[str, Any] = {}
@@ -672,19 +678,31 @@ class ContextBundle:
 
     def span_pull(self, start: int, end: int, *, op: str) -> None:
         """Count a pull of ``full_text()[start:end]`` against the sections it overlaps."""
-        parts = []
-        for s in self._sections:
-            a, b = max(start, s.start), min(end, s.end)
-            if a < b:
-                parts.append((s.name, a - s.start, b - s.start))
-        self._check_budget(sum(_nbytes(self._by_name[n].text[a:b]) for n, a, b in parts))
-        with self._lock:
-            self._pull_calls += 1
-        for name, a, b in parts:
-            self._record(
-                op, name, _nbytes(self._by_name[name].text[a:b]),
-                span=(a, b), count_call=False, checked=True,
-            )
+        self.span_pulls([(start, end)], op=op)
+
+    def span_pulls(self, spans: Iterable[tuple[int, int]], *, op: str) -> None:
+        """Count several ``full_text()`` spans as ONE all-or-nothing charge (OAB-17 F16): the
+        budget is checked against the TOTAL before anything is recorded, so a refused
+        multi-span pull (``chunk_context``) charges nothing."""
+        planned: list[list[tuple[str, int, int]]] = []
+        total = 0
+        for start, end in spans:
+            parts = []
+            for s in self._sections:
+                a, b = max(start, s.start), min(end, s.end)
+                if a < b:
+                    parts.append((s.name, a - s.start, b - s.start))
+                    total += _nbytes(self._by_name[s.name].text[a - s.start:b - s.start])
+            planned.append(parts)
+        self._check_budget(total)
+        for parts in planned:
+            with self._lock:
+                self._pull_calls += 1
+            for name, a, b in parts:
+                self._record(
+                    op, name, _nbytes(self._by_name[name].text[a:b]),
+                    span=(a, b), count_call=False, checked=True,
+                )
 
     # ------------------------------------------------------------------ turns / caps
 

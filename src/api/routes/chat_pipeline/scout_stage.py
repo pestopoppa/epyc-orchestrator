@@ -142,6 +142,30 @@ def _scout_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "asyncio
         _scout_executor(), lambda: ctx.run(fn, *args, **kwargs))
 
 
+#: OAB-17 F9 (review): the blocking region-claim acquire and the /slots read must NOT share
+#: the scout pool. Claim waiters can park for the whole request deadline; if they sat in the
+#: 16-thread scout pool they could starve the holder's own scouts (the holder needs those
+#: threads to finish and release the claim). A separate small pool keeps them apart.
+CONTROL_EXECUTOR_WORKERS = 8
+_CONTROL_EXECUTOR: "ThreadPoolExecutor | None" = None
+
+
+def _control_executor() -> "ThreadPoolExecutor":
+    global _CONTROL_EXECUTOR
+    with _SCOUT_EXECUTOR_LOCK:
+        if _CONTROL_EXECUTOR is None:
+            _CONTROL_EXECUTOR = ThreadPoolExecutor(
+                max_workers=CONTROL_EXECUTOR_WORKERS, thread_name_prefix="scoutctl")
+        return _CONTROL_EXECUTOR
+
+
+def _control_thread(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> "asyncio.Future[Any]":
+    """Like `_scout_thread` but on the control pool (claim acquire, `resolve_cap`)."""
+    ctx = contextvars.copy_context()
+    return asyncio.get_running_loop().run_in_executor(
+        _control_executor(), lambda: ctx.run(fn, *args, **kwargs))
+
+
 def _payload_sha256(payload: dict[str, Any]) -> str:
     """Hash canonical client payload, without claiming it is the rendered server prompt."""
     wire = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -1227,6 +1251,9 @@ def resolve_cap(url: str, *, max_scouts: int, n_targets: int, reserve_slots: int
                         cap=max(0, min(int(max_scouts), int(n_targets), free - reserve)))
         return decision
     with _INFLIGHT_LOCK:                       # decide and reserve atomically
+        if hold.get("released"):               # the request already ended (cancelled mid-read)
+            decision.update(total_slots=total, busy=busy, source="released")
+            return decision
         mine = _INFLIGHT.get(url, 0)
         free = max(0, total - busy - mine)
         cap = max(0, min(int(max_scouts), int(n_targets), free - reserve))
@@ -1302,7 +1329,12 @@ async def run_scouts(*args: Any, parent_request_id: str | None = None,
         return await _run_scouts(*args, _held=held, **kwargs)
     finally:
         _SCOUT_PARENT.reset(token)
-        _release_inflight(held.get("url"), int(held.get("n") or 0))
+        # Mark released under the lock so a resolve_cap still running in its pool thread
+        # (request cancelled mid-read) cannot reserve afterwards and leak the slots.
+        with _INFLIGHT_LOCK:
+            held["released"] = True
+            url, n = held.get("url"), int(held.get("n") or 0)
+        _release_inflight(url, n)
 
 
 async def _run_scouts(
@@ -1350,7 +1382,7 @@ async def _run_scouts(
             r.status, r.skip_reason = "skipped", "no task scope"
         return _finish(report, results, t0, clock, "", role, 0)
     # resolve_cap does a synchronous /slots HTTP read: keep it off the event loop.
-    cap = await _scout_thread(resolve_cap, url or "", max_scouts=config.max_scouts,
+    cap = await _control_thread(resolve_cap, url or "", max_scouts=config.max_scouts,
                                   n_targets=len(wanted), reserve_slots=config.reserve_slots,
                                   resolver=resolver, hold=_held)
     report["cap"] = cap
@@ -1370,7 +1402,7 @@ async def _run_scouts(
 
     transport = transport or ChatCompletionsTransport(url or "", enable_thinking=config.enable_thinking)
     # Token-aware admission on a shared KV pool: slots bound concurrency, tokens bound load.
-    pool_limit, pool = await _scout_thread(resolve_pool_gate, url or "",
+    pool_limit, pool = await _control_thread(resolve_pool_gate, url or "",
                                                resolver=resolver, pool=pool_admission)
     if pool is not None:
         report["pool_gate"] = {"gated": True, "pool_tokens": int(pool_limit.pool_tokens),
@@ -1405,7 +1437,7 @@ async def _run_scouts(
         claim_report.update(status="error", error=f"{type(exc).__name__}: {exc}"[:500])
     if claim is not None:
         claim_started = clock()
-        acquire = asyncio.ensure_future(_scout_thread(claim.__enter__))
+        acquire = asyncio.ensure_future(_control_thread(claim.__enter__))
         try:
             await asyncio.shield(acquire)
         except asyncio.CancelledError:
