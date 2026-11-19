@@ -1,6 +1,7 @@
 """Capture an actual flag-off graph prompt with a fake model; no inference."""
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -34,7 +35,12 @@ def capture(mode, scratch):
         state.last_output = 'HEAD-' + ('output-block-' * 300) + '-TAIL'
     worker = Recorder()
     ctx = SimpleNamespace(state=state, deps=TaskDeps(repl=repl, primitives=worker))
-    with patch('src.graph.helpers._answer_force_due', return_value=False):
+    # The MP1 fixture predates the default-on untrusted-tool-text framing (1145b9ce).
+    # That hardening is independent of the context arms and has its own tests
+    # (test_untrusted_tool_text.py); its kill switch keeps this an MP1-vs-flag-off
+    # comparison of the context-arm code path only.
+    with patch('src.graph.helpers._answer_force_due', return_value=False), \
+            patch.dict(os.environ, {'ORCHESTRATOR_UNTRUSTED_TOOL_TEXT': '0'}):
         asyncio.run(_execute_turn(ctx, 'worker_general'))
     assert len(worker.prompts) == 1
     return worker.prompts[0].replace(str(Path(scratch)), '<TMP>')
