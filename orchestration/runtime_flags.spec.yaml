@@ -169,6 +169,8 @@ flags:
   tool_result_clearing: baseline
   tool_selector: baseline
   tool_selector_shadow: baseline
+  tool_surface_cap: baseline
+  tool_surface_logging: baseline
   tools: baseline
   trajectory_artifact: baseline
   tts_it_normalize: baseline

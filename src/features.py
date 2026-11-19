@@ -391,6 +391,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # on ``os.environ``. With no runtime override the env value is returned untouched, so a flag that
     # is not toggled behaves byte-identically. ``env_var`` is the ORIGINAL env name (unchanged).
     FeatureSpec("tool_selector", False, False, "TOOL_SELECTOR", "CM-1 hardened tool picker: narrow the per-request tool list (native /v1 path + REPL prompt); ORCHESTRATOR_TOOL_SELECTOR=embed|oneshot selects the variant (runtime ON = embed); fails open to the full list; embeds through the pooled embedder, so it needs repl_embedding_pool (without it the picker is not wired and every request gets the full list)", ("repl_embedding_pool",), env_parse=_env_in("embed", "oneshot"), env_on="embed", env_off="off"),
+    FeatureSpec("tool_surface_logging", False, False, "TOOL_SURFACE_LOGGING", "UFH14-TOOLS-1: per-turn JSONL of the REPL-global and registry-tool counts each role can see (logs/tool_surface)"),
+    FeatureSpec("tool_surface_cap", False, False, "TOOL_SURFACE_CAP", "UFH14-TOOLS-1: list_tools() shows only the per-role allowlist (orchestration/tool_surface_allowlist.yaml); the rest stay callable and list_tools(deferred=True) shows them"),
     FeatureSpec("tool_selector_shadow", False, False, "TOOL_SELECTOR_SHADOW", "C2 shadow rerank beside the applied picker pick (logs the one-shot decision-model choice, never applied); needs tool_selector; costs one worker call per selection", ("tool_selector",), env_parse=_env_in("oneshot"), env_on="oneshot", env_off="off"),
     FeatureSpec("repl_explicit_final", True, True, "REPL_EXPLICIT_FINAL", "codemode fix 1: a one-line REPL tool/exploration call is never auto-wrapped as FINAL(...) (ORCHESTRATOR_REPL_EXPLICIT_FINAL unset/tools); off = legacy wrap of every single-line expression", env_parse=_env_not_in("0", "false", "off", "no"), env_on="tools", env_off="0"),
     FeatureSpec("repl_explicit_final_strict", False, False, "REPL_EXPLICIT_FINAL_STRICT", "codemode fix 1 strict: only an obvious answer VALUE is auto-wrapped as FINAL (ORCHESTRATOR_REPL_EXPLICIT_FINAL=strict); implies repl_explicit_final", env_parse=_env_in("1", "true", "on", "yes", "strict"), env_name="ORCHESTRATOR_REPL_EXPLICIT_FINAL"),
@@ -927,6 +929,8 @@ class Features:
     # Flag surface (2026-11-18): see the registry block above. Defaults mirror the registry.
     tool_selector: bool = False
     tool_selector_shadow: bool = False
+    tool_surface_logging: bool = False  # UFH14-TOOLS-1: per-turn tool-surface counts (default off)
+    tool_surface_cap: bool = False  # UFH14-TOOLS-1: per-role list_tools allowlist, deferred rest (default off)
     repl_explicit_final: bool = True
     repl_explicit_final_strict: bool = False
     repl_turn_memory: bool = False

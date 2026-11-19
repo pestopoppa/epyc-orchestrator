@@ -963,8 +963,13 @@ class _ContextMixin:
         except (TypeError, ValueError):
             return str(result)
 
-    def _list_tools(self) -> list[dict[str, Any]]:
+    def _list_tools(self, deferred: bool = False) -> list[dict[str, Any]]:
         """List available tools for the current role.
+
+        Args:
+            deferred: UFH14-TOOLS-1. With the ``tool_surface_cap`` flag on, False returns only the
+                role's allowlisted tools and True returns the deferred rest. Flag off: ignored,
+                the full list is returned (unchanged behaviour).
 
         Returns:
             List of tool info dicts.
@@ -972,9 +977,17 @@ class _ContextMixin:
         if self.tool_registry is None:
             return []
 
-        return self.tool_registry.list_tools(
+        tools = self.tool_registry.list_tools(
             role=self.role, context=getattr(self, "tool_context", None),
         )
+        from src.features import features as _features
+
+        if getattr(_features(), "tool_surface_cap", False):
+            from src.repl_environment.tool_surface import split_tools
+
+            visible, rest = split_tools(self.role, tools)
+            return rest if deferred else visible
+        return tools
 
     def _invoke_script(self, script_id: str, **kwargs) -> Any:
         """Invoke a prepared script by ID.

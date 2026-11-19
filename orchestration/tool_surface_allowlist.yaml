@@ -1,0 +1,7 @@
+# UFH14-TOOLS-1: per-role registry-tool allowlist for deferred loading.
+# Consulted ONLY when the `tool_surface_cap` feature flag is on (default off).
+# A role absent from `roles` sees every tool it is permitted (no cap). Tools outside a role's list stay
+# callable and are shown by list_tools(deferred=True). Populate from measured per-role usage
+# (tool_surface_logging counts + tool_step events) before any A/B; an empty map is intentional.
+version: 1
+roles: {}

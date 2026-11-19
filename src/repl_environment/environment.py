@@ -1775,6 +1775,14 @@ class REPLEnvironment(
             )
         self._in_execute = True
         self._last_cell_code = code  # REPL-EMB-3.1: relevance query for the extractive spill
+        from src.features import features as _tsf
+
+        if getattr(_tsf(), "tool_surface_logging", False):  # UFH14-TOOLS-1, default off
+            from src.repl_environment import tool_surface as _ts
+
+            self._tool_surface_turn = getattr(self, "_tool_surface_turn", 0) + 1
+            self._tool_surface_cap_on = bool(getattr(_tsf(), "tool_surface_cap", False))
+            _ts.record_turn(self, self._tool_surface_turn)
         self._snippet_tool_calls = 0
         _hs = getattr(self, "_handle_store", None)
         if _hs is not None:
