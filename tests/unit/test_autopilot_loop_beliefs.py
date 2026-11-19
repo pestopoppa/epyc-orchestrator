@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -616,6 +617,16 @@ def test_integration_real_reader_child_from_tmp_copy(tmp_path: Path) -> None:
     vidya = tmp_path / "root" / "scripts" / "vidya"
     shutil.copytree(ROOT_VIDYA, vidya, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     (vidya / "sync.py").write_text(FAKE_SYNC)  # never the real plumbing sync
+    # The reader enforces the LOOP-SAFETY C1 pin (`reader_checkout`): its ROOT must be a git
+    # checkout whose HEAD contains origin/main. Make the tmp copy a one-commit checkout with
+    # origin/main == HEAD, i.e. a CURRENT reader, so the pin is exercised rather than skipped.
+    root_copy = tmp_path / "root"
+    git_env = {**os.environ, "GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@invalid",
+               "GIT_COMMITTER_NAME": "fixture", "GIT_COMMITTER_EMAIL": "fixture@invalid"}
+    for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "--no-verify", "-m", "fixture"),
+                 ("update-ref", "refs/remotes/origin/main", "HEAD")):
+        subprocess.run(["git", "-C", str(root_copy), *args], env=git_env, check=True,
+                       capture_output=True, timeout=60)
     builder = tmp_path / "builder" / "build_ledger.py"
     builder.parent.mkdir()
     builder.write_text(BUILD_LEDGER)
