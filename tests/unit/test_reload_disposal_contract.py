@@ -50,15 +50,33 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 REGISTRY_MARKERS = ("disposer", "AsyncExitStack", "weakref.finalize", "register_cleanup")
 
 
+# Reviewed occurrences that are NOT a component-teardown registry. Each entry is one file
+# and one marker; any other file, or any other marker in that file, still trips the witness.
+#   monty_adapter.py (66c62a4a, 2026-11-18): a per-adapter GC finalizer that hands ONE
+#   request's worker lease back when that adapter object is collected. It registers no
+#   component effects and is not invoked by reload, so the reload gap is unchanged.
+NON_REGISTRY_USES = {
+    ("weakref.finalize", "repl_environment/monty_adapter.py"),
+}
+
+
 def _files_containing(needle: str) -> list[str]:
-    """Return src/ files mentioning `needle`. Empty list means the concept is absent."""
+    """Return src/ .py files mentioning `needle`. Empty list means the concept is absent.
+
+    Source only: compiled ``__pycache__`` artefacts repeat whatever the source says.
+    """
     result = subprocess.run(
-        ["grep", "-rl", "--", needle, str(SRC)],
+        ["grep", "-rl", "--include=*.py", "--", needle, str(SRC)],
         capture_output=True,
         text=True,
         check=False,
     )
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return [
+        line
+        for line in result.stdout.splitlines()
+        if line.strip()
+        and (needle, Path(line).relative_to(SRC).as_posix()) not in NON_REGISTRY_USES
+    ]
 
 
 class TestDisposerRegistryGap:
