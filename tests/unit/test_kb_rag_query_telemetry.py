@@ -88,7 +88,9 @@ def test_real_tokenizer_counts_the_query_prefix(monkeypatch) -> None:
     monkeypatch.setattr(colbert_encoder, "_count_tokenizer", None)
     monkeypatch.setattr(colbert_encoder, "_query_prefix", "[Q] ")
     monkeypatch.setattr(colbert_encoder, "_do_lower_case", False)
-    text = "why does the kb rag query cap truncate long agent questions " * 8
+    # No edge whitespace: query/document bodies are stripped like encode() (7d92b1a8),
+    # ROLE_NONE is not, so a trailing space would cost the query count one token.
+    text = " ".join(["why does the kb rag query cap truncate long agent questions"] * 8)
 
     none = colbert_encoder.count_tokens(text, role=colbert_encoder.ROLE_NONE)
     query = colbert_encoder.count_tokens(text, role=colbert_encoder.ROLE_QUERY)
