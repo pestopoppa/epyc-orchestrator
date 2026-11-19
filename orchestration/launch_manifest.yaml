@@ -110,6 +110,7 @@ port_map:
   whisper: 9000            # whisper.cpp STT (transcription service, not llama-server)
   tts: 9002                # qwentts.cpp TTS (registered 2026-08-02, W4)
   ocr_pdf_lighton: 9003    # LightOnOCR-2-1B-bbox F16 llama-server (PDF OCR route, STACKCHG-OCR-LIGHTON-20261117)
+  embedder_gpu: 8099       # BGE-large on the MI210 beside the 27B (STACKCHG-EMBEDPLACE-20261118); 8099 free, 8096-8098 are warm candidates
 
 # Stack-managed auxiliaries whose startup failure is non-fatal but must remain
 # visible in the read-only status surface even when no state row was created.
@@ -441,6 +442,14 @@ embedding:
     8096: {cpuset: "152-167"}   # node 2, siblings of 56-71
     # 168-175 (node 3, siblings of 72-79) deliberately left unallocated.
     # 8097 / 8098 (warm e5 / bge-m3) stay undeclared: default affinity, as today.
+  # ── STACKCHG-EMBEDPLACE-20261118 (option A) — GPU POOL MEMBERS ─────────────
+  # Pool members that are an aux service on the MI210 rather than a CPU port with a cpuset.
+  # port -> aux service name. Everything else is DERIVED from that aux service, never restated:
+  # slots from its `-np`, model from its `-m` (must be the CPU pool's model), and it has NO
+  # NUMA node (-1), so it has no guarded neighbour and the REPL-EMB-1.4 cap never applies to it.
+  # Preference is policy (embedding_pool_policy.yaml client.prefer_device).
+  gpu_members:
+    8099: embedder_gpu
   extra_recipes:
     8096:
       model_path: /mnt/raid0/llm/models/granite-embedding-97m-multilingual-r2-Q8_0.gguf
@@ -1026,6 +1035,44 @@ aux_services:
     health_timeout: 120
     model_label: LightOnOCR-2-1B-bbox F16 + mmproj F16 (CPU -t 24, v10 store)
     log: ocr_pdf_lighton.log
+
+  - name: embedder_gpu
+    port: 8099
+    # STACKCHG-EMBEDPLACE-20261118 (option A): the picker/pool embedder on the MI210 beside the
+    # :8083 27B. Same bge-large-en-v1.5-f16 weights as the six CPU pool servers (an index belongs
+    # to ONE embedding model; PoolTopology refuses a pool that spans two), served by the v10 GPU
+    # kernel store, full offload. Evidence (CODEMODE-AB-V2 r2, /mnt/raid0/llm/tmp/codemode-ab-v2-20261118/):
+    #   27B GPU r2 full pre-check  p50 8.5 / p95 10.8 ms, residency proven (KFD ctx for both pids,
+    #   embedder 1262.6 MiB VRAM) vs CPU -t 2 on shared cores p95 500 ms, CPU disjoint cores p95 136 ms (35B) / 286 ms (Flash).
+    # Same flags as the measured row: -c 2048 -b 2048 -ub 2048 -fa on -ngl 99 --device ROCm0 -t 2 -tb 2.
+    # -np 4 = the CPU pool recipe's slots (2048/4 = 512 tokens per slot, BGE's window).
+    # cpuset 184-191 = the declared GPU host lane (the probe pinned it there); -t 2 inside it.
+    # optional: a down GPU embedder must not fail `start`; the pool fails open to the six CPU servers.
+    optional: true
+    description: BGE-large-en-v1.5 f16 embedding server on the MI210 (picker / pool member, v10 GPU store)
+    backend: gpu
+    argv: ["llama-server",
+           "-m", "{models_dir}/bge-large-en-v1.5-f16.gguf",
+           "--embeddings", "--pooling", "cls",
+           "-np", "4",
+           "-c", "2048", "-b", "2048", "-ub", "2048",
+           "--flash-attn", "on",
+           "-ngl", "99", "--device", "ROCm0",
+           "-t", "2", "-tb", "2",
+           "--host", "127.0.0.1",
+           "--port", "8099",
+           "--no-webui"]
+    cpuset: "184-191"
+    env:
+      OMP_WAIT_POLICY: "passive"
+      KMP_BLOCKTIME: "0"
+      OMP_DYNAMIC: "false"
+    cwd: "{project_root}"
+    verify_ggml_linkage: true
+    health_path: /health
+    health_timeout: 120
+    model_label: bge-large-en-v1.5 f16 (MI210 ROCm0 -ngl 99, v10 GPU store)
+    log: embedder_gpu.log
 
   - name: handoff_dashboard
     port: 8100

@@ -51,6 +51,10 @@ client:
   cache_max_entries: 20000
   # Poll interval while waiting for headroom or a busy-state change (s).
   poll_interval_s: 0.02
+  # STACKCHG-EMBEDPLACE-20261118: equal-tier slots go to the GPU pool member (embedder_gpu :8099)
+  # first; the six CPU servers are overflow and the fail-open when :8099 is down. `none` restores
+  # the legacy order (a rollback lever that needs no process change).
+  prefer_device: gpu
 
 neighbour_cap:
   # REPL-EMB-1.4 (operator decision D3, 2026-09-26): while a guarded serving

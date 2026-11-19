@@ -193,6 +193,7 @@ class EmbeddingScheduler:
         excluded = set(exclude)
         requester_nodes = self.topology.nodes_of_port(requester_port)
         use_foreign = self.policy.neighbour_cap.use_capped_foreign_instances
+        prefer = self.policy.client.prefer_device
         with self._lock:
             now = self._clock()
             ports = self.topology.ports
@@ -222,7 +223,10 @@ class EmbeddingScheduler:
                 for rank, tier, capped, port, headroom in candidates:
                     if alloc.get(port, 0) >= headroom:
                         continue
-                    key = (rank, self._inflight[port] + alloc.get(port, 0), order[port])
+                    # STACKCHG-EMBEDPLACE-20261118: within a tier, the preferred device first
+                    # (policy `client.prefer_device`; "none" = every instance ties = legacy order).
+                    dev_rank = 0 if prefer in ("none", self.topology.embedder(port).device) else 1
+                    key = (rank, dev_rank, self._inflight[port] + alloc.get(port, 0), order[port])
                     if best is None or key < best[0]:
                         best = (key, port)
                 if best is None:

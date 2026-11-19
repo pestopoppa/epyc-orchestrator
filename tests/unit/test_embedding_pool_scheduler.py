@@ -135,8 +135,12 @@ def test_live_topology_is_derived_from_the_repo_declarations():
     from scripts.server.stack_manifest import EMBEDDER_PORTS, EMBEDDING_PLACEMENT
 
     topo = live_topology()
-    assert list(topo.ports) == sorted(EMBEDDER_PORTS)
-    for e in topo.embedders:
+    # STACKCHG-EMBEDPLACE-20261118: the CPU pool plus the declared GPU member(s) (no NUMA node,
+    # no neighbour; see test_embedding_pool_gpu_member.py)
+    cpu = [e for e in topo.embedders if e.device == "cpu"]
+    assert [e.port for e in cpu] == sorted(EMBEDDER_PORTS)
+    assert all(e.device == "gpu" and e.numa_node == -1 for e in topo.embedders if e not in cpu)
+    for e in cpu:
         assert e.numa_node == EMBEDDING_PLACEMENT[e.port].numa_node
         assert e.slots > 0
         # every embedder shares a node with at least the full-machine frontdoor

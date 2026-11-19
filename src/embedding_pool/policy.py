@@ -41,6 +41,10 @@ class ClientPolicy:
     oversize_max_halvings: int = 3
     cache_max_entries: int = 20000
     poll_interval_s: float = 0.02
+    # STACKCHG-EMBEDPLACE-20261118: which device class an equal-tier slot goes to first.
+    # "none" = no preference (legacy, byte-identical selection); "gpu" = the MI210 member(s)
+    # first, the CPU pool as overflow and fail-open. Measured: GPU p95 10.8 ms vs CPU 136-500 ms.
+    prefer_device: str = "none"
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,8 @@ def parse_policy(document: Any) -> EmbeddingPoolPolicy:
         raise ValueError("embedding_pool_policy: oversize_max_halvings must be >= 1")
     if client.cache_max_entries < 0:
         raise ValueError("embedding_pool_policy: cache_max_entries must be >= 0")
+    if client.prefer_device not in ("none", "cpu", "gpu"):
+        raise ValueError("embedding_pool_policy: `client.prefer_device` must be none|cpu|gpu")
     if client.poll_interval_s <= 0:
         raise ValueError("embedding_pool_policy: poll_interval_s must be > 0")
     return EmbeddingPoolPolicy(client=client, neighbour_cap=cap)
