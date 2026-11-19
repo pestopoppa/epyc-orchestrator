@@ -76,9 +76,9 @@ def _synthetic_navigation(tmp_path):
     )
 
 
-def _server(tmp_path):
+def _server(tmp_path, bound="sess-a"):
     server = FastMCP("synthetic-trace-navigation")
-    register_trace_navigation_tools(server, navigation=_synthetic_navigation(tmp_path))
+    register_trace_navigation_tools(server, navigation=_synthetic_navigation(tmp_path), bound_session_id=bound)
     return server
 
 
@@ -163,25 +163,43 @@ def test_registration_exposes_dotted_names_and_exact_optional_schemas(tmp_path):
 
 def test_search_and_expand_return_only_the_callers_session(tmp_path):
     server = _server(tmp_path)
-    a = _call(server, "ms.search", {"text": "needle", "session_id": "sess-a"})["records"]
-    b = _call(server, "ms.search", {"text": "needle", "session_id": "sess-b"})["records"]
+    a = _call(server, "ms.search", {"text": "needle"})["records"]
+    b = _call(_server(tmp_path, "sess-b"), "ms.search", {"text": "needle"})["records"]
     assert len(a) == 2 and {r["session_id"] for r in a} == {"sess-a"}
     assert len(b) == 1 and b[0]["session_id"] == "sess-b"
     ids_a = [r["id"] for r in a]
+    # a matching client-supplied id is accepted
     expanded = _call(server, "ms.expand", {"event_ids": ids_a[::-1], "session_id": "sess-a"})["records"]
     assert [r["id"] for r in expanded] == ids_a[::-1]
     # exact ids of ANOTHER session do not resolve for this caller
-    leak = _call(server, "ms.expand", {"event_ids": [b[0]["id"]] + ids_a, "session_id": "sess-a"})["records"]
+    leak = _call(server, "ms.expand", {"event_ids": [b[0]["id"]] + ids_a})["records"]
     assert b[0]["id"] not in [r["id"] for r in leak]
     assert "secret" not in json.dumps(leak)
 
 
-def test_missing_session_id_returns_nothing_and_does_not_leak(tmp_path):
-    server = _server(tmp_path)
-    out = _call(server, "ms.search", {"text": "needle"})
-    assert out["records"] == [] and "session" in out["error"]
-    out = _call(server, "ms.expand", {"event_ids": [1, 2, 3]})
-    assert out["records"] == [] and "error" in out
+def test_client_supplied_foreign_session_id_is_refused(tmp_path):
+    server = _server(tmp_path)  # bound to sess-a
+    out = _call(server, "ms.search", {"text": "needle", "session_id": "sess-b"})
+    assert out["records"] == [] and "does not match" in out["error"]
+    out = _call(server, "ms.expand", {"event_ids": [1, 2, 3], "session_id": "sess-b"})
+    assert out["records"] == [] and "does not match" in out["error"]
+    assert "secret" not in json.dumps(out)
+
+
+def test_no_bound_session_fails_closed_even_with_a_client_session(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_MCP_SESSION_ID", raising=False)
+    for server in (_server(tmp_path, bound=None), _server(tmp_path, bound="")):
+        for args in ({"text": "needle"}, {"text": "needle", "session_id": "sess-a"}):
+            out = _call(server, "ms.search", args)
+            assert out["records"] == [] and "no server-bound session" in out["error"]
+        out = _call(server, "ms.expand", {"event_ids": [1, 2, 3], "session_id": "sess-a"})
+        assert out["records"] == [] and "no server-bound session" in out["error"]
+
+
+def test_bound_session_defaults_to_the_launcher_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_MCP_SESSION_ID", "sess-b")
+    out = _call(_server(tmp_path, bound=None), "ms.search", {"text": "needle"})
+    assert {r["session_id"] for r in out["records"]} == {"sess-b"}
 
 
 def test_all_scope_is_refused_while_the_setting_is_off(monkeypatch, tmp_path):
@@ -196,7 +214,7 @@ def test_all_scope_is_refused_while_the_setting_is_off(monkeypatch, tmp_path):
 def test_all_scope_works_only_with_the_setting_on_and_is_explicit(monkeypatch, tmp_path):
     _on(monkeypatch, FLAG, CROSS)
     server = _server(tmp_path)
-    allrows = _call(server, "ms.search", {"text": "needle", "session_id": "sess-a", "scope": "all"})["records"]
+    allrows = _call(server, "ms.search", {"text": "needle", "scope": "all"})["records"]
     assert {r["session_id"] for r in allrows} == {"sess-a", "sess-b"}
     expanded = _call(server, "ms.expand", {"event_ids": [r["id"] for r in allrows], "scope": "all"})["records"]
     assert len(expanded) == 3
