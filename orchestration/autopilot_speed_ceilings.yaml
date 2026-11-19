@@ -1,0 +1,69 @@
+# AP-72 (S3-AP-10): per-model physical speed ceilings for SafetyGate's speed_physicality_leg.
+#
+# OPERATOR DECISION (2026-11-19): the ceiling for a served model is its MEASURED decode
+# roofline summed over the eval's concurrent slots, plus a 10% margin:
+#
+#     ceiling_tps = roofline_tps x slots x (1 + margin)
+#
+# THE BOUND IS OFF. This table is data only: the leg reads it ONLY when the runtime flag
+# `autopilot_speed_physical_bound` (env AUTOPILOT_SPEED_PHYSICAL_BOUND, default off) is on,
+# and the operator has not yet reviewed these numbers. AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS,
+# when set, still overrides the whole table with one explicit number.
+#
+# Unknown model (not in `models`) -> NO bound (fail-open), logged. Never a guessed number.
+#
+# `roofline_tps` is the registry's measured single-stream decode throughput for the role's
+# production-optimal recipe (server_mode throughput; includes the role's speculative recipe,
+# so it is a measured achieved decode rate, not the pure bytes/bandwidth model). Source:
+# orchestration/derived/stack_priors.yaml roles.<role>.priors.throughput_tps, from the
+# registry performance block `optimized_tps` (dates below). The separate bytes/bandwidth
+# CPU roofline (handoffs/active/cpu-decode-roofline-program.md: 4.16 GB/token -> 9.3 ms,
+# 107 t/s at 446.8 GB/s, computed not measured) exists only for the research Flash-Next
+# artifact and is not a per-served-model figure; it is NOT used here.
+#
+# `slots` is the served -np (stack_priors roles.<role>.serving.slots). EvalTower caps eval
+# fan-out at topology max_safe_concurrency (<=4), so slots is the upper bound of the eval's
+# concurrent streams; the gate uses min(result.eval_concurrency, slots) for a single-model eval.
+
+schema: epyc.autopilot_speed_ceilings
+version: 1
+computed_on: '2026-11-19'
+margin: 0.10
+bound_enabled_default: false
+formula: roofline_tps * slots * (1 + margin)
+
+models:
+  qwen3.8-27b-q8_0:
+    roofline_tps: 47.79
+    roofline_source: "stack_priors.yaml roles.architect_critic.priors.throughput_tps = registry optimized_tps (server_mode throughput, 2026-08-22, production-optimal row; DFlash2 spec recipe)"
+    slots: 4
+    slots_source: "stack_priors.yaml roles.architect_critic.serving.slots"
+    ceiling_tps: 210.276   # 47.79 * 4 * 1.10
+    roles: [architect_critic, coder_escalation, ingest_long_context]
+  qwen3.6-35b-a3b-mtp-q8_0:
+    roofline_tps: 40.22
+    roofline_source: "stack_priors.yaml roles.frontdoor.priors.throughput_tps = registry optimized_tps (server_mode throughput, 2026-05-04; draft-mtp recipe)"
+    slots: 4
+    slots_source: "stack_priors.yaml roles.frontdoor.serving.slots"
+    ceiling_tps: 176.968   # 40.22 * 4 * 1.10
+    roles: [frontdoor, worker, worker_general, worker_explore, worker_math, worker_summarize, toolrunner]
+  qwen3.8-flash-next-ud-iq4_xs:
+    roofline_tps: 52.7
+    roofline_source: "stack_priors.yaml roles.architect_general.priors.throughput_tps = registry optimized_tps (server_mode throughput, 2026-09-14; draft-mtp recipe)"
+    slots: 1
+    slots_source: "stack_priors.yaml roles.architect_general.serving.slots"
+    ceiling_tps: 57.97   # 52.7 * 1 * 1.10
+    roles: [architect_general]
+  qwen3-vl-30b-a3b-q4_k_m:
+    roofline_tps: 112.2
+    roofline_source: "stack_priors.yaml roles.vision_escalation.priors.throughput_tps = registry optimized_tps (server_mode throughput, 2026-07-31; baseline recipe)"
+    slots: 1
+    slots_source: "stack_priors.yaml roles.vision_escalation.serving.slots"
+    ceiling_tps: 123.42   # 112.2 * 1 * 1.10
+    roles: [vision_escalation, worker_vision]
+
+# Aliases the eval's routing_distribution uses that are not a single descriptor role.
+# `architect` is served by either architect model, so an eval that routes to it is bounded
+# by the SUM of both models' ceilings (an upper bound; never tighter than the truth).
+role_aliases:
+  architect: [qwen3.8-27b-q8_0, qwen3.8-flash-next-ud-iq4_xs]

@@ -196,16 +196,148 @@ def _reliability_floor() -> float:
 SPEED_PHYSICAL_CEILING_ENV = "AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS"
 
 
-def _speed_physical_ceiling() -> float | None:
-    """AP-72: the operator-declared physical bound on a trial's reported speed (tokens/s).
+SPEED_PHYSICAL_BOUND_FLAG_ENV = "AUTOPILOT_SPEED_PHYSICAL_BOUND"
+SPEED_CEILINGS_PATH = Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_speed_ceilings.yaml"
+_SPEED_CEILING_TABLE_CACHE: dict[str, Any] = {"path": None, "mtime": None, "table": None}
 
-    Default OFF (unset -> None). A malformed or non-positive value is ignored with a warning,
-    which leaves the bound off; it can never loosen another gate. The bound must be derived from
-    the surface's roofline (bandwidth / bytes per token, summed over the eval's concurrency) by
-    whoever sets it; this module does not guess a hardware number.
+
+def _speed_bound_flag_on() -> bool:
+    """AP-72: the runtime-toggleable `autopilot_speed_physical_bound` flag (default OFF).
+
+    Read per call through ``src.flag_env`` so a ``POST /config`` runtime override toggles it with
+    no restart; falls back to the plain environment if the overlay is unavailable.
+    """
+    try:
+        from src.flag_env import flag_env
+
+        raw = flag_env().get(SPEED_PHYSICAL_BOUND_FLAG_ENV, "")
+    except Exception:
+        raw = os.environ.get(SPEED_PHYSICAL_BOUND_FLAG_ENV, "")
+    return str(raw or "").strip().lower() in {"1", "true", "on", "yes"}
+
+
+def _load_speed_ceiling_table(path: Path | None = None) -> dict[str, Any] | None:
+    """Load orchestration/autopilot_speed_ceilings.yaml (mtime-cached). None when missing/invalid."""
+    path = Path(path) if path is not None else SPEED_CEILINGS_PATH
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        log.warning("AP-72 ceiling table %s missing; physicality bound stays off", path)
+        return None
+    cache = _SPEED_CEILING_TABLE_CACHE
+    if cache["path"] == str(path) and cache["mtime"] == mtime:
+        return cache["table"]
+    table: dict[str, Any] | None
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        table = loaded if isinstance(loaded, dict) and isinstance(loaded.get("models"), dict) else None
+        if table is None:
+            log.warning("AP-72 ceiling table %s malformed; physicality bound stays off", path)
+    except Exception as exc:  # fail-open: a bad table can only turn the bound off
+        log.warning("AP-72 ceiling table %s unreadable (%s); physicality bound stays off", path, exc)
+        table = None
+    cache.update(path=str(path), mtime=mtime, table=table)
+    return table
+
+
+def _model_ceiling(entry: Any, concurrency: int | None) -> float | None:
+    """roofline_tps x slots, recomputed from the entry's own inputs (never a stale cached
+    product); ``concurrency`` caps the slots for a single-model eval. Margin applied by caller."""
+    try:
+        roofline = float(entry["roofline_tps"])
+        slots = int(entry["slots"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(roofline) and roofline > 0 and slots >= 1):
+        return None
+    if concurrency is not None and concurrency >= 1:
+        slots = min(slots, int(concurrency))
+    return roofline * slots
+
+
+def speed_ceiling_from_table(
+    result: Any, table: Mapping[str, Any] | None = None, *, bottleneck_role: str | None = None
+) -> float | None:
+    """AP-72: the per-model physical ceiling (tokens/s) for ``result``'s eval, or None = no bound.
+
+    ceiling = measured decode roofline x concurrent slots x (1 + margin). Models the eval touched
+    come from ``result.details['speed_ceiling_model']`` (explicit), else the roles in
+    ``result.routing_distribution``, else the bottleneck role. Several models -> the SUM of their
+    full-slot ceilings (an upper bound). Any role/model not in the table -> None (fail-open, logged):
+    the table never bounds what it has no measurement for.
+    """
+    table = table if table is not None else _load_speed_ceiling_table()
+    if not table:
+        return None
+    models = table.get("models") or {}
+    aliases = table.get("role_aliases") or {}
+    try:
+        margin = float(table.get("margin", 0.10))
+    except (TypeError, ValueError):
+        margin = 0.10
+    if not math.isfinite(margin) or margin < 0:
+        log.warning("AP-72 ceiling table margin invalid; physicality bound stays off")
+        return None
+    role_to_models: dict[str, list[str]] = {}
+    for mid, entry in models.items():
+        for role in (entry or {}).get("roles") or ():
+            role_to_models.setdefault(str(role), []).append(str(mid))
+    for role, mids in aliases.items():
+        role_to_models[str(role)] = [str(m) for m in (mids or ())]
+
+    details = getattr(result, "details", None) or {}
+    explicit = str(details.get("speed_ceiling_model") or "").strip()
+    labels: list[str]
+    if explicit:
+        labels = [explicit]
+    else:
+        dist = getattr(result, "routing_distribution", None) or {}
+        labels = [str(r) for r, share in dist.items() if (share or 0) > 0]
+        if not labels:
+            labels = [bottleneck_role or os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")]
+
+    touched: list[str] = []
+    for label in labels:
+        mids = [label] if label in models else role_to_models.get(label)
+        if not mids or any(m not in models for m in mids):
+            log.warning(
+                "AP-72: no measured roofline for %r (not in autopilot_speed_ceilings.yaml); "
+                "speed physicality bound NOT applied (fail-open)",
+                label,
+            )
+            return None
+        for m in mids:
+            if m not in touched:
+                touched.append(m)
+    conc = None
+    if len(touched) == 1:
+        try:
+            conc = int(getattr(result, "eval_concurrency", 0) or 0) or None
+        except (TypeError, ValueError):
+            conc = None
+    total = 0.0
+    for m in touched:
+        base = _model_ceiling(models[m], conc)
+        if base is None:
+            log.warning("AP-72: ceiling inputs for %r invalid; bound NOT applied (fail-open)", m)
+            return None
+        total += base
+    return total * (1.0 + margin)
+
+
+def _speed_physical_ceiling(result: Any = None) -> float | None:
+    """AP-72: the physical bound on a trial's reported speed (tokens/s). Default OFF.
+
+    Order: AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS (one explicit number, wins) -> else, only when the
+    ``autopilot_speed_physical_bound`` flag is on and a result is supplied, the per-model table
+    (orchestration/autopilot_speed_ceilings.yaml) -> else None (off). A malformed or non-positive
+    env value is ignored with a warning, which leaves the bound off; it can never loosen another
+    gate. This module does not guess a hardware number: table values carry their sources.
     """
     raw = os.environ.get(SPEED_PHYSICAL_CEILING_ENV, "").strip()
     if not raw:
+        if result is not None and _speed_bound_flag_on():
+            return speed_ceiling_from_table(result)
         return None
     try:
         val = float(raw)
@@ -2209,7 +2341,7 @@ def verdict_from_evidence(result: Any, evidence: GateEvidence) -> SafetyVerdict:
             result.speed,
             evidence.speed_physical_ceiling
             if evidence.speed_physical_ceiling is not None
-            else _speed_physical_ceiling(),
+            else _speed_physical_ceiling(result),
         ),
         violations,
         warnings,
@@ -2900,7 +3032,7 @@ class SafetyGate:
         # AP-72: a speed above the declared physical bound is an invalid metric event
         # (inert unless AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS is set).
         _add(
-            speed_physicality_leg(result.speed, _speed_physical_ceiling()),
+            speed_physicality_leg(result.speed, _speed_physical_ceiling(result)),
             violations,
             warnings,
             categories,
