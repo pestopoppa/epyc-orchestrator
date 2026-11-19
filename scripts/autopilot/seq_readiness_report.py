@@ -57,6 +57,7 @@ DEFAULT_MIN_FLIP_RATE = 0.30
 DEFAULT_HOLD_FLIP_RATE = 0.10
 DEFAULT_MIN_SHARED_QIDS = 35
 DEFAULT_ALPHA_WEALTH_BUDGET = 1.0
+DEFAULT_ROLLING_WINDOW_DAYS = 90.0
 DEFAULT_STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 
 LEGACY_MAD_EXCLUSIONS = frozenset({"mad_noise", "reproduction_confirmed"})
@@ -97,6 +98,7 @@ def build_seq_readiness_report(
     hold_flip_rate: float = DEFAULT_HOLD_FLIP_RATE,
     min_shared_qids: int = DEFAULT_MIN_SHARED_QIDS,
     alpha_wealth_budget: float = DEFAULT_ALPHA_WEALTH_BUDGET,
+    rolling_window_days: float = DEFAULT_ROLLING_WINDOW_DAYS,
 ) -> dict[str, Any]:
     """Build a no-write readiness report from folded journal rows."""
     normalized = [dict(row) for row in rows if isinstance(row, Mapping)]
@@ -109,6 +111,12 @@ def build_seq_readiness_report(
     alpha_wealth = _alpha_multiplicity_diagnostic(
         trusted_rows,
         budget=alpha_wealth_budget,
+    )
+    # SEQ-5-ALPHAWIN-FOLLOWUP: report-only rolling-window fingerprint alpha (monitor M3).
+    alpha_wealth["rolling_window"] = _rolling_window_alpha(
+        trusted_rows,
+        budget=alpha_wealth_budget,
+        window_days=rolling_window_days,
     )
     # SEQ-5: additive lifetime promotion-attempt ledger (existing keys untouched). Folded
     # from ALL rows, not only trusted vectors: an attempt is a journal fact, not a vector.
@@ -209,6 +217,16 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"rate_reference_is_latest_only="
             f"{report.get('alpha_wealth', {}).get('rate_reference_is_latest_only')}; "
             "an instrument-era boundary resets the charged fingerprint set"
+        ),
+        (
+            "- Rolling-window fingerprint alpha (monitor M3 decided: OP-ALPHAWIN status quo + "
+            "reporting; report-only): "
+            f"window_days={(report.get('alpha_wealth', {}).get('rolling_window') or {}).get('window_days')}, "
+            f"first_tested={(report.get('alpha_wealth', {}).get('rolling_window') or {}).get('fingerprints_first_tested_in_window')}, "
+            f"confirmed={(report.get('alpha_wealth', {}).get('rolling_window') or {}).get('fingerprints_confirmed_in_window')}, "
+            f"alpha_spent={(report.get('alpha_wealth', {}).get('rolling_window') or {}).get('alpha_spent_in_window')}, "
+            f"confirmations_shown_binding="
+            f"{(report.get('alpha_wealth', {}).get('rolling_window') or {}).get('confirmations_shown_binding')}"
         ),
         (
             "- Monitor M1 (decided: OP-PQP status quo + ledger; K_opened is a lower bound): "
@@ -458,6 +476,72 @@ def _alpha_multiplicity_diagnostic(
         ),
         "budget_exhausted": spent >= budget if budget > 0.0 else bool(candidates),
         "new_fingerprint_confirmations_allowed": spent_with_new <= budget,
+    }
+
+
+def _rolling_window_alpha(
+    rows: list[Mapping[str, Any]],
+    *,
+    budget: float,
+    window_days: float,
+) -> dict[str, Any]:
+    """Report-only rolling-window fingerprint alpha line (monitor M3, DP-C status quo).
+
+    The window ends at the latest journal timestamp (deterministic, never wall clock). A
+    fingerprint is charged to the window holding its FIRST seq row. No gate reads this.
+    """
+    from src.autopilot_core.journal_reconstruction import parse_journal_ts
+
+    alpha = max(0.0, float(DEFAULT_POLICY.alpha))
+    budget = max(0.0, float(budget))
+    first_ts: dict[str, float | None] = {}
+    confirmed_ts: dict[str, float | None] = {}
+    all_ts: list[float] = []
+    for row in rows:
+        ts = parse_journal_ts(row.get("timestamp"))
+        if ts is not None:
+            all_ts.append(ts)
+        seq = row.get("seq")
+        if not isinstance(seq, Mapping) or not str(seq.get("candidate") or "").strip():
+            continue
+        cand = str(seq["candidate"])
+        if cand not in first_ts or (ts is not None and (first_ts[cand] is None or ts < first_ts[cand])):
+            first_ts[cand] = ts
+        if seq.get("confirmed") is True or str(seq.get("state") or "") == "confirmed":
+            if cand not in confirmed_ts or (
+                ts is not None and (confirmed_ts[cand] is None or ts < confirmed_ts[cand])
+            ):
+                confirmed_ts[cand] = ts
+    window_s = max(0.0, float(window_days)) * 86400.0
+    end = max(all_ts) if all_ts else None
+    start = end - window_s if end is not None else None
+
+    def in_window(ts: float | None) -> bool:
+        return ts is not None and start is not None and ts >= start
+
+    tested_in = sum(1 for ts in first_ts.values() if in_window(ts))
+    confirmed_in = sum(1 for ts in confirmed_ts.values() if in_window(ts))
+    untimed = sum(1 for ts in first_ts.values() if ts is None)
+    spent = tested_in * alpha
+    spent_next = (tested_in + 1) * alpha
+    return {
+        "window_days": float(window_days),
+        "window_end_ts": end,
+        "fingerprints_first_tested_in_window": tested_in,
+        "fingerprints_confirmed_in_window": confirmed_in,
+        "fingerprints_untimed_excluded": untimed,
+        "alpha_spent_in_window": round(spent, 6),
+        "budget": round(budget, 6),
+        "budget_remaining_in_window": round(max(0.0, budget - spent), 6),
+        "window_budget_would_bind": spent_next > budget,
+        "confirmations_shown_binding": confirmed_in > 0 and spent_next > budget,
+        "monitor_m3": {
+            "decided": True,
+            "decision": "OP-ALPHAWIN (a) status quo + reporting (DP-C, operator 2026-11-11)",
+            "reopen_dp_c_option_b": "only if confirmations_shown_binding persists after the era "
+            "and rate-axis faults are fixed",
+            "note": "report-only; no rolling-window budget gates anything",
+        },
     }
 
 

@@ -181,6 +181,52 @@ def test_report_surfaces_alpha_wealth_across_candidate_fingerprints() -> None:
     assert "new_fingerprint_confirmations_allowed=False" in rendered
 
 
+def _ts_row(trial_id: int, fp: str, ts: str, state: str) -> dict:
+    row = _row(trial_id, fp, set(range(20)), seq_state=state)
+    row["timestamp"] = ts
+    return row
+
+
+def test_report_rolling_window_alpha_line_is_report_only() -> None:
+    rows = [
+        _ts_row(1, "old", "2026-01-01T00:00:00+00:00", "confirmed"),
+        _ts_row(2, "fp-b", "2026-06-20T00:00:00+00:00", "accumulating"),
+        _ts_row(3, "fp-c", "2026-06-25T00:00:00+00:00", "confirmed"),
+        _ts_row(4, "fp-d", "2026-06-30T00:00:00+00:00", "refuted"),
+    ]
+    kwargs = dict(min_trusted_vector_trials=1, min_seq_shadow_rows=0, min_shared_qids=1)
+    report = seq_readiness_report.build_seq_readiness_report(
+        rows, alpha_wealth_budget=0.03, rolling_window_days=30, **kwargs
+    )
+    win = report["alpha_wealth"]["rolling_window"]
+    assert win["fingerprints_first_tested_in_window"] == 3  # "old" is outside 30 days
+    assert win["fingerprints_confirmed_in_window"] == 1
+    assert win["alpha_spent_in_window"] == 0.15
+    assert win["window_budget_would_bind"] is True
+    assert win["confirmations_shown_binding"] is True
+    assert win["monitor_m3"]["decided"] is True
+    rendered = seq_readiness_report.render_markdown(report)
+    assert "Rolling-window fingerprint alpha" in rendered
+    assert "Monitor M1" in rendered
+    # report-only: existing alpha_wealth keys and cutover verdict are unchanged by the window
+    base = seq_readiness_report.build_seq_readiness_report(
+        rows, alpha_wealth_budget=0.03, rolling_window_days=3650, **kwargs
+    )
+    assert base["alpha_wealth"]["fingerprints_tested"] == report["alpha_wealth"]["fingerprints_tested"]
+    assert base["cutover_ready"] == report["cutover_ready"]
+
+
+def test_report_rolling_window_untimed_rows_are_excluded_not_charged() -> None:
+    rows = [_row(1, "fp-a", set(range(20)), seq_state="confirmed")]
+    report = seq_readiness_report.build_seq_readiness_report(
+        rows, min_trusted_vector_trials=1, min_seq_shadow_rows=0, min_shared_qids=1
+    )
+    win = report["alpha_wealth"]["rolling_window"]
+    assert win["fingerprints_untimed_excluded"] == 1
+    assert win["fingerprints_first_tested_in_window"] == 0
+    assert win["window_end_ts"] is None
+
+
 def test_report_projects_w8_promotion_eval_state() -> None:
     state = {
         "seq_pending_promotion_fresh_eval": {
