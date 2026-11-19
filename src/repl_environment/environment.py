@@ -311,6 +311,15 @@ class REPLEnvironment(
         self._bundle_print_cap_bytes: int | None = None
         self._bundle_preview_chars: int | None = None
 
+        # UTM-B1: session-scoped trace navigation tools join this request's registry (flag
+        # ``trace_navigation_tools``, default off) so the picker/stubs see them. Before the
+        # query_memory clone below, which copies the registry it is given.
+        if self.tool_registry is not None:
+            from src.repl_environment import trace_navigation_tools as _trace_nav
+
+            if _trace_nav.enabled():
+                self.tool_registry = _trace_nav.registry_with_trace_navigation(self.tool_registry, self)
+
         if (self.tool_registry is not None and self.llm_primitives is not None
                 and os.environ.get("ORCHESTRATOR_QUERY_MEMORY", "").strip().lower()
                 in {"1", "true", "yes", "on"}):

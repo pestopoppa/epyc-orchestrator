@@ -349,6 +349,14 @@ def install(env: Any, globals_dict: dict[str, Any], environ: Mapping[str, str] |
         if retr is not None:
             globals_dict["q_scores"] = lambda items, k=3: q_scores(retr, items, k, budget)
             added.append("q_scores")
+    # UTM-B1: bound methods (not lambdas) so the snippet tool budget charges them and the shared
+    # tool broker bridges them to the contained child lane; bound BEFORE the stubs so those keep them.
+    from src.repl_environment import trace_navigation_tools as _trace_nav
+
+    if _trace_nav.enabled():
+        globals_dict["ms_search"] = env._ms_search
+        globals_dict["ms_expand"] = env._ms_expand
+        added += ["ms_search", "ms_expand"]
     if flag(ENV_STUBS, environ) and getattr(env, "tool_registry", None) is not None:
         added += bind_stub_tools(globals_dict, env._invoke_tool, env._list_tools())
     if flag(ENV_HANDLES, environ):

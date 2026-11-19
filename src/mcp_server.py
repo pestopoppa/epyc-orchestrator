@@ -41,9 +41,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 mcp = FastMCP("orchestrator-info")
 
-# The proposed UTM-B1 registrar remains an explicit source child until the
-# OpenCode-facing catalog-growth acceptance is settled. Do not register it in
-# the default server catalog yet.
+# UTM-B1: ms.search / ms.expand join the catalog only while the
+# ``trace_navigation_tools`` feature flag is on (default OFF until measured). The flag is read
+# once at server start; with it off the default catalog is unchanged. Calls are session-scoped.
+from src.trace.mcp_tools import register_trace_navigation_tools_if_enabled  # noqa: E402
+
+register_trace_navigation_tools_if_enabled(mcp)
 
 # HS-4 P0-MCP-b: every tool declares ``session_id``.
 # OpenCode names MCP tools "<server>_<tool>", and the epyc OpenCode plugin stamps

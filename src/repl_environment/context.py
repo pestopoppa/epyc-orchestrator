@@ -989,6 +989,18 @@ class _ContextMixin:
             return rest if deferred else visible
         return tools
 
+    def _ms_search(self, text: str, scope: str = "session") -> dict[str, Any]:
+        """UTM-B1 (flag ``trace_navigation_tools``): search THIS session's trace store."""
+        from src.repl_environment.trace_navigation_tools import ms_search
+
+        return ms_search(self, text, scope)
+
+    def _ms_expand(self, event_ids: list[int], scope: str = "session") -> dict[str, Any]:
+        """UTM-B1 (flag ``trace_navigation_tools``): expand exact trace event ids of THIS session."""
+        from src.repl_environment.trace_navigation_tools import ms_expand
+
+        return ms_expand(self, event_ids, scope)
+
     def _invoke_script(self, script_id: str, **kwargs) -> Any:
         """Invoke a prepared script by ID.
 

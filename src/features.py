@@ -391,6 +391,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # on ``os.environ``. With no runtime override the env value is returned untouched, so a flag that
     # is not toggled behaves byte-identically. ``env_var`` is the ORIGINAL env name (unchanged).
     FeatureSpec("tool_selector", False, False, "TOOL_SELECTOR", "CM-1 hardened tool picker: narrow the per-request tool list (native /v1 path + REPL prompt); ORCHESTRATOR_TOOL_SELECTOR=embed|oneshot selects the variant (runtime ON = embed); fails open to the full list; embeds through the pooled embedder, so it needs repl_embedding_pool (without it the picker is not wired and every request gets the full list)", ("repl_embedding_pool",), env_parse=_env_in("embed", "oneshot"), env_on="embed", env_off="off"),
+    FeatureSpec("trace_navigation_tools", False, False, "TRACE_NAVIGATION_TOOLS", "UTM-B1: model-facing read-only trace navigation (ms.search / ms.expand on the MCP server, ms_search / ms_expand as REPL tools through the shared tool broker); each call is scoped to the caller's own session (default off until measured; the MCP server reads it at startup)"),
+    FeatureSpec("trace_navigation_cross_session", False, False, "TRACE_NAVIGATION_CROSS_SESSION", "UTM-B1: allow scope=\"all\" on ms.search / ms.expand to read trace rows from ANY session (privacy setting, default off; needs trace_navigation_tools)", ("trace_navigation_tools",)),
     FeatureSpec("tool_surface_logging", False, False, "TOOL_SURFACE_LOGGING", "UFH14-TOOLS-1: per-turn JSONL of the REPL-global and registry-tool counts each role can see (logs/tool_surface)"),
     FeatureSpec("autopilot_speed_physical_bound", False, False, "SPEED_PHYSICAL_BOUND", "AP-72: SafetyGate marks a trial invalid when its reported speed exceeds the per-model physical ceiling in orchestration/autopilot_speed_ceilings.yaml (measured decode roofline x slots x 1.10); unknown model = no bound (fail-open). Read by scripts/autopilot/safety_gate.py per verdict; AUTOPILOT_SPEED_PHYSICAL_CEILING_TPS, when set, overrides the table", env_name="AUTOPILOT_SPEED_PHYSICAL_BOUND", env_on="1", env_off="0"),
     FeatureSpec("tool_surface_cap", False, False, "TOOL_SURFACE_CAP","UFH14-TOOLS-1: list_tools() shows only the per-role allowlist (orchestration/tool_surface_allowlist.yaml); the rest stay callable and list_tools(deferred=True) shows them"),
@@ -930,6 +932,8 @@ class Features:
     # Flag surface (2026-11-18): see the registry block above. Defaults mirror the registry.
     tool_selector: bool = False
     tool_selector_shadow: bool = False
+    trace_navigation_tools: bool = False  # UTM-B1: ms.search/ms.expand (MCP + REPL), session-scoped (default off)
+    trace_navigation_cross_session: bool = False  # UTM-B1: allow scope="all" (default off)
     tool_surface_logging: bool = False  # UFH14-TOOLS-1: per-turn tool-surface counts (default off)
     autopilot_speed_physical_bound: bool = False  # AP-72: per-model physical speed ceiling in SafetyGate (default off)
     tool_surface_cap: bool = False  # UFH14-TOOLS-1: per-role list_tools allowlist, deferred rest (default off)

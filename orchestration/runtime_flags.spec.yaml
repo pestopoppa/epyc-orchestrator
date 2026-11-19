@@ -173,6 +173,8 @@ flags:
   tool_surface_cap: baseline
   tool_surface_logging: baseline
   tools: baseline
+  trace_navigation_cross_session: baseline
+  trace_navigation_tools: baseline
   trajectory_artifact: baseline
   tts_it_normalize: baseline
   tts_it_respell: baseline
