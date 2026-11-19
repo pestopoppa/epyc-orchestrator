@@ -1,0 +1,43 @@
+{
+  "schema": "ap71.prompt_lineage_depth_audit.v1",
+  "run": {
+    "date": "2026-11-19",
+    "command": "prompt_lineage_depth_audit.py --journal-dir <orch>/orchestration --repo <orch> --corpus-jsonl epyc-inference-research/benchmarks/prompts/question_pool.jsonl",
+    "journal_sha256": {
+      "autopilot_journal.jsonl": "1c5a665922de5c81c53cc6dd4218a9597123c1a1d42347344104683758f70dbc",
+      "autopilot_journal_1.jsonl": "9f9fd39b8ed1db90b073782b9fe4c57a368b6c6e9c9bef6d4819b4b98aec408a"
+    },
+    "corpus": "question_pool.jsonl, 1352624735 bytes (mtime 2026-10-21), question/prompt/expected/answer fields; draw/sentinel/trace-bank banks are not separate files, the pool is the superset available",
+    "corpus_ngrams": 59300202,
+    "wall_seconds": 75,
+    "claim_status": "descriptive screen over 6 prompt_forge keeps; no ClaimTuple; not a verdict on cause"
+  },
+  "ngram": 8,
+  "files": {
+    "compaction_index.md": {
+      "keeps": 1,
+      "verdict": "insufficient_depth",
+      "rows": [{"depth": 1, "trial_id": 782, "quality": 2.1315789473684212, "prompt_tokens": 249, "added_ngram_overlap": null, "added_suite_mentions": null}]
+    },
+    "frontdoor.md": {
+      "keeps": 4,
+      "verdict": "no_signature",
+      "icrh_signature": false,
+      "rho_vs_depth": {"quality": 0.6324555320336759, "prompt_tokens": -0.7745966692414834, "added_ngram_overlap": null, "added_suite_mentions": null},
+      "rising_side_effects": [],
+      "rows": [
+        {"depth": 1, "trial_id": 182, "quality": 1.6578947368421053, "prompt_tokens": 267, "added_ngram_overlap": null, "added_suite_mentions": null},
+        {"depth": 2, "trial_id": 585, "quality": 2.0, "prompt_tokens": 152, "added_ngram_overlap": 0, "added_suite_mentions": 0},
+        {"depth": 3, "trial_id": 588, "quality": 2.1999999999999997, "prompt_tokens": 152, "added_ngram_overlap": 0, "added_suite_mentions": 0},
+        {"depth": 4, "trial_id": 590, "quality": 2.0, "prompt_tokens": 152, "added_ngram_overlap": 0, "added_suite_mentions": 0}
+      ]
+    },
+    "tools.md": {
+      "keeps": 1,
+      "verdict": "insufficient_depth",
+      "rows": [{"depth": 1, "trial_id": 784, "quality": 2.1315789473684212, "prompt_tokens": 250, "added_ngram_overlap": null, "added_suite_mentions": null}]
+    }
+  },
+  "unrecovered": [],
+  "note": "screen only: rank correlation with depth, not a causal claim. Depth-1 rows have no previous keep, so their added-text columns are null by construction; rho over the 3 defined added-text values is null (n<4)."
+}
