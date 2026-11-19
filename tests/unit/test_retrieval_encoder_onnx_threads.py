@@ -82,6 +82,12 @@ def _load_with_stubs(monkeypatch, module_name: str, model_dir):
                 token_to_id=lambda token: 50368,
             )
 
+        @classmethod
+        def from_str(cls, text):
+            # 9d3a338a: the encoder parses the tokenizer from the same bytes it
+            # fingerprints, so it loads via from_str rather than from_file.
+            return cls.from_file(None)
+
     fake_tok = types.ModuleType("tokenizers")
     fake_tok.Tokenizer = _FakeTokenizer
 
