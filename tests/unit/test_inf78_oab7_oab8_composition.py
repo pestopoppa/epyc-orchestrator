@@ -85,6 +85,8 @@ class _Primitives(_RecordingPrimitives):
 
 
 class _FakeHttpRequest:
+    headers: dict = {}
+
     async def is_disconnected(self) -> bool:
         return False
 

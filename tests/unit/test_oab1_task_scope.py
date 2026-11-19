@@ -384,6 +384,8 @@ def test_chat_response_without_scope_is_unchanged():
 
 
 class _FakeHttpRequest:
+    headers: dict = {}
+
     async def is_disconnected(self) -> bool:
         return False
 

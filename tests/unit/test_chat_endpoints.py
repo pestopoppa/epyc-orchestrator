@@ -17,6 +17,8 @@ from src.api.routes.chat import _handle_chat, chat, chat_stream, inject_reward
 
 
 class _FakeRequest:
+    headers: dict = {}
+
     async def is_disconnected(self) -> bool:
         return False
 

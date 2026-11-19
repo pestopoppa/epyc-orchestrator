@@ -451,6 +451,8 @@ class TestChatEndpoint:
         )
 
         class _FakeRequest:
+            headers: dict = {}
+
             async def is_disconnected(self) -> bool:
                 return False
 
@@ -479,6 +481,8 @@ class TestChatEndpoint:
         )
 
         class _FakeRequest:
+            headers: dict = {}
+
             async def is_disconnected(self) -> bool:
                 return False
 
@@ -509,6 +513,8 @@ class TestChatEndpoint:
         )
 
         class _FakeRequest:
+            headers: dict = {}
+
             async def is_disconnected(self) -> bool:
                 return False
 
@@ -539,6 +545,8 @@ class TestChatEndpoint:
         )
 
         class _FakeRequest:
+            headers: dict = {}
+
             async def is_disconnected(self) -> bool:
                 return False
 
@@ -565,6 +573,8 @@ class TestChatEndpoint:
         )
 
         class _FakeRequest:
+            headers: dict = {}
+
             async def is_disconnected(self) -> bool:
                 return False
 
@@ -587,6 +597,8 @@ class TestChatEndpoint:
         monkeypatch.setenv("ORCHESTRATOR_PROMPT_ROOT_OVERRIDE_BASE", str(tmp_path / "gepa"))
 
         class _FakeRequest:
+            headers: dict = {}
+
             async def is_disconnected(self) -> bool:
                 return False
 
