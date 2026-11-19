@@ -1654,6 +1654,11 @@ def test_runtime_artifact_identity_detects_same_path_mutation(tmp_path: Path) ->
     )
 
     artifact.write_bytes(b"bbbb")
+    # Same size and inode: the stat-only identity sees the rewrite only through
+    # mtime, and back-to-back writes can share one coarse timestamp tick. Model
+    # the later write explicitly (the sha256 half below covers equal mtimes).
+    first_mtime = full_before[str(artifact.resolve())]["st_mtime_ns"]
+    os.utime(artifact, ns=(first_mtime + 1_000_000_000, first_mtime + 1_000_000_000))
     cheap_after = runner.runtime_artifact_identities(
         [str(artifact)], include_sha256=False
     )
