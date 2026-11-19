@@ -23,6 +23,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.flag_env import episodic_source_label_on as _source_label_on
 from src.workload_model import capture_workload_class
 from src.orchestration.interaction import (
     INTERACTION_POLICY_VERSION as _INTERACTION_POLICY_VERSION,
@@ -449,7 +450,7 @@ class ProgressLogger:
                    if isinstance(task_ir.get("request_source"), str)
                    and (task_ir["request_source"] in {"smoke", "probe", "health"}
                         # M-27d.1 (default off): journal the other known labels too
-                        or (os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1"
+                        or (_source_label_on()
                             and task_ir["request_source"] in {
                                 "interactive", "autopilot", "benchmark", "repl_experiment"}))
                    else {}),

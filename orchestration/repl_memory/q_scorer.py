@@ -24,6 +24,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from src.flag_env import episodic_source_label_on as _source_label_on
+
 # DAR-2: Contrastive Q-value updates (decision-aware-routing.md).
 # When enabled, routing Q-updates include a contrastive adjustment that
 # sharpens decision boundaries between alternative models. The adjustment
@@ -1896,7 +1898,7 @@ class QScorer:
                     # rows can be separated without a retrieval-side change.
                     extra=(
                         {"request_source": task_context["request_source"]}
-                        if os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1"
+                        if _source_label_on()
                         and task_context.get("request_source")
                         else None
                     ),

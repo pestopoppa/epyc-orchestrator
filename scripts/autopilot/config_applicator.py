@@ -80,6 +80,8 @@ HOT_SWAP_FEATURES = {
     "episodic_routing_lookups",
     # TD-29.M2 (2026-11-19): validate-first in the tool-argument shadow (needs typed_decisions_tool_args on).
     "typed_decisions_validate_first",
+    # M-27d.1: request-source label on episodic rows (write side, read live, default off).
+    "episodic_source_label",
 }
 
 # Parameters applied via env vars (require API restart)

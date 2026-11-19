@@ -94,6 +94,7 @@ from src.api.routes.chat_routing import (
 )
 from src.api.services.episodic_switch import episodic_lookups_enabled
 from src.features import features
+from src.flag_env import episodic_source_label_on
 
 if TYPE_CHECKING:
     from src.api.routes.chat_utils import RoutingResult
@@ -1451,7 +1452,7 @@ async def chat_stream(
         }
         task_ir = canonicalize_task_ir(task_ir)
         if request.x_request_source in {"smoke", "probe", "health"} or (
-            request.x_request_source and os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1"
+            request.x_request_source and episodic_source_label_on()
         ):
             task_ir["request_source"] = request.x_request_source
         if state.progress_logger:

@@ -404,6 +404,10 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("repl_write_dedupe", True, True, "REPL_WRITE_DEDUPE", "REPL: an identical write call that already succeeded in this request is skipped, not re-run (ORCHESTRATOR_REPL_WRITE_DEDUPE=0 is the kill switch)", env_on="1", env_off="0"),
     FeatureSpec("pdf_route_lighton", False, False, "PDF_ROUTE_LIGHTON", "PDF ingest: needs_ocr documents go to the LightOnOCR-2-1B aux server, the rest to LiteParse (PIP-04 held-out rule); the stack launcher sets ORCHESTRATOR_PDF_ROUTE_LIGHTON=1", env_on="1", env_off="0"),
     FeatureSpec("l3_textrow", False, False, "L3_TEXTROW", "L3 empty-table fallback: text-row table extraction on pages with no parser table (method=textrow); the stack launcher sets ORCHESTRATOR_L3_TEXTROW=1", env_parse=_env_in("1"), env_on="1", env_off="0"),
+    # M-27d.1: stamp the request-source label (interactive/autopilot/benchmark/...) on episodic rows so recall
+    # composition can be separated by source. Write side only: default off, no retrieval change. Read through
+    # src.flag_env.episodic_source_label_on(), so POST /config toggles it live.
+    FeatureSpec("episodic_source_label", False, False, "EPISODIC_SOURCE_LABEL", "M-27d.1: stamp request_source (interactive/autopilot/benchmark/repl_experiment) on episodic task-start journal entries and MemRL rows (extra, not embedded); write side only, retrieval unchanged", env_on="1", env_off="0"),
     # M-12k (2026-11-19): the memory-off arm of the frontdoor answer-quality A/B. ON (default) = today's
     # behaviour: the learned HybridRouter (episodic KNN over MemRL memories) picks the initial role, the
     # execution mode, the try-cheap-first Q-value gate and the plan-review Q-value gate. OFF = those four
@@ -934,6 +938,7 @@ class Features:
     repl_write_dedupe: bool = True
     pdf_route_lighton: bool = False
     l3_textrow: bool = False
+    episodic_source_label: bool = False  # M-27d.1: stamp request_source on episodic rows (write side)
     episodic_routing_lookups: bool = True  # M-12k: False skips episodic lookups in routing (see registry)
 
     # Debug/Development

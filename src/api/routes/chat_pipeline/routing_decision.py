@@ -20,6 +20,7 @@ from src.backends.context_limits import (
     get_context_limit_resolver,
 )
 from src.features import features
+from src.flag_env import episodic_source_label_on
 from src.roles import Role
 from src.runtime import routing_stage_timing
 
@@ -683,7 +684,7 @@ def log_routing_start(
         task_ir=({**task_ir, "request_source": request.x_request_source}
                  if request.x_request_source in {"smoke", "probe", "health"}
                  or (request.x_request_source
-                     and os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL", "0") == "1")
+                     and episodic_source_label_on())
                  else task_ir),
         routing_decision=routing_decision,
         routing_strategy=routing_strategy,

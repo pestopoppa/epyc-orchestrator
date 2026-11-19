@@ -161,3 +161,16 @@ _FLAG_ENV = _FlagEnv()
 def flag_env() -> Mapping[str, str]:
     """The environment code paths should read flag-bound knobs from (a runtime-overridable view of ``os.environ``)."""
     return _FLAG_ENV
+
+
+def episodic_source_label_on() -> bool:
+    """M-27d.1: stamp the request-source label on episodic rows. Default off; runtime-toggleable.
+
+    Bound to the ``episodic_source_label`` feature (env ``ORCHESTRATOR_EPISODIC_SOURCE_LABEL=1``);
+    a live ``POST /config`` override wins. Never raises: an unreadable overlay reads as off.
+    """
+    try:
+        raw = flag_env().get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL")
+    except Exception:  # noqa: BLE001
+        raw = os.environ.get("ORCHESTRATOR_EPISODIC_SOURCE_LABEL")
+    return raw is not None and raw.strip().lower() in {"1", "true", "yes", "on"}
