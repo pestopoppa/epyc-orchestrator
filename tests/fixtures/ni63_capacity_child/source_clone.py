@@ -129,6 +129,11 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
         "f41a8de1d31942d223ad1e86a8415c43e6a005ec",
         "6b2f3aa7844887b491f8883878f97f2563cced61c5bb2bd51dc5e23f8027d226",
     ),
+    # Added 2026-11-19 (W9): stack_manifest.py now imports it, so the clone's import closure needs it.
+    "src/registry/slot_declarations.py": (
+        "c58ad3a491cad9af25d9c5e8ee0153251f2f3222",
+        "8c49d436367b94e4976d2fed2b34833daa7a09c3f786569941cb5ca35b481a01",
+    ),
     "src/registry/stack_priors.py": (
         "69de40e88e0a68015937f0dbb01332da7f9bfa94",
         "304f652cba847e157e8ac9e3098b5e9817e0c07071b921d0a3b359f81add1f5d",
@@ -150,10 +155,11 @@ SOURCE_PINS: dict[str, tuple[str, str]] = {
         "90e3f9e001bbcb940c4cb493caa4df29b4da244b7d9834e6b09632c9fb49171b",
     ),
 }
+# Re-pinned 2026-11-19 (W9): f38a2379 (operator-approved 2026-11-18) changed only A3B draft_n_max 4 -> 2 in this file.
 CAPACITY_ARTIFACT_PIN = (
     "orchestration/gpu_shadow_lane_np_ceiling.yaml",
-    "0bf348c1dae4bd44698a2ed9d3920c98d9eb1bc0",
-    "deeb744c4a411bc0f364d1209c402c29504c23a19c96eddc22b9b0bd0326c04f",
+    "e04d8f0a8bdc939b6f219ba4a7bf9b2b81bc66cb",
+    "2279f18716e8710bf246983677190bd3aa565d3df7701e6dc58de77e043a5f76",
 )
 FIXTURE_PINS: dict[str, str] = {
     "launch_manifest.yaml": "583bbb9ee8910c5633e454f5a3528e4f9a86146b6641448e92ebf6b573cfd41b",

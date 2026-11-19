@@ -280,8 +280,11 @@ def test_rubric_judge_flag_on_sends_zero(monkeypatch, flag_on):
 def test_eval_generation_call_never_carries_field(monkeypatch, flag_on):
     """The eval GENERATION call (call_kwargs path) is not a judge; it must not opt in."""
     src = (REPO_ROOT / "scripts" / "autopilot" / "eval_tower.py").read_text()
-    gen = src[src.index("resp = call_orchestrator_forced(**call_kwargs, **_bitwise_generation_spec_kwargs())") - 6000 :
-              src.index("resp = call_orchestrator_forced(**call_kwargs, **_bitwise_generation_spec_kwargs())")]
+    # Call site reformatted multi-line when 63fd32d5 added request_source=; anchor on the
+    # helper-kwargs line (unique to the generation call) instead of the old one-line form.
+    anchor = "                **_bitwise_generation_spec_kwargs(),\n"
+    assert src.count(anchor) == 1
+    gen = src[src.index(anchor) - 6000 : src.index(anchor)]
     # Q38-T10.2(b): the only opt-in is the env-gated helper on the call line itself.
     assert "speculative_n_max" not in gen and "_bitwise_spec" not in gen
 
@@ -471,8 +474,11 @@ def test_speculative_n_max_is_last_defaulted_param_so_positional_calls_cannot_sh
     import inspect
 
     params = list(inspect.signature(seeding_orchestrator.call_orchestrator_forced).parameters.values())
-    assert params[-1].name == "speculative_n_max" and params[-1].default is None
-    assert params[-2].name == "eval_fence"  # previous last param unchanged
+    # 63fd32d5 appended request_source AFTER speculative_n_max (still append-only, all defaulted,
+    # so positional callers cannot shift); the relative order of the prior two is unchanged.
+    assert params[-1].name == "request_source" and params[-1].default is None
+    assert params[-2].name == "speculative_n_max" and params[-2].default is None
+    assert params[-3].name == "eval_fence"
 
 
 def test_only_bitwise_callers_of_call_orchestrator_forced_opt_in():

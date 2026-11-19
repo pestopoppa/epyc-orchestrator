@@ -102,8 +102,15 @@ def test_single_instance_roles_use_first_entry() -> None:
         expected = instances[0][2]
         assert int(orchestrator_stack._resolve_thread_count(role)) == expected
         assert int(orchestrator_stack._resolve_thread_count(role, 0)) == expected
-        # out-of-range falls back defensively
-        assert int(orchestrator_stack._resolve_thread_count(role, 99)) == expected
+        # out-of-range: a role with a declared serving recipe fails CLOSED
+        # (orchestrator_stack.py `recipe cpu_shape disagrees with instance`,
+        # introduced by 2c435097 "launcher: consume declared serving recipe");
+        # only a recipe-less role keeps the pre-recipe defensive fallback.
+        if orchestrator_stack.recipe_for(role):
+            with pytest.raises(ValueError, match="disagrees with instance"):
+                orchestrator_stack._resolve_thread_count(role, 99)
+        else:
+            assert int(orchestrator_stack._resolve_thread_count(role, 99)) == expected
 
 
 def test_quartered_roles_per_instance_thread_count() -> None:
