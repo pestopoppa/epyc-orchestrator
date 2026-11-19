@@ -123,7 +123,7 @@
   entry_type: pattern
   title: Sweep Expected-Attention keep_ratio and layer_weights
   description: triattention keepratio in numeric_swarm
-  insight: Sweep Expected-Attention keep_ratio and layer_weights per role, then persist Pareto profiles.
+  insight: Sweep Expected-Attention keep_ratio and layer_weights per role, then persist Pareto profiles. Exclude the hybrid 27B on port 8083 (EA is refused there until a ladder approves a floor; EA-HYBRID-FOLD-GUARD).
   evidence_trial_ids: []
   source_handoff: triattention-kv-selection
   seeded_reason: Expose the triattention keep_ratio sweep to NumericSwarm

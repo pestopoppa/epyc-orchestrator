@@ -117,6 +117,10 @@ SURFACES: dict[str, list[ParamSpec]] = {
         # keep_ratio: fraction of KV entries to KEEP per compaction. Safe range
         # [0.50, 0.90]; below 0.25 format degrades. Lower bound capped at 0.25
         # so autopilot does not sample the catastrophic cliff zone.
+        # Hybrid 27B (:8083) is excluded for EA regardless of keep_ratio: the
+        # guard lives in kv_compress.compress_slot (the single chokepoint used
+        # by config_applicator.KvCompactionApplicator and slot_compact), so no
+        # candidate can bypass it. See EA-HYBRID-FOLD-GUARD.
         ParamSpec("kv.keep_ratio", 0.25, 0.90, "float"),
         # Sink tokens never evicted. Default 4. Protects system prompt.
         ParamSpec("kv.keep_first", 2, 16, "int"),

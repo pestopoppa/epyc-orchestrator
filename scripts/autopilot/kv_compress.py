@@ -35,6 +35,36 @@ log = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
+# Expected-Attention (EA) must never touch the hybrid Qwen3.8-27B server on
+# :8083 (architect_critic / coder_escalation / ingest_long_context): EA is a
+# silent no-op there today, a pending kernel fix makes it evict for real, and
+# at 5x compaction it scored 0/60 vs 60/60 for the full cache.
+# See box EA-HYBRID-FOLD-GUARD in handoffs/active/kernel-champion-and-promotion.md.
+EA_HYBRID_EXCLUDED_PORTS: frozenset[int] = frozenset({8083})
+# Ladder-approved floor. None = override disabled (8083 always excluded for EA).
+# Set ONLY after a ratio ladder approves a safe keep_ratio; then 8083 is
+# admitted for EA only when keep_ratio >= this floor.
+EA_HYBRID_MIN_KEEP_RATIO: float | None = None
+
+
+def ea_hybrid_refusal(port: int | None, scorer: str, keep_ratio: float) -> str | None:
+    """Return a refusal reason if EA on this port is forbidden, else None.
+
+    Non-EA scorers are never affected.
+    """
+    if port is None or str(scorer).strip().lower() != "expected_attention":
+        return None
+    if port not in EA_HYBRID_EXCLUDED_PORTS:
+        return None
+    floor = EA_HYBRID_MIN_KEEP_RATIO
+    if floor is not None and keep_ratio >= floor:
+        return None
+    return (
+        f"expected_attention KV compaction refused on hybrid port {port} "
+        f"(keep_ratio={keep_ratio}, ladder floor={floor}); "
+        "see EA-HYBRID-FOLD-GUARD in handoffs/active/kernel-champion-and-promotion.md"
+    )
+
 
 @dataclass
 class CompressResult:
@@ -91,6 +121,13 @@ def compress_slot(
     Returns:
         CompressResult with eviction details and timing
     """
+    refusal = ea_hybrid_refusal(port, scorer, keep_ratio)
+    if refusal:
+        log.warning("KV compress refused: %s", refusal)
+        return CompressResult(
+            success=False, port=port, slot_id=slot_id, scorer=scorer,
+            keep_ratio=keep_ratio, error=refusal,
+        )
     url = f"http://localhost:{port}/slots/{slot_id}?action=compact"
     body: dict[str, Any] = {
         "keep_ratio": keep_ratio,
@@ -585,7 +622,12 @@ def auto_compress_all(
     Returns dict of role → CompressResult (or None if below threshold).
     """
     results = {}
+    scorer = kwargs.get("scorer", "expected_attention")
     for role, port in production_ports().items():
+        if ea_hybrid_refusal(port, scorer, keep_ratio):
+            log.info("auto_compress_all: skipping %s (port %s): EA hybrid guard", role, port)
+            results[role] = None
+            continue
         results[role] = auto_compress_if_needed(
             port, slot_id=0, threshold=threshold, keep_ratio=keep_ratio,
             role=role, layer_adaptive_profile=layer_adaptive_profile, **kwargs,

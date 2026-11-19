@@ -6617,10 +6617,13 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
         ),
         "slot_compact": (
             '- Compact: {{"type": "slot_compact", "port": 0, "slot_id": 0, '
-            '"keep_ratio": 0.3, "scorer": "expected_attention", '
+            '"keep_ratio": 0.5, "scorer": "expected_attention", '
             '"keep_first": 5, "n_future": 128}}\n'
-            "  (AM KV compaction — replace port=0 with a live port from Slot "
-            "Memory or the generated system card before emitting the action. "
+            "  (AM KV compaction — replace port=0 with a live NON-HYBRID port "
+            "(e.g. the frontdoor) from Slot Memory or the generated system "
+            "card before emitting the action. NEVER target the hybrid "
+            "Qwen3.8-27B on :8083 with expected_attention; it is refused "
+            "(EA-HYBRID-FOLD-GUARD). "
             "Use after long-context queries to free memory. Evaluates quality "
             "post-compact.)"
         ),

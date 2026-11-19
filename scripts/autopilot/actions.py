@@ -3084,12 +3084,18 @@ def _action_slot_compact(action: dict[str, Any], ctx: _ActionContext):
             "slot_management",
         )
 
-    from kv_compress import compress_slot, auto_compress_all
+    from kv_compress import compress_slot, auto_compress_all, ea_hybrid_refusal
 
     slot_id = action.get("slot_id", 0)
     keep_ratio = action.get("keep_ratio", 0.5)
     keep_first = action.get("keep_first", 4)
     scorer = action.get("scorer", "expected_attention")
+    # EA-HYBRID-FOLD-GUARD: never EA-compact the hybrid 27B (:8083) without a
+    # ladder-approved floor (kv_compress.EA_HYBRID_MIN_KEEP_RATIO). The
+    # all-slots path is guarded inside kv_compress.auto_compress_all.
+    refusal = ea_hybrid_refusal(port, scorer, keep_ratio)
+    if refusal:
+        return SkipOutcome("invalid", f"slot_compact: {refusal}", "slot_compact"), "slot_management"
     layer_weights = action.get("layer_weights")
     n_future = action.get("n_future", 128)
     use_covariance = action.get("use_covariance", True)
