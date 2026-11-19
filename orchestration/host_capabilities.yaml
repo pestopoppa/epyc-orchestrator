@@ -1,0 +1,46 @@
+manifest_version: 1
+cpu:
+  model: AMD EPYC 9655 96-Core Processor
+  logical_cpus: 192
+  isa_flags:
+  - avx
+  - avx2
+  - avx512_bf16
+  - avx512_bitalg
+  - avx512_vbmi2
+  - avx512_vnni
+  - avx512_vpopcntdq
+  - avx512bw
+  - avx512cd
+  - avx512dq
+  - avx512f
+  - avx512ifma
+  - avx512vbmi
+  - avx512vl
+  - avx_vnni
+  - bmi1
+  - bmi2
+  - f16c
+  - fma
+ram_gib: 1133
+numa_nodes:
+- node: 0
+  cpulist: 0-23,96-119
+  ram_gib: 283
+- node: 1
+  cpulist: 24-47,120-143
+  ram_gib: 283
+- node: 2
+  cpulist: 48-71,144-167
+  ram_gib: 283
+- node: 3
+  cpulist: 72-95,168-191
+  ram_gib: 283
+gpu:
+- arch: gfx90a
+  name: AMD Instinct MI210
+  compute_units: 104
+  index: 0
+  vram_gib: 64
+rocm_version: 6.2.0-66
+probe_gaps: []

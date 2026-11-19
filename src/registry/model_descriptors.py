@@ -1266,8 +1266,13 @@ def compile_model_descriptors(
     *,
     active_roles: set[str] | None = None,
     allow_incomplete: bool = False,
+    host_capabilities_path: Path | None = None,
 ) -> dict[str, Any]:
     """Compile one descriptor per canonical model identity.
+
+    ``host_capabilities_path`` (RTG-VAR-1, opt-in): when given, the host-capability
+    manifest's sha256 and headline facts are recorded under ``host_capabilities`` in the
+    metadata. Omitted, the output is byte-identical to before.
 
     The current W2 compiler is intentionally conservative: it derives model identity,
     role bindings, serving, acceleration, and registry-carried quality/speed evidence
@@ -1363,6 +1368,10 @@ def compile_model_descriptors(
     }
     if research_registry_path is not None:
         metadata["source_registries"]["research"] = _source_metadata(research_registry_path)
+    if host_capabilities_path is not None:
+        from src.registry.host_capabilities import load_host_capabilities
+
+        metadata["host_capabilities"] = load_host_capabilities(host_capabilities_path)
     return metadata
 
 
@@ -1423,6 +1432,13 @@ def main(argv: list[str] | None = None) -> int:
         "also overrides. Refuses when origin/main cannot be read.",
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_DESCRIPTOR_OUTPUT)
+    parser.add_argument(
+        "--host-capabilities",
+        type=Path,
+        default=None,
+        help="RTG-VAR-1: record this host-capability manifest (sha256 + headline facts) in the "
+        "descriptor metadata. Opt-in; default output is unchanged.",
+    )
     parser.add_argument("--roles", nargs="+", help="Explicit active role list")
     parser.add_argument(
         "--dry-run", action="store_true", help="Print descriptors instead of writing"
@@ -1448,6 +1464,7 @@ def main(argv: list[str] | None = None) -> int:
             research_registry_path=resolved.path,
             active_roles=active_roles,
             allow_incomplete=args.allow_incomplete,
+            host_capabilities_path=args.host_capabilities,
         )
     finally:
         # provenance_for() was consulted inside compile; the temp copy is no longer needed.
