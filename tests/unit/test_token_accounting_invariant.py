@@ -52,8 +52,17 @@ def test_backend_tokens_not_double_counted():
 
 
 def test_estimate_used_when_backend_absent():
-    """Cache-hit / mock path (backend does not count): the char-estimate IS used,
-    so tokens are not silently dropped — the guard only suppresses the DOUBLE add."""
+    """Mock path (no backend counts): the char-estimate IS used, so tokens are
+    not silently dropped — the guard only suppresses the DOUBLE add."""
+    p = LLMPrimitives(mock_mode=True)
+    before = p.total_tokens_generated
+    p._llm_call_impl("q", role="frontdoor")
+    assert p.total_tokens_generated > before, "estimate must be used when backend didn't count"
+
+
+def test_unmetered_real_call_is_not_estimated():
+    """c2650210: a REAL call whose backend reported nothing stays explicitly
+    unknown — the primitives layer never fabricates a char-estimate for it."""
     p = _real_primitives()
 
     def fake_real_call_no_count(prompt, role, *a, **k):
@@ -62,7 +71,7 @@ def test_estimate_used_when_backend_absent():
     p._real_call = fake_real_call_no_count
     before = p.total_tokens_generated
     p._llm_call_impl("q", role="frontdoor")
-    assert p.total_tokens_generated > before, "estimate must be used when backend didn't count"
+    assert p.total_tokens_generated == before
 
 
 def test_eval_speed_ignores_tool_output():
