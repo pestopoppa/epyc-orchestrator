@@ -25,6 +25,12 @@ from scripts.server.autokernel_enrollment import (
     ArtifactPin, capture_current_context, export_production_enrollment, seal_export_bundle)
 
 ROOT = Path(__file__).resolve().parents[2]
+# The MASTER registry lives in the research repo (scripts/kernel_rnd/autokernel/loop/<module>.py
+# -> repo root is parents[4]). The orchestrator's own orchestration/model_registry.yaml is the
+# compiled LEAN copy; passing it as the master makes the DRAFT-SEL-1 compiler read its projected
+# drafter fields as hand-carried and raise DrafterSelectionError.
+RESEARCH_ROOT = Path(production.__file__).resolve().parents[4]
+MASTER_REGISTRY = RESEARCH_ROOT / "orchestration/model_registry.yaml"
 
 
 def _fresh_prior(tmp_path: Path, monkeypatch) -> None:
@@ -48,7 +54,7 @@ def test_actual_cpu_gpu_export_resolves_reaches_campaign_cli_and_fake_measuremen
         tmp_path, monkeypatch, capsys):
     _fresh_prior(tmp_path, monkeypatch)
     context = capture_current_context(
-        master_registry=ROOT / "orchestration/model_registry.yaml",
+        master_registry=MASTER_REGISTRY,
         revision="caller-declared-test", instance_mode="full")
     first = export_production_enrollment(context)
     pins = []
@@ -61,6 +67,12 @@ def test_actual_cpu_gpu_export_resolves_reaches_campaign_cli_and_fake_measuremen
             ArtifactPin("executable", command[0], hashlib.sha256(f"{role}:exe".encode()).hexdigest()),
             ArtifactPin("model", command[2], hashlib.sha256(f"{role}:model".encode()).hexdigest()),
         ))
+        # DRAFT-SEL-1: a role whose selected drafter is a separate GGUF (-md, e.g. the :8083
+        # DFlash2 drafter) needs its own pinned digest or the target stays waiting_artifact.
+        if "-md" in command:
+            pins.append(ArtifactPin(
+                "drafter", command[command.index("-md") + 1],
+                hashlib.sha256(f"{role}:drafter".encode()).hexdigest()))
         directories = ({str(Path(command[0]).parent)}
                        | set(row["runtime_requirements"]["ld_library_path"] or []))
         for index, directory in enumerate(sorted(directories)):
@@ -120,6 +132,11 @@ def test_actual_cpu_gpu_export_resolves_reaches_campaign_cli_and_fake_measuremen
         def __enter__(self): return self
         def __exit__(self, *_): return False
 
+    class PortOwner:
+        # The fake child (pid 99) has no /proc entry; the real owner reads /proc/<pid>/net.
+        def listener_ready(self): return True
+        def require_listener(self): return None
+
     class Response:
         def __init__(self, body): self.body = body
         def read(self): return self.body
@@ -148,7 +165,11 @@ def test_actual_cpu_gpu_export_resolves_reaches_campaign_cli_and_fake_measuremen
         with mock.patch.object(serving.subprocess, "Popen", return_value=Process()) as popen, \
              mock.patch.object(serving.residency, "Sampler", return_value=Sampler()), \
              mock.patch.object(serving.urllib.request, "urlopen", side_effect=urlopen), \
-             mock.patch.object(serving, "verify_env_readback"):
+             mock.patch.object(serving, "verify_env_readback"), \
+             mock.patch.object(serving, "ServerPortOwner", return_value=PortOwner()), \
+             mock.patch.object(serving.hip_launch_proof, "linkage", return_value={
+                 "status": serving.hip_launch_proof.UNPROVEN,
+                 "reason": "fake child: no real binary to link-check"}):
             assert serving._measure_once(
                 frozen.template, Path(frozen.build_dir), frozen.port,
                 frozen_requests=requests, resolved_recipe=frozen) == 10.0 * len(requests)
