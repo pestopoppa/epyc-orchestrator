@@ -217,6 +217,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("trajectory_artifact", False, False, "TRAJECTORY_ARTIFACT", "Write a per-task chronological trajectory-artifact JSONL (TOC-SP-6)"),
     # Output spill
     FeatureSpec("output_spill_to_file", False, True, "OUTPUT_SPILL_TO_FILE", "Spill truncated output to file"),
+    FeatureSpec("spill_extractive_summary", False, False, "SPILL_EXTRACTIVE_SUMMARY", "REPL-EMB-3.1: spill summary is verbatim head/tail + top-k task-relevant chunks (no worker call) instead of the 512-token worker summary"),
     # Pipeline monitoring
     FeatureSpec("model_grading", False, False, "MODEL_GRADING", "Post-hoc model-graded evals"),
     # P-BENCH-3 A7: eval-batch serving-class switch. Metadata/shadow support may
@@ -813,6 +814,7 @@ class Features:
 
     # CMV-style output spill (Action 11): write truncated output/error to temp file with peek() pointer
     output_spill_to_file: bool = False  # Spill long REPL output/error to file + retrieval pointer
+    spill_extractive_summary: bool = False  # REPL-EMB-3.1: extractive (no-worker) spill summary (default off)
     trajectory_artifact: bool = False  # TOC-SP-6: per-task trajectory-artifact JSONL writer (needs ORCHESTRATOR_TRAJECTORY_ARTIFACT_DIR)
 
     # Conversation Management (B-series cherry-picks from Hermes/OpenGauss)

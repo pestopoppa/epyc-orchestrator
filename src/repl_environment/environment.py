@@ -1057,6 +1057,16 @@ class REPLEnvironment(
                 f"{output[-self._ERROR_TAIL_CHARS:]}\n{footer}"
             )
 
+        # 1c. REPL-EMB-3.1 (default off): extractive summary, verbatim head/tail + top-k
+        #     chunks relevant to the cell that produced the output. No worker call.
+        if getattr(features(), "spill_extractive_summary", False):
+            from src.repl_environment.spill_extract import extractive_summary
+
+            body = extractive_summary(
+                output, getattr(self, "_last_cell_code", "") or "", head_chars=600, tail_chars=400
+            )
+            return f"{header}\n{body}\n{footer}"
+
         # 2. Try worker summary. role="worker" resolves to worker_general, an alias
         #    on frontdoor's :8070 fleet (Qwen3.6-35B-A3B MTP Q8, CPU) since the
         #    2026-09-22 lineup cutover; it shares that server with frontdoor traffic.
@@ -1764,6 +1774,7 @@ class REPLEnvironment(
                 elapsed_seconds=0.0,
             )
         self._in_execute = True
+        self._last_cell_code = code  # REPL-EMB-3.1: relevance query for the extractive spill
         self._snippet_tool_calls = 0
         _hs = getattr(self, "_handle_store", None)
         if _hs is not None:
