@@ -729,6 +729,12 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
         snap["stream_degeneration"] = stream_degeneration.snapshot()
     except Exception as exc:  # noqa: BLE001
         snap["stream_degeneration"] = {"error": str(exc)}
+    try:
+        from src.metrics import tool_call_parse_retry
+
+        snap["tool_call_parse_retry"] = tool_call_parse_retry.snapshot()
+    except Exception as exc:  # noqa: BLE001
+        snap["tool_call_parse_retry"] = {"error": str(exc)}
 
     # Per-role scheduling state (quarter preference + migration counts).
     # Fetched here because it lives on app.state.llm_primitives._backends,

@@ -77,6 +77,10 @@ HOT_SWAP_FEATURES = {
     "prompt_stable_prefix", "history_append_only", "tool_output_bound",
     # Degenerate-generation stream abort (default off): read per streamed chat call via features().
     "stream_degeneration_guard",
+    # Server tool-call parse-error retry (default off): read per chat-completions call via features().
+    "tool_call_parse_error_retry",
+    # Client-side tool-call argument markup guard (default off): same seam, read per call via features().
+    "tool_call_arg_leak_guard",
     # D-RI-MONTY-LANE (2026-11-18): REPL cells routed to a confined Monty worker with CPython fallback.
     # Read live per REPL construction and per cell; telemetry in logs/monty_lane.jsonl.
     "monty_repl",

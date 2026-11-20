@@ -497,7 +497,10 @@ class LlamaServerBackend(ModelBackend):
             or _chat_payload(request) is not None
             or _thinking_chat_lane(role_config, request)
         ):
-            return self._infer_chat_completions(role_config, request, start_time)
+            return self._with_tool_parse_retry(
+                role_config, request,
+                lambda req: self._infer_chat_completions(role_config, req, start_time),
+            )
 
         # Build request payload
         payload = self._build_payload(role_config, request)
@@ -742,6 +745,116 @@ class LlamaServerBackend(ModelBackend):
                 failure_reason="request_error",
                 completion_reason="request_error",
             )
+
+    @staticmethod
+    def _tool_parse_error_of(body: Any) -> dict[str, Any] | None:
+        """The server's tool_call_parse_error object (keyed on error.type, not the status), only
+        while ``tool_call_parse_error_retry`` is on; None otherwise so flag-off paths are unchanged.
+        ``body`` is a decoded SSE event / JSON object or a raw response text."""
+        from src.features import features as _features
+
+        if not getattr(_features(), "tool_call_parse_error_retry", False):
+            return None
+        from src.backends import tool_parse_retry as _tpr
+
+        if isinstance(body, str):
+            return _tpr.parse_error_from_text(body)
+        return _tpr.parse_error_from_payload(body)
+
+    def _with_tool_parse_retry(
+        self,
+        role_config: RoleConfig,
+        request: InferenceRequest,
+        attempt: Any,
+    ) -> InferenceResult:
+        """Shared one-retry seam for two default-off flags (at most ONE re-prompt per call).
+
+        ``tool_call_parse_error_retry``: the SERVER failed to parse a tool call: a result whose
+        failure_reason is ``tool_call_parse_error`` (error.type, batch body or stream event) or a
+        NativeToolParseLoss (current servers). ``tool_call_arg_leak_guard``: a successful result
+        whose parsed tool-call args carry tool-call markup (tool_arg_guard). Both off: ``attempt``
+        runs once, untouched. The retry appends the trigger's correction as a user turn to the same
+        history (never the raw_excerpt). A second failure raises ToolCallParseFailed /
+        ToolCallArgLeak (NativeToolParseLoss subclasses: no model fallback; FORMAT category: no
+        tier escalation).
+        """
+        from src.features import features as _features
+
+        _f = _features()
+        parse_on = bool(getattr(_f, "tool_call_parse_error_retry", False))
+        leak_on = bool(getattr(_f, "tool_call_arg_leak_guard", False))
+        if not (parse_on or leak_on):
+            return attempt(request)
+
+        import dataclasses
+
+        from src.backends import tool_arg_guard as tag
+        from src.backends import tool_parse_retry as tpr
+        from src.metrics import tool_call_parse_retry as metrics
+
+        def _trigger(res: InferenceResult | None, exc: NativeToolParseLoss | None) -> tuple[str, str] | None:
+            """(trigger, detail) with trigger in {parse_error, arg_leak}."""
+            if exc is not None:
+                if (not parse_on or isinstance(exc, (tpr.ToolCallParseFailed, tag.ToolCallArgLeak))
+                        or str(exc) in tpr.NOT_RETRYABLE_LOSS_REASONS):
+                    return None
+                return ("parse_error", f"native_parser_loss:{exc}")
+            if res is None:
+                return None
+            if parse_on and not res.success and res.failure_reason == tpr.FAILURE_REASON:
+                return ("parse_error", res.error_message or "")
+            if leak_on and res.success and res.tool_calls:
+                leak = tag.find_call_leak(res.tool_calls)
+                if leak is not None:
+                    return ("arg_leak", f"tool={leak[0]} key={leak[1]} marker={leak[2]}")
+            return None
+
+        first_exc: NativeToolParseLoss | None = None
+        result: InferenceResult | None = None
+        try:
+            result = attempt(request)
+        except NativeToolParseLoss as exc:
+            first_exc = exc
+        first = _trigger(result, first_exc)
+        if first is None:
+            if first_exc is not None:
+                raise first_exc
+            return result  # type: ignore[return-value]
+        logger.warning(
+            "tool-call %s role=%s (%s); re-prompting once",
+            first[0], role_config.name, first[1][:300],
+        )
+        correction = tag.CORRECTION if first[0] == "arg_leak" else tpr.CORRECTION
+        chat_payload = _chat_payload(request)
+        if chat_payload is not None:
+            retry_payload = dict(chat_payload)
+            retry_payload["messages"] = [
+                *(dict(m) for m in chat_payload.get("messages") or []),
+                {"role": "user", "content": correction},
+            ]
+            retry_request = dataclasses.replace(request, chat_payload=retry_payload)
+        else:
+            retry_request = dataclasses.replace(
+                request, prompt=f"{request.prompt or ''}\n\n{correction}"
+            )
+        try:
+            retried = attempt(retry_request)
+            second = _trigger(retried, None)
+        except NativeToolParseLoss as exc:
+            retried, second = None, _trigger(None, exc) or ("parse_error", f"native_parser_loss:{exc}")
+        if second is not None:
+            metrics.record(role_config.name, second[0], "failed", second[1])
+            if second[0] == "arg_leak":
+                raise tag.ToolCallArgLeak(
+                    "tool call arguments still contained tool-call markup after one corrective "
+                    "retry (model format error)"
+                )
+            raise tpr.ToolCallParseFailed(
+                "tool call parse error persisted after one corrective retry (model format error)"
+            )
+        if retried is not None and retried.success:
+            metrics.record(role_config.name, first[0], "retried_ok", first[1])
+        return retried  # type: ignore[return-value]
 
     def _infer_chat_completions(
         self,
@@ -1046,6 +1159,17 @@ class LlamaServerBackend(ModelBackend):
             overflow = _overflow_from_error_response(e.response)
             if overflow is not None:
                 return _context_overflow_result(role_config, overflow, elapsed)
+            _parse_err = self._tool_parse_error_of(_response_text(e.response))
+            if _parse_err is not None:
+                from src.backends import tool_parse_retry as _tpr
+
+                return InferenceResult(
+                    role=role_config.name, output="", tokens_generated=0,
+                    generation_speed=0.0, elapsed_time=elapsed, success=False,
+                    error_message=f"chat_completions HTTP {e.response.status_code}: {_tpr.describe(_parse_err)}",
+                    failure_stage="generation", failure_reason=_tpr.FAILURE_REASON,
+                    completion_reason="http_error",
+                )
             return InferenceResult(
                 role=role_config.name, output="", tokens_generated=0,
                 generation_speed=0.0, elapsed_time=elapsed, success=False,
@@ -1255,8 +1379,11 @@ class LlamaServerBackend(ModelBackend):
         # without changing the on_chunk contract.
         if (_chat_payload(request) is not None or self.config.use_chat_completions
                 or _thinking_chat_lane(role_config, request)):
-            return self._infer_stream_text_chat_completions(
-                role_config, request, on_chunk, start_time,
+            return self._with_tool_parse_retry(
+                role_config, request,
+                lambda req: self._infer_stream_text_chat_completions(
+                    role_config, req, on_chunk, start_time,
+                ),
             )
 
         payload = self._build_payload(role_config, request)
@@ -1974,6 +2101,21 @@ class LlamaServerBackend(ModelBackend):
                                         return _context_overflow_result(
                                             role_config, overflow, time.time() - start_time,
                                             partial_output="".join(chunks),
+                                        )
+                                    _parse_err = self._tool_parse_error_of(evt)
+                                    if _parse_err is not None:
+                                        # Strict-parser stream error: no partial tool_calls delta
+                                        # precedes it and the stream closes without [DONE].
+                                        from src.backends import tool_parse_retry as _tpr
+
+                                        return InferenceResult(
+                                            role=role_config.name, output="", tokens_generated=0,
+                                            generation_speed=0.0,
+                                            elapsed_time=time.time() - start_time, success=False,
+                                            error_message=f"chat_completions stream error: {_tpr.describe(_parse_err)}",
+                                            failure_stage="generation",
+                                            failure_reason=_tpr.FAILURE_REASON,
+                                            completion_reason="server_error",
                                         )
                                     err = evt.get("error")
                                     err_msg = err.get("message") if isinstance(err, dict) else str(err)

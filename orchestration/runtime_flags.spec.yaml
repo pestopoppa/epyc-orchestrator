@@ -172,6 +172,8 @@ flags:
   swarm_fanout: baseline
   task_token_budget: baseline
   thinking_roles_chat_lane: baseline
+  tool_call_arg_leak_guard: baseline
+  tool_call_parse_error_retry: baseline
   tool_output_bound: baseline
   tool_output_compression: baseline
   tool_result_clearing: baseline
