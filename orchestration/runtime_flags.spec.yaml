@@ -164,6 +164,7 @@ flags:
   staged_rewards: baseline
   state_history_snapshots: baseline
   step_event_logging: baseline
+  stream_degeneration_guard: baseline
   streaming: baseline
   structured_delimiters: baseline
   structured_read_only: baseline

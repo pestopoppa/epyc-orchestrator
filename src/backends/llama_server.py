@@ -37,6 +37,8 @@ from src.backends.context_overflow import (
     classify_error_payload,
 )
 from src import spec_policy
+from src.backends.stream_degeneration import DegenerationGuard
+from src.metrics import stream_degeneration as stream_degeneration_metrics
 from src.model_server import InferenceRequest, InferenceResult, ModelBackend
 from src.registry_loader import RoleConfig
 
@@ -1927,6 +1929,15 @@ class LlamaServerBackend(ModelBackend):
         stream_timings: dict[str, Any] = {}
         output_tokens_reported: int | None = None
 
+        # stream_degeneration_guard (default off): per-token timings + abort on degenerate output.
+        degen_guard: DegenerationGuard | None = None
+        degenerate: tuple[str, str, int] | None = None
+        from src.features import features as _features
+
+        if _features().stream_degeneration_guard:
+            degen_guard = DegenerationGuard()
+            payload["timings_per_token"] = True
+
         try:
             _overall = request.timeout or self.config.timeout
             _read_timeout = _overall  # non-streaming: read must cover the full budget (see above)
@@ -1982,8 +1993,10 @@ class LlamaServerBackend(ModelBackend):
                                 if isinstance(_evt_usage, dict) and _evt_usage:
                                     stream_usage = _evt_usage
                                 choices = evt.get("choices") or []
+                                _chunk_text = ""
                                 if choices:
                                     delta = choices[0].get("delta") or {}
+                                    _chunk_text = delta.get("content") or ""
                                     # RI-23: reasoning deltas are collected, never fed to
                                     # on_chunk (FINAL/early-stop checks see content only).
                                     _rc = delta.get("reasoning_content")
@@ -2030,6 +2043,17 @@ class LlamaServerBackend(ModelBackend):
                                     if fr:
                                         completion_reason = str(fr)
                                         terminal_event_seen = True
+                                if degen_guard is not None:
+                                    _tm = evt.get("timings")
+                                    _verdict = degen_guard.feed(
+                                        _chunk_text,
+                                        _tm if isinstance(_tm, dict) else None,
+                                    )
+                                    if _verdict is not None:
+                                        degenerate = (
+                                            _verdict[0], _verdict[1], degen_guard.predicted_n,
+                                        )
+                                        break
                             except _json.JSONDecodeError:
                                 continue
                 except httpx.ReadTimeout:
@@ -2039,6 +2063,29 @@ class LlamaServerBackend(ModelBackend):
                     )
                     completion_reason = "read_timeout"
                     interrupted = True
+                if degenerate is not None:
+                    # Stop reading and drop the connection so llama-server cancels the slot.
+                    response.close()
+
+            if degenerate is not None:
+                _d_reason, _d_detail, _d_tokens = degenerate
+                _d_tokens = _d_tokens or len("".join(chunks).split())
+                stream_degeneration_metrics.record_abort(_d_reason, role_config.name, _d_tokens)
+                logger.warning(
+                    "chat_completions stream aborted as degenerate generation role=%s reason=%s (%s) tokens=%d",
+                    role_config.name, _d_reason, _d_detail, _d_tokens,
+                )
+                # Infra-classified (request_error is in INFRA_FAILURE_REASONS and the graph error
+                # reasons): retryable, never a model-capability failure. partial=True keeps the
+                # backend health tracker from counting a healthy server as failed.
+                return InferenceResult(
+                    role=role_config.name, output="", tokens_generated=0,
+                    generation_speed=0.0, elapsed_time=time.time() - start_time,
+                    success=False, partial=True,
+                    error_message=f"degenerate_generation:{_d_reason}: {_d_detail}",
+                    failure_stage="transport", failure_reason="request_error",
+                    completion_reason="request_error",
+                )
 
             output = "".join(chunks)
             elapsed = time.time() - start_time

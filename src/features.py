@@ -357,6 +357,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("prompt_stable_prefix", False, False, "PROMPT_STABLE_PREFIX", "Prefix-cache layout (a): REPL root prompt renders system/tools/rules/task/instruction first (the stable prefix); the per-request selected-tools block, the previous-turns history and then the volatile state/last-output/turn counter follow, and selected tools are listed sorted by name. Off = legacy layout, byte-identical"),
     FeatureSpec("history_append_only", False, False, "HISTORY_APPEND_ONLY", "Prefix-cache layout (b): REPL turn memory (repl_turn_memory, N>0) keeps every turn until a char budget is hit, then drops the oldest turns once, down to half the budget (instead of sliding the N-turn window every turn); the /v1 B2 history fold (context_compression) only runs past a hard size. Off = C3 sliding window exactly as before"),
     FeatureSpec("tool_output_bound", False, False, "TOOL_OUTPUT_BOUND", "Prefix-cache layout (c): tool/REPL output and error text stored in REPL turn memory is cut to 2000 chars (3:1 head:tail, deterministic marker) when stored. Off = the 4000-char render-time clip only"),
+    FeatureSpec("stream_degeneration_guard", False, False, "STREAM_DEGENERATION_GUARD", "Streaming chat path (llama_server _infer_chat_completions_stream): request timings_per_token and abort the stream (close the connection, retryable request_error, no tier escalation) when rolling MTP draft acceptance < 0.2 over >= 512 tokens or the word 6-gram repeat ratio over the last 4000 chars >= 0.6 (Qwen3.6-35B-A3B degenerates to the 4096 cap in ~1% of requests). Off = no detection and byte-identical request bodies"),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
@@ -945,6 +946,7 @@ class Features:
     prompt_stable_prefix: bool = False
     history_append_only: bool = False
     tool_output_bound: bool = False
+    stream_degeneration_guard: bool = False
 
 
     # Flag surface (2026-11-18): see the registry block above. Defaults mirror the registry.

@@ -75,6 +75,8 @@ HOT_SWAP_FEATURES = {
     "repl_syntax_loop_breaker", "repl_plan_narration_nudge", "harness_failure_ratio_guard",
     # Prefix-cache layout (default off): read per prompt build / per turn-memory add via features().
     "prompt_stable_prefix", "history_append_only", "tool_output_bound",
+    # Degenerate-generation stream abort (default off): read per streamed chat call via features().
+    "stream_degeneration_guard",
     # D-RI-MONTY-LANE (2026-11-18): REPL cells routed to a confined Monty worker with CPython fallback.
     # Read live per REPL construction and per cell; telemetry in logs/monty_lane.jsonl.
     "monty_repl",
