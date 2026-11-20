@@ -92,8 +92,15 @@ class RootLMPrompt:
     """Codemode fix 2 (``ORCHESTRATOR_REPL_TURN_MEMORY``): the previous-turns block, APPENDED after every other
     section (never inserted before them) so the cacheable prefix is unchanged. Empty renders nothing."""
 
-    def to_string(self, prefix_stable: bool = False) -> str:
+    selected_tools: str = ""
+    """Prefix-cache layout (``prompt_stable_prefix``): the per-request selected-tools block, rendered AFTER the
+    task so ``tools`` stays identical across requests. Empty renders nothing (legacy puts it inside ``tools``)."""
+
+    def to_string(self, prefix_stable: bool = False, stable_prefix: bool = False) -> str:
         """Convert to a single prompt string.
+
+        ``stable_prefix`` (flag ``prompt_stable_prefix``) renders system, tools, rules, task, instruction (the stable
+        prefix), then selected_tools, history, state, context, reference_code, turn_tail. It overrides ``prefix_stable``.
 
         Args:
             prefix_stable: When True, render the FIXED sections (task,
@@ -105,9 +112,9 @@ class RootLMPrompt:
                 stay AFTER the fixed prefix for the cache to help at all.
                 Default False preserves the legacy order.
         """
-        return "\n".join(text for _, text in self._parts(prefix_stable))
+        return "\n".join(text for _, text in self._parts(prefix_stable, stable_prefix))
 
-    def _parts(self, prefix_stable: bool = False) -> list[tuple[str, str]]:
+    def _parts(self, prefix_stable: bool = False, stable_prefix: bool = False) -> list[tuple[str, str]]:
         """Ordered ``(kind, line)`` pairs; ``to_string`` joins the lines with newlines.
 
         ``kind`` is the RTE-LOG-1 block kind (``src/backends/prompt_layout.py``);
@@ -120,6 +127,26 @@ class RootLMPrompt:
             parts.extend([("tools", ""), ("tools", "## Available Tools"), ("tools", self.tools)])
         if self.rules:
             parts.extend([("rules", ""), ("rules", "## Rules"), ("rules", self.rules)])
+        if stable_prefix:
+            if self.task:
+                parts.extend([("task", ""), ("task", "## Task"), ("task", self.task)])
+            if self.instruction:
+                parts.extend([("task", ""), ("task", "## Your Code"), ("task", self.instruction)])
+            # Append-only region (grows by whole turns), then the per-turn volatile sections.
+            if self.selected_tools:
+                parts.extend([("tools", ""), ("tools", self.selected_tools)])
+            if self.history:
+                parts.extend([("history", ""), ("history", self.history)])
+            if self.state:
+                parts.extend([("state", ""), ("state", "## Current State"), ("state", self.state)])
+            if self.context:
+                parts.extend([("context", ""), ("context", self.context)])
+            if self.reference_code:
+                parts.extend([("reference_code", ""), ("reference_code", "## Reference Code"),
+                              ("reference_code", self.reference_code)])
+            if self.turn_tail:
+                parts.extend([("state", ""), ("state", self.turn_tail)])
+            return parts
         if prefix_stable:
             # Fixed sections first — shared across every turn of a session.
             if self.task:
@@ -152,7 +179,7 @@ class RootLMPrompt:
             parts.extend([("history", ""), ("history", self.history)])
         return parts
 
-    def section_spans(self, prefix_stable: bool = False) -> list[tuple[str, int, int]]:
+    def section_spans(self, prefix_stable: bool = False, stable_prefix: bool = False) -> list[tuple[str, int, int]]:
         """``(kind, start, end)`` character spans of each section in ``to_string``.
 
         Adjacent lines of one kind merge; a span starts after its leading blank
@@ -160,7 +187,7 @@ class RootLMPrompt:
         """
         spans: list[tuple[str, int, int]] = []
         pos = 0
-        for i, (kind, text) in enumerate(self._parts(prefix_stable)):
+        for i, (kind, text) in enumerate(self._parts(prefix_stable, stable_prefix)):
             start, end = pos, pos + len(text)
             pos = end + 1  # the "\n" join
             if text == "":

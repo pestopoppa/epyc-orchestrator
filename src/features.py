@@ -352,6 +352,11 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("repl_syntax_loop_breaker", False, False, "REPL_SYNTAX_LOOP_BREAKER", "Harness guard A: count consecutive SyntaxError REPL turns per task; at 2 append a one-shot 'emit a minimal valid snippet' hint to the parser error, at 3 end the task as a harness failure (harness:syntax_loop) instead of burning turns/escalating"),
     FeatureSpec("repl_plan_narration_nudge", False, False, "REPL_PLAN_NARRATION_NUDGE", "Harness guard B: a prose-only turn that narrates a plan ('I will', 'Let me', 'Next I', 'First,', 'Plan:') is not rescued into a bogus FINAL; it gets a continue-nudge ('emit one python block now') counted by MAX_CONSECUTIVE_NUDGES"),
     FeatureSpec("harness_failure_ratio_guard", False, False, "HARNESS_FAILURE_RATIO_GUARD", "Harness guard C: when REPL+tool failures / turns >= 0.5 over >= 4 turns, mark artifacts harness_suspect=True and refuse tier escalation (the harness, not the model, is failing)"),
+    # Prefix-cache layout (hybrid Qwen3.6-35B-A3B cannot --cache-reuse; it rolls back to context checkpoints, so a
+    # byte change early in the prompt or a rewrite of earlier turns discards most of the KV cache). All default OFF.
+    FeatureSpec("prompt_stable_prefix", False, False, "PROMPT_STABLE_PREFIX", "Prefix-cache layout (a): REPL root prompt renders system/tools/rules/task/instruction first (the stable prefix); the per-request selected-tools block, the previous-turns history and then the volatile state/last-output/turn counter follow, and selected tools are listed sorted by name. Off = legacy layout, byte-identical"),
+    FeatureSpec("history_append_only", False, False, "HISTORY_APPEND_ONLY", "Prefix-cache layout (b): REPL turn memory (repl_turn_memory, N>0) keeps every turn until a char budget is hit, then drops the oldest turns once, down to half the budget (instead of sliding the N-turn window every turn); the /v1 B2 history fold (context_compression) only runs past a hard size. Off = C3 sliding window exactly as before"),
+    FeatureSpec("tool_output_bound", False, False, "TOOL_OUTPUT_BOUND", "Prefix-cache layout (c): tool/REPL output and error text stored in REPL turn memory is cut to 2000 chars (3:1 head:tail, deterministic marker) when stored. Off = the 4000-char render-time clip only"),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
@@ -936,6 +941,10 @@ class Features:
     repl_syntax_loop_breaker: bool = False
     repl_plan_narration_nudge: bool = False
     harness_failure_ratio_guard: bool = False
+    # Prefix-cache layout flags (default off): stable prompt prefix, append-only REPL history, tool-output bound.
+    prompt_stable_prefix: bool = False
+    history_append_only: bool = False
+    tool_output_bound: bool = False
 
 
     # Flag surface (2026-11-18): see the registry block above. Defaults mirror the registry.

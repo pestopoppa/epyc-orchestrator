@@ -17,7 +17,6 @@ and the KV-cache prefix; across turns only the tail grows (and the window slides
 from __future__ import annotations
 
 import os
-from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -38,16 +37,54 @@ def turn_memory_n(environ: Mapping[str, str] | None = None) -> int:
     return max(0, min(n, MAX_TURNS))
 
 
-class TurnMemory:
-    """Bounded deque of ``{"turn", "code", "output", "error"}`` entries."""
+# Prefix-cache layout (flags ``history_append_only`` / ``tool_output_bound``, default off).
+APPEND_ONLY_CHAR_BUDGET = 60000  # hard limit on stored history chars before ONE truncation
+APPEND_ONLY_TRUNCATE_TO = APPEND_ONLY_CHAR_BUDGET // 2  # the truncation lands here, so the next one is far away
+TOOL_OUTPUT_BOUND_CHARS = 2000
 
-    def __init__(self, n: int):
+
+def bound_text(text: str, limit: int = TOOL_OUTPUT_BOUND_CHARS) -> str:
+    """Deterministic head:tail (3:1) cut of ``text`` to about ``limit`` chars with a fixed marker."""
+    if len(text) <= limit:
+        return text
+    tail = limit // 4
+    head = limit - tail
+    return text[:head] + f"\n...[{len(text) - head - tail} chars omitted by tool_output_bound]...\n" + text[len(text) - tail:]
+
+
+def _entry_chars(e: Mapping[str, Any]) -> int:
+    return sum(min(len(str(e.get(k, "") or "")), DEFAULT_PREVIEW_CHARS) for k in ("code", "output", "error"))
+
+
+class TurnMemory:
+    """Bounded list of ``{"turn", "code", "output", "error"}`` entries.
+
+    Default (``append_only`` False): a sliding window of the last ``n`` entries, exactly the C3 behaviour.
+    ``append_only``: keep every entry (the ``n`` window is not applied) until the stored size passes
+    ``APPEND_ONLY_CHAR_BUDGET``; then drop the oldest entries ONCE, down to ``APPEND_ONLY_TRUNCATE_TO``, so
+    already-sent turns are never rewritten in between. ``bound_output`` cuts output/error text at store time.
+    """
+
+    def __init__(self, n: int, append_only: bool = False, bound_output: bool = False):
         self.n = max(0, int(n))
-        self._d: deque[dict[str, Any]] = deque(maxlen=self.n or None)
+        self.append_only = bool(append_only)
+        self.bound_output = bool(bound_output)
+        self._d: list[dict[str, Any]] = []
 
     def add(self, turn: int, code: str, output: str = "", error: str = "") -> None:
-        if self.n:
-            self._d.append({"turn": int(turn), "code": code or "", "output": output or "", "error": error or ""})
+        if not self.n:
+            return
+        output, error = output or "", error or ""
+        if self.bound_output:
+            output, error = bound_text(output), bound_text(error)
+        self._d.append({"turn": int(turn), "code": code or "", "output": output, "error": error})
+        if not self.append_only:
+            del self._d[: max(0, len(self._d) - self.n)]
+            return
+        total = sum(_entry_chars(e) for e in self._d)
+        if total > APPEND_ONLY_CHAR_BUDGET:
+            while len(self._d) > 1 and total > APPEND_ONLY_TRUNCATE_TO:
+                total -= _entry_chars(self._d.pop(0))
 
     def entries(self) -> list[dict[str, Any]]:
         return list(self._d)

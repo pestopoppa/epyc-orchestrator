@@ -78,6 +78,9 @@ def _record_session_turn(
             if not isinstance(_mem, TurnMemory) or _mem.n != _n:
                 _mem = TurnMemory(_n)
                 state.turn_memory = _mem  # type: ignore[attr-defined]
+            # Prefix-cache layout flags (default off): append-only history and the stored-output bound.
+            _mem.append_only = bool(getattr(_get_features(), "history_append_only", False))
+            _mem.bound_output = bool(getattr(_get_features(), "tool_output_bound", False))
             _mem.add(max(0, state.turns - 1), code, verbatim_output if verbatim_output is not None else output,
                      (verbatim_error if verbatim_error is not None else error) or "")
     except Exception:  # noqa: BLE001 - memory must never break a turn

@@ -207,6 +207,9 @@ def _record_compression_fallback(exc: BaseException, message_count: int) -> None
     )
 
 
+_APPEND_ONLY_FOLD_CHARS = 120000  # history_append_only: B2 fold runs only above this many content chars
+
+
 def _compressed_history_dicts(history_messages: list[OpenAIMessage]) -> list[dict[str, Any]]:
     """Return history dicts, B2-compressed when the flag is on and the history is long.
 
@@ -218,6 +221,11 @@ def _compressed_history_dicts(history_messages: list[OpenAIMessage]) -> list[dic
     unfolded = [_history_message_dict(m) for m in history_messages]
     if not (_feat().context_compression and len(history_messages) > 8):
         return unfolded
+    if _feat().history_append_only:
+        # Prefix-cache layout (b): the fold re-renders already-sent turns on every request, so it only runs once
+        # the history passes a hard size (then it is one deliberate rewrite, not a per-request one).
+        if sum(len(str(m.get("content") or "")) for m in unfolded) <= _APPEND_ONLY_FOLD_CHARS:
+            return unfolded
     try:
         from src.context_compression import ContextCompressor
 

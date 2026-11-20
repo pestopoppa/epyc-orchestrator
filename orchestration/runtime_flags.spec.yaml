@@ -73,6 +73,7 @@ flags:
   graph_router: baseline
   harness_failure_ratio_guard: baseline
   helpfulness_scoring: baseline
+  history_append_only: baseline
   hierarchical_speculation: baseline
   ingest_triviality_guard: baseline
   injection_scanning: baseline
@@ -109,6 +110,7 @@ flags:
   plan_review: baseline
   prefix_stable_order: baseline
   process_reward_telemetry: baseline
+  prompt_stable_prefix: baseline
   react_mode: baseline
   reasoning_length_alarm: baseline
   reasoning_runaway_retry: baseline
@@ -169,6 +171,7 @@ flags:
   swarm_fanout: baseline
   task_token_budget: baseline
   thinking_roles_chat_lane: baseline
+  tool_output_bound: baseline
   tool_output_compression: baseline
   tool_result_clearing: baseline
   tool_selector: baseline

@@ -59,6 +59,13 @@ def _selected_tools_or(static_tools: str, task: str) -> str:
     # The pick ADDS to the static tools text: it never replaces it (arm C of the probe dropped the static list and lost the
     # file tools). list_tools() stays in both the static text and the selected block.
     return static_tools if selected is None else f"{static_tools}\n\n{selected}"
+
+
+def _selected_block_only(task: str) -> str:
+    """``prompt_stable_prefix``: the per-request selected-tools block alone ('' when the selector is off/absent)."""
+    from src.prompt_builders.tool_selector import maybe_selected_tools_block
+
+    return maybe_selected_tools_block(task) or ""
 _CORPUS_REGISTRY: Any | None = None
 _DEFAULT_CORPUS_SLOW_QUERY_MS = 5000.0
 _CORPUS_TASK_SCOPED_ROLES_ENV = "ORCHESTRATOR_CORPUS_TASK_SCOPED_ROLES"
@@ -286,6 +293,9 @@ class PromptBuilder:
         from src.prompt_builders.turn_memory import render_turn_memory, turn_memory_n
 
         _mem_n = turn_memory_n()
+        if _mem_n and getattr(_get_features(), "history_append_only", False):
+            # Prefix-cache layout (b): TurnMemory owns the (append-only) retention; render every stored entry.
+            _mem_n = max(_mem_n, len(turn_history or ()))
         _history_block = render_turn_memory(list(turn_history or ()), _mem_n)
         _last_in_history = bool(_history_block)
         # CT-12.3a: user task, REPL output/error, state previews and retrieved
@@ -298,7 +308,9 @@ class PromptBuilder:
 
         # RTE-PFX-3: with repl_turn_counter_tail the per-turn counter leaves the head of the
         # state block (the first divergence between consecutive turns) for the prompt tail.
-        _counter_tail = bool(getattr(_get_features(), "repl_turn_counter_tail", False))
+        # prompt_stable_prefix implies the tail counter (the counter at the head of state would break the prefix).
+        _stable_prefix = bool(getattr(_get_features(), "prompt_stable_prefix", False))
+        _counter_tail = _stable_prefix or bool(getattr(_get_features(), "repl_turn_counter_tail", False))
         from src.prompt_builders import codemode_prompt as _cm
 
         _system_text = (
@@ -308,7 +320,8 @@ class PromptBuilder:
         )
         prompt = RootLMPrompt(
             system=with_agent_file(_system_text, role) if role else _system_text,
-            tools=_selected_tools_or(self._resolve_tools(), original_prompt),
+            tools=self._resolve_tools() if _stable_prefix else _selected_tools_or(self._resolve_tools(), original_prompt),
+            selected_tools=(_selected_block_only(original_prompt) if _stable_prefix else ""),
             rules=self._resolve_rules(),
             state=state if _counter_tail else f"Turn {turn + 1}\n{state}",
             task=original_prompt,
@@ -397,8 +410,8 @@ class PromptBuilder:
         # RTE-Prefix: when enabled, fixed sections render before per-turn ones
         # so REPL turns share a longer KV-cache prefix (see to_string docs).
         _stable = _get_features().prefix_stable_order
-        text = prompt.to_string(prefix_stable=_stable)
-        _record_root_lm_layout(prompt, text, _stable, turn, routing_context, _tool_output_block)
+        text = prompt.to_string(prefix_stable=_stable, stable_prefix=_stable_prefix)
+        _record_root_lm_layout(prompt, text, _stable, turn, routing_context, _tool_output_block, _stable_prefix)
         return text
 
     def build_escalation_prompt(
@@ -869,6 +882,7 @@ def build_stage2_review_prompt(
 def _record_root_lm_layout(
     prompt: RootLMPrompt, text: str, prefix_stable: bool, turn: int, routing_context: str,
     tool_output: str = "",
+    stable_prefix: bool = False,
 ) -> None:
     """RTE-LOG-1: stage the block layout of a rendered Root LM prompt (hashes only).
 
@@ -880,7 +894,7 @@ def _record_root_lm_layout(
 
         if not prompt_layout.enabled():
             return
-        spans = prompt.section_spans(prefix_stable)
+        spans = prompt.section_spans(prefix_stable, stable_prefix)
         routing = f"## Routing Intelligence\n{routing_context}" if routing_context else ""
         named = []
         # Carve each sub-block out of the context span so the kinds never overlap.
