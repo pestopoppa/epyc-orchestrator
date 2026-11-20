@@ -29,6 +29,35 @@ def _looks_like_prompt_echo(text: str) -> bool:
     return any(m in hay for m in markers)
 
 
+_PLAN_LINE_RE = re.compile(
+    r"^\s*(?:[-*>\d.)\s]*)(?:"
+    r"i\s+will\b|i'll\b|i\s+am\s+going\s+to\b|i'm\s+going\s+to\b|i\s+need\s+to\b|i\s+should\b|"
+    r"let\s+me\b|let's\b|let\s+us\b|"
+    r"next,?\s+i\b|now,?\s+i\b|"
+    r"first,|first\s+i\b|then,?\s+i\b|"
+    r"plan\s*:|my\s+plan\b|step\s*1\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+_INLINE_ANSWER_RE = re.compile(r"\b(?:final\s+|correct\s+)?answer\s+is\b|\bI\s+(?:choose|select|pick)\b", re.IGNORECASE)
+
+
+def _looks_like_plan_narration(text: str) -> bool:
+    """Conservative: True when prose only narrates a plan/intent (no explicit answer).
+
+    A line opening with a plan/intent marker ("I will", "Let me", "Next I", "First,",
+    "Plan:") makes the text plan-shaped, UNLESS it also states an explicit answer
+    ("The answer is B", "I will go with B", "I choose C", ...), which is a real answer.
+    """
+    if not text or not text.strip() or "```" in text:
+        return False
+    if _PROSE_ANSWER_RE.search(text) or _INLINE_ANSWER_RE.search(text):
+        return False
+    return any(_PLAN_LINE_RE.match(line) for line in text.splitlines() if line.strip())
+
+
 def _should_attempt_prose_rescue(raw_output: str, extracted_code: str) -> bool:
     """Allow prose rescue only for short, answer-like outputs."""
     if not _repl_prose_rescue_enabled():

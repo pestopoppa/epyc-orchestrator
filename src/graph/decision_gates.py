@@ -64,6 +64,19 @@ def _regeneration_cap_reached(ctx: Ctx) -> bool:
     return isinstance(cap, int) and cap > 0 and ctx.state.total_repl_failures >= cap
 
 
+HARNESS_FAILURE_RATIO = 0.5
+HARNESS_FAILURE_MIN_TURNS = 4
+
+
+def _harness_failure_ratio_tripped(state: TaskState) -> bool:
+    """True when REPL+tool failures / turns >= 0.5 over >= 4 turns (pure; no flag check)."""
+    turns = state.turns
+    if turns < HARNESS_FAILURE_MIN_TURNS:
+        return False
+    failures = state.harness_repl_failures + state.harness_tool_failures
+    return failures / turns >= HARNESS_FAILURE_RATIO
+
+
 def _should_escalate(
     ctx: Ctx,
     error_category: ErrorCategory,
@@ -76,6 +89,18 @@ def _should_escalate(
     if _regeneration_cap_reached(ctx):
         log.warning("Regeneration cap (%d failed turns) reached; refusing escalation",
                     state.total_repl_failures)
+        return False
+
+    # harness_failure_ratio_guard: a task whose turns mostly fail in the REPL/tools is a harness
+    # problem, not a model-capability gap, so a bigger tier would not fix it.
+    from src.features import features as _get_features
+
+    if _get_features().harness_failure_ratio_guard and _harness_failure_ratio_tripped(state):
+        state.artifacts["harness_suspect"] = True
+        log.warning(
+            "Harness failure ratio %d/%d turns >= %.1f; marking harness_suspect, refusing escalation",
+            state.harness_repl_failures + state.harness_tool_failures, state.turns, HARNESS_FAILURE_RATIO,
+        )
         return False
 
     # Format errors never escalate

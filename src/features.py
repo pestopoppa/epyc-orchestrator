@@ -347,6 +347,11 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # explicit ContextOverflowError (graph/helpers._execute_turn).
     FeatureSpec("repl_compaction", False, False, "REPL_COMPACTION", "OAB-19: run session compaction on REPL turns (off = retired; REPL turns keep full context, since TaskState.context is not rendered into turn prompts)"),
     FeatureSpec("repl_answer_force", False, False, "REPL_ANSWER_FORCE", "UFH14-B1 F2: wall-time forced-answer turn (FINAL now at a fraction of the request budget; no compaction on that turn)"),
+    # REPL harness-robustness guards (taskflow canary: a local 35B scored 0/10 from harness failures alone).
+    # All default OFF, runtime-toggleable (POST /config) and on the autopilot flag surface.
+    FeatureSpec("repl_syntax_loop_breaker", False, False, "REPL_SYNTAX_LOOP_BREAKER", "Harness guard A: count consecutive SyntaxError REPL turns per task; at 2 append a one-shot 'emit a minimal valid snippet' hint to the parser error, at 3 end the task as a harness failure (harness:syntax_loop) instead of burning turns/escalating"),
+    FeatureSpec("repl_plan_narration_nudge", False, False, "REPL_PLAN_NARRATION_NUDGE", "Harness guard B: a prose-only turn that narrates a plan ('I will', 'Let me', 'Next I', 'First,', 'Plan:') is not rescued into a bogus FINAL; it gets a continue-nudge ('emit one python block now') counted by MAX_CONSECUTIVE_NUDGES"),
+    FeatureSpec("harness_failure_ratio_guard", False, False, "HARNESS_FAILURE_RATIO_GUARD", "Harness guard C: when REPL+tool failures / turns >= 0.5 over >= 4 turns, mark artifacts harness_suspect=True and refuse tier escalation (the harness, not the model, is failing)"),
     # intake-614/615 DAR-6 scaffolding (default-off in BOTH test and prod; no production routing until DAR-6.5 A/B clears)
     FeatureSpec("swarm_fanout", False, False, "SWARM_FANOUT", "DAR-6.1: fan high-injection-risk prompts to N>=2 concurrent serves + BT-aggregate (J14). Scaffolding only — default-off until the DAR-6.5 injection-suite A/B clears (handoffs/active/decision-aware-routing.md § DAR-6.5)."),
     # P21.A test-time compute: DeepConf offline confidence-filtered self-consistency (intake-603)
@@ -927,6 +932,10 @@ class Features:
     repl_compaction: bool = False
     # UFH14-B1 F2: wall-time forced-answer turn in the REPL graph.
     repl_answer_force: bool = False
+    # REPL harness-robustness guards (default off): syntax-loop breaker, plan-narration nudge, failure-ratio guard.
+    repl_syntax_loop_breaker: bool = False
+    repl_plan_narration_nudge: bool = False
+    harness_failure_ratio_guard: bool = False
 
 
     # Flag surface (2026-11-18): see the registry block above. Defaults mirror the registry.

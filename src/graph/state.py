@@ -101,6 +101,11 @@ class TaskState:
     current_role: Role | str = Role.FRONTDOOR
     consecutive_failures: int = 0
     total_repl_failures: int = 0
+    # Harness-robustness guards (flag-gated, untouched while the flags are off).
+    syntax_error_streak: int = 0  # repl_syntax_loop_breaker: consecutive SyntaxError turns
+    syntax_hint_sent: bool = False  # repl_syntax_loop_breaker: the one-shot hint was already injected
+    harness_repl_failures: int = 0  # harness_failure_ratio_guard: turns whose REPL execution errored
+    harness_tool_failures: int = 0  # harness_failure_ratio_guard: error-free REPL turns whose tool call returned an error
     consecutive_nudges: int = 0
     escalation_count: int = 0
     role_history: list[str] = field(default_factory=list)

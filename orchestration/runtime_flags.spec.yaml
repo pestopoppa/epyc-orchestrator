@@ -71,6 +71,7 @@ flags:
   generation_monitor: baseline
   gpu_shadow_lane: baseline
   graph_router: baseline
+  harness_failure_ratio_guard: baseline
   helpfulness_scoring: baseline
   hierarchical_speculation: baseline
   ingest_triviality_guard: baseline
@@ -115,6 +116,8 @@ flags:
   repl_answer_force: baseline
   repl_child_lane: baseline
   repl_classify: baseline
+  repl_plan_narration_nudge: baseline
+  repl_syntax_loop_breaker: baseline
   repl_compaction: baseline
   repl_embedding_pool: baseline
   repl_explicit_final: baseline

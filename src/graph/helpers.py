@@ -38,6 +38,7 @@ from src.graph.answer_resolution import (  # noqa: F401
     _FINAL_RE,
     _extract_final_from_raw,
     _extract_prose_answer,
+    _looks_like_plan_narration,
     _looks_like_prompt_echo,
     _rescue_from_last_output,
     _resolve_answer,
@@ -794,6 +795,49 @@ def _backend_infra_sentinel(raw_output: str) -> str | None:
     this.
     """
     return _inband_error_text(raw_output)
+
+
+PLAN_NARRATION_NUDGE = (
+    "No code block found. Emit one ```python block now that performs the next step."
+)
+
+SYNTAX_LOOP_HINT = (
+    "Hint: your last two code blocks were not valid Python. Emit a minimal valid snippet "
+    "(one short ```python block, no prose inside it) that performs only the next step."
+)
+SYNTAX_LOOP_LIMIT = 3
+
+
+def _guard_syntax_loop(state: TaskState, result: Any) -> tuple[str | None, bool]:
+    """repl_syntax_loop_breaker bookkeeping for one executed turn.
+
+    Returns ``(hint, terminal)``: ``hint`` is appended to the parser error on the 2nd consecutive
+    SyntaxError turn (once per task); ``terminal`` is True on the 3rd.
+    """
+    err = getattr(result, "error", None)
+    if err and not getattr(result, "is_final", False) and str(err).startswith("SyntaxError"):
+        state.syntax_error_streak += 1
+    else:
+        state.syntax_error_streak = 0
+        return None, False
+    if state.syntax_error_streak >= SYNTAX_LOOP_LIMIT:
+        return None, True
+    if state.syntax_error_streak == 2 and not state.syntax_hint_sent:
+        state.syntax_hint_sent = True
+        return SYNTAX_LOOP_HINT, False
+    return None, False
+
+
+def _note_turn_health(state: TaskState, result: Any) -> None:
+    """harness_failure_ratio_guard bookkeeping: count a failing turn once (REPL error, else tool error)."""
+    if getattr(result, "is_final", False):
+        return
+    if getattr(result, "error", None):
+        state.harness_repl_failures += 1
+        return
+    out = getattr(result, "output", "") or ""
+    if isinstance(out, str) and out.lstrip().startswith(("[ERROR", "[TOOL ERROR")):
+        state.harness_tool_failures += 1
 
 
 def _no_executable_code_nudge(state: TaskState, *, comment_ratio: float | None = None) -> str:
@@ -2086,6 +2130,19 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     _update_workspace_from_turn(state, role, raw_llm_output, None)
 
+    # repl_plan_narration_nudge: a prose-only turn that merely narrates a plan must not end the
+    # loop (rescue) or run as Python; continue-nudge it (counted by MAX_CONSECUTIVE_NUDGES).
+    if (
+        "FINAL(" not in code
+        and _get_features().repl_plan_narration_nudge
+        and _looks_like_plan_narration(raw_llm_output)
+    ):
+        log.info("Plan narration without code (turn %d), nudging model", state.turns)
+        nudge = PLAN_NARRATION_NUDGE
+        _emit_bep_trace(False, "plan_narration")
+        _record_session_turn(state, role=str(role), code=code, nudge=nudge)
+        return "", None, False, {"_nudge": nudge}
+
     # Prose answer rescue: model answered in prose (e.g. "The answer is D")
     # without producing FINAL() or code blocks.  Extract the answer from
     # the raw output and synthesize FINAL() to avoid an infinite REPL loop.
@@ -2267,6 +2324,25 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 is_final=True,
                 final_answer=final_rescue,
             )
+
+    # harness_failure_ratio_guard: tally failing turns (read by decision_gates._should_escalate).
+    if _get_features().harness_failure_ratio_guard:
+        _note_turn_health(state, result)
+
+    # repl_syntax_loop_breaker: 2nd consecutive SyntaxError gets a one-shot hint, the 3rd ends the task.
+    if _get_features().repl_syntax_loop_breaker:
+        _syntax_hint, _syntax_terminal = _guard_syntax_loop(state, result)
+        if _syntax_terminal:
+            _reason = "harness:syntax_loop"
+            _failure = (
+                f"[FAILED: {_reason} after {state.syntax_error_streak} consecutive SyntaxError turns: "
+                f"{' '.join(str(result.error).split())[:200]}]"
+            )
+            log.warning("REPL turn %d: %s -- ending task as a harness failure", state.turns, _reason)
+            _record_session_turn(state, role=str(role), code=code, error=_failure)
+            return "", _failure, False, {"_infra_failure": True, "harness_failure_reason": _reason}
+        if _syntax_hint:
+            result.error = f"{result.error}\n{_syntax_hint}"
 
     # input() violation nudge: model wrote code using input() which is blocked.
     # The REPL error hint is too subtle — provide a concrete template so the
