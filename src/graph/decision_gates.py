@@ -35,6 +35,11 @@ def _admit_early_abort_escalation(ctx: Ctx) -> bool:
     state = ctx.state
     if state.escalation_count >= ctx.deps.config.max_escalations:
         return False
+    # harness_failure_ratio_guard also covers first-strike aborts (they bypass _should_escalate).
+    from src.features import features as _get_features
+
+    if _get_features().harness_failure_ratio_guard and _harness_failure_ratio_tripped(state):
+        return False
     return not _detect_role_cycle_impl(state.role_history)
 
 

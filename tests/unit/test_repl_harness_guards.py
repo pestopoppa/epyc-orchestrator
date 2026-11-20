@@ -255,6 +255,17 @@ def test_ratio_guard_on_under_four_turns_still_escalates():
         assert _should_escalate(ctx, ErrorCategory.CODE, Role.CODER_ESCALATION) is True
 
 
+def test_ratio_guard_covers_early_abort_admission():
+    from src.graph.decision_gates import _admit_early_abort_escalation
+
+    with patch("src.graph.decision_gates._detect_role_cycle_impl", return_value=False):
+        with _with_flag(True):
+            assert _admit_early_abort_escalation(_esc_ctx(turns=4, repl_fail=2)) is False
+            assert _admit_early_abort_escalation(_esc_ctx(turns=4, repl_fail=1)) is True
+        with _with_flag(False):
+            assert _admit_early_abort_escalation(_esc_ctx(turns=4, repl_fail=4)) is True
+
+
 def test_ratio_guard_off_escalates_as_before():
     ctx = _esc_ctx(turns=4, repl_fail=4)
     with _with_flag(False), patch("src.graph.decision_gates._detect_role_cycle_impl", return_value=False):
