@@ -1184,6 +1184,13 @@ class TestMultiDimensionalCost:
         expected: dict[str, tuple[float, str]] = {}
         for role, record in records.items():
             quality, source = _compiled_quality_prior(role, record)
+            if quality is None and record.get("deployment_status") == "live_stack":
+                # INF-45: a measured judge-suite figure keyed by the role's model_id.
+                measured = q_scorer_module.MEASURED_QUALITY_BY_MODEL_ID.get(
+                    str(record.get("model_id"))
+                )
+                if measured is not None:
+                    quality, source = measured["value"], "measured_judge_suite"
             if quality is None:
                 assert role not in cfg.baseline_quality_by_role, (
                     f"compiled role {role!r} has no measured quality "
@@ -1727,3 +1734,83 @@ class TestExternalScoreIdentity:
                 embedding=[1.0] * 1024,
                 action_type="",
             )
+
+
+# ===== INF-45: measured judge quality wired; unmeasured roles fail closed =====
+
+
+class TestMeasuredQualityAndFailClosed:
+    def _records(self):
+        from orchestration.repl_memory.q_scorer import MEASURED_QUALITY_BY_MODEL_ID  # noqa: F401
+
+        out = {}
+        for role, model_id, quality in (
+            ("coder_escalation", "qwen3.8-27b-q8_0", None),
+            ("architect_critic", "qwen3.8-27b-q8_0", None),
+            ("architect_general", "qwen3.8-flash-next-ud-iq4_xs", None),
+            ("frontdoor", "qwen3.6-35b-a3b-mtp-q8_0", 0.84),
+        ):
+            rec = _minimal_stack_prior_record(role, quality_overall=quality)
+            rec["model_id"] = model_id
+            out[role] = rec
+        return out
+
+    def test_measured_quality_reaches_only_roles_served_by_that_model(self, tmp_path):
+        path = _write_stack_priors(tmp_path / "sp.yaml", self._records())
+        priors = stack_prior_q_scorer_priors_by_role(path)
+
+        for role in ("coder_escalation", "architect_critic"):
+            assert priors.baseline_quality_by_role[role] == pytest.approx(0.886)
+            assert priors.baseline_quality_source_by_role[role] == "measured_judge_suite"
+            prov = priors.baseline_quality_provenance_by_role[role]
+            assert prov["date"] == "2026-11-11"
+            assert prov["report"].endswith("inf45-judge79-q38-27b-20261111/out/report.json")
+            assert prov["score"] == "210/237"
+        # A role on ANOTHER model never receives the 27B number.
+        assert "architect_general" not in priors.baseline_quality_by_role
+        assert priors.baseline_quality_source_by_role["architect_general"] == "unscored"
+        assert priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.84)
+        assert priors.baseline_quality_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert validate_live_q_scorer_prior_sources(path) == []
+
+    def test_unmeasured_role_drops_degraded_seed_value(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            q_scorer_module, "_baseline_quality_by_role",
+            lambda priors=None: {"architect_general": 0.94},
+        )
+        path = _write_stack_priors(tmp_path / "sp.yaml", self._records())
+        priors = stack_prior_q_scorer_priors_by_role(path)
+        assert "architect_general" not in priors.baseline_quality_by_role
+        assert priors.baseline_quality_source_by_role["architect_general"] == "unscored"
+        assert PRIOR_SOURCE_DEGRADED_FALLBACK not in (
+            priors.baseline_quality_source_by_role["architect_general"],
+        )
+
+    def test_unscored_is_rejected_when_compiled_prior_is_not_declared_null(self, tmp_path):
+        recs = self._records()
+        # A compiled prior that is NOT declared null yet yields no usable value
+        # (out of range) must not be waved through as an honest absence.
+        recs["architect_general"]["priors"]["quality_overall"] = 7.0
+        path = _write_stack_priors(tmp_path / "sp.yaml", recs)
+        errors = validate_live_q_scorer_prior_sources(path)
+        assert errors, errors
+        assert any("architect_general" in e and "unscored" in e for e in errors)
+
+    def test_measured_source_without_provenance_is_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(
+            q_scorer_module.MEASURED_QUALITY_BY_MODEL_ID,
+            "qwen3.8-27b-q8_0",
+            {"value": 0.886},
+        )
+        path = _write_stack_priors(tmp_path / "sp.yaml", self._records())
+        errors = validate_live_q_scorer_prior_sources(path)
+        assert any("coder_escalation" in e and "measured_judge_suite" in e for e in errors)
+
+    def test_real_compiled_priors_have_no_degraded_quality(self):
+        priors = stack_prior_q_scorer_priors_by_role()
+        assert PRIOR_SOURCE_DEGRADED_FALLBACK not in set(
+            priors.baseline_quality_source_by_role.values()
+        )
+        assert validate_live_q_scorer_prior_sources() == []
+        assert priors.baseline_quality_by_role["coder_escalation"] == pytest.approx(0.886)
+        assert "architect_general" not in priors.baseline_quality_by_role

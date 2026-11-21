@@ -419,6 +419,33 @@ PRIOR_SOURCE_STACK_PRIORS = "stack_priors"
 PRIOR_SOURCE_MODEL_DESCRIPTORS = "model_descriptors"
 PRIOR_SOURCE_REGISTRY = "registry"
 PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
+# INF-45 (2026-11-21): a live role whose model has NO measured quality is
+# explicitly UNSCORED: no value is carried, and the source says so. It is never
+# back-filled from the degraded table (a number from somewhere else).
+PRIOR_SOURCE_UNSCORED = "unscored"
+# A whole-model quality measured on THIS stack by the canonical judge suite and
+# recorded in MEASURED_QUALITY_BY_MODEL_ID below, with provenance.
+PRIOR_SOURCE_MEASURED_JUDGE_SUITE = "measured_judge_suite"
+
+# Measured whole-model quality for models whose compiled stack prior is null
+# (no public benchmark set to derive one from). Keyed by compiled `model_id`, so
+# the value reaches ONLY roles actually served by that model.
+#
+# Qwen3.8-27B-Q8_0 (+ DFlash2-Q8_0 drafter): canonical 8-suite judge run,
+# 210/237 = 0.886, Claude-judged, decision_grade, 2026-11-11. The basis is a
+# 237-point 8-suite denominator: it is NOT comparable to the 183-point 6-suite
+# frontdoor anchor (report.json -> full_canonical_8suite.comparability_note), so
+# it is labelled with its own source rather than "stack_priors".
+MEASURED_QUALITY_BY_MODEL_ID: Dict[str, Dict[str, Any]] = {
+    "qwen3.8-27b-q8_0": {
+        "value": 0.886,
+        "score": "210/237",
+        "instrument": "canonical 8-suite judge (237-point basis)",
+        "date": "2026-11-11",
+        "report": "/mnt/raid0/llm/tmp/inf45-judge79-q38-27b-20261111/out/report.json",
+        "handoff": "handoffs/active/numa-placement-and-contention.md (INF-45)",
+    },
+}
 
 # 2026-08-12 (NIB2-57a): `roles.*.performance.optimized_tps` and
 # `roles.*.performance.baseline_tps` are DIFFERENT MEASUREMENTS — the same model
@@ -476,6 +503,9 @@ def _materialize_q_scorer_priors(priors: QScorerPriors) -> QScorerPriors:
             priors.memory_cost_source_by_role
         ),
         degraded_reason=priors.degraded_reason,
+        baseline_quality_provenance_by_role=_materialize_q_scorer_role_aliases(
+            priors.baseline_quality_provenance_by_role
+        ),
     )
 
 
@@ -490,6 +520,11 @@ class QScorerPriors:
     baseline_quality_source_by_role: Dict[str, str] = field(default_factory=dict)
     memory_cost_source_by_role: Dict[str, str] = field(default_factory=dict)
     degraded_reason: str | None = None
+    # role -> provenance record for quality values that came from
+    # MEASURED_QUALITY_BY_MODEL_ID (report path + date). Empty otherwise.
+    baseline_quality_provenance_by_role: Dict[str, Dict[str, Any]] = field(
+        default_factory=dict
+    )
 
     @property
     def uses_degraded_fallback(self) -> bool:
@@ -616,6 +651,7 @@ def stack_prior_q_scorer_priors_by_role(
     tps_sources = dict(fallback_priors.baseline_tps_source_by_role)
     quality_sources = dict(fallback_priors.baseline_quality_source_by_role)
     memory_sources = dict(fallback_priors.memory_cost_source_by_role)
+    quality_provenance: Dict[str, Dict[str, Any]] = {}
 
     try:
         live_role_records = _load_valid_stack_prior_role_records(stack_priors_path)
@@ -658,10 +694,25 @@ def stack_prior_q_scorer_priors_by_role(
             quality = _valid_quality(for_role.get("value"))
         if quality is None:
             quality = _valid_quality(priors.get("quality_overall"))
+        measured = None
+        if quality is None:
+            measured = MEASURED_QUALITY_BY_MODEL_ID.get(str(record.get("model_id")))
+            if measured is not None:
+                quality = _valid_quality(measured.get("value"))
         if quality is not None:
             for target_role in target_roles:
                 quality_by_role[target_role] = quality
-                quality_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
+                if measured is not None:
+                    quality_sources[target_role] = PRIOR_SOURCE_MEASURED_JUDGE_SUITE
+                    quality_provenance[target_role] = dict(measured)
+                else:
+                    quality_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
+        else:
+            # FAIL CLOSED: no measured quality for this role's model. Carry NO
+            # number (drop anything the degraded table seeded) and say so.
+            for target_role in target_roles:
+                quality_by_role.pop(target_role, None)
+                quality_sources[target_role] = PRIOR_SOURCE_UNSCORED
         memory_cost = priors.get("memory_cost")
         if isinstance(memory_cost, (int, float)) and float(memory_cost) > 0:
             for target_role in target_roles:
@@ -676,6 +727,7 @@ def stack_prior_q_scorer_priors_by_role(
             baseline_tps_source_by_role=tps_sources,
             baseline_quality_source_by_role=quality_sources,
             memory_cost_source_by_role=memory_sources,
+            baseline_quality_provenance_by_role=quality_provenance,
         )
     )
 
@@ -777,7 +829,15 @@ def validate_live_q_scorer_prior_sources(
             source = source_by_role.get(role, "<missing>")
             if source == PRIOR_SOURCE_STACK_PRIORS:
                 continue
-            if source == "<missing>" and _declared_null(role, prior_name):
+            if (
+                prior_name == "quality"
+                and source == PRIOR_SOURCE_MEASURED_JUDGE_SUITE
+                and role in priors.baseline_quality_by_role
+                and priors.baseline_quality_provenance_by_role.get(role, {}).get("report")
+            ):
+                # Measured on this stack, with provenance, for this role's model.
+                continue
+            if source in ("<missing>", PRIOR_SOURCE_UNSCORED) and _declared_null(role, prior_name):
                 # Honest absence, corroborated by the compiled artifact.
                 continue
             errors.append(
