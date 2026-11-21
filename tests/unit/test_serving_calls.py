@@ -432,3 +432,126 @@ def test_legacy_and_unstaged_lease_metadata_remains_unknown(log_file):
         assert info.get("lease_held_at_admission") is None
         assert info.get("lease_wait_observed_ms") is None
         assert info.get("lease_holder_ticket") is None
+
+
+# ===== INF-45 P2-2: identity fields on every record; population attribution =====
+
+
+@pytest.fixture
+def declared_priors(monkeypatch):
+    """Stub the compiled-priors declaration so tests never read the real yaml."""
+    sc._DECLARED_CACHE.update(key=None, by_port={})
+
+    def _set(by_port):
+        monkeypatch.setattr(sc, "_declared_by_port", lambda: by_port)
+
+    yield _set
+    sc._DECLARED_CACHE.update(key=None, by_port={})
+
+
+def test_absent_identity_keeps_keys_explicitly_null(log_file, declared_priors):
+    declared_priors({})
+    _Backend(_server_ok, base_url="http://localhost:8199").infer(
+        _role_config(), InferenceRequest(role="frontdoor", prompt="x")
+    )
+    [rec] = _records(log_file)
+    server = rec["server"]
+    assert server["identity_source"] == "absent"
+    assert "model_path" in server and server["model_path"] is None
+    assert "argv_sha256" in server and server["argv_sha256"] is None
+
+
+def test_declared_model_path_used_without_sidecar_and_never_invents_argv(
+    log_file, declared_priors
+):
+    declared_priors({8083: {"paths": {"/m/Qwen3.8-27B-Q8_0.gguf"}, "roles": {"coder_escalation"}}})
+    _Backend(_server_ok, base_url="http://localhost:8083").infer(
+        _role_config("coder_escalation"), InferenceRequest(role="coder_escalation", prompt="x")
+    )
+    [rec] = _records(log_file)
+    server = rec["server"]
+    assert server["identity_source"] == "stack_priors_declared"
+    assert server["model_path"] == "/m/Qwen3.8-27B-Q8_0.gguf"
+    assert server["argv_sha256"] is None
+    assert server["declared_roles"] == ["coder_escalation"]
+
+
+def test_ambiguous_declaration_is_not_identity(log_file, declared_priors):
+    declared_priors({8083: {"paths": {"/m/a.gguf", "/m/b.gguf"}, "roles": {"x", "y"}}})
+    _Backend(_server_ok, base_url="http://localhost:8083").infer(
+        _role_config(), InferenceRequest(role="frontdoor", prompt="x")
+    )
+    [rec] = _records(log_file)
+    assert rec["server"]["identity_source"] == "absent"
+    assert rec["server"]["model_path"] is None
+
+
+def test_sidecar_wins_over_declaration(log_file, tmp_path, declared_priors):
+    declared_priors({8070: {"paths": {"/m/declared.gguf"}, "roles": {"frontdoor"}}})
+    sidecar = tmp_path / "server_launches" / "8070.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(json.dumps({"launch_id": "L1", "argv_sha256": "b" * 64,
+                                   "model_path": "/m/sidecar.gguf"}))
+    _Backend(_server_ok).infer(_role_config(), InferenceRequest(role="frontdoor", prompt="x"))
+    [rec] = _records(log_file)
+    assert rec["server"]["identity_source"] == "stack_sidecar"
+    assert rec["server"]["model_path"] == "/m/sidecar.gguf"
+    assert rec["server"]["argv_sha256"] == "b" * 64
+
+
+def test_sidecar_without_model_path_is_completed_from_declaration_and_labelled(
+    log_file, tmp_path, declared_priors
+):
+    declared_priors({8070: {"paths": {"/m/declared.gguf"}, "roles": {"frontdoor"}}})
+    sidecar = tmp_path / "server_launches" / "8070.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(json.dumps({"launch_id": "L1", "argv_sha256": "c" * 64}))
+    _Backend(_server_ok).infer(_role_config(), InferenceRequest(role="frontdoor", prompt="x"))
+    [rec] = _records(log_file)
+    assert rec["server"]["identity_source"] == "stack_sidecar+stack_priors_declared"
+    assert rec["server"]["argv_sha256"] == "c" * 64
+    assert rec["server"]["model_path"] == "/m/declared.gguf"
+
+
+@pytest.mark.parametrize(
+    "workload,expected",
+    [("interactive", "production"), ("eval_batch", "benchmark"),
+     ("campaign", "benchmark"), (None, "unknown")],
+)
+def test_population_caller_class_from_staged_workload(
+    log_file, declared_priors, monkeypatch, workload, expected
+):
+    declared_priors({})
+    monkeypatch.setattr(sc, "production_ports", lambda: frozenset({8070}))
+    fields = {"task_id": "t"}
+    if workload:
+        fields["workload_class"] = workload
+    sc.stage_caller(**fields)
+    _Backend(_server_ok).infer(_role_config(), InferenceRequest(role="frontdoor", prompt="x"))
+    [rec] = _records(log_file)
+    pop = rec["population"]
+    assert pop["caller_class"] == expected
+    assert pop["server_scope"] == "production"
+    if workload is None:
+        assert pop["caller_class_source"] == "absent"
+
+
+def test_population_server_scope_private_and_unresolved(log_file, declared_priors, monkeypatch):
+    declared_priors({})
+    monkeypatch.setattr(sc, "production_ports", lambda: frozenset({9999}))
+    assert sc.population_attribution(8070, {}, None)["server_scope"] == "private"
+    monkeypatch.setattr(sc, "production_ports", lambda: None)
+    assert sc.population_attribution(8070, {}, None)["server_scope"] == "unresolved"
+    assert sc.population_attribution(None, {}, None)["server_scope"] == "unresolved"
+
+
+def test_population_context_depth_only_when_reported(log_file, declared_priors):
+    declared_priors({})
+    res = types.SimpleNamespace(prompt_tokens=3456)
+    pop = sc.population_attribution(8070, {}, res)
+    assert pop["context_depth_tokens"] == 3456
+    assert pop["context_depth_source"] == "result.prompt_tokens"
+    for bad in (None, True, -1, "12"):
+        pop = sc.population_attribution(8070, {}, types.SimpleNamespace(prompt_tokens=bad))
+        assert pop["context_depth_tokens"] is None
+        assert pop["context_depth_source"] == "absent"

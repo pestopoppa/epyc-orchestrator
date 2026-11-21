@@ -325,31 +325,92 @@ def launch_sidecar_dir() -> Path:
 _SIDECAR_CACHE: dict[int, tuple[float, dict[str, Any] | None]] = {}
 
 
-def server_identity(port: int | None) -> dict[str, Any]:
-    """Launch identity for the server on ``port``, from the stack's sidecar.
+_DECLARED_CACHE: dict[str, Any] = {"key": None, "by_port": {}}
 
-    Re-read whenever the sidecar's mtime changes (a reload rewrites it). Absence is
-    reported, never filled: ``identity_source`` is ``"absent"`` when no sidecar
-    exists — e.g. a server launched before the sidecar was introduced.
+
+def _declared_by_port() -> dict[int, dict[str, set]]:
+    """port -> {"paths": {...}, "roles": {...}} from the compiled stack priors (mtime-cached)."""
+    from src.registry import stack_priors as sp
+
+    path = Path(sp.DEFAULT_OUTPUT)
+    key = (str(path), path.stat().st_mtime_ns)
+    if _DECLARED_CACHE["key"] != key:
+        by_port: dict[int, dict[str, set]] = {}
+        for role, rec in sp.live_stack_role_records(path).items():
+            serving = sp.stack_prior_serving(rec)
+            ports = set(sp.stack_prior_serving_ports(serving))
+            try:
+                endpoint = sp.stack_prior_endpoint_port(serving)
+            except ValueError:
+                endpoint = None
+            if endpoint is not None:
+                ports.add(int(endpoint))
+            req = (sp.stack_prior_launch(rec) or {}).get("requirements") or {}
+            mp = req.get("model_path")
+            if not (isinstance(mp, str) and mp):
+                continue
+            for prt in ports:
+                slot = by_port.setdefault(int(prt), {"paths": set(), "roles": set()})
+                slot["paths"].add(mp)
+                slot["roles"].add(role)
+        _DECLARED_CACHE.update(key=key, by_port=by_port)
+    return _DECLARED_CACHE["by_port"]
+
+
+def _declared_identity(port: int) -> dict[str, Any]:
+    """What the compiled stack registry DECLARES for ``port`` (never what is running).
+
+    Source: ``orchestration/derived/stack_priors.yaml`` live-role records whose
+    serving ports include ``port``; ``serving.launch.requirements.model_path``.
+    A declaration is weaker than the launch sidecar (it cannot see a drifted
+    process and carries no argv hash), so callers label it as such. Several
+    different models claiming one port is ambiguous, hence NOT an identity.
     """
+    try:
+        slot = _declared_by_port().get(int(port))
+        if slot and len(slot["paths"]) == 1:
+            return {"model_path": next(iter(slot["paths"])), "roles": sorted(slot["roles"])}
+    except Exception:
+        pass
+    return {}
+
+
+def server_identity(port: int | None) -> dict[str, Any]:
+    """Launch identity for the server on ``port``.
+
+    ``model_path`` and ``argv_sha256`` are ALWAYS present on the record (None when
+    unknown) so a reader never has to tell "key missing" from "not known".
+    ``identity_source`` says where the values came from:
+
+    * ``stack_sidecar`` — the stack's launch sidecar (authoritative, has argv hash);
+    * ``stack_priors_declared`` — no usable sidecar; ``model_path`` is what the
+      compiled stack priors declare for that port, ``argv_sha256`` stays None;
+    * ``unreadable`` / ``absent`` — nothing known; both fields are None.
+
+    Re-read whenever the sidecar's mtime changes (a reload rewrites it). Nothing is
+    ever invented: a missing value is reported as None, not guessed.
+    """
+    empty: dict[str, Any] = {"model_path": None, "argv_sha256": None}
     if not port:
-        return {"identity_source": "absent"}
+        return {**empty, "identity_source": "absent"}
     path = launch_sidecar_dir() / f"{int(port)}.json"
+    data: dict[str, Any] | None = None
+    source = "absent"
     try:
         mtime = path.stat().st_mtime
     except OSError:
-        return {"identity_source": "absent"}
-    cached = _SIDECAR_CACHE.get(int(port))
-    if cached is None or cached[0] != mtime:
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            data = None
-        _SIDECAR_CACHE[int(port)] = (mtime, data if isinstance(data, dict) else None)
-        cached = _SIDECAR_CACHE[int(port)]
-    data = cached[1]
-    if not data:
-        return {"identity_source": "unreadable"}
+        mtime = None
+    if mtime is not None:
+        cached = _SIDECAR_CACHE.get(int(port))
+        if cached is None or cached[0] != mtime:
+            try:
+                loaded = json.loads(path.read_text())
+            except (OSError, ValueError):
+                loaded = None
+            _SIDECAR_CACHE[int(port)] = (mtime, loaded if isinstance(loaded, dict) else None)
+            cached = _SIDECAR_CACHE[int(port)]
+        data = cached[1]
+        source = "stack_sidecar" if data else "unreadable"
     keep = (
         "launch_id",
         "launched_at",
@@ -362,8 +423,19 @@ def server_identity(port: int | None) -> dict[str, Any]:
         "ld_library_path",
         "stack_commit",
     )
-    out = {k: data.get(k) for k in keep if k in data}
-    out["identity_source"] = "stack_sidecar"
+    out: dict[str, Any] = dict(empty)
+    if data:
+        out.update({k: data.get(k) for k in keep if k in data})
+    if not out.get("model_path"):
+        declared = _declared_identity(int(port))
+        if declared.get("model_path"):
+            out["model_path"] = declared["model_path"]
+            if source != "stack_sidecar":
+                out["declared_roles"] = declared["roles"]
+                source = "stack_priors_declared"
+            else:
+                source = "stack_sidecar+stack_priors_declared"
+    out["identity_source"] = source
     return out
 
 
@@ -766,6 +838,45 @@ def _caller_block(staged: dict[str, Any] | None) -> dict[str, Any]:
     return caller
 
 
+_BENCHMARK_WORKLOAD_CLASSES = frozenset({"eval_batch", "campaign"})
+
+
+def population_attribution(
+    port: int | None, caller: dict[str, Any] | None, result: Any = None
+) -> dict[str, Any]:
+    """Which traffic population this call belongs to, and at what context depth.
+
+    ``caller_class`` is derived ONLY from the staged ``workload_class``
+    (``interactive`` -> ``production``; ``eval_batch`` / ``campaign`` ->
+    ``benchmark``); an unstaged call is ``unknown``, never assumed production.
+    ``server_scope`` is whether the port is a live production port
+    (``unresolved`` when the registry cannot say). ``context_depth_tokens`` is the
+    prompt token count the server reported, None when it did not.
+    """
+    wc = (caller or {}).get("workload_class")
+    if wc in _BENCHMARK_WORKLOAD_CLASSES:
+        caller_class = "benchmark"
+    elif wc == "interactive":
+        caller_class = "production"
+    else:
+        caller_class = "unknown"
+    ports = production_ports()
+    if port is None or ports is None:
+        scope = "unresolved"
+    else:
+        scope = "production" if int(port) in ports else "private"
+    depth = getattr(result, "prompt_tokens", None) if result is not None else None
+    if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+        depth = None
+    return {
+        "caller_class": caller_class,
+        "caller_class_source": f"caller.workload_class={wc}" if wc else "absent",
+        "server_scope": scope,
+        "context_depth_tokens": depth,
+        "context_depth_source": "result.prompt_tokens" if depth is not None else "absent",
+    }
+
+
 def build_record(
     *,
     method: str,
@@ -809,6 +920,7 @@ def build_record(
         "server": {"base_url": base_url, "port": port, **server_identity(port)},
         "model_registry": getattr(model, "name", None) if model is not None else None,
         "caller": _caller_block(staged),
+        "population": population_attribution(port, _caller_block(staged), result),
         "queue": queue,
         "timings": timings,
         "timings_source": "server" if timings else "absent",
