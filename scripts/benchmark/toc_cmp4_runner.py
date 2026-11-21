@@ -19,6 +19,25 @@ from pathlib import Path
 from typing import Any
 
 ARMS_A = ("summary_only", "pointer_only", "prune_pointer")  # pre-registered, option (a)
+# TOC-CMP-4 v2 amendment (2026-11-21, docs/design/toc-cmp-4-preregistration-20261109.md section 11).
+ARMS_V2_NEW = ("persistence_floor", "prose_only_frozen_append")
+ARMS_BLOCKED = {"async_compaction_next_k_judge": "blocked on kv-prefix-fork P1 (needs two sequences sharing the prefix)"}
+_KNOWN_ARMS = frozenset(ARMS_A) | frozenset(ARMS_V2_NEW)
+
+
+def resolve_arms(arms: Sequence[str]) -> tuple[str, ...]:
+    """Validate an arm set for scheduling: unknown names and blocked arms are refused with the reason."""
+    arms = tuple(arms)
+    if len(set(arms)) != len(arms) or len(arms) < 2:
+        raise ValueError("need at least two distinct arms")
+    for arm in arms:
+        if arm in ARMS_BLOCKED:
+            raise ValueError(f"arm {arm!r} is {ARMS_BLOCKED[arm]}")
+        if arm not in _KNOWN_ARMS:
+            raise ValueError(f"unknown arm {arm!r}")
+    return arms
+
+
 # Boundary-turn bands per stratum (assumption recorded in the receipt: the pre-registration fixes the
 # strata "by the point list"; absolute turn bands stand in for terciles until trajectory lengths are
 # measured by the pilot).
@@ -101,6 +120,7 @@ def build_schedule(
 ) -> list[dict[str, Any]]:
     """One row per (point, arm, repeat). Repeats differ only in sampling seed; arm order within a
     (point, repeat) is the point's seeded permutation."""
+    arms = resolve_arms(arms)
     rows: list[dict[str, Any]] = []
     for p in points:
         order = arm_permutation(p["point_id"], arms, seed=seed)

@@ -100,3 +100,19 @@ def test_void_when_boundary_not_reached_replaced_from_seeded_reserve(tmp_path):
     # resume: voided point stays voided, nothing re-run
     again = r.run_schedule(r.build_schedule([victim], repeats=2), submit, ledger, reserves=reserves, repeats=2)
     assert again["ok"] == 0
+
+
+def test_v2_arm_names_accepted_and_blocked_arm_refused():
+    from scripts.benchmark import toc_cmp4_runner as r
+
+    pts = [{"point_id": "p1", "task_id": "t1", "stratum": "early", "boundary_turn": 2}]
+    rows = r.build_schedule(pts, arms=("summary_only", "persistence_floor", "prose_only_frozen_append"), repeats=2)
+    assert {row["arm"] for row in rows} == {"summary_only", "persistence_floor", "prose_only_frozen_append"}
+    assert {row["env"]["ORCHESTRATOR_CONTEXT_ARM"] for row in rows} == {row["arm"] for row in rows}
+    assert len(r.build_schedule(pts, repeats=2)) == 6  # default option-(a) triple unchanged
+    import pytest
+
+    with pytest.raises(ValueError, match="kv-prefix-fork P1"):
+        r.build_schedule(pts, arms=("summary_only", "async_compaction_next_k_judge"))
+    with pytest.raises(ValueError, match="unknown arm"):
+        r.build_schedule(pts, arms=("summary_only", "fifo"))

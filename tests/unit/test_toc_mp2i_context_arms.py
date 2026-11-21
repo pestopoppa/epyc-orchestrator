@@ -494,3 +494,22 @@ def test_ordinary_refused_prose_is_not_blocked(case, monkeypatch):
     turn = next(event for event in events if event['event'] == 'turn')
     assert turn['blocked'] is False
     assert state.history_turns[0]['output'] == 'refused shipment\n'
+
+
+def test_persistence_floor_keeps_only_the_common_tail(case, monkeypatch):
+    """TOC-CMP-4 v2: no summary, no pointer, no older history; same raw tail as the other arms."""
+    state, repl, ctx, worker = case
+    monkeypatch.setenv('ORCHESTRATOR_CONTEXT_ARM', 'persistence_floor')
+    for i in range(5):
+        add(state, f'item-{i} ' + 'x' * 500)
+    asyncio.run(ab.boundary(ctx, force=True))
+    after = ab.render(state, repl)
+    assert ab.FLOOR_NOTICE in after and 'Full log:' not in after and 'SUMMARY' not in after
+    assert 'peek(' not in after and not worker.messages
+    assert 'item-4' in after and 'item-0' not in after  # tail kept, oldest dropped
+
+
+def test_unimplemented_v2_arm_is_refused_with_reason(case, monkeypatch):
+    monkeypatch.setenv('ORCHESTRATOR_CONTEXT_ARM', 'prose_only_frozen_append')
+    with pytest.raises(ValueError, match='not implemented yet'):
+        ab.settings()

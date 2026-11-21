@@ -13,7 +13,11 @@ from src.graph.toc_openclaw_prompts import (
 )
 from src.security.control_tokens import neutralise_control_tokens
 
-ARMS = frozenset({'summary_only', 'summary_pointer', 'pointer_only', 'prune_pointer', 'full_history'})
+ARMS = frozenset({'summary_only', 'summary_pointer', 'pointer_only', 'prune_pointer', 'full_history', 'persistence_floor'})
+# TOC-CMP-4 v2 (2026-11-21): persistence floor = the common raw tail only; no summary, no pointer, no older history.
+FLOOR_NOTICE = 'Earlier turns of this task are not shown. You are continuing the same task.'
+# Accepted by the TOC-CMP-4 scheduler but not implemented here yet (TOC-CMP-ARM-PROSE-FROZEN): prose_only_frozen_append.
+UNIMPLEMENTED_ARMS = frozenset({'prose_only_frozen_append'})
 CONTINUATION = ('Earlier turns of this task are not shown. You are continuing the same task: '
                 'retrieve exact lines from the full log with peek() or grep() as you need them.')
 
@@ -36,6 +40,8 @@ def settings() -> tuple[str, int, float, set[int]]:
     if conflicts:
         raise ValueError(f'context arm confounders must be off: {conflicts}')
     arm = os.environ.get('ORCHESTRATOR_CONTEXT_ARM', '')
+    if arm in UNIMPLEMENTED_ARMS:
+        raise ValueError(f'context arm {arm!r} is scheduled by the TOC-CMP-4 v2 runner but not implemented yet')
     if arm not in ARMS:
         raise ValueError(f'invalid context arm {arm!r}')
     budget = int(os.environ.get('ORCHESTRATOR_CONTEXT_BUDGET_TOKENS', '16384'))
@@ -124,9 +130,11 @@ def render(state: Any, repl: Any = None, count_tokens=None) -> str:
     if not state.history_boundaries or arm == 'full_history':
         from src.graph.file_artifacts import _spill_if_truncated
         return '\n'.join(_turn_text(t, output=_spill_if_truncated(t['output'], 1500, 'output', state, repl=repl)) for t in turns)
-    if arm in {'summary_only', 'summary_pointer', 'pointer_only'}:
+    if arm in {'summary_only', 'summary_pointer', 'pointer_only', 'persistence_floor'}:
         tail = state.history_tail_start
         parts = []
+        if arm == 'persistence_floor':
+            parts.append(FLOOR_NOTICE)
         if arm in {'summary_only', 'summary_pointer'}:
             parts.append(state.session_summary_cache)
         if arm in {'summary_pointer', 'pointer_only'}:
