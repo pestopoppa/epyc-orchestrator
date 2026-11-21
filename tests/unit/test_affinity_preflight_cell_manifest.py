@@ -470,7 +470,9 @@ def test_foreign_allow_pattern_records_but_does_not_gate(monkeypatch, tmp_path):
         ("500", "llama-server --port 19990"),
         ("600", "/mnt/raid0/llm/llama.cpp/build-hip/bin/llama-server -m x --port 18072"),
     ])
-    monkeypatch.setattr(ap, "_memory_placement_for_pid", lambda *a, **k: (None, "n/a", None), raising=False)
+    # T5 is armed now: isolate this foreign-overlap test from the real /proc/500.
+    monkeypatch.setattr(ap, "_memory_placement", lambda *a, **k: {
+        "checked": False, "required": False, "match": None, "note": "stubbed"})
 
     out = tmp_path / "artifact.json"
     rc = _run_main(monkeypatch, [
@@ -567,16 +569,14 @@ def test_require_memory_locality_refuses_a_vacuous_pass() -> None:
     `live_memory_placement_verified: true` on a run that examined zero entries, and
     `--require-memory-locality` passed vacuously. Absence read as a pass.
 
-    This does NOT arm the predicate — T5 is blocked on ratifying
-    INTERLEAVE_TOLERANCE, and mmap placement is shared across instances so arming
-    it could hard-fail a correctly-configured role. It only makes "not checked"
-    distinguishable from "checked and passed".
+    The predicate itself is armed (RATIFY-INF45-P23-20261109); this test covers
+    the separate "not checked" vs "checked and passed" distinction.
     """
     src = Path(affinity_preflight.__file__).read_text(encoding="utf-8")
     # The vacuous branch exists and fires before the mismatch branch.
     assert "if args.require_memory_locality and not memory_checked:" in src
     vac = src.index("if args.require_memory_locality and not memory_checked:")
-    mis = src.index("if args.require_memory_locality and not memory_verified:")
+    mis = src.index("if not memory_verified:")
     assert vac < mis, "the vacuity check must precede the mismatch check"
     # And the artifact distinguishes the two states rather than collapsing them.
     assert '"live_memory_placement_checked": memory_checked,' in src

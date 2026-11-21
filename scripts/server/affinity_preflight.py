@@ -213,6 +213,11 @@ def _cmdline(pid: str) -> list[str]:
     return [part.decode("utf-8", errors="replace") for part in raw.split(b"\0") if part]
 
 
+# Ratified RATIFY-INF45-P23-20261109 (measurement/protocols/bench-cpu.md).
+LOCALITY_THRESHOLD = 0.95
+INTERLEAVE_TOLERANCE = 0.25
+
+
 def _pages_by_node_from_line(line: str) -> dict[int, int]:
     return {int(m.group("node")): int(m.group("pages")) for m in NODE_RE.finditer(line)}
 
@@ -274,20 +279,41 @@ def _summarize_numa_maps(
     total = _node_page_total(signal)
     expected_pages = sum(signal.get(node, 0) for node in expected_nodes)
     local_fraction = (expected_pages / total) if total else None
-    required = no_mmap and len(expected_nodes) == 1
-    match = (local_fraction is not None and local_fraction >= threshold) if required else None
-    note = "not required"
-    if required:
-        note = "ok" if match else "MEMORY LOCALITY MISMATCH"
-    elif no_mmap and len(expected_nodes) != 1:
-        note = "multi-node no_mmap placement observed"
-    elif not no_mmap:
-        note = "shared mmap placement observed"
+    # T5 locality gate (RATIFY-INF45-P23-20261109, bench-cpu.md): ALWAYS armed,
+    # regardless of mmap. Single-node -> local_fraction >= threshold (0.95);
+    # multi-node -> every node page share within +/-25% relative of 1/n.
+    required = bool(expected_nodes)
+    n_nodes = len(expected_nodes)
+    node_shares: dict[str, float] = {}
+    if n_nodes == 1:
+        arm = "locality"
+        match = (local_fraction is not None and local_fraction >= threshold) if required else None
+    elif n_nodes > 1:
+        arm = "interleave"
+        if total:
+            node_shares = {f"N{n}": signal.get(n, 0) / total for n in sorted(expected_nodes)}
+            lo = (1.0 - INTERLEAVE_TOLERANCE) / n_nodes
+            hi = (1.0 + INTERLEAVE_TOLERANCE) / n_nodes
+            match = all(lo <= v <= hi for v in node_shares.values())
+        else:
+            match = False
+    else:
+        arm = "none"
+        match = None
+    if not required:
+        note = "not required"
+    else:
+        note = "ok" if match else (
+            "MEMORY LOCALITY MISMATCH" if arm == "locality" else "MEMORY INTERLEAVE MISMATCH"
+        )
 
     return {
         "checked": True,
         "required": required,
         "match": match,
+        "arm": arm,
+        "interleave_tolerance": INTERLEAVE_TOLERANCE,
+        "node_shares": node_shares,
         "threshold": threshold,
         "no_mmap": no_mmap,
         "signal_kind": signal_kind,
@@ -618,15 +644,17 @@ def _run_cell_mode(cells: list[dict], meta: dict, args: argparse.Namespace) -> i
     if args.require_memory_locality and not memory_checked:
         print(
             "REFUSING: --require-memory-locality was requested but ZERO entries were "
-            "eligible for the locality check (predicate: no_mmap AND single-node; "
-            "every instance is multi-node after the topology change). A guarantee "
+            "eligible for the locality check (every instance had no live process or "
+            "unreadable numa_maps). A guarantee "
             "satisfied by checking nothing is not a guarantee — see T5 in "
             "handoffs/active/numa-placement-defect-20260730.md, blocked on ratifying "
             "INTERLEAVE_TOLERANCE.",
             file=sys.stderr,
         )
         return 1
-    if args.require_memory_locality and not memory_verified:
+    # T5 hard-fail (operator 2026-11-09): a checked mismatch fails regardless of
+    # --require-memory-locality or mmap mode.
+    if not memory_verified:
         return 1
     return 0
 
@@ -643,8 +671,8 @@ def main() -> int:
     ap.add_argument(
         "--memory-locality-threshold",
         type=float,
-        default=0.85,
-        help="minimum fraction of --no-mmap weight/proxy pages on the expected NUMA node",
+        default=LOCALITY_THRESHOLD,
+        help="minimum fraction of weight/proxy pages on the expected NUMA node",
     )
     ap.add_argument(
         "--foreign-allow-pattern",
@@ -768,7 +796,9 @@ def main() -> int:
     )
     if not all_match:
         return 1
-    if args.require_memory_locality and not memory_verified:
+    # T5 hard-fail (operator 2026-11-09): a checked mismatch fails regardless of
+    # --require-memory-locality or mmap mode.
+    if not memory_verified:
         return 1
     return 0
 
