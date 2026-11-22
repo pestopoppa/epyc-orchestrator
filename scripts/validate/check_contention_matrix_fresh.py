@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
-"""Fail-loud check: is the persisted contention matrix fresh vs live NUMA_CONFIG?
+"""Pre-commit gate: is the DERIVED placement-feasibility artifact current?
+
+DEFAULT mode (what the orchestrator pre-commit hook runs): consult
+data/contention_matrix/placement_feasibility.json, a pure cpuset-intersection
+artifact regenerated from stack_numa.py by scripts/server/placement_feasibility.py
+(handoff W-40). The BENCHMARKED contention matrix no longer gates commits.
+  0 current · 2 missing/stale (re-run placement_feasibility.py) · 3 invalid
+
+`--benchmarked` keeps the legacy check below (matrix freshness vs NUMA_CONFIG),
+used by scripts/server/preflight_gate.py for inference-batch attestation only.
+
+Legacy check: is the persisted contention matrix fresh vs live NUMA_CONFIG?
 
 Per Phase F of `handoffs/active/cross-role-bw-aware-routing.md`. Intended as a
 pre-commit hook + a CI gate when stack_numa.py or role model paths change.
@@ -40,7 +51,23 @@ def main() -> int:
         default=None,
         help="Override path to contention_matrix.yaml",
     )
+    parser.add_argument(
+        "--benchmarked",
+        action="store_true",
+        help="Legacy mode: check the benchmarked contention matrix instead of the "
+        "derived placement-feasibility artifact",
+    )
     args = parser.parse_args()
+
+    if not args.benchmarked:
+        try:
+            import placement_feasibility
+            rc, msg = placement_feasibility.check()
+        except Exception as exc:
+            print(f"ERROR: placement feasibility check failed: {exc}", file=sys.stderr)
+            return 3
+        print(("FAIL: " if rc else "") + msg, file=sys.stderr if rc else sys.stdout)
+        return rc
 
     try:
         from stack_numa import NUMA_CONFIG

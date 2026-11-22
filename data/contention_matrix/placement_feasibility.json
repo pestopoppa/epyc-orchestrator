@@ -1,0 +1,258 @@
+{
+  "derived_from": "scripts/server/stack_numa.py",
+  "measured": false,
+  "pairs": [
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_FULL",
+      "may_co_run": false,
+      "shared_physical_cores": 8,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_HALF_A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_HALF_B",
+      "may_co_run": false,
+      "shared_physical_cores": 8,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_Q0A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_Q0B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_Q1A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "GPU_HOST_LANE",
+      "b": "NUMA_Q1B",
+      "may_co_run": false,
+      "shared_physical_cores": 8,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_FULL",
+      "b": "NUMA_HALF_A",
+      "may_co_run": false,
+      "shared_physical_cores": 48,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_FULL",
+      "b": "NUMA_HALF_B",
+      "may_co_run": false,
+      "shared_physical_cores": 48,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_FULL",
+      "b": "NUMA_Q0A",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_FULL",
+      "b": "NUMA_Q0B",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_FULL",
+      "b": "NUMA_Q1A",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_FULL",
+      "b": "NUMA_Q1B",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_HALF_A",
+      "b": "NUMA_HALF_B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_HALF_A",
+      "b": "NUMA_Q0A",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_HALF_A",
+      "b": "NUMA_Q0B",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_HALF_A",
+      "b": "NUMA_Q1A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_HALF_A",
+      "b": "NUMA_Q1B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_HALF_B",
+      "b": "NUMA_Q0A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_HALF_B",
+      "b": "NUMA_Q0B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_HALF_B",
+      "b": "NUMA_Q1A",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_HALF_B",
+      "b": "NUMA_Q1B",
+      "may_co_run": false,
+      "shared_physical_cores": 24,
+      "verdict": "intersecting"
+    },
+    {
+      "a": "NUMA_Q0A",
+      "b": "NUMA_Q0B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_Q0A",
+      "b": "NUMA_Q1A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_Q0A",
+      "b": "NUMA_Q1B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_Q0B",
+      "b": "NUMA_Q1A",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_Q0B",
+      "b": "NUMA_Q1B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    },
+    {
+      "a": "NUMA_Q1A",
+      "b": "NUMA_Q1B",
+      "may_co_run": true,
+      "shared_physical_cores": 0,
+      "verdict": "disjoint"
+    }
+  ],
+  "role_instance_cpusets": {
+    "architect_critic": [
+      "184-191"
+    ],
+    "architect_general": [
+      "0-95"
+    ],
+    "eval_batch_frontdoor": [
+      "0-47,96-143"
+    ],
+    "frontdoor": [
+      "0-95",
+      "0-47,96-143",
+      "48-95,144-191"
+    ],
+    "worker_vision": [
+      "0-47,96-143"
+    ]
+  },
+  "rule": "disjoint cpusets (raw and SMT-folded) may co-run; any intersection is exclusive",
+  "schema": "epyc.placement_feasibility.v1",
+  "shapes": {
+    "GPU_HOST_LANE": {
+      "class": "gpu_host_lane",
+      "cpuset": "184-191"
+    },
+    "NUMA_FULL": {
+      "class": "full",
+      "cpuset": "0-95"
+    },
+    "NUMA_HALF_A": {
+      "class": "half",
+      "cpuset": "0-47,96-143"
+    },
+    "NUMA_HALF_B": {
+      "class": "half",
+      "cpuset": "48-95,144-191"
+    },
+    "NUMA_Q0A": {
+      "class": "quarter",
+      "cpuset": "0-23,96-119"
+    },
+    "NUMA_Q0B": {
+      "class": "quarter",
+      "cpuset": "24-47,120-143"
+    },
+    "NUMA_Q1A": {
+      "class": "quarter",
+      "cpuset": "48-71,144-167"
+    },
+    "NUMA_Q1B": {
+      "class": "quarter",
+      "cpuset": "72-95,168-191"
+    }
+  },
+  "topology_hash": "64c87551733f609ced5d7b849cf97fad8095491337c7587eed59cb1b1553a0b1"
+}

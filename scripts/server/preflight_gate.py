@@ -396,7 +396,7 @@ def check_contention_matrix_fresh(max_age_days: int = 30,
         return {"ok": False, "contention_matrix_fresh": False,
                 "error": f"freshness checker missing: {script}", **detail}
     res = _run(
-        [sys.executable, str(script), "--max-age-days", str(max_age_days)],
+        [sys.executable, str(script), "--benchmarked", "--max-age-days", str(max_age_days)],
         cwd=ORCH, timeout=120.0,
     )
     if res is None:
