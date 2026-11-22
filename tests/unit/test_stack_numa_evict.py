@@ -210,6 +210,8 @@ def test_parse_free_mb():
 def _four_nodes(monkeypatch):
     monkeypatch.setattr(ev, "_node_ids", lambda: [0, 1, 2, 3])
     monkeypatch.setattr(ev.shutil, "which", lambda name: "/usr/bin/numactl")
+    monkeypatch.setattr(ev, "_sleep", lambda s: None)
+    monkeypatch.setattr(ev, "SETTLE_TIMEOUT_S", 0.05)
 
 
 def test_zero_target_is_a_noop(monkeypatch):
@@ -255,6 +257,7 @@ def test_uses_the_research_helper_only_when_it_is_the_forcing_form(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "  OK: every requested node is at or above target.\n", "")
 
     monkeypatch.setattr(ev.subprocess, "run", fake_run)
+    monkeypatch.setattr(ev, "_query_free_mb", lambda: {n: 50 * GIB_MB for n in range(4)})
     ok, msg = ev.pre_evict_nodes(40)
     assert ok is True
     assert seen["cmd"] == ["python3", ev.RESEARCH_EVICT, "--target-gib", "40", "--passes", "2"]
@@ -338,6 +341,85 @@ def test_research_timeout_is_caught(monkeypatch):
     monkeypatch.setattr(ev.subprocess, "run", slow)
     ok, msg = ev.pre_evict_nodes(40, timeout_s=7)
     assert ok is False and "timed out after 7s" in msg
+
+
+# --- W-39: settle after a forced reclaim before returning -------------------
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def test_settle_waits_until_free_reaches_target_then_returns():
+    """first read low -> reclaim -> verify loop waits until free reaches target."""
+    reads = iter([39, 39, 41, 41, 41])  # node 0 free GiB per read
+    clk = _Clock()
+
+    def query():
+        return {0: next(reads) * GIB_MB, 1: 50 * GIB_MB}
+
+    short, free = ev.settle_until_target(
+        [0, 1], TARGET, query_free_mb=query, timeout_s=60, poll_s=2,
+        sleep=clk.sleep, clock=clk.now,
+    )
+    assert short == []
+    assert clk.t == 6.0  # slept after the 3 reads before two stable ones
+
+
+def test_run_eviction_does_not_return_until_settled():
+    box = _FakeBox({0: 30, 1: 50})
+    pending = {"n": 0}
+    real_query = box.query
+
+    def query():  # release is visible only on the 3rd read after the touch
+        if box.calls:
+            pending["n"] += 1
+            if pending["n"] < 3:
+                return {0: 30 * GIB_MB, 1: 50 * GIB_MB}
+        return real_query()
+
+    clk = _Clock()
+    short, allocs = ev.run_eviction(
+        [0, 1], TARGET, query_free_mb=query, evict=box.evict, passes=1,
+        settle_timeout_s=60, settle_poll_s=1, sleep=clk.sleep,
+    )
+    assert short == [] and allocs == [(1, 0, 42)]
+    assert pending["n"] >= 4 and clk.t > 0
+
+
+def test_no_reclaim_needed_means_no_settle_wait():
+    box = _FakeBox({0: 50, 1: 50})
+    clk = _Clock()
+    short, allocs = ev.run_eviction(
+        [0, 1], TARGET, query_free_mb=box.query, evict=box.evict,
+        settle_timeout_s=60, sleep=clk.sleep,
+    )
+    assert short == [] and allocs == [] and clk.t == 0
+
+
+def test_settle_timeout_is_bounded_and_reports_short(monkeypatch):
+    clk = _Clock()
+    short, _ = ev.settle_until_target(
+        [0, 1], TARGET, query_free_mb=lambda: {0: 10 * GIB_MB, 1: 50 * GIB_MB},
+        timeout_s=10, poll_s=2, sleep=clk.sleep, clock=clk.now,
+    )
+    assert short == [0] and 10 <= clk.t <= 12
+
+
+def test_pre_evict_nodes_fails_with_message_when_settle_times_out(monkeypatch):
+    _four_nodes(monkeypatch)
+    monkeypatch.setattr(ev, "research_helper_is_forcing", lambda path=None: False)
+    monkeypatch.setattr(ev.os.path, "isfile", lambda p: False)
+    monkeypatch.setattr(ev, "_touch_node", lambda node, gib, timeout_s=0: True)
+    monkeypatch.setattr(ev, "_query_free_mb", lambda: {0: 10 * GIB_MB, 1: 50 * GIB_MB, 2: 50 * GIB_MB, 3: 50 * GIB_MB})
+    ok, msg = ev.pre_evict_nodes(40)
+    assert ok is False and "still below 40 GiB" in msg and "TIMED OUT" in msg
 
 
 # --- the placement fold ------------------------------------------------------

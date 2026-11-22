@@ -82,6 +82,56 @@ DEFAULT_PASSES = 2
 EVICT_TIMEOUT_S = 900
 PER_NODE_TIMEOUT_S = 600
 
+# W-39 settle gate. A forced membind alloc/release frees pages asynchronously
+# (per-cpu lists, deferred reclaim), and loading the model straight after it
+# lets the kernel round-robin onto a node whose free count is still catching
+# up, so the reclaimed node under-fills. After ANY forced allocation we poll
+# per-node free until every node holds >= TARGET for SETTLE_STABLE_READS
+# consecutive reads, bounded by SETTLE_TIMEOUT_S. Timeout => (False, msg),
+# which the launch path logs as [WARN] (the existing never-block convention).
+SETTLE_TIMEOUT_S = 60.0
+SETTLE_POLL_S = 2.0
+SETTLE_STABLE_READS = 2
+
+
+def _sleep(seconds: float) -> None:  # indirection so tests need not sleep
+    time.sleep(seconds)
+
+
+def settle_until_target(
+    nodes: list[int],
+    target_gib: int,
+    *,
+    query_free_mb,
+    timeout_s: float = SETTLE_TIMEOUT_S,
+    poll_s: float = SETTLE_POLL_S,
+    stable_reads: int = SETTLE_STABLE_READS,
+    sleep=None,
+    clock=time.monotonic,
+    log=lambda _msg: None,
+) -> tuple[list[int], dict[int, int]]:
+    """Poll until every node has >= target free for `stable_reads` reads in a row.
+
+    Returns (nodes still short at the end, last free map). Bounded by
+    `timeout_s`; always performs at least one read.
+    """
+    sleep = sleep or _sleep
+    deadline = clock() + timeout_s
+    streak = 0
+    while True:
+        free = query_free_mb()
+        short = [n for n in nodes if free.get(n, 0) // 1024 < target_gib]
+        streak = 0 if short else streak + 1
+        if streak >= max(1, stable_reads):
+            return [], free
+        if clock() >= deadline:
+            return short, free
+        log(
+            "settle: " + " ".join(f"n{n}={free.get(n, 0)}MB" for n in sorted(free))
+            + (f" short {short}" if short else f" at target ({streak}/{stable_reads})")
+        )
+        sleep(poll_s)
+
 
 def pre_evict_gib_for_role(numa_cfg: dict | None) -> int:
     """Resolve `numa_pre_evict_gib` from a role's stack_topology entry.
@@ -129,11 +179,17 @@ def run_eviction(
     passes: int = DEFAULT_PASSES,
     headroom_gib: int = FORCE_HEADROOM_GIB,
     log=lambda _msg: None,
+    settle_timeout_s: float = 0,
+    settle_poll_s: float = SETTLE_POLL_S,
+    sleep=None,
 ) -> tuple[list[int], list[tuple[int, int, int]]]:
     """Force >= target on every node, verifying per node, up to `passes` times.
 
     `query_free_mb()` -> {node: free MB}; `evict(node, gib)` -> bool. Returns
     (nodes still short after the last pass, allocations as (pass, node, gib)).
+    When `settle_timeout_s` > 0 and any allocation was forced, the result is
+    only returned once per-node free has settled at target (W-39), or the
+    bound expires with the nodes still short.
     """
     allocations: list[tuple[int, int, int]] = []
     free = query_free_mb()
@@ -156,6 +212,12 @@ def run_eviction(
             + " ".join(f"n{n}={free.get(n, 0)}MB" for n in sorted(free))
             + (f" still short {short}" if short else " all at target")
         )
+    if allocations and settle_timeout_s > 0:
+        short, _free = settle_until_target(
+            nodes, target_gib, query_free_mb=query_free_mb,
+            timeout_s=settle_timeout_s, poll_s=settle_poll_s, sleep=sleep, log=log,
+        )
+        log("settle: " + (f"TIMED OUT, still short {short}" if short else "all nodes settled at target"))
     return short, allocations
 
 
@@ -267,7 +329,22 @@ def pre_evict_nodes(
         detail = tail[-1] if tail else ""
         if proc.returncode != 0:
             return False, f"exit {proc.returncode} after {elapsed:.1f}s via {source}: {detail}"
-        return True, f"{target_gib} GiB/node in {elapsed:.1f}s via {source}: {detail}"
+        # W-39: the helper reclaimed; do not return (and let the caller load
+        # the model) until per-node free has settled at target. An unreadable
+        # free map is reported, never silently treated as settled.
+        try:
+            short, free = settle_until_target(
+                nodes, target_gib, query_free_mb=_query_free_mb,
+                timeout_s=SETTLE_TIMEOUT_S, poll_s=SETTLE_POLL_S,
+            )
+        except Exception as exc:
+            return False, f"settle verify failed: {type(exc).__name__}: {exc} ({source})"
+        if short:
+            return False, (
+                f"nodes {short} below {target_gib} GiB after {SETTLE_TIMEOUT_S:.0f}s settle "
+                f"(helper reported: {detail}) via {source}"
+            )
+        return True, f"{target_gib} GiB/node in {elapsed:.1f}s, settled, via {source}: {detail}"
 
     source = "inline forcing form" + (
         " (research helper on disk is the weak form)"
@@ -282,6 +359,7 @@ def pre_evict_nodes(
             evict=lambda node, gib: _touch_node(node, gib, PER_NODE_TIMEOUT_S),
             passes=passes,
             log=lines.append,
+            settle_timeout_s=SETTLE_TIMEOUT_S,
         )
     except Exception as exc:  # never block a launch
         return False, f"{type(exc).__name__}: {exc} ({source})"
@@ -366,6 +444,8 @@ __all__ = [
     "pre_evict_gib_for_role",
     "plan_allocation_gib",
     "run_eviction",
+    "settle_until_target",
+    "SETTLE_TIMEOUT_S",
     "parse_free_mb",
     "research_helper_is_forcing",
     "pre_evict_nodes",
