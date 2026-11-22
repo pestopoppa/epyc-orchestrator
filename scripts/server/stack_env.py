@@ -114,6 +114,23 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # MI210 27B on :8083 (now architect_critic) has no block, as it had none while it
     # was architect_general. BINDING follows the PROCESS.
     "architect_general": {},
+    # 2026-11-22 STACK-CHANGE V5I-27B-Q8MF (operator-signed package,
+    # epyc-root artifacts/operator/stack-change-v5i-27b-q8mf-20261122/): the MI210
+    # 27B DFlash2 process on :8083 (architect_critic; also hosts the coder_escalation
+    # and ingest_long_context aliases) runs the V5I matrix-core Q8_0 small-M path.
+    # Served KEEP (V5I-SERVED-27B): np1 1.0995x [1.078, 1.121], np2 1.161x, KLD passed.
+    # A3B (frontdoor) LOSES at 0.988x [0.983, 0.992] and must NOT receive these.
+    # KERNEL: production v10 (ffc1bac82) reads none of these knobs (0 strings in its
+    # libggml-hip.so). They act only on a kernel carrying a8cb3a839 (DTREE-0-Q8MF-V5)
+    # + in-place repack (C18 champion lineage), where all default OFF, so the env is
+    # REQUIRED after promotion and inert before it.
+    "architect_critic": {
+        "GGML_HIP_Q8_MF": "6",
+        "GGML_HIP_Q8_MF_MIN": "1",
+        "GGML_HIP_Q8_MF_INPLACE": "1",
+        "GGML_HIP_Q8_MF_SLC": "1",
+        "GGML_HIP_Q8_WVSK_MAX": "16",
+    },
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
     # Activate when a hybrid_ssm_dense model is rostered.
     # 2026-06-26 v6 cutover: removed GGML_CCD_POOLS / GGML_CCD_WORK_DIST /

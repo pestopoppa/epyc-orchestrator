@@ -131,3 +131,25 @@ def test_dead_numa_repack_interleave_knob_is_not_emitted() -> None:
     assert registry["architect_critic"]["device"] == "ROCm0"
     gpu_env = build_launch_env("architect_critic", base_env={})
     assert "GGML_NUMA_REPACK_INTERLEAVE" not in gpu_env
+
+
+_V5I_ENV = {
+    "GGML_HIP_Q8_MF": "6",
+    "GGML_HIP_Q8_MF_MIN": "1",
+    "GGML_HIP_Q8_MF_INPLACE": "1",
+    "GGML_HIP_Q8_MF_SLC": "1",
+    "GGML_HIP_Q8_WVSK_MAX": "16",
+}
+
+
+def test_v5i_env_scoped_to_27b_dflash2_process() -> None:
+    """V5I (stack-change V5I-27B-Q8MF): the 27B :8083 process and its aliases only."""
+    for role in ("architect_critic", "coder_escalation", "ingest_long_context"):
+        env = build_launch_env(role, base_env={})
+        for key, value in _V5I_ENV.items():
+            assert env.get(key) == value, (role, key)
+    # A3B loses at 0.988x; no other role may carry any V5I knob.
+    for role in ("frontdoor", "worker_summarize", "worker_general", "architect_general",
+                 "worker_vision", "vision_escalation", "toolrunner"):
+        env = build_launch_env(role, base_env={})
+        assert not set(_V5I_ENV) & set(env), role
