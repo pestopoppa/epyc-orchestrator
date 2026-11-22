@@ -1187,6 +1187,80 @@ class ConcurrencyAwareBackend:
             return False
 
     @staticmethod
+    def _contention_backfill_enabled() -> bool:
+        """W-38 (C backfill): default-off ORCHESTRATOR_CONTENTION_BACKFILL (also
+        requires the dual shape-aware gate)."""
+        import os as _os
+
+        if _os.environ.get("ORCHESTRATOR_CONTENTION_BACKFILL", "0").strip().lower() not in {
+            "1", "true", "yes", "on",
+        }:
+            return False
+        return ConcurrencyAwareBackend._shape_aware_contention_enabled()
+
+    def _backfill_place(
+        self,
+        loop_candidates,
+        held_by_role,
+        traffic_class,
+        instance_regions,
+        exclude_topology_idxs,
+    ):
+        """Ask `select_backfill_candidate` for a candidate to admit when the
+        head of the queue is blocked. Candidates the gate already rejected this
+        poll are excluded (the gate veto is never overridden); the caller still
+        gate-evaluates and try-acquires the pick. Returns (internal_idx,
+        topology_idx) or None. Never raises."""
+        try:
+            from src.scheduling.contention import select_backfill_candidate
+
+            by_topo = {t: i for i, t in loop_candidates}
+            pool = [
+                (self._topology_role, t)
+                for _i, t in loop_candidates
+                if t not in exclude_topology_idxs
+            ]
+            picked = select_backfill_candidate(
+                pool,
+                held_by_role,
+                traffic_class,
+                instance_regions=instance_regions,
+            )
+            if picked is None:
+                return None
+            return (by_topo[picked[1]], picked[1])
+        except Exception as exc:  # fail closed: no backfill, head stays queued
+            logger.warning("contention backfill selection failed: %s", exc)
+            return None
+
+    def _try_backfill(
+        self, loop_candidates, held_by_role, traffic_class, instance_regions,
+        exclude_topology_idxs, gate, try_instance,
+    ):
+        """Select + gate-evaluate + try-acquire one backfill candidate.
+        Returns (ctx, internal_idx) or (None, -2)."""
+        pick = self._backfill_place(
+            loop_candidates, held_by_role, traffic_class, instance_regions,
+            exclude_topology_idxs,
+        )
+        if pick is None:
+            return None, -2
+        internal_idx, topo_idx = pick
+        if gate is not None:
+            decision = gate.evaluate(
+                self._topology_role, traffic_class, candidate_topology_idx=topo_idx
+            )
+            if not decision.admitted:
+                return None, -2
+        attempt = try_instance(self._topology_role, topo_idx)
+        if attempt is None:
+            return None, -2
+        logger.info(
+            "contention backfill admitted role=%s topology_idx=%d", self._role, topo_idx
+        )
+        return attempt[0], internal_idx
+
+    @staticmethod
     def _traffic_class_for_request(request: Any):
         from src.scheduling.contention import TrafficClass
 
@@ -1582,6 +1656,7 @@ class ConcurrencyAwareBackend:
             poll_deadline = time.perf_counter() + poll_budget_s
             poll_interval_s = 0.150  # matches contention_gate._GATE_POLL_S
             queue_log_emitted = False
+            backfill_enabled = self._contention_backfill_enabled()
             cross_role_enabled = self._cross_role_disjoint_placement_enabled()
             shape_gate_enabled = self._shape_aware_contention_enabled()
             gate = get_gate() if shape_gate_enabled else None
@@ -1666,6 +1741,7 @@ class ConcurrencyAwareBackend:
                     # At least one safe candidate — try them in priority order.
                     gate_rejected = False
                     lock_race_lost = False
+                    gate_rejected_topo: set[int] = set()
                     for place in placement.places:
                         if gate is not None:
                             decision = gate.evaluate(
@@ -1702,6 +1778,7 @@ class ConcurrencyAwareBackend:
                                     )
                                     queue_log_emitted = True
                                 gate_rejected = True
+                                gate_rejected_topo.add(place.topology_idx)
                                 continue
                         attempt = _try_instance(self._topology_role, place.topology_idx)
                         if attempt is not None:
@@ -1709,6 +1786,12 @@ class ConcurrencyAwareBackend:
                             chosen_idx = place.internal_idx
                             break
                         lock_race_lost = True
+                    if chosen_ctx is None and gate_rejected and backfill_enabled:
+                        chosen_ctx, chosen_idx = self._try_backfill(
+                            loop_candidates, held_by_role, traffic_class,
+                            instance_regions, gate_rejected_topo, gate,
+                            _try_instance,
+                        )
                     if chosen_ctx is not None:
                         break  # acquired; exit poll loop
                     # Either every physically safe candidate was rejected by
@@ -1727,6 +1810,13 @@ class ConcurrencyAwareBackend:
                         timeout_class = "admission_denied"
                         timeout_code = "placement_unavailable"
                 else:
+                    if backfill_enabled:
+                        chosen_ctx, chosen_idx = self._try_backfill(
+                            loop_candidates, held_by_role, traffic_class,
+                            instance_regions, set(), gate, _try_instance,
+                        )
+                        if chosen_ctx is not None:
+                            break
                     if not queue_log_emitted:
                         logger.info(
                             "placement queued role=%s reason=%s detail=%s",

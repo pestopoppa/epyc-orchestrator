@@ -2742,6 +2742,10 @@ def start_orchestrator(
     # regions do not literally overlap.
     env.setdefault("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
     env.setdefault("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", "1")
+    # W-38 (C backfill): ORCHESTRATOR_CONTENTION_BACKFILL is deliberately NOT
+    # defaulted here — default OFF, operator/autopilot-armed only (needs the two
+    # flags above). When on, dispatch may admit a select_backfill_candidate pick
+    # when the head of the placement queue is blocked.
     # WP-7/J6 (2026-05-26): within-role placement rollout. These were previously
     # shell-env-only, so ANY API restart (autopilot config-apply, watcher relaunch,
     # manual) silently reverted the placement state machine to OFF — J6 ran without it
