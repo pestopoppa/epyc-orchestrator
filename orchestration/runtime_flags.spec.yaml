@@ -40,6 +40,7 @@ flags:
   approval_gates: baseline
   architect_delegation: baseline
   architect_untrusted_boundary_sentence: baseline
+  autopilot_alfworld_suite: baseline
   autopilot_bsv2_accept_gate: baseline
   autopilot_bsv2_accept_rigor: baseline
   autopilot_lh_layer_taxonomy: baseline

@@ -3739,11 +3739,29 @@ def _bsv2_rigor_prepare(ctx: _ActionContext) -> bool:
             budget_unit=unit,
             budget_limit=limit,
         )
+        _bsv2_seal_alfworld_test_split(ctx)
         ctx.tower.bsv2_exclude_qids = rigor.accept_exclusions(ctx.state["bsv2_rigor"])
         return True
     except Exception as exc:  # noqa: BLE001 - state stays as-is; R1 then fails closed
         log.warning("BSV-2 rigor state population failed (%s); gate fails closed", exc)
         return False
+
+
+def _bsv2_seal_alfworld_test_split(ctx: _ActionContext) -> None:
+    """AP-ALFWORLD-SUITE R3: with the ALFWorld slice on, every qid of the sealed TEST split ``new_std`` joins
+    ``sealed_qids``. The slice never draws from it; this makes any such qid in an accept eval an R3 blocker.
+    Flag off: nothing is read or changed. A missing split file is logged, not fatal (the slice is then unavailable)."""
+    import alfworld_suite
+
+    if not alfworld_suite.flag_on():
+        return
+    try:
+        test_qids = alfworld_suite.sealed_qids(alfworld_suite.config_from_env())
+    except (OSError, ValueError, KeyError) as exc:
+        log.warning("ALFWorld sealed split unreadable (%s); R3 seal not extended", exc)
+        return
+    cur = ctx.state["bsv2_rigor"]
+    cur["sealed_qids"] = sorted(set(cur.get("sealed_qids") or []) | set(test_qids))
 
 
 def _bsv2_rigor_note_eval(ctx: _ActionContext, result: Any) -> None:

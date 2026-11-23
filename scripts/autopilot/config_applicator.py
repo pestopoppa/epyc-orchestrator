@@ -100,6 +100,9 @@ HOT_SWAP_FEATURES = {
     # AP-LH-WHOLE-TRAJECTORY-CAPTURE (2026-11-23): read live by the autopilot process (src.flag_env) and by the API
     # process (features(), REPL-tap result header). Needs a reload of neither.
     "autopilot_lh_whole_trajectory_capture",
+    # AP-ALFWORLD-SUITE (2026-11-23): ALFWorld slice on the T1 eval, default off, read live by the autopilot process
+    # through src.flag_env. Adds ~5 episodes of wall clock per T1 eval when on; the slice never enters scalar quality.
+    "autopilot_alfworld_suite",
 }
 
 # Parameters applied via env vars (require API restart)

@@ -1520,6 +1520,11 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["route"] = r.route_used
     if getattr(r, "details", None):
         item["details"] = dict(r.details)
+        # AP-ALFWORLD-SUITE: a row that declares its R4 status (bsv2_accept_rigor.STATUSES) carries it on the row so
+        # the rigor gate's status split reads it; rows that declare none are unchanged (absent = completed).
+        _rigor_status = r.details.get("rigor_status")
+        if isinstance(_rigor_status, str) and _rigor_status:
+            item["status"] = _rigor_status
     if r.tools_called:
         item["tools_called"] = list(r.tools_called[:5])
     # AP-54: fence state and touched paths (paths only, bounded). getattr: this
@@ -1608,6 +1613,66 @@ def _annotate_partition(questions: list[dict], partition: str) -> list[dict]:
         item["eval_partition"] = partition
         annotated.append(item)
     return annotated
+
+
+def _alfworld_question_results(run: Any) -> list[QuestionResult]:
+    """AP-ALFWORLD-SUITE: one QuestionResult per ALFWorld episode row (episode success = correct).
+
+    ``completed`` / ``solver_limit`` failures score 0 and stay in the denominator; ``candidate_error`` is ``task_failed``
+    (ETR-1, scores 0); ``infra_error`` is ``infra_failed`` (no quality information). The R4 status rides in
+    ``details["rigor_status"]`` and is lifted onto the compact journal row by ``_compact_question_result``.
+    """
+    batch_id = _eval_batch_id(label="alfworld", n_questions=len(run.rows), started_at_s=time.time())
+    by_qid = {g.qid: g for g in run.games}
+    results: list[QuestionResult] = []
+    for row in run.rows:
+        qid = str(row.get("qid") or "")
+        game = by_qid.get(qid)
+        status = str(row.get("status") or "candidate_error")
+        if status not in {"completed", "solver_limit", "infra_error", "candidate_error"}:
+            status = "candidate_error"
+        detail = str(row.get("detail") or "")
+        success = bool(int(row.get("success") or 0))
+        if status == "infra_error":
+            disposition, error = DISPOSITION_INFRA_FAILED, f"alfworld_infra: {detail}"[:200]
+        elif status == "candidate_error":
+            disposition, error = DISPOSITION_TASK_FAILED, f"alfworld_candidate_error: {detail}"[:200]
+        else:
+            disposition, error = DISPOSITION_SCORED, None
+        results.append(
+            QuestionResult(
+                question_id=qid,
+                suite="alfworld",
+                prompt=f"alfworld:{game.rel_path if game else row.get('game', '')}",
+                expected="won",
+                qid=qid,
+                answer=detail,
+                correct=success,
+                error=error,
+                disposition=disposition,
+                infra_reason=detail.split(":", 1)[0] if disposition == DISPOSITION_INFRA_FAILED else "",
+                tokens_generated=int(row.get("tokens_completion") or 0),
+                elapsed_s=float(row.get("elapsed_s") or 0.0),
+                route_used=str(run.cfg.force_role or run.cfg.model),
+                scoring_method="episode_success",
+                eval_partition="alfworld",
+                eval_batch_id=batch_id,
+                tools_used=int(row.get("model_calls") or 0),
+                tools_called=["take_action"] if row.get("model_calls") else [],
+                details={
+                    "rigor_status": status,
+                    "alfworld": {
+                        "split": game.split if game else "",
+                        "index": row.get("index"),
+                        "kind": game.kind if game else "",
+                        "steps": int(row.get("steps") or 0),
+                        "outcome": detail[:120],
+                        "tokens_prompt": int(row.get("tokens_prompt") or 0),
+                    },
+                },
+            )
+        )
+    return results
 
 
 def _audit_seed(trial_id: int, core_id: str) -> int:
@@ -7107,6 +7172,16 @@ class EvalTower:
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
 
+        # AP-ALFWORLD-SUITE (default off): a small rotating ALFWorld slice rides on the journaled eval. Flag off, or a
+        # diagnostic observation, returns (None, {}) and nothing below changes: no rows, no core_id suffix, no details key.
+        alfworld_run, alfworld_note = self._alfworld_slice_for_t1(
+            seed=seed, trial_id=resolved_trial_id, diagnostic=isinstance(observation, dict)
+        )
+        if alfworld_run is not None:
+            results.extend(_alfworld_question_results(alfworld_run))
+            questions = questions + _annotate_partition(alfworld_run.questions(), "alfworld")
+            core_id = f"{core_id}{alfworld_run.core_suffix}"  # a different question set is a different instrument
+
         excluded_partitions: set[str] = set()
         exclusion_reasons: dict[str, str] = {}
         if audit_policy["active"] and audit_policy["shadow_only"]:
@@ -7115,6 +7190,9 @@ class EvalTower:
         if tool_sentinel_questions:
             excluded_partitions.add("tool_sentinel")
             exclusion_reasons["tool_sentinel"] = "tool_secret_minting_not_decision_grade"
+        if alfworld_run is not None:
+            excluded_partitions.add("alfworld")
+            exclusion_reasons["alfworld"] = "alfworld_slice_small_n_outside_scalar_quality_and_speed"
         result = self._aggregate_decision_partitions(
             results,
             tier=1,
@@ -7202,6 +7280,20 @@ class EvalTower:
                 "tier_mix_provenance": tier_mix_provenance,
             }
         )
+        alfworld_profile: dict[str, Any] = {}
+        if alfworld_run is not None:
+            alfworld_profile = {
+                "alfworld_slice": {
+                    "qids": [g.qid for g in alfworld_run.games],
+                    "split": "train_valid",
+                    "data_sha256": alfworld_run.data_sha,
+                    "max_steps": alfworld_run.cfg.max_steps,
+                    "episode_wall_s": alfworld_run.cfg.episode_wall_s,
+                    "slice_dataset_content_sha256": dataset_content_sha256(alfworld_run.questions()),
+                }
+            }
+        if alfworld_note:
+            result.details["alfworld_slice"] = alfworld_note
         return _stamp_eval_instrument(
             result,
             questions=instrument_questions,
@@ -7222,9 +7314,38 @@ class EvalTower:
                 # Declared mix + any shortfall, so a reader can tell the instrument's
                 # INTENDED composition from the one actually drawn.
                 "tier_mix_provenance": tier_mix_provenance,
+                **alfworld_profile,
             },
             register_identity=not isinstance(observation, dict),
         )
+
+    def _alfworld_slice_for_t1(
+        self, *, seed: int, trial_id: int | None, diagnostic: bool
+    ) -> tuple[Any | None, dict[str, Any]]:
+        """AP-ALFWORLD-SUITE: draw and run the ALFWorld slice for this T1 eval, or ``(None, {})`` when it is off.
+
+        Never raises into the eval: a failure here is a ``status`` note in ``details["alfworld_slice"]`` and the eval
+        proceeds exactly as with the flag off (no rows, no core_id suffix).
+        """
+        try:
+            import alfworld_suite
+
+            if diagnostic or not alfworld_suite.flag_on():
+                return None, {}
+            run = alfworld_suite.run_slice(
+                tower_url=self.url,
+                base_seed=int(seed),
+                rotation=core_rotation_index(trial_id),
+                exclude_qids=getattr(self, "bsv2_exclude_qids", None),
+            )
+        except Exception as exc:  # noqa: BLE001 - the suite must never take the core eval down
+            log.warning("ALFWorld slice failed before running (%s); T1 continues without it", exc)
+            return None, {"status": "error", "reason": f"{type(exc).__name__}: {exc}"[:300]}
+        if isinstance(run, dict):
+            log.warning("ALFWorld slice unavailable: %s", run.get("reason"))
+            return None, dict(run)
+        log.info("ALFWorld slice ran: %s", run.descriptor()["summary"])
+        return run, run.descriptor()
 
     def eval_t2(
         self,
