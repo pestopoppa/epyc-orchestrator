@@ -3,7 +3,7 @@
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/worktrees/ak-revert512-o/orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/epyc-orchestrator/.worktrees/sc-a3b-pmin05-apply/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-11-12T16:53:54+00:00
-# Cache key:   9ef72ad4106fddbf...
+# Compiled at: 2026-11-23T18:26:21+00:00
+# Cache key:   231c2a3c777e37fa...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1903,6 +1903,7 @@ server_mode:
       type: speculative_decoding
       spec_type: draft-mtp
       draft_max: 4
+      draft_p_min: 0.5
       lookup: false
       corpus_retrieval: false
     throughput: 40.22
@@ -1973,6 +1974,7 @@ server_mode:
       inherits_spec_from: frontdoor
       spec_type: draft-mtp
       draft_max: 4
+      draft_p_min: 0.5
       lookup: false
       corpus_retrieval: false
     throughput: 40.22
@@ -2229,6 +2231,7 @@ roles:
       type: speculative_decoding
       spec_type: draft-mtp
       draft_max: 4
+      draft_p_min: 0.5
       draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       lookup: false
       corpus_retrieval: false
