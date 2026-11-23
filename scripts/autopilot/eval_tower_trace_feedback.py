@@ -13,13 +13,19 @@ from pathlib import Path
 from typing import Any
 
 
+#: Prefix ``trim_trace_text`` puts on a trace it had to cut.
+TRACE_TRUNCATED_MARKER = "[trace truncated]"
+#: Provenance of the default capture: the last N lines of the inference tap (LLM text only, no REPL results).
+DEFAULT_TRACE_SOURCE = "inference_tap_tail"
+
+
 def trim_trace_text(trace_text: Any, max_chars: int) -> str:
     text = str(trace_text or "").strip()
     if not text or max_chars <= 0:
         return ""
     if len(text) <= max_chars:
         return text
-    return "[trace truncated]\n" + text[-max_chars:]
+    return TRACE_TRUNCATED_MARKER + "\n" + text[-max_chars:]
 
 
 def capture_recent_traces(
@@ -203,14 +209,24 @@ def update_contrastive_trace_bank(
     reason: str = "",
     max_examples_per_outcome: int = 8,
     max_trace_chars: int = 1600,
+    complete: bool = False,
+    source: str = DEFAULT_TRACE_SOURCE,
 ) -> list[dict[str, Any]]:
-    """Append one labeled trace example and cap the in-state contrastive bank."""
+    """Append one labeled trace example and cap the in-state contrastive bank.
+
+    ``complete`` / ``source`` are the item's provenance (AP-LH-DISTILL): ``complete=True`` asserts the text is
+    the WHOLE trajectory of the trial (every LLM turn and every REPL result). The default capture is the last
+    50 lines of the inference tap, which holds LLM prompt/response text only (REPL results live in
+    ``repl_tap.log``), so it is never a whole trajectory and the default is ``complete=False``. A trace that
+    ``trim_trace_text`` had to cut is never complete, whatever the caller asserted.
+    """
     normalized_outcome = str(outcome or "").strip().lower()
     if normalized_outcome not in {"success", "failure"}:
         return list(trace_bank or [])
     trace = trim_trace_text(trace_text, max_trace_chars)
     if not trace:
         return list(trace_bank or [])
+    trace_complete = bool(complete) and not trace.startswith(TRACE_TRUNCATED_MARKER)
 
     normalized: list[dict[str, Any]] = []
     for raw in trace_bank or []:
@@ -234,6 +250,10 @@ def update_contrastive_trace_bank(
                     raw.get("trace_hash")
                     or hashlib.sha256(raw_trace.encode("utf-8")).hexdigest()[:12]
                 ),
+                # Rows banked before provenance existed read as incomplete tap-tail captures.
+                "complete": raw.get("complete") is True
+                and not raw_trace.startswith(TRACE_TRUNCATED_MARKER),
+                "source": str(raw.get("source") or DEFAULT_TRACE_SOURCE),
             }
         )
 
@@ -256,6 +276,8 @@ def update_contrastive_trace_bank(
             "reason": str(reason or ""),
             "trace": trace,
             "trace_hash": trace_hash,
+            "complete": trace_complete,
+            "source": str(source or DEFAULT_TRACE_SOURCE),
         }
     )
 

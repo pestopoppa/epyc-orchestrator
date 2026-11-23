@@ -21,13 +21,25 @@ instead of running the full ALFWorld Life-Harness run. Two ideas are taken, both
 
 2. **Trace-replay pre-check** (item 24, "before any paid evaluation ... trace replay on recorded traces"). A
    flag proposal is replayed, with NO model call, against the failing trace(s) that motivated it. Each
-   guard has a deterministic firing predicate that OVER-approximates the real guard (a predicate may say
-   "fires" when the real guard would not, never the reverse), so ``would_not_fire`` is a proof that turning the
-   guard on would have changed nothing on that trace. Prompt and code edits have no deterministic replay model
-   and are recorded ``not_replayable`` rather than guessed. A truncated trace is inconclusive, not a null.
+   replayable guard has a deterministic firing predicate built from the REAL guard's own patterns
+   (imported, not mirrored) and written to OVER-approximate it: it may say "fires" when the real guard would
+   not, never the reverse. A rejecting ``would_not_fire`` needs BOTH that and a whole-trajectory trace.
+
+   The trace bank is currently fed from the last 50 lines of the inference tap: LLM prompt/response text only
+   (REPL results live in ``repl_tap.log``), so a trace without a truncation marker is still NOT a complete
+   trajectory. Bank items therefore carry ``complete`` / ``source`` provenance (default
+   ``complete=False``, ``source="inference_tap_tail"``) and a rejection is returned ONLY when every
+   motivating trace has ``complete=True`` and no truncation marker; otherwise the status is ``inconclusive``
+   and the proposal proceeds to its eval. Today no capture sets ``complete=True``, so the pre-check is
+   observe-only (it never rejects) until a whole-trajectory capture exists.
+
+   Prompt and code edits, flags turned off, and guards that cannot be decided from text
+   (``stream_degeneration_guard`` aborts on live draft acceptance; ``tool_call_parse_error_retry`` acts on
+   server-side parse failures that never reach the transcript) are ``not_replayable``, never guessed.
 
 Pure functions only: no I/O, no model call, no global state. Observe-only by construction except the one
-documented effect of the pre-check (a ``would_not_fire`` flag proposal is skipped before its eval).
+documented effect of the pre-check (a ``would_not_fire`` flag proposal is skipped before its eval, which
+needs whole-trajectory traces that no capture produces yet).
 """
 from __future__ import annotations
 
@@ -260,7 +272,9 @@ def motivating_failure_traces(state: Mapping[str, Any], k: int = MOTIVATING_K) -
     """The failing trace(s) that motivate the next proposal: the newest ``k`` failures of the contrastive bank.
 
     These are exactly the failure examples ``build_critic_trace_ir`` shows the proposer. Items carry
-    ``trace`` (possibly carrying the ``[trace truncated]`` marker), ``trial_id`` and ``trace_hash``.
+    ``trace`` (possibly carrying a truncation marker), ``trial_id``, ``trace_hash`` and the provenance
+    ``complete`` (True only when the bank item asserted a whole-trajectory capture; absent reads False) and
+    ``source``.
     """
     bank = state.get("contrastive_trace_bank") if isinstance(state, Mapping) else None
     out: list[dict[str, Any]] = []
@@ -276,6 +290,8 @@ def motivating_failure_traces(state: Mapping[str, Any], k: int = MOTIVATING_K) -
                     "trial_id": item.get("trial_id"),
                     "trace_hash": str(item.get("trace_hash") or hashlib.sha256(text.encode()).hexdigest()[:12]),
                     "trace": text,
+                    "complete": item.get("complete") is True,
+                    "source": str(item.get("source") or "unknown"),
                 }
             )
     return out[-k:] if k > 0 else []
@@ -376,21 +392,55 @@ def build_layer_record(
 # ---------------------------------------------------------------------------------------------------------
 # Trace replay (no model call)
 # ---------------------------------------------------------------------------------------------------------
+#: Prefix ``eval_tower_trace_feedback.trim_trace_text`` puts on a trace it cut (kept as a literal: pure module).
 TRUNCATION_MARKER = "[trace truncated]"
+#: The inference tap's own cut marker, e.g. ``... [1000 chars truncated]`` (src/runtime/inference_tap.py).
+_TAP_TRUNCATION = re.compile(r"\[\d+ chars truncated\]")
 
-_FAIL_LINE = re.compile(r"Traceback|Error\b|Exception\b|\bFAILED\b")
-_NARRATION = re.compile(r"(?im)^\s*(?:I will|I'll|Let me|Next,? I|First,|Plan:)")
-_PARSE = re.compile(r"tool[_ ]call.{0,40}pars|failed to parse|parse[_ ]error|tool_call_pars", _I)
-_MARKUP = re.compile(r"</?tool_call>|<function=|<parameter=|<arg_key>")
+#: Real-guard error shapes that make a turn a failing turn (src/graph/helpers.py ``_note_turn_health``: a REPL
+#: error of any text, or tool output starting ``[ERROR`` / ``[TOOL ERROR``). Case-insensitive; over-approximate.
+_FAIL_LINE = re.compile(
+    r"traceback|error|exception|\bfailed\b|\bfailure\b|timed?[ -]?out|\[ERROR|\[TOOL ERROR", _I
+)
+
+
+def is_truncated(trace: str) -> bool:
+    """True when the trace carries either truncation marker (the bank's or the inference tap's own)."""
+    return TRUNCATION_MARKER in trace or bool(_TAP_TRUNCATION.search(trace))
+
+
+def _real_leak_markers() -> tuple[str, ...] | None:
+    """The real arg-leak guard's own markers (``src.backends.tool_arg_guard.LEAK_MARKERS``), or None."""
+    try:
+        from src.backends.tool_arg_guard import LEAK_MARKERS
+
+        return tuple(LEAK_MARKERS)
+    except Exception:  # noqa: BLE001 - unreadable real guard: cannot over-approximate it, so say "fires"
+        return None
+
+
+def _real_plan_line_re() -> "re.Pattern[str] | None":
+    """The real plan-narration guard's own line pattern (``src.graph.answer_resolution._PLAN_LINE_RE``), or None."""
+    try:
+        from src.graph.answer_resolution import _PLAN_LINE_RE
+
+        return _PLAN_LINE_RE
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _fires_syntax_loop(trace: str) -> bool:
     # real guard: 2 CONSECUTIVE SyntaxError REPL turns. Two occurrences anywhere is a superset.
-    return len(re.findall(r"SyntaxError", trace)) >= 2
+    return len(re.findall(r"SyntaxError", trace, _I)) >= 2
 
 
 def _fires_plan_narration(trace: str) -> bool:
-    return bool(_NARRATION.search(trace))
+    # real guard (answer_resolution._looks_like_plan_narration): a line matching _PLAN_LINE_RE, UNLESS the text
+    # also states an answer or contains a code fence. Ignoring those exclusions makes this a superset.
+    pattern = _real_plan_line_re()
+    if pattern is None:
+        return True
+    return any(pattern.match(line) for line in trace.splitlines() if line.strip())
 
 
 def _fires_failure_ratio(trace: str) -> bool:
@@ -398,17 +448,12 @@ def _fires_failure_ratio(trace: str) -> bool:
     return sum(1 for ln in trace.splitlines() if _FAIL_LINE.search(ln)) >= 2
 
 
-def _fires_parse_retry(trace: str) -> bool:
-    return bool(_PARSE.search(trace))
-
-
 def _fires_arg_leak(trace: str) -> bool:
-    return bool(_MARKUP.search(trace))
-
-
-def _fires_degeneration(trace: str) -> bool:
-    # real guard aborts on low rolling draft acceptance; repeated output lines are a superset of that symptom.
-    return _repeated_line(trace, min_len=8, times=3)
+    # real guard (tool_arg_guard.find_leak): any LEAK_MARKERS substring in a tool-call argument value.
+    markers = _real_leak_markers()
+    if markers is None:
+        return True
+    return any(marker in trace for marker in markers)
 
 
 #: Enabling flag -> deterministic over-approximating firing predicate. A flag absent here is NOT replayable.
@@ -416,9 +461,13 @@ FLAG_FIRING_PREDICATES = {
     "repl_syntax_loop_breaker": _fires_syntax_loop,
     "repl_plan_narration_nudge": _fires_plan_narration,
     "harness_failure_ratio_guard": _fires_failure_ratio,
-    "tool_call_parse_error_retry": _fires_parse_retry,
     "tool_call_arg_leak_guard": _fires_arg_leak,
-    "stream_degeneration_guard": _fires_degeneration,
+}
+
+#: Guards that cannot be decided from transcript text, with the reason recorded in the journal.
+NOT_REPLAYABLE_FLAGS: dict[str, str] = {
+    "stream_degeneration_guard": "aborts on live rolling draft acceptance, which is not in the transcript text",
+    "tool_call_parse_error_retry": "acts on server-side tool-call parse failures that never reach the transcript text",
 }
 
 
@@ -432,9 +481,11 @@ def replay_precheck(
     """Replay a proposal against the failing trace(s) that motivated it. No model call, no I/O.
 
     ``status`` is one of ``would_fire`` (the proposal's guard fires on >= 1 motivating trace: proceed),
-    ``would_not_fire`` (provably changes none of them: reject before the eval), or ``not_replayable``
-    (no deterministic replay model, no motivating trace, or an inconclusive truncated trace: proceed).
-    Only ``would_not_fire`` rejects; every other status leaves the proposal to its normal eval.
+    ``would_not_fire`` (the predicate fires on none of them AND every one is a whole-trajectory capture with no
+    truncation marker: reject before the eval), ``inconclusive`` (the predicate fires on none, but at least one
+    trace is not provably whole: proceed to the eval) or ``not_replayable`` (no deterministic replay model, or
+    no motivating trace: proceed). Only ``would_not_fire`` rejects; every other status leaves the proposal to
+    its normal eval. Traces whose ``complete`` is not True (the default tap-tail capture) never reject.
     """
     atype = str(action.get("type") or "")
     if atype != "structural_experiment":
@@ -445,6 +496,8 @@ def replay_precheck(
     name, value = next(iter(flags.items()))
     if value is not True:
         return _replay("not_replayable", f"turning {name} off has no replay model", flag=name)
+    if name in NOT_REPLAYABLE_FLAGS:
+        return _replay("not_replayable", f"{name} is not replayable from text: {NOT_REPLAYABLE_FLAGS[name]}", flag=name)
     predicate = FLAG_FIRING_PREDICATES.get(name)
     if predicate is None:
         return _replay("not_replayable", f"{name} has no firing predicate", flag=name)
@@ -452,29 +505,33 @@ def replay_precheck(
     if not items:
         return _replay("not_replayable", "no motivating failure trace", flag=name, motivating=0)
     fired = [t for t in items if predicate(str(t["trace"]))]
-    truncated = sum(1 for t in items if str(t["trace"]).lstrip().startswith(TRUNCATION_MARKER))
+    truncated = sum(1 for t in items if is_truncated(str(t["trace"])))
+    incomplete = sum(1 for t in items if t.get("complete") is not True)
     base = {
         "flag": name,
         "motivating": len(items),
         "fired": len(fired),
         "truncated": truncated,
+        "incomplete": incomplete,
+        "sources": sorted({str(t.get("source") or "unknown") for t in items}),
         "trace_hashes": [t.get("trace_hash") for t in items],
     }
     if fired:
         return _replay("would_fire", f"{name} fires on {len(fired)}/{len(items)} motivating trace(s)", **base)
-    if truncated:
+    if truncated or incomplete:
         return _replay(
-            "not_replayable",
-            f"{name} does not fire on the visible window but {truncated}/{len(items)} trace(s) are truncated",
+            "inconclusive",
+            f"{name} does not fire on the visible text but {max(truncated, incomplete)}/{len(items)} trace(s) "
+            "are not provably whole trajectories (truncated or not a whole-trajectory capture)",
             **base,
         )
     return _replay(
         "would_not_fire",
-        f"{name} would not have fired on any of the {len(items)} complete motivating failure trace(s)",
+        f"{name} would not have fired on any of the {len(items)} whole-trajectory motivating failure trace(s)",
         **base,
     )
 
 
 def replay_rejects(record: Mapping[str, Any] | None) -> bool:
-    """True only for a proved no-op (the single status that skips the eval)."""
+    """True only for ``would_not_fire`` (the single status that skips the eval)."""
     return isinstance(record, Mapping) and record.get("status") == "would_not_fire"

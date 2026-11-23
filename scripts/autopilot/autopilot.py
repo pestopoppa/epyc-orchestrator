@@ -5883,7 +5883,8 @@ def _record_skip_trial(
         bug_corrupted_reason=bug_corrupted_reason,
         run_manifest=dict(run_manifest or {}),  # AP-63(a)
         # AP-LH-DISTILL: harness_layer / trace_replay_precheck records (absent with both flags off).
-        eval_details=dict(lh_annotations) if lh_annotations else {},
+        # Under "details" so a skipped row uses the same eval_details.details.<record> path as an executed trial.
+        eval_details={"details": dict(lh_annotations)} if lh_annotations else {},
     )
     journal.record(entry)
     _record_reproposal_rate_windows(journal)

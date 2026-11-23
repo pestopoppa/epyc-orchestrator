@@ -110,6 +110,28 @@ _SLOT_SCORERS = {"expected_attention", "knorm"}
 DEEP_EVAL_TIERS = (0, 1, 2, 3)
 
 
+def _layer_key_enabled() -> bool:
+    """AP-LH-DISTILL: the ``layer`` action key exists only while ``autopilot_lh_layer_taxonomy`` is on.
+
+    Flag off => ``layer`` is an unsupported key exactly as before the feature (identical error text and
+    JSON schema). Read live on every validation so a ``POST /config`` flip takes effect without a restart.
+    Fail-closed: an unimportable module reads as off.
+    """
+    try:
+        import harness_layers
+
+        return harness_layers.flag_on(harness_layers.LAYER_TAXONOMY_ENV)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _allowed_keys(spec: dict[str, Any]) -> set[str]:
+    allowed = set(spec.get("allowed", {"type"}))
+    if "layer" in allowed and not _layer_key_enabled():
+        allowed.discard("layer")
+    return allowed
+
+
 def set_suppressed_numeric_surfaces(surfaces: set[str] | list[str] | tuple[str, ...]) -> None:
     """Update startup-scoped numeric surfaces hidden from planner validation."""
     global _NUMERIC_SURFACES
@@ -1016,7 +1038,7 @@ def _action_type_json_schema(action_type: str, spec: dict[str, Any]) -> dict[str
     `enum` constraints. Nothing here is invented beyond that existing
     contract; field TYPES beyond an enum's own value types are intentionally
     left unconstrained (`_ACTION_SCHEMAS` does not declare them either)."""
-    allowed = sorted(spec.get("allowed", {"type"}) | {"type"})
+    allowed = sorted(_allowed_keys(spec) | {"type"})
     required = sorted({"type"} | set(spec.get("required", set())))
     enums = spec.get("enums", {})
     properties: dict[str, Any] = {"type": {"const": action_type}}
@@ -1209,7 +1231,7 @@ def _validate_action_schema(action: dict[str, Any]) -> str | None:
     if schema is None:
         return None
 
-    allowed = schema.get("allowed", set())
+    allowed = _allowed_keys(schema) if "allowed" in schema else set()
     extra = sorted(set(action) - allowed)
     if extra:
         return f"{action_type} unsupported keys: {extra}; allowed keys: {sorted(allowed)}"

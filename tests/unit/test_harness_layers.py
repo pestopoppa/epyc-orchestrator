@@ -26,8 +26,12 @@ LOOP_TRACE = "turn\nclick the red door\nclick the red door\nclick the red door\n
 CONTRACT_TRACE = "RESPONSE:\nNameError: name 'peek_all' is not defined\n"
 
 
-def _fail(trace: str, trial_id: int = 1, outcome: str = "failure") -> dict:
-    return {"outcome": outcome, "trial_id": trial_id, "trace": trace, "trace_hash": f"h{trial_id}"}
+def _fail(trace: str, trial_id: int = 1, outcome: str = "failure", complete: bool = False) -> dict:
+    """A bank item. ``complete`` defaults False, like every real tap-tail capture."""
+    return {
+        "outcome": outcome, "trial_id": trial_id, "trace": trace, "trace_hash": f"h{trial_id}",
+        "complete": complete, "source": "whole_trajectory_fixture" if complete else "inference_tap_tail",
+    }
 
 
 def _structural(flag: str, value: bool = True, **extra) -> dict:
@@ -72,7 +76,8 @@ def test_every_replay_predicate_flag_is_a_mapped_surface() -> None:
     assert set(hl.FLAG_FIRING_PREDICATES) <= mapped
 
 
-def test_planner_schema_vocabulary_matches_module_and_validates() -> None:
+def test_planner_schema_vocabulary_matches_module_and_validates(monkeypatch) -> None:
+    monkeypatch.setenv(TAX_ENV, "1")
     assert controller_io._HARNESS_LAYERS == set(hl.LAYER_VOCABULARY)
     ok = {"type": "prompt_mutation", "file": "tools.md", "layer": "environment_contract"}
     assert controller_io.validate_single_variable(ok) is None
@@ -80,6 +85,26 @@ def test_planner_schema_vocabulary_matches_module_and_validates() -> None:
     assert "layer must be one of" in (controller_io.validate_single_variable(bad) or "")
     flag = {"type": "structural_experiment", "flags": {"repl_syntax_loop_breaker": True}, "layer": "action_realization"}
     assert controller_io.validate_single_variable(flag) is None
+
+
+def test_layer_key_is_unsupported_when_taxonomy_flag_is_off(monkeypatch) -> None:
+    """Flags off == the pre-feature contract: `layer` is an unsupported key, in validation AND in the JSON schema."""
+    monkeypatch.delenv(TAX_ENV, raising=False)
+    for action in (
+        {"type": "prompt_mutation", "file": "tools.md", "layer": "environment_contract"},
+        {"type": "structural_experiment", "flags": {"repl_syntax_loop_breaker": True}, "layer": "action_realization"},
+    ):
+        err = controller_io.validate_single_variable(action) or ""
+        assert "unsupported keys: ['layer']" in err and "'layer'" not in err.split("allowed keys:")[1]
+        assert controller_io.validate_single_variable({k: v for k, v in action.items() if k != "layer"}) is None
+    branches = controller_io.autopilot_action_schema()["oneOf"]
+    assert all("layer" not in b["properties"] for b in branches)
+    monkeypatch.setenv(TAX_ENV, "1")
+    branches = controller_io.autopilot_action_schema()["oneOf"]
+    assert any("layer" in b["properties"] for b in branches)
+    assert controller_io.validate_single_variable(
+        {"type": "prompt_mutation", "file": "tools.md", "layer": "environment_contract"}
+    ) is None
 
 
 def test_layer_annotation_does_not_change_config_identity() -> None:
@@ -179,8 +204,12 @@ def test_layer_record_declared_surface_and_alignment() -> None:
 # ----- trace replay -----
 
 
-def _traces(*texts: str) -> list[dict]:
-    return [{"trace": t, "trial_id": i, "trace_hash": f"h{i}"} for i, t in enumerate(texts)]
+def _traces(*texts: str, complete: bool = False) -> list[dict]:
+    """Motivating traces. ``complete`` defaults False, like every real tap-tail capture."""
+    return [
+        {"trace": t, "trial_id": i, "trace_hash": f"h{i}", "complete": complete, "source": "fixture"}
+        for i, t in enumerate(texts)
+    ]
 
 
 def test_replay_would_fire_when_the_guard_matches_a_motivating_trace() -> None:
@@ -189,16 +218,47 @@ def test_replay_would_fire_when_the_guard_matches_a_motivating_trace() -> None:
     assert not hl.replay_rejects(rec)
 
 
-def test_replay_rejects_only_a_proved_noop_on_complete_traces() -> None:
-    rec = hl.replay_precheck(_structural("repl_syntax_loop_breaker"), _traces(CALM_TRACE, CONTRACT_TRACE))
-    assert rec["status"] == "would_not_fire" and rec["fired"] == 0
+def test_replay_rejects_only_when_every_trace_is_a_whole_trajectory() -> None:
+    rec = hl.replay_precheck(
+        _structural("repl_syntax_loop_breaker"), _traces(CALM_TRACE, CONTRACT_TRACE, complete=True)
+    )
+    assert rec["status"] == "would_not_fire" and rec["fired"] == 0 and rec["incomplete"] == 0
     assert hl.replay_rejects(rec)
 
 
-def test_replay_truncated_trace_is_inconclusive_not_a_null() -> None:
-    rec = hl.replay_precheck(_structural("repl_syntax_loop_breaker"), _traces("[trace truncated]\n" + CALM_TRACE))
-    assert rec["status"] == "not_replayable" and rec["truncated"] == 1
+def test_replay_tap_tail_traces_never_reject() -> None:
+    """The default capture (last 50 tap lines, no REPL results) is not a whole trajectory: inconclusive, not a null."""
+    rec = hl.replay_precheck(_structural("repl_syntax_loop_breaker"), _traces(CALM_TRACE, CONTRACT_TRACE))
+    assert rec["status"] == "inconclusive" and rec["incomplete"] == 2 and rec["fired"] == 0
     assert not hl.replay_rejects(rec)
+    # a bank item with NO provenance fields at all (pre-provenance rows) reads as incomplete too
+    legacy = [{"trace": CALM_TRACE, "trial_id": 1, "trace_hash": "h1"}]
+    assert hl.replay_precheck(_structural("repl_syntax_loop_breaker"), legacy)["status"] == "inconclusive"
+
+
+def test_replay_one_incomplete_trace_among_complete_ones_blocks_the_rejection() -> None:
+    mixed = _traces(CALM_TRACE, CONTRACT_TRACE, complete=True)
+    mixed[1]["complete"] = False
+    rec = hl.replay_precheck(_structural("repl_syntax_loop_breaker"), mixed)
+    assert rec["status"] == "inconclusive" and rec["incomplete"] == 1
+    assert not hl.replay_rejects(rec)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["[trace truncated]\n", "... [1000 chars truncated]\n", "head\n... [4000 chars truncated]\ntail\n"],
+)
+def test_replay_truncated_trace_is_inconclusive_even_when_asserted_complete(marker) -> None:
+    rec = hl.replay_precheck(
+        _structural("repl_syntax_loop_breaker"), _traces(marker + CALM_TRACE, complete=True)
+    )
+    assert rec["status"] == "inconclusive" and rec["truncated"] == 1
+    assert not hl.replay_rejects(rec)
+
+
+def test_replay_a_firing_predicate_wins_over_incompleteness() -> None:
+    rec = hl.replay_precheck(_structural("repl_syntax_loop_breaker"), _traces(SYNTAX_TRACE))
+    assert rec["status"] == "would_fire" and not hl.replay_rejects(rec)
 
 
 @pytest.mark.parametrize(
@@ -209,6 +269,8 @@ def test_replay_truncated_trace_is_inconclusive_not_a_null() -> None:
         ({"type": "gepa_optimize", "file": "tools.md"}, "no deterministic replay model"),
         (_structural("repl_syntax_loop_breaker", value=False), "off has no replay model"),
         (_structural("memrl"), "no firing predicate"),
+        (_structural("stream_degeneration_guard"), "not replayable from text"),
+        (_structural("tool_call_parse_error_retry"), "not replayable from text"),
         ({"type": "structural_experiment", "flags": {"a": True, "b": True}}, "exactly one flag"),
     ],
 )
@@ -229,15 +291,158 @@ def test_replay_without_motivating_traces_does_not_reject() -> None:
         ("repl_syntax_loop_breaker", SYNTAX_TRACE, CALM_TRACE),
         ("repl_plan_narration_nudge", "RESPONSE:\nLet me think about this plan first.\n", CALM_TRACE),
         ("harness_failure_ratio_guard", "Traceback (most recent call last)\nValueError: bad\nTypeError: worse\n", CALM_TRACE),
-        ("tool_call_parse_error_retry", "error: failed to parse tool call arguments", CALM_TRACE),
         ("tool_call_arg_leak_guard", 'args={"q": "<tool_call>x</tool_call>"}', CALM_TRACE),
-        ("stream_degeneration_guard", LOOP_TRACE, CALM_TRACE),
     ],
 )
 def test_each_firing_predicate_fires_and_stays_quiet(flag, firing, silent) -> None:
     pred = hl.FLAG_FIRING_PREDICATES[flag]
     assert pred(firing) is True
     assert pred(silent) is False
+
+
+def test_undecidable_guards_are_not_replayable_and_have_no_predicate() -> None:
+    assert set(hl.NOT_REPLAYABLE_FLAGS) == {"stream_degeneration_guard", "tool_call_parse_error_retry"}
+    assert not set(hl.NOT_REPLAYABLE_FLAGS) & set(hl.FLAG_FIRING_PREDICATES)
+    mapped = {flag for surf in hl.SURFACES.values() for flag in surf["flags"]}
+    assert set(hl.NOT_REPLAYABLE_FLAGS) <= mapped  # still a mapped surface; just never replayed
+
+
+# ----- negative direction: whatever the REAL guard fires on, the predicate must fire on (over-approximation) -----
+
+
+def test_arg_leak_predicate_fires_on_every_real_leak_marker() -> None:
+    from src.backends.tool_arg_guard import LEAK_MARKERS, find_call_leak, find_leak
+
+    assert LEAK_MARKERS  # the real list is non-empty, so the loop below proves something
+    for marker in LEAK_MARKERS:
+        assert find_leak({"path": f"a{marker}b"}) is not None  # the real guard fires...
+        assert hl.FLAG_FIRING_PREDICATES["tool_call_arg_leak_guard"](f'args={{"path": "a{marker}b"}}')  # ...so must we
+    call = {"function": {"name": "t", "arguments": '{"p": "x</parameter></function><parameter=path>"}'}}
+    assert find_call_leak([call]) is not None
+    assert hl.FLAG_FIRING_PREDICATES["tool_call_arg_leak_guard"](call["function"]["arguments"])
+
+
+def test_arg_leak_predicate_does_not_invent_markers_the_real_guard_lacks() -> None:
+    """`<arg_key>` was in the old mirrored regex but is not a real guard marker: it must not make us fire."""
+    from src.backends.tool_arg_guard import find_leak
+
+    text = "<arg_key>q</arg_key>"
+    assert find_leak({"q": text}) is None
+    assert hl.FLAG_FIRING_PREDICATES["tool_call_arg_leak_guard"](text) is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "I will open the drawer",
+        "- I'll check the table",
+        "1. Let me look at the shelf",
+        "  > Let's try the other door",
+        "* I am going to take the key",
+        "I need to find the lamp",
+        "I should open it",
+        "Now, I examine the box",
+        "Then I go east",
+        "My plan: look around",
+        "Step 1 find the key",
+        "PLAN: x",
+        "first, open it",
+    ],
+)
+def test_plan_narration_predicate_fires_on_every_real_plan_line_shape(line) -> None:
+    from src.graph.answer_resolution import _PLAN_LINE_RE, _looks_like_plan_narration
+
+    assert _PLAN_LINE_RE.match(line)
+    assert _looks_like_plan_narration(line) is True  # the real guard fires on it...
+    assert hl.FLAG_FIRING_PREDICATES["repl_plan_narration_nudge"](f"RESPONSE:\n{line}\n")  # ...so must we
+
+
+def test_plan_narration_predicate_over_approximates_the_real_guards_exclusions() -> None:
+    """The real guard is silent when an answer or code fence is present; we still fire (a superset)."""
+    from src.graph.answer_resolution import _looks_like_plan_narration
+
+    text = "I will go with B. The answer is B."
+    assert _looks_like_plan_narration(text) is False
+    assert hl.FLAG_FIRING_PREDICATES["repl_plan_narration_nudge"](text) is True
+
+
+def test_failure_ratio_predicate_fires_on_a_trace_the_real_guard_trips_on() -> None:
+    from src.graph.decision_gates import _harness_failure_ratio_tripped
+    from src.graph.helpers import _note_turn_health
+    from src.graph.state import TaskState
+
+    state = TaskState()
+    turns = [
+        SimpleNamespace(is_final=False, error="NameError: name 'x' is not defined", output=""),
+        SimpleNamespace(is_final=False, error="", output="[TOOL ERROR] read failed: no such file"),
+        SimpleNamespace(is_final=False, error="", output="[ERROR] bad arguments"),
+        SimpleNamespace(is_final=False, error="", output="ok"),
+    ]
+    for t in turns:
+        state.turns += 1
+        _note_turn_health(state, t)
+    assert _harness_failure_ratio_tripped(state)  # the real guard trips on these four turns
+    transcript = "\n".join(str(t.error or t.output) for t in turns)
+    assert hl.FLAG_FIRING_PREDICATES["harness_failure_ratio_guard"](transcript)  # so must we
+
+
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "[ERROR] boom\n[TOOL ERROR] again",  # the bracket tags the old regex missed
+        "error: boom\nerror: again",  # case-insensitive
+        "ERROR: x\nFAILED y",
+        "Execution timed out\ntimeout reading file",
+    ],
+)
+def test_failure_ratio_predicate_counts_bracket_tags_and_ignores_case(transcript) -> None:
+    assert hl.FLAG_FIRING_PREDICATES["harness_failure_ratio_guard"](transcript) is True
+
+
+def test_syntax_loop_predicate_fires_on_a_trace_the_real_guard_acts_on() -> None:
+    from src.graph.helpers import _guard_syntax_loop
+    from src.graph.state import TaskState
+
+    state = TaskState()
+    errors: list[str] = []
+    for _ in range(3):
+        err = "SyntaxError: invalid syntax (<string>, line 1)"
+        errors.append(err)
+        hint, terminal = _guard_syntax_loop(state, SimpleNamespace(is_final=False, error=err))
+        if hint or terminal:
+            break
+    assert hint is not None  # the real guard hints on the 2nd consecutive SyntaxError turn
+    assert hl.FLAG_FIRING_PREDICATES["repl_syntax_loop_breaker"]("\n".join(errors))
+
+
+@pytest.mark.parametrize("flag", ["tool_call_arg_leak_guard", "repl_plan_narration_nudge"])
+def test_predicate_says_fires_when_the_real_guard_cannot_be_imported(flag, monkeypatch) -> None:
+    """An unreadable real guard cannot be over-approximated; the safe answer is 'fires', never 'would not fire'."""
+    assert hl.FLAG_FIRING_PREDICATES[flag](CALM_TRACE) is False  # with the real guard present, a calm trace is quiet
+    monkeypatch.setattr(hl, "_real_leak_markers", lambda: None)
+    monkeypatch.setattr(hl, "_real_plan_line_re", lambda: None)
+    assert hl.FLAG_FIRING_PREDICATES[flag](CALM_TRACE) is True
+
+
+def test_trace_bank_items_carry_provenance_and_default_to_incomplete() -> None:
+    from eval_tower_trace_feedback import update_contrastive_trace_bank
+
+    bank = update_contrastive_trace_bank(None, trace_text="RESPONSE:\nboom", outcome="failure", trial_id=1)
+    assert bank[0]["complete"] is False and bank[0]["source"] == "inference_tap_tail"
+    bank = update_contrastive_trace_bank(
+        bank, trace_text="whole run", outcome="failure", trial_id=2, complete=True, source="whole_trajectory"
+    )
+    assert bank[1]["complete"] is True and bank[1]["source"] == "whole_trajectory"
+    assert bank[0]["complete"] is False  # an earlier item keeps its provenance across a re-normalisation
+    # a trace the bank had to cut is never complete, whatever the caller asserted
+    bank = update_contrastive_trace_bank(
+        bank, trace_text="x" * 5000, outcome="failure", trial_id=3, complete=True, max_trace_chars=100
+    )
+    assert bank[2]["trace"].startswith("[trace truncated]") and bank[2]["complete"] is False
+    # the pre-check reads the same provenance: only the one whole-trajectory failure is complete
+    traces = hl.motivating_failure_traces({"contrastive_trace_bank": bank}, k=3)
+    assert [t["complete"] for t in traces] == [False, True, False]
+    assert hl.replay_precheck(_structural("repl_syntax_loop_breaker"), traces)["status"] == "inconclusive"
 
 
 # ----- flags are fully wired and default off -----
@@ -327,10 +532,21 @@ def test_dispatch_flags_off_is_unannotated_and_unchanged(monkeypatch) -> None:
     assert "harness_layer" not in result.details and "trace_replay_precheck" not in result.details
 
 
-def test_dispatch_replay_on_skips_a_proved_noop_before_apply_or_eval(monkeypatch) -> None:
+def test_dispatch_replay_on_tap_tail_trace_never_skips_today(monkeypatch) -> None:
+    """With the current capture (tap tail, complete=False) the pre-check is observe-only: the eval still runs."""
     monkeypatch.setenv(REPLAY_ENV, "1")
     monkeypatch.delenv(TAX_ENV, raising=False)
     state = {"contrastive_trace_bank": [_fail(CALM_TRACE, 7)]}
+    result, _sp, lab, tower = _dispatch(_structural("repl_syntax_loop_breaker"), state)
+    assert not isinstance(result, actions.SkipOutcome)
+    assert tower.calls == 1 and lab.applied
+    assert result.details["trace_replay_precheck"]["status"] == "inconclusive"
+
+
+def test_dispatch_replay_on_skips_a_proved_noop_before_apply_or_eval(monkeypatch) -> None:
+    monkeypatch.setenv(REPLAY_ENV, "1")
+    monkeypatch.delenv(TAX_ENV, raising=False)
+    state = {"contrastive_trace_bank": [_fail(CALM_TRACE, 7, complete=True)]}
     result, species, lab, tower = _dispatch(_structural("repl_syntax_loop_breaker"), state)
     assert isinstance(result, actions.SkipOutcome) and species == "structural_lab"
     assert result.status == "skipped"  # never "invalid": a proved no-op is not blacklist-eligible
@@ -438,5 +654,21 @@ def test_skip_row_journals_the_annotations() -> None:
         lh_annotations=ann,
     )
     # _record_reproposal_rate_windows may touch the journal; the entry is what matters
-    assert recorded and recorded[0].eval_details == ann
+    # same eval_details.details.<record> path as an executed trial's journal row
+    assert recorded and recorded[0].eval_details == {"details": ann}
+    assert recorded[0].eval_details["details"]["trace_replay_precheck"]["status"] == "would_not_fire"
     assert recorded[0].outcome_status == "skipped"
+
+
+def test_skip_row_without_annotations_has_empty_eval_details() -> None:
+    autopilot = importlib.import_module("autopilot")
+    recorded = []
+
+    class J:
+        def record(self, entry):
+            recorded.append(entry)
+
+    autopilot._record_skip_trial(
+        J(), 4, _structural("repl_syntax_loop_breaker"), "structural_lab", "skipped", "r", 0,
+    )
+    assert recorded[0].eval_details == {}

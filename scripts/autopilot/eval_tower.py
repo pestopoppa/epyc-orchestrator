@@ -8262,6 +8262,8 @@ class EvalTower:
         reason: str = "",
         max_examples_per_outcome: int = 8,
         max_trace_chars: int = 1600,
+        complete: bool = False,
+        source: str = eval_tower_trace_feedback.DEFAULT_TRACE_SOURCE,
     ) -> list[dict[str, Any]]:
         return eval_tower_trace_feedback.update_contrastive_trace_bank(
             trace_bank,
@@ -8273,6 +8275,8 @@ class EvalTower:
             reason=reason,
             max_examples_per_outcome=max_examples_per_outcome,
             max_trace_chars=max_trace_chars,
+            complete=complete,
+            source=source,
         )
 
     def capture_contrastive_traces(
