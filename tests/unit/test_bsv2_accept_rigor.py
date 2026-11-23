@@ -144,7 +144,7 @@ def test_wiring_rigor_on_accepts_when_configured_and_records_round(monkeypatch):
     assert st["bsv2_rigor"]["budget"]["spent"] == 4 and len(st["bsv2_rigor"]["rounds"]) == 1
 
 
-def test_flags_registered_default_off_and_hot_swap():
+def test_flags_registered_default_off_and_pinned_observe_only():
     from scripts.autopilot.config_applicator import HOT_SWAP_FEATURES
     from src.features import _REGISTRY_BY_NAME, Features
 
@@ -153,4 +153,88 @@ def test_flags_registered_default_off_and_hot_swap():
         spec = _REGISTRY_BY_NAME[name]
         assert spec.default_test is False and spec.default_prod is False and spec.env_name == env
         assert getattr(Features(), name) is False
-        assert name in HOT_SWAP_FEATURES
+        assert name not in HOT_SWAP_FEATURES  # AP-BSV2-RIGOR-PIN: the proposer cannot flip its own gate
+
+
+# --- AP-BSV2-RIGOR-STATE: loop-populated state + proposal-disjoint accept partition -------------------------
+
+
+class _FakeTower:
+    """Pool of 40 qids; ``hybrid_eval`` draws 6 deterministically, honouring ``bsv2_exclude_qids`` like eval_t1."""
+
+    def __init__(self):
+        self.bsv2_exclude_qids = None
+        self.pool = {"math": [{"qid": f"q{i:02d}", "prompt": f"p{i}", "suite": "math"} for i in range(40)]}
+
+    def _load_pool(self):
+        return self.pool
+
+    def draw(self):
+        ex = self.bsv2_exclude_qids or set()
+        return [q["qid"] for q in self.pool["math"] if q["qid"] not in ex][:6]
+
+
+def _loop_ctx(monkeypatch, traces=""):
+    monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "1")
+    monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_RIGOR", "1")
+    monkeypatch.setenv("AUTOPILOT_BSV2_MIN_SHARED_QIDS", "2")
+    return SimpleNamespace(tower=_FakeTower(), state={"last_traces": traces} if traces else {})
+
+
+def _eval_pair(qids, cand_ok=True):
+    b = [{"qid": q, "suite": "math", "correct": False, "tokens_generated": 10} for q in qids]
+    c = [{"qid": q, "suite": "math", "correct": cand_ok, "tokens_generated": 10} for q in qids]
+    return b, c
+
+
+def test_state_loop_populates_and_a_disjoint_accept_passes(monkeypatch):
+    ctx = _loop_ctx(monkeypatch)
+    assert actions._bsv2_rigor_prepare(ctx) is True
+    st = ctx.state["bsv2_rigor"]
+    assert st["proposal_qids"] == [] and st["budget"]["unit"] in rig.BUDGET_UNITS and st["budget"]["limit"]
+    assert st["sealed_qids"] and set(st["sealed_qids"]) < {f"q{i:02d}" for i in range(40)}
+    drawn = ctx.tower.draw()
+    assert drawn and not set(drawn) & set(st["sealed_qids"])
+    b, c = _eval_pair(drawn)
+    ok, detail = _gate(ctx, b, c, monkeypatch, rigor_on=True)
+    assert ok and detail["rigor"]["rules"]["R1"]["ok"] and detail["rigor"]["rules"]["R3"]["ok"]
+    # the eval just run becomes the next proposal batch, and the next draw is disjoint from it
+    actions._bsv2_rigor_note_eval(ctx, SimpleNamespace(question_results=c))
+    ctx.tower.bsv2_exclude_qids = None
+    assert actions._bsv2_rigor_prepare(ctx) is True
+    assert set(ctx.state["bsv2_rigor"]["proposal_qids"]) == set(drawn)
+    assert not set(ctx.tower.draw()) & set(drawn)
+
+
+def test_state_overlapping_accept_is_refused(monkeypatch):
+    ctx = _loop_ctx(monkeypatch)
+    actions._bsv2_rigor_prepare(ctx)
+    st = ctx.state["bsv2_rigor"]
+    overlap = ctx.tower.draw()[:3]
+    st["proposal_qids"] = sorted(overlap)  # the proposer saw these
+    b, c = _eval_pair(overlap)
+    ok, detail = _gate(ctx, b, c, monkeypatch, rigor_on=True)
+    assert not ok and detail["rigor"]["rules"]["R1"]["ok"] is False
+    # sealed qids in the accept eval are refused too (R3)
+    sealed = st["sealed_qids"][:3]
+    st["proposal_qids"] = []
+    b, c = _eval_pair(sealed)
+    ok, detail = _gate(ctx, b, c, monkeypatch, rigor_on=True)
+    assert not ok and detail["rigor"]["rules"]["R3"]["ok"] is False
+
+
+def test_state_unknown_proposal_batch_with_traces_fails_closed(monkeypatch):
+    ctx = _loop_ctx(monkeypatch, traces="some earlier traces")
+    assert actions._bsv2_rigor_prepare(ctx) is True
+    assert ctx.state["bsv2_rigor"]["proposal_qids"] is None
+    b, c = _eval_pair(ctx.tower.draw())
+    ok, _ = _gate(ctx, b, c, monkeypatch, rigor_on=True)
+    assert not ok
+
+
+def test_state_prepare_is_inert_when_flags_off(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_RIGOR", raising=False)
+    ctx = SimpleNamespace(tower=_FakeTower(), state={})
+    assert actions._bsv2_rigor_prepare(ctx) is False
+    assert "bsv2_rigor" not in ctx.state and ctx.tower.bsv2_exclude_qids is None

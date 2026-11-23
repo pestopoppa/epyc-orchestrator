@@ -4225,6 +4225,9 @@ class EvalTower:
         self._sentinel_load_details: dict[str, Any] = {}
         self._pool = None
         self._pool_mtime_ns: int | None = None
+        # AP-BSV2-RIGOR-STATE: qids the T1 legacy-pool draw must avoid (proposal batch + sealed split). Set by the
+        # dispatcher around one action when the BSV-2 rigor flag is on; None = no exclusion (legacy draw, unchanged).
+        self.bsv2_exclude_qids: set[str] | None = None
         self._pool_load_details: dict[str, Any] = {}
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
@@ -6992,7 +6995,12 @@ class EvalTower:
             )
             effective_seed = rotated_core_seed(seed, rotation)
             rng = random.Random(effective_seed)
-            questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(pool, n, rng)
+            bsv2_excluded = set(getattr(self, "bsv2_exclude_qids", None) or ())
+            questions, tier_mix_provenance = _sample_tier_stratified_eval_questions(
+                pool, n, rng, exclude_qids=bsv2_excluded or None
+            )
+            if bsv2_excluded:
+                tier_mix_provenance["bsv2_accept_partition_excluded_qids"] = len(bsv2_excluded)
             tier_mix_provenance.update(
                 {
                     "core_rotation_index": rotation,
@@ -7003,6 +7011,8 @@ class EvalTower:
             )
             core_selection = "tier_stratified"
             core_id = f"tier_stratified_{EVAL_TIER_MIX_POLICY}_seed_{seed}_n{n}_rot{rotation}"
+            if bsv2_excluded:  # a partitioned draw is a different instrument, so it gets its own core_id
+                core_id += "_bsv2part"
 
         audit_questions: list[dict] = []
         if audit_policy["enabled"] and audit_policy["requested_n"] > 0:

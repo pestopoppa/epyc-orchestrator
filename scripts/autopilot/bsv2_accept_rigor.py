@@ -84,6 +84,50 @@ def ensure_state(state: dict[str, Any]) -> dict[str, Any]:
     return cur
 
 
+def sealed_split(pool_qids: Iterable[str], fraction: float, salt: str = "bsv2-sealed-v1") -> list[str]:
+    """R3: deterministic hash split. A qid is sealed iff its salted hash falls in the first ``fraction``."""
+    import hashlib
+
+    out: list[str] = []
+    cut = int(max(0.0, min(1.0, float(fraction))) * 0xFFFFFFFF)
+    for q in sorted({str(x) for x in pool_qids}):
+        if int(hashlib.sha256(f"{salt}\x00{q}".encode()).hexdigest()[:8], 16) < cut:
+            out.append(q)
+    return out
+
+
+def populate_state(
+    state: dict[str, Any],
+    *,
+    proposal_qids: Iterable[str] | None,
+    pool_qids: Iterable[str] | None = None,
+    sealed_fraction: float = 0.2,
+    budget_unit: str | None = None,
+    budget_limit: float | None = None,
+) -> dict[str, Any]:
+    """Loop-side population of ``state["bsv2_rigor"]`` before an accept round.
+
+    ``proposal_qids`` None keeps R1 failing closed. The sealed split is computed once from the pool and
+    kept; the budget unit/limit are only set when given (``spent`` is never reset). Returns the rigor dict.
+    """
+    cur = ensure_state(state)
+    cur["proposal_qids"] = None if proposal_qids is None else sorted({str(q) for q in proposal_qids})
+    if not cur.get("sealed_qids") and pool_qids is not None:
+        cur["sealed_qids"] = sealed_split(pool_qids, sealed_fraction)
+    if budget_unit is not None:
+        cur["budget"]["unit"] = budget_unit
+    if budget_limit is not None:
+        cur["budget"]["limit"] = budget_limit
+    return cur
+
+
+def accept_exclusions(rigor_state: Mapping[str, Any]) -> set[str]:
+    """Qids the accept draw must avoid: the proposal batch plus the sealed split."""
+    return {str(q) for q in (rigor_state.get("proposal_qids") or [])} | {
+        str(q) for q in (rigor_state.get("sealed_qids") or [])
+    }
+
+
 def evaluate_rigor(
     *,
     rigor_state: dict[str, Any],

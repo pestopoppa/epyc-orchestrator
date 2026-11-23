@@ -3600,4 +3600,61 @@ def dispatch_action(
     )
     if hasattr(ctx.tower, "set_trial_context"):
         ctx.tower.set_trial_context(ctx.state.get("trial_counter"))
-    return handler(action, ctx)
+    rigor_on = _bsv2_rigor_prepare(ctx)
+    try:
+        outcome = handler(action, ctx)
+    finally:
+        if rigor_on:
+            ctx.tower.bsv2_exclude_qids = None
+    if rigor_on:
+        _bsv2_rigor_note_eval(ctx, outcome[0] if isinstance(outcome, tuple) else outcome)
+    return outcome
+
+
+def _bsv2_rigor_prepare(ctx: _ActionContext) -> bool:
+    """AP-BSV2-RIGOR-STATE: populate ``ctx.state["bsv2_rigor"]`` and partition the accept draw.
+
+    Active only with both ``AUTOPILOT_BSV2_ACCEPT_GATE`` and ``AUTOPILOT_BSV2_ACCEPT_RIGOR`` on. The proposal batch
+    is the qid set of the previous eval the proposer's traces came from (``state["bsv2_rigor"]["proposal_qids"]``,
+    recorded by ``_bsv2_rigor_note_eval``); unknown with non-empty traces fails closed (None). The sealed split is a
+    hash split of the question pool, kept across rounds. The tower draw then excludes proposal and sealed qids, so
+    baseline and candidate arms share one accept partition disjoint from both. Never raises into the loop.
+    """
+    if not (_env_flag_enabled(_BSV2_ACCEPT_GATE_ENV) and _env_flag_enabled(_BSV2_ACCEPT_RIGOR_ENV)):
+        return False
+    try:
+        import bsv2_accept_rigor as rigor
+
+        cur = rigor.ensure_state(ctx.state)
+        proposal = cur.get("proposal_qids")
+        if proposal is None and not ctx.state.get("last_traces"):
+            proposal = []  # nothing was shown to the proposer yet: a known-empty batch, not an unknown one
+        pool_qids = None
+        if not cur.get("sealed_qids"):
+            import eval_tower as _et
+
+            pool = ctx.tower._load_pool() or {}
+            pool_qids = [_et._question_result_qid(q) for qs in pool.values() for q in qs]
+        unit = os.environ.get("AUTOPILOT_BSV2_BUDGET_UNIT", "").strip() or cur["budget"].get("unit") or "rollouts"
+        raw_limit = os.environ.get("AUTOPILOT_BSV2_BUDGET_LIMIT", "").strip()
+        limit = float(raw_limit) if raw_limit else (cur["budget"].get("limit") or 5000.0)
+        rigor.populate_state(
+            ctx.state,
+            proposal_qids=proposal,
+            pool_qids=pool_qids,
+            sealed_fraction=float(os.environ.get("AUTOPILOT_BSV2_SEALED_FRACTION", "0.2") or 0.2),
+            budget_unit=unit,
+            budget_limit=limit,
+        )
+        ctx.tower.bsv2_exclude_qids = rigor.accept_exclusions(ctx.state["bsv2_rigor"])
+        return True
+    except Exception as exc:  # noqa: BLE001 - state stays as-is; R1 then fails closed
+        log.warning("BSV-2 rigor state population failed (%s); gate fails closed", exc)
+        return False
+
+
+def _bsv2_rigor_note_eval(ctx: _ActionContext, result: Any) -> None:
+    """The eval just run becomes the next round's proposal batch (its traces feed the next proposer)."""
+    qids = [str(r.get("qid")) for r in (getattr(result, "question_results", None) or []) if r.get("qid")]
+    if qids:
+        ctx.state["bsv2_rigor"]["proposal_qids"] = sorted(set(qids))
