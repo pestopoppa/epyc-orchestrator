@@ -144,6 +144,7 @@ from phase_status import (
 import controller_io
 from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from run_manifest import build_run_manifest, manifest_drift_reasons
+import harness_layers
 import rejected_mutation_ledger
 import reproposal_rate
 from planner_coordinator import (
@@ -5846,6 +5847,7 @@ def _record_skip_trial(
     bug_corrupted_by: str = "",
     bug_corrupted_reason: str = "",
     run_manifest: dict[str, Any] | None = None,
+    lh_annotations: dict[str, Any] | None = None,
 ) -> None:
     """Journal a non-executing trial so it leaves durable residue (audit + planner).
 
@@ -5880,6 +5882,8 @@ def _record_skip_trial(
         bug_corrupted_by=bug_corrupted_by,
         bug_corrupted_reason=bug_corrupted_reason,
         run_manifest=dict(run_manifest or {}),  # AP-63(a)
+        # AP-LH-DISTILL: harness_layer / trace_replay_precheck records (absent with both flags off).
+        eval_details=dict(lh_annotations) if lh_annotations else {},
     )
     journal.record(entry)
     _record_reproposal_rate_windows(journal)
@@ -6656,6 +6660,16 @@ def _format_available_action_schemas(action_types: list[str]) -> str:
         ),
     }
     lines = [schemas[action_type] for action_type in ordered if action_type in schemas]
+    if lines and harness_layers.flag_on(harness_layers.LAYER_TAXONOMY_ENV) and any(
+        t in ordered
+        for t in ("prompt_mutation", "gepa_optimize", "code_mutation", "structural_experiment")
+    ):
+        # AP-LH-DISTILL: optional, annotation only (excluded from action identity).
+        lines.append(
+            '- Optional on prompt/GEPA/code/structural actions: "layer": one of '
+            + "|".join(sorted(harness_layers.LAYER_VOCABULARY))
+            + " — the harness layer the failing traces implicate (annotation only; never changes the action)."
+        )
     if lines:
         return "\n".join(lines).replace("{{", "{").replace("}}", "}")
     return "- Pause: no currently selectable autonomous action schema is available."
@@ -10742,6 +10756,7 @@ def _run_loop_inner(
                     bug_corrupted_by=skip_bug_corrupted_by,
                     bug_corrupted_reason=skip_bug_corrupted_reason,
                     run_manifest=_in_flight_run_manifest(state, trial_counter),  # AP-63(a)
+                    lh_annotations=getattr(eval_result, "lh_annotations", None),  # AP-LH-DISTILL
                 )
             except Exception:
                 log.debug("skip-trial journal write failed", exc_info=True)

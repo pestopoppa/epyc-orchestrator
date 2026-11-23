@@ -100,6 +100,12 @@ _SUPPRESSED_NUMERIC_SURFACES: set[str] = set()
 _NUMERIC_SURFACES = set(_RAW_NUMERIC_SURFACES)
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
 _CODE_MUTATIONS = {"targeted_fix", "new_file"}
+# AP-LH-DISTILL: optional harness-layer annotation on proposal actions. Mirrors harness_layers.LAYER_VOCABULARY
+# (a unit test asserts equality); it is in action_identity.EPHEMERAL_ACTION_KEYS so it never changes config identity.
+_HARNESS_LAYERS = {
+    "action_realization", "environment_contract", "trajectory_regulation", "procedural_skill",
+    "prompt", "routing", "flag",
+}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
 DEEP_EVAL_TIERS = (0, 1, 2, 3)
 
@@ -166,22 +172,24 @@ _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "enums": {"surface": _NUMERIC_SURFACES},
     },
     "prompt_mutation": {
-        "allowed": {"type", "file", "mutation", "description"},
+        "allowed": {"type", "file", "mutation", "description", "layer"},
         "required": {"file"},
-        "enums": {"mutation": _PROMPT_MUTATIONS},
+        "enums": {"mutation": _PROMPT_MUTATIONS, "layer": _HARNESS_LAYERS},
     },
     "gepa_optimize": {
-        "allowed": {"type", "file", "max_evals", "description"},
+        "allowed": {"type", "file", "max_evals", "description", "layer"},
         "required": {"file"},
+        "enums": {"layer": _HARNESS_LAYERS},
     },
     "code_mutation": {
-        "allowed": {"type", "file", "mutation", "description"},
+        "allowed": {"type", "file", "mutation", "description", "layer"},
         "required": {"file"},
-        "enums": {"mutation": _CODE_MUTATIONS},
+        "enums": {"mutation": _CODE_MUTATIONS, "layer": _HARNESS_LAYERS},
     },
     "structural_experiment": {
-        "allowed": {"type", "flags"},
+        "allowed": {"type", "flags", "layer"},
         "required": {"flags"},
+        "enums": {"layer": _HARNESS_LAYERS},
     },
     "consult_gate_probe": {
         "allowed": {"type", "task_suite", "turns", "tier"},

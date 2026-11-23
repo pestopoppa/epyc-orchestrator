@@ -94,6 +94,9 @@ HOT_SWAP_FEATURES = {
     "typed_decisions_validate_first",
     # M-27d.1: request-source label on episodic rows (write side, read live, default off).
     "episodic_source_label",
+    # AP-LH-DISTILL (2026-11-23): Life-Harness distillation, both default off, read live by the autopilot process
+    # through src.flag_env (POST /config writes the shared runtime-flag file). Annotation / pre-check only.
+    "autopilot_lh_layer_taxonomy", "autopilot_lh_trace_replay_precheck",
 }
 
 # Parameters applied via env vars (require API restart)

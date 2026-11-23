@@ -19,6 +19,8 @@ EPHEMERAL_ACTION_KEYS = frozenset({
     "hypothesis",
     "reasoning",
     "expected_mechanism",
+    # AP-LH-DISTILL: harness-layer annotation (annotation only; the surface edited determines behavior).
+    "layer",
     # Recovery metadata describes the configuration that preceded a staged
     # candidate; it is not part of the deployed candidate's behavior.
     "_multitier_restore_preimage",

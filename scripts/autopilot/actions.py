@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 from controller_io import suppressed_numeric_surfaces, validate_single_variable
+import harness_layers
 import rejected_mutation_ledger
 from mutation_author_capture import author_capture_kwargs
 from safety_gate import EvalResult, SafetyGate
@@ -476,6 +477,8 @@ class SkipOutcome:
     action_type: str = ""
     bug_corrupted_by: str = ""
     bug_corrupted_reason: str = ""
+    # AP-LH-DISTILL: harness_layer / trace_replay_precheck annotations for the journal row (None = flags off).
+    lh_annotations: dict[str, Any] | None = None
 
 
 @dataclass
@@ -498,6 +501,71 @@ class _ActionContext:
     # Phase 6/7 deployments construct one in autopilot.py main() and pass
     # it through dispatch_action → _action_seed_batch → Seeder.run_batch.
     watcher: Any | None = None
+    # AP-LH-DISTILL: per-dispatch Life-Harness state (see _lh_prepare); None when both flags are off.
+    lh: dict[str, Any] | None = None
+
+
+# AP-LH-DISTILL action types that carry a harness-layer annotation / replay record.
+_LH_SCOPE_ACTIONS = frozenset(
+    {"prompt_mutation", "gepa_optimize", "code_mutation", "structural_experiment"}
+)
+
+
+def _lh_prepare(action: dict[str, Any], ctx: _ActionContext) -> dict[str, Any] | None:
+    """Life-Harness distillation state for one dispatch. Pure + fail-open: never raises into the loop.
+
+    Builds the diagnosis of the motivating failing traces, the ``harness_layer`` record (taxonomy flag) and the
+    ``trace_replay_precheck`` record (replay flag). Only the handler decides to act on the replay record.
+    """
+    taxonomy = harness_layers.flag_on(harness_layers.LAYER_TAXONOMY_ENV)
+    replay = harness_layers.flag_on(harness_layers.TRACE_REPLAY_PRECHECK_ENV)
+    if not (taxonomy or replay) or action.get("type") not in _LH_SCOPE_ACTIONS:
+        return None
+    try:
+        traces = harness_layers.motivating_failure_traces(ctx.state)
+        diagnosis = harness_layers.diagnose_failure_traces(traces)
+        annotations: dict[str, Any] = {}
+        if taxonomy:
+            annotations["harness_layer"] = harness_layers.build_layer_record(action, diagnosis)
+        if replay:
+            annotations["trace_replay_precheck"] = harness_layers.replay_precheck(action, traces)
+        return {
+            "taxonomy": taxonomy,
+            "replay": replay,
+            "diagnosis": diagnosis,
+            "annotations": annotations,
+        }
+    except Exception as exc:  # noqa: BLE001 - annotation must never block a trial
+        log.warning("AP-LH-DISTILL preparation failed (%s); proceeding unannotated", type(exc).__name__)
+        return None
+
+
+def _lh_replay_rejection(ctx: _ActionContext) -> dict[str, Any] | None:
+    """The replay record when the pre-check proves the proposal would not have changed any motivating trace."""
+    lh = ctx.lh
+    if not lh or not lh.get("replay"):
+        return None
+    record = (lh.get("annotations") or {}).get("trace_replay_precheck")
+    return record if harness_layers.replay_rejects(record) else None
+
+
+def _lh_stamp(outcome: Any, ctx: _ActionContext) -> None:
+    """Attach the annotations to the result's journal-bound details (or the skip row). Fail-open."""
+    lh = ctx.lh
+    if not lh or not lh.get("annotations"):
+        return
+    try:
+        result = outcome[0] if isinstance(outcome, tuple) and outcome else None
+        if isinstance(result, SkipOutcome):
+            if result.lh_annotations is None:
+                result.lh_annotations = json.loads(json.dumps(lh["annotations"]))
+            return
+        details = getattr(result, "details", None)
+        if isinstance(details, dict):
+            for key, value in lh["annotations"].items():
+                details.setdefault(key, value)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("AP-LH-DISTILL stamp skipped: %s", exc)
 
 
 # -----------------------------------------------------------------------------
@@ -1368,6 +1436,13 @@ def _build_mutation_context(
         last_traces = ctx.state.get("last_traces", "")
         if last_traces:
             failure_context = f"## Recent Execution Traces\n{last_traces}\n\n" + failure_context
+
+    # AP-LH-DISTILL: which harness layer the failing traces implicate + the existing surfaces per layer
+    # (annotation only; default off). Placed before the trace blocks so the proposer reads it first.
+    if ctx.lh and ctx.lh.get("taxonomy"):
+        layer_block = harness_layers.render_layer_block(ctx.lh.get("diagnosis"))
+        if layer_block:
+            failure_context = f"{layer_block}\n\n{failure_context}"
 
     # AP-53: harness-written memory of rejected changes to THIS target. Placed first
     # so it survives any downstream truncation of the failure context.
@@ -2342,6 +2417,22 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
             return SkipOutcome("invalid", reason, "structural_experiment"), "structural_lab"
         reason = str(validation.get("error", "flag experiment error"))
         return SkipOutcome("skipped", reason, "structural_experiment"), "structural_lab"
+
+    # AP-LH-DISTILL: a flag whose guard provably would not have fired on any motivating failing trace does not
+    # pay for an eval (zero model calls; journaled as a skipped row with the replay record).
+    replay_reject = _lh_replay_rejection(ctx)
+    if replay_reject is not None:
+        reason = f"trace_replay_precheck: {replay_reject['reason']}"
+        log.warning("AP-LH-DISTILL %s", reason)
+        return (
+            SkipOutcome(
+                "skipped",
+                reason,
+                "structural_experiment",
+                lh_annotations=json.loads(json.dumps((ctx.lh or {}).get("annotations") or {})),
+            ),
+            "structural_lab",
+        )
 
     try:
         prior_flags = ctx.lab.current_flags()
@@ -3601,11 +3692,13 @@ def dispatch_action(
     if hasattr(ctx.tower, "set_trial_context"):
         ctx.tower.set_trial_context(ctx.state.get("trial_counter"))
     rigor_on = _bsv2_rigor_prepare(ctx)
+    ctx.lh = _lh_prepare(action, ctx)
     try:
         outcome = handler(action, ctx)
     finally:
         if rigor_on:
             ctx.tower.bsv2_exclude_qids = None
+    _lh_stamp(outcome, ctx)
     if rigor_on:
         _bsv2_rigor_note_eval(ctx, outcome[0] if isinstance(outcome, tuple) else outcome)
     return outcome
