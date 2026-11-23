@@ -467,6 +467,24 @@ def _request_constraints(request: Any, chat_payload: Any = None) -> list[str]:
         return []
 
 
+def _resolved_sampler(role_config: Any, request: Any) -> dict[str, Any] | None:
+    """SPEC-DTREE-DICE step 1: the sampler params llama-server is sent, for the tap START event.
+
+    ``{temperature, top_k, top_p, min_p, speculative_n_max, speculative_requested}`` from the
+    backend's own resolver, so the record equals the wire. ``None`` (key omitted) when no role
+    config is bound or resolution fails: absent means "predates this hook / unknown", never a
+    guessed value. Never raises.
+    """
+    if role_config is None:
+        return None
+    try:
+        from src.backends.llama_server import resolve_sampler_params
+
+        return resolve_sampler_params(role_config, request)
+    except Exception:  # noqa: BLE001 - a label must never break dispatch
+        return None
+
+
 def _build_tap_metadata(
     request: Any,
     *,
@@ -478,6 +496,7 @@ def _build_tap_metadata(
     context_trial_id: Any = None,
     context_batch_id: Any = None,
     chat_payload: Any = None,
+    role_config: Any = None,
 ) -> dict[str, Any]:
     parent_request_id = parent_request_id or _metadata_from_request_or_env(
         request,
@@ -506,7 +525,7 @@ def _build_tap_metadata(
     )
     if batch_id in (None, ""):
         batch_id = context_batch_id
-    return {
+    meta = {
         "request_id": request_id,
         "parent_request_id": parent_request_id,
         "task_id": task_id or getattr(request, "task_id", None),
@@ -518,6 +537,10 @@ def _build_tap_metadata(
         "port": port,
         "request_constraints": _request_constraints(request, chat_payload),
     }
+    sampler = _resolved_sampler(role_config, request)
+    if sampler is not None:
+        meta["sampler"] = sampler
+    return meta
 
 
 def _request_chat_payload(owner: Any) -> dict[str, Any] | None:
@@ -1656,6 +1679,7 @@ class InferenceMixin:
                                 else None
                             ),
                             chat_payload=_request_chat_payload(self),
+                            role_config=role_config,
                         )
                         tap_metadata.update(direct_region_metadata)
                         trace_keys = _request_trace_keys(self)

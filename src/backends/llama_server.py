@@ -128,6 +128,40 @@ def _write_logit_probe(prompt: str, first_token_probs: dict) -> None:
         logger.debug("logit_probe write failed", exc_info=True)
 
 
+def resolve_sampler_params(role_config: Any, request: Any) -> dict[str, Any]:
+    """The sampler parameters this backend sends for ``request`` (single source of truth).
+
+    ``_apply_deterministic_sampling`` writes them onto the wire; the inference tap
+    (SPEC-DTREE-DICE step 1) records the same dict on its START event, so the logged
+    values cannot drift from the sent ones. Temperature precedence: explicit request
+    override -> role acceleration override -> role generation_defaults -> 0.0. A
+    negative temperature is not sent (``None``). ``min_p`` is never sent by this
+    backend today, so it is ``None``; the key is reserved. ``speculative_n_max`` is the
+    per-request / in-context ``speculative.n_max`` (``None`` = key omitted, the server's
+    launch default applies) and ``speculative_requested`` is ``n_max > 0`` (``None`` when
+    unspecified). Pure: no I/O, never reads ``self``.
+    """
+    temp = request.temperature
+    if temp is None:
+        temp = role_config.acceleration.temperature
+    if temp is None and role_config.generation_defaults is not None:
+        temp = role_config.generation_defaults.temperature
+    if temp is None:
+        temp = 0.0
+    n_max = getattr(request, "speculative_n_max", None)
+    if n_max is None:
+        n_max = spec_policy.current_override()
+    n_max = max(0, int(n_max)) if isinstance(n_max, (int, float)) and not isinstance(n_max, bool) else None
+    return {
+        "temperature": temp if temp >= 0 else None,
+        "top_k": request.top_k if request.top_k is not None else 40,
+        "top_p": request.top_p if request.top_p is not None else 0.95,
+        "min_p": None,
+        "speculative_n_max": n_max,
+        "speculative_requested": None if n_max is None else n_max > 0,
+    }
+
+
 def _apply_pinned_slot(payload: dict[str, Any], request: Any) -> None:
     """Chat lane: forward ``slot_id`` as ``id_slot`` only on an explicit ``pin_slot`` opt-in.
 
@@ -1736,17 +1770,11 @@ class LlamaServerBackend(ModelBackend):
         request.seed. top_k/top_p/repeat_penalty are pinned to identical values
         on both endpoints unless the request explicitly overrides top_k/top_p.
         """
-        temp = request.temperature
-        if temp is None:
-            temp = role_config.acceleration.temperature
-        if temp is None and role_config.generation_defaults is not None:
-            temp = role_config.generation_defaults.temperature
-        if temp is None:
-            temp = 0.0
-        if temp is not None and temp >= 0:
-            payload["temperature"] = temp
-        payload["top_k"] = request.top_k if request.top_k is not None else 40
-        payload["top_p"] = request.top_p if request.top_p is not None else 0.95
+        sampler = resolve_sampler_params(role_config, request)
+        if sampler["temperature"] is not None:
+            payload["temperature"] = sampler["temperature"]
+        payload["top_k"] = sampler["top_k"]
+        payload["top_p"] = sampler["top_p"]
         payload["repeat_penalty"] = 1.1
         seed = getattr(request, "seed", None)
         payload["seed"] = seed if isinstance(seed, int) else _DETERMINISTIC_SAMPLING_SEED
