@@ -82,6 +82,36 @@ def test_smoke_no_checkpoints_and_hybrid():
     assert {r["class"] for r in h["rows"]} == {ec.ALIGN_CANNOT_SHIFT}
 
 
+class FakeServer:
+    """Fake slot that re-prefills len(prompt) - max(checkpoint <= common prefix)."""
+
+    def __init__(self, cps, arch=None, off_by=0):
+        self.cps, self.arch, self.off_by, self.cached = cps, arch, off_by, []
+
+    def completion(self, tokens):
+        common = 0
+        for x, y in zip(self.cached, tokens):
+            if x != y:
+                break
+            common += 1
+        ok = [c for c in self.cps if c <= common]
+        p = max(ok) if ok else 0
+        self.cached = list(tokens)
+        return len(tokens) - p + self.off_by
+
+    def slot_state(self):
+        return {"t_prime": len(self.cached), "checkpoints": self.cps, "arch": self.arch}
+
+
+def test_measured_mode_with_fake_server():
+    base = list(range(1, 3001))
+    cuts = sm.synth_cuts(3000, [500, 1500, 2500])
+    ok = sm.run_measured(FakeServer([500, 1500, 2500]), base, CAL, 32000, cuts)
+    assert ok["k"] == 20 and ok["pass"]
+    bad = sm.run_measured(FakeServer([500, 1500, 2500], off_by=1), base, CAL, 32000, cuts)
+    assert not bad["pass"]
+
+
 def test_smoke_detects_broken_probe(monkeypatch):
     real = ec.predict_evict_cost
     def bad(t, cut, cps, cal, **kw):
