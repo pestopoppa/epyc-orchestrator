@@ -54,6 +54,7 @@ from src.runtime.lock_queue import (
     LockQueueTimeout,
     append_event_log,
     check_nesting,
+    flock_exclusive_owner_pids,
     install_ticket_sigterm_cleanup as _fifo_install_sigterm_cleanup,
     is_fifo_enabled,
     queue_dir as _fifo_queue_dir,
@@ -247,6 +248,8 @@ def gpu_quiet_lock(
                 holder_pids=_gpu_quiet_holder_pids,
                 queue_dir_path=fifo_qdir,
                 label="gpu_quiet",
+                requested_shared=mode != GPU_QUIET_EXCLUSIVE,
+                exclusive_holder_pids=lambda: flock_exclusive_owner_pids(path),
             )
             fifo_ticket_id, fifo_ticket_path = write_ticket(
                 fifo_qdir,

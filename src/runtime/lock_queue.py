@@ -399,6 +399,28 @@ def wait_for_admission(
         time.sleep(max(0.001, wake_at - now))
 
 
+def flock_exclusive_owner_pids(
+    lock_file: Path, proc_locks: Path = Path("/proc/locks")
+) -> Optional[set[int]]:
+    """PIDs holding an exclusive (WRITE) FLOCK on `lock_file`; None if unreadable."""
+    try:
+        ino = lock_file.stat().st_ino
+        lines = proc_locks.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    out: set[int] = set()
+    for line in lines:
+        f = line.split()
+        if "->" in f or len(f) < 6 or f[1] != "FLOCK" or f[3] != "WRITE":
+            continue
+        try:
+            if int(f[5].rsplit(":", 1)[-1]) == ino:
+                out.add(int(f[4]))
+        except ValueError:
+            continue
+    return out
+
+
 def check_nesting(
     resource_keys: Iterable[str],
     *,
@@ -406,12 +428,19 @@ def check_nesting(
     queue_dir_path: Path,
     label: str = "lock",
     max_depth: int = 64,
+    requested_shared: bool = False,
+    exclusive_holder_pids: Optional[Callable[[], Optional[set[int]]]] = None,
 ) -> None:
     """Refuse fast (`NestedLockError`) if an ancestor holds or queues for an
     overlapping resource. Never blocks — a nested acquire must fail
     immediately, not queue, or it can deadlock against the very ancestor it
     would be waiting on (e.g. a parent `region-lock run` waiting on a child
     process that itself calls back into the same lock).
+
+    Shared-in-shared is exempt: when `requested_shared` and no overlapping
+    ancestor holder owns the lock exclusively (per `exclusive_holder_pids`;
+    None = unknown -> refuse as before), a nested shared acquire cannot
+    deadlock. Exclusive behaviour is unchanged.
     """
     pid = os.getpid()
     ancestors = set(ancestor_pids(pid, max_depth=max_depth))
@@ -423,6 +452,13 @@ def check_nesting(
     except Exception:  # best-effort probe; never let it mask a real nesting bug
         held_by = set()
     overlap_holders = ancestors & held_by
+    if overlap_holders and requested_shared and exclusive_holder_pids is not None:
+        try:
+            excl = exclusive_holder_pids()
+        except Exception:
+            excl = None
+        if excl is not None and not (overlap_holders & set(excl)):
+            overlap_holders = set()
     if overlap_holders:
         raise NestedLockError(
             f"{label}: refusing nested acquire — ancestor pid(s) {sorted(overlap_holders)} "
@@ -434,6 +470,7 @@ def check_nesting(
         int(t["pid"])
         for t in live
         if int(t.get("pid", -1)) in ancestors
+        and not (requested_shared and t.get("mode") == "shared")
         and want.intersection(t.get("resources") or t.get("regions") or [])
     }
     if conflicting_pids:
@@ -486,6 +523,7 @@ __all__ = [
     "ancestor_pids",
     "append_event_log",
     "check_nesting",
+    "flock_exclusive_owner_pids",
     "install_ticket_sigterm_cleanup",
     "is_fifo_enabled",
     "older_overlapping_blocks",

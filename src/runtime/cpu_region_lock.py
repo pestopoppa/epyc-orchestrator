@@ -64,6 +64,7 @@ from src.runtime.lock_queue import (
     LockQueueTimeout,
     append_event_log,
     check_nesting,
+    flock_exclusive_owner_pids,
     install_ticket_sigterm_cleanup as _fifo_install_sigterm_cleanup,
     is_fifo_enabled,
     queue_dir as _fifo_queue_dir,
@@ -1104,6 +1105,19 @@ def cpu_region_lock(
                 pids.update(int(p) for p in _current_lock_owner_pids(global_region_lock_path(region)))
         return pids
 
+    def _region_exclusive_holder_pids() -> set[int] | None:
+        out: set[int] = set()
+        for region in sorted_regions:
+            paths = [region_lock_path(role, region)]
+            if cross_role_mutex and not shared:
+                paths.append(global_region_lock_path(region))
+            for lp in paths:
+                got = flock_exclusive_owner_pids(lp)
+                if got is None:
+                    return None
+                out |= got
+        return out
+
     try:
         if fifo_enabled:
             check_nesting(
@@ -1111,6 +1125,8 @@ def cpu_region_lock(
                 holder_pids=_region_holder_pids,
                 queue_dir_path=fifo_qdir,
                 label=f"cpu_region:{role}",
+                requested_shared=bool(shared),
+                exclusive_holder_pids=_region_exclusive_holder_pids,
             )
             fifo_ticket_id, fifo_ticket_path = write_ticket(
                 fifo_qdir,
