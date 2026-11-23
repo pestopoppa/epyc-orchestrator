@@ -434,6 +434,8 @@ if TYPE_CHECKING:
 log = logging.getLogger("autopilot")
 _SKILL_EFFICACY_GATE_ENV = "AUTOPILOT_SKILL_EFFICACY_GATE"
 _BSV2_ACCEPT_GATE_ENV = "AUTOPILOT_BSV2_ACCEPT_GATE"
+#: R1-R5 accept-rigor sub-flag (AP-BSV2-RIGOR-GATE-CODE, default off); needs the gate flag too.
+_BSV2_ACCEPT_RIGOR_ENV = "AUTOPILOT_BSV2_ACCEPT_RIGOR"
 _BSV2_MIN_SHARED_QIDS_ENV = "AUTOPILOT_BSV2_MIN_SHARED_QIDS"
 _BSV2_MAX_ACCURACY_REGRESSION_ENV = "AUTOPILOT_BSV2_MAX_ACCURACY_REGRESSION"
 _PLANNER_HINTS_ENABLED = os.environ.get("AUTOPILOT_PLANNER_HINTS", "").strip().lower() in {
@@ -1684,6 +1686,45 @@ def _bsv2_eval_payload(
     }
 
 
+def _bsv2_apply_rigor(
+    *,
+    ctx: "_ActionContext",
+    detail: dict[str, Any],
+    baseline_result: EvalResult,
+    candidate_result: EvalResult,
+    paired_accept: bool,
+    report: dict[str, Any],
+) -> bool:
+    """R1-R5 on top of the paired decision. Fails closed on any error."""
+    try:
+        import bsv2_accept_rigor as rigor
+
+        state = rigor.ensure_state(ctx.state)
+        b_details = getattr(baseline_result, "details", {}) or {}
+        fresh = baseline_result is not candidate_result and not any(
+            b_details.get(k) for k in ("cached", "replayed", "reused", "from_journal")
+        )
+        stats = report.get("paired_stats") or {}
+        record = rigor.evaluate_rigor(
+            rigor_state=state,
+            baseline_rows=list(getattr(baseline_result, "question_results", []) or []),
+            candidate_rows=list(getattr(candidate_result, "question_results", []) or []),
+            baseline_fresh=fresh,
+            paired_accept=paired_accept,
+            accuracy_delta=stats.get("delta_b_minus_a"),
+        )
+        rigor.commit_round(state, record)
+    except Exception as exc:
+        detail["rigor"] = {"accept": False, "error": str(exc)}
+        detail["accept"] = False
+        detail["blockers"] = list(detail.get("blockers") or []) + [f"rigor failed closed: {exc}"]
+        return False
+    detail["rigor"] = record
+    detail["accept"] = record["accept"]
+    detail["blockers"] = list(detail.get("blockers") or []) + list(record["blockers"])
+    return bool(record["accept"])
+
+
 def _bsv2_accepts(
     *,
     baseline_result: EvalResult | None,
@@ -1691,8 +1732,13 @@ def _bsv2_accepts(
     artifact_kind: str,
     target: str,
     mutation_type: str,
+    ctx: "_ActionContext | None" = None,
 ) -> bool:
     """Default-off BSV-2 behavior-signature accept hook.
+
+    With ``AUTOPILOT_BSV2_ACCEPT_RIGOR`` also on (and a ``ctx``), R1-R5 from
+    ``bsv2_accept_rigor`` are enforced on top of the paired decision and the per-round
+    decision record is written to ``details["bsv2_accept_gate"]["rigor"]``.
 
     When enabled, the caller supplies a pre-mutation baseline eval and the
     post-mutation candidate eval. The existing paired-report backend decides
@@ -1765,6 +1811,16 @@ def _bsv2_accepts(
             "thresholds": report.get("thresholds"),
         }
     )
+    if ctx is not None and _env_flag_enabled(_BSV2_ACCEPT_RIGOR_ENV):
+        accept = _bsv2_apply_rigor(
+            ctx=ctx,
+            detail=detail,
+            baseline_result=baseline_result,
+            candidate_result=candidate_result,
+            paired_accept=accept,
+            report=report,
+        )
+        blockers = list(detail.get("blockers") or [])
     if not accept:
         log.warning(
             "BSV-2 accept gate rejected %s mutation on %s: %s",
@@ -1905,6 +1961,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         artifact_kind="prompt",
         target=target,
         mutation_type=mutation_type,
+        ctx=ctx,
     ):
         _record_mutation_diversity_coverage(
             eval_result,
@@ -2041,6 +2098,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         artifact_kind="prompt",
         target=target,
         mutation_type="gepa",
+        ctx=ctx,
     ):
         _record_rejected_mutation(
             ctx, mutation=mutation, target=target, mutation_type="gepa",
@@ -2207,6 +2265,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
                 artifact_kind="code",
                 target=target,
                 mutation_type=mutation_type,
+                ctx=ctx,
             ):
                 _record_mutation_diversity_coverage(
                     eval_result,

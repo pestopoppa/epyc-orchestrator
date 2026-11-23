@@ -50,6 +50,7 @@ DEFAULT_MODEL_REGISTRY_PATH = ORCH_ROOT / "orchestration" / "model_registry.yaml
 
 # Parameters that can be hot-swapped via POST /config (feature flags)
 HOT_SWAP_FEATURES = {
+    "autopilot_bsv2_accept_gate", "autopilot_bsv2_accept_rigor",  # BSV-2 accept gate + R1-R5 (default off)
     "memrl", "tools", "scripts", "streaming", "openai_compat", "repl",
     "caching", "specialist_routing", "architect_delegation", "session_log",
     "generation_monitor", "think_harder", "graph_router", "skillbank",

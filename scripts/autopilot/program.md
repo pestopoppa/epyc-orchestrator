@@ -195,6 +195,7 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 
 ### Tier 2: Feature Flag Combinations (hot-swap, zero-restart, direct logic changes)
 - Skillbank on/off
+- BSV-2 accept gate (`autopilot_bsv2_accept_gate`, default off) and its rigor extension (`autopilot_bsv2_accept_rigor`, default off, needs the gate on): accept-path controls, not quality levers. Rigor enforces R1 disjoint accept tasks, R2 fresh parent re-run, R3 sealed test split, R4 per-round decision record (status split, tokens per accepted gain), R5 budgets in rollouts or tokens; it fails closed when the proposal-qid set is unknown. Judge by accepts surviving R1-R5 (replay baseline: 0 of 130), never by score. Do not flip during a search; an operator arms these at a window boundary.
 - Session log on/off
 - Graph router vs classifier-only routing
 - Episodic memory configurations (retrieval weights, confidence thresholds)
