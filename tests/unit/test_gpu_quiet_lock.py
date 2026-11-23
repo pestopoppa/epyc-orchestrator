@@ -243,6 +243,9 @@ def _cli(args, tmp_path, timeout=30):
     env = os.environ.copy()
     env["ORCHESTRATOR_TMP_DIR"] = str(tmp_path)
     env["ORCHESTRATOR_INFERENCE_LOCK_POLL_MS"] = "10"
+    # AKU-25: FIFO defaults ON, and a CLI child of the holding test process would
+    # refuse as a nested acquire; these tests exercise the flock-only path.
+    env["EPYC_LOCK_FIFO"] = "0"
     return subprocess.run(
         [sys.executable, "-m", "src.runtime.region_lock_cli", *args],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=timeout,

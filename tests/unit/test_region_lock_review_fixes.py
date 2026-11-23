@@ -32,6 +32,7 @@ def _cli(lock_dir: Path, args: list[str], extra_env: dict[str, str] | None = Non
     env.pop("FILLER_DRYRUN", None)
     env["ORCHESTRATOR_TMP_DIR"] = str(lock_dir)
     env["GPU_QUIET_HW_CHECK"] = "0"
+    env["EPYC_LOCK_FIFO"] = "0"  # AKU-25: flock-only path; a FIFO child of the holder would refuse as nested
     env.update(extra_env or {})
     return subprocess.run(
         [sys.executable, "-m", "src.runtime.region_lock_cli", *args],

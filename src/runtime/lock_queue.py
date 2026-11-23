@@ -33,7 +33,7 @@ replaces it, only orders *when a waiter is allowed to attempt it*:
    while shared holders that already passed the gate (and so hold no
    ticket) finish undisturbed.
 
-GATING. Entirely opt-in behind `EPYC_LOCK_FIFO=1` (default OFF). An old
+GATING. Default ON since AKU-25 (2026-11-23); `EPYC_LOCK_FIFO=0` opts out. An old
 client that never calls into this module does not write tickets and is
 never gated by `wait_for_admission` — it just flocks directly, exactly as
 today. That is "unfair but correct": the flock remains the single source of
@@ -71,11 +71,12 @@ CLIENT_VERSION = 2
 GPU_QUIET_RESOURCE = "gpu-quiet"
 
 _TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
 
 
 def is_fifo_enabled() -> bool:
-    """`EPYC_LOCK_FIFO=1` gate. Default OFF until all live loops restart."""
-    return os.environ.get("EPYC_LOCK_FIFO", "0").strip().lower() in _TRUTHY
+    """`EPYC_LOCK_FIFO` gate. Default ON (AKU-25); `0`/`false`/`no`/`off` opts out."""
+    return os.environ.get("EPYC_LOCK_FIFO", "1").strip().lower() not in _FALSY
 
 
 class LockQueueTimeout(RuntimeError):

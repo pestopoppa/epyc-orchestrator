@@ -885,3 +885,27 @@ class TestNestingAudit:
             "bench and autokernel-cpu were serialized with the GLOBAL mutex "
             f"off -- ticket key is not scoped to the real contended resource: {spans}"
         )
+
+
+class TestFifoDefaultOn:
+    """AKU-25: EPYC_LOCK_FIFO defaults ON; explicit falsy values opt out."""
+
+    def test_unset_is_on(self, monkeypatch):
+        monkeypatch.delenv("EPYC_LOCK_FIFO", raising=False)
+        from src.runtime import lock_queue
+
+        assert lock_queue.is_fifo_enabled() is True
+
+    @pytest.mark.parametrize("val", ["0", "false", "No", "off", " OFF "])
+    def test_falsy_opts_out(self, monkeypatch, val):
+        from src.runtime import lock_queue
+
+        monkeypatch.setenv("EPYC_LOCK_FIFO", val)
+        assert lock_queue.is_fifo_enabled() is False
+
+    @pytest.mark.parametrize("val", ["1", "true", "yes", "on", ""])
+    def test_truthy_or_empty_is_on(self, monkeypatch, val):
+        from src.runtime import lock_queue
+
+        monkeypatch.setenv("EPYC_LOCK_FIFO", val)
+        assert lock_queue.is_fifo_enabled() is True
