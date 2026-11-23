@@ -30,8 +30,10 @@ instead of running the full ALFWorld Life-Harness run. Two ideas are taken, both
    trajectory. Bank items therefore carry ``complete`` / ``source`` provenance (default
    ``complete=False``, ``source="inference_tap_tail"``) and a rejection is returned ONLY when every
    motivating trace has ``complete=True`` and no truncation marker; otherwise the status is ``inconclusive``
-   and the proposal proceeds to its eval. Today no capture sets ``complete=True``, so the pre-check is
-   observe-only (it never rejects) until a whole-trajectory capture exists.
+   and the proposal proceeds to its eval. The default capture never sets ``complete=True``, so the pre-check is
+   observe-only (it never rejects) unless ``autopilot_lh_whole_trajectory_capture`` is on: that flag banks a
+   joined whole-trajectory trace (``whole_trajectory_capture.py``) as ``complete=True`` only when it proves it
+   whole.
 
    Prompt and code edits, flags turned off, and guards that cannot be decided from text
    (``stream_degeneration_guard`` aborts on live draft acceptance; ``tool_call_parse_error_retry`` acts on
@@ -274,7 +276,7 @@ def motivating_failure_traces(state: Mapping[str, Any], k: int = MOTIVATING_K) -
     These are exactly the failure examples ``build_critic_trace_ir`` shows the proposer. Items carry
     ``trace`` (possibly carrying a truncation marker), ``trial_id``, ``trace_hash`` and the provenance
     ``complete`` (True only when the bank item asserted a whole-trajectory capture; absent reads False) and
-    ``source``.
+    ``source``. A bank item carrying ``full_trace`` (the whole-trajectory capture) contributes that text.
     """
     bank = state.get("contrastive_trace_bank") if isinstance(state, Mapping) else None
     out: list[dict[str, Any]] = []
@@ -285,6 +287,11 @@ def motivating_failure_traces(state: Mapping[str, Any], k: int = MOTIVATING_K) -
             and str(item.get("trace") or "").strip()
         ):
             text = str(item["trace"])
+            full = item.get("full_trace")
+            if isinstance(full, str) and full.strip():
+                # AP-LH-WHOLE-TRAJECTORY-CAPTURE: the whole-trajectory text the item's ``complete`` was judged on
+                # (``trace`` is only its display tail); replay and diagnosis read that, never the cut tail.
+                text = full
             out.append(
                 {
                     "trial_id": item.get("trial_id"),

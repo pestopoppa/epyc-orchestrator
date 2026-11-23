@@ -63,9 +63,16 @@ def tap_write_repl_exec(
 
 
 def tap_write_repl_result(
-    output: str, error: str | None, is_final: bool, turn: int,
+    output: str, error: str | None, is_final: bool, turn: int, task_id: object = None,
 ) -> None:
-    """Write REPL execution result to the REPL tap file."""
+    """Write REPL execution result to the REPL tap file.
+
+    Optional ``task_id`` (AP-LH-WHOLE-TRAJECTORY-CAPTURE, only passed when that flag is on) puts a delimiting
+    header line ahead of the unchanged result text: ``[turn N] RESULT | task_id=X | chars=L`` where ``L`` is the
+    exact character length of the text that follows. The legacy block carries no id, so results of concurrent
+    tasks cannot be attributed; the length lets a reader delimit the block without trusting its content. Absent
+    (the default) the written text is byte-identical to the legacy format.
+    """
     if _IN_PYTEST:
         return
     try:
@@ -86,6 +93,9 @@ def tap_write_repl_result(
             parts.append(f"[turn {turn}] ERROR:\n{err_preview}")
         parts.append("")  # trailing newline
         text = "\n".join(parts)
+        tid = str(task_id).split()[0] if task_id not in (None, "") and str(task_id).split() else ""
+        if tid:
+            text = f"[turn {turn}] RESULT | task_id={tid} | chars={len(text)}\n{text}"
         with _repl_tap_lock:
             with open(_get_repl_tap_path(), "a") as f:
                 f.write(text)

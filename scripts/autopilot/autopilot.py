@@ -7603,6 +7603,22 @@ def _bsv3_conflict_policy_decision(
     }
 
 
+def _whole_trajectory_capture(tower: Any, outcome: str) -> Any:
+    """The tower's whole-trajectory capture for a failure trial, or None (flag off, not a failure, no capture)."""
+    if outcome != "failure":
+        return None
+    try:
+        import whole_trajectory_capture as wtc  # type: ignore
+
+        if not wtc.flag_on():
+            return None
+        capture = getattr(tower, "capture_whole_trajectory", None)
+        return capture() if callable(capture) else None
+    except Exception as exc:  # noqa: BLE001 - trace feedback must never disrupt trial completion
+        log.debug("Whole-trajectory capture skipped: %s", exc)
+        return None
+
+
 def _update_contrastive_trace_state(
     state: dict[str, Any],
     tower: Any,
@@ -7625,11 +7641,25 @@ def _update_contrastive_trace_state(
         bug_corrupted_by=bug_corrupted_by,
         outcome_status=outcome_status,
     )
-    if not outcome or not str(trace_text or "").strip():
+    # AP-LH-WHOLE-TRAJECTORY-CAPTURE (default off): a FAILURE item is banked from the joined whole trajectory
+    # (complete=True only when the capture proved it whole). Flag off, or no capture: ``whole`` is None and
+    # everything below is the legacy tap-tail path, unchanged.
+    whole = _whole_trajectory_capture(tower, outcome)
+    if not outcome or (not str(trace_text or "").strip() and whole is None):
         return
     updater = getattr(tower, "update_contrastive_trace_bank", None)
     if not callable(updater):
         return
+    bank_extra: dict[str, Any] = {}
+    if whole is not None:
+        import whole_trajectory_capture as _wtc  # type: ignore
+
+        trace_text = whole.text
+        bank_extra = {"complete": whole.complete, "source": _wtc.SOURCE, "full_trace": whole.text}
+        log.info(
+            "Whole-trajectory capture for trial %s: complete=%s reasons=%s stats=%s",
+            trial_id, whole.complete, whole.reasons, whole.stats,
+        )
     if outcome == "failure":
         reason = failure_analysis
     else:
@@ -7646,6 +7676,7 @@ def _update_contrastive_trace_state(
             species=species,
             action_type=action_type,
             reason=reason,
+            **bank_extra,
         )
         state["contrastive_trace_bank"] = bank
         formatter = getattr(tower, "capture_contrastive_traces", None)

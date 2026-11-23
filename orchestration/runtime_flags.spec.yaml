@@ -44,6 +44,7 @@ flags:
   autopilot_bsv2_accept_rigor: baseline
   autopilot_lh_layer_taxonomy: baseline
   autopilot_lh_trace_replay_precheck: baseline
+  autopilot_lh_whole_trajectory_capture: baseline
   autopilot_speed_physical_bound: baseline
   batch_edit_mode: baseline
   binding_routing: baseline

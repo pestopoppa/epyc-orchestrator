@@ -163,10 +163,13 @@ def _tap_write_repl_exec(
 
 
 def _tap_write_repl_result(
-    output: str, error: str | None, is_final: bool, turn: int,
+    output: str, error: str | None, is_final: bool, turn: int, task_id: object = None,
 ) -> None:
     """Compatibility wrapper for REPL tap result logging."""
-    _tap_write_repl_result_impl(output, error, is_final, turn)
+    if task_id is None:
+        _tap_write_repl_result_impl(output, error, is_final, turn)
+    else:
+        _tap_write_repl_result_impl(output, error, is_final, turn, task_id=task_id)
 
 
 def _trace_announced_action(
@@ -2307,7 +2310,12 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     state.repl_executions += 1
 
     # Write execution result to inference tap
-    _tap_write_repl_result(result.output, result.error, result.is_final, state.turns)
+    if _get_features().autopilot_lh_whole_trajectory_capture is True:
+        # AP-LH-WHOLE-TRAJECTORY-CAPTURE: id + length header so concurrent tasks' results can be attributed.
+        _tap_write_repl_result(result.output, result.error, result.is_final, state.turns,
+                               task_id=getattr(state, "task_id", None) or None)
+    else:
+        _tap_write_repl_result(result.output, result.error, result.is_final, state.turns)
 
     # FINAL() rescue: if REPL execution failed but the model DID write
     # FINAL("answer") in its output, extract the answer directly.

@@ -97,6 +97,9 @@ HOT_SWAP_FEATURES = {
     # AP-LH-DISTILL (2026-11-23): Life-Harness distillation, both default off, read live by the autopilot process
     # through src.flag_env (POST /config writes the shared runtime-flag file). Annotation / pre-check only.
     "autopilot_lh_layer_taxonomy", "autopilot_lh_trace_replay_precheck",
+    # AP-LH-WHOLE-TRAJECTORY-CAPTURE (2026-11-23): read live by the autopilot process (src.flag_env) and by the API
+    # process (features(), REPL-tap result header). Needs a reload of neither.
+    "autopilot_lh_whole_trajectory_capture",
 }
 
 # Parameters applied via env vars (require API restart)

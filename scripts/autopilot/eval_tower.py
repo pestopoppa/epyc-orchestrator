@@ -4232,6 +4232,9 @@ class EvalTower:
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
         self._trial_path_context: Path | None = None
+        # AP-LH-WHOLE-TRAJECTORY-CAPTURE: trial id -> {"ids": [eval_batch_id], "start": epoch}; stays empty unless
+        # autopilot_lh_whole_trajectory_capture is on (see note_trial_batches).
+        self._trial_batches: dict[int, dict[str, Any]] = {}
         # EV-11c: when set (window-runner / verifier-mode path), _eval_batch writes
         # per-arm question rows into this directory instead of the trial-keyed root.
         self._question_artifact_dir: Path | None = None
@@ -5305,6 +5308,10 @@ class EvalTower:
         ]
         results: list[QuestionResult | None] = [None] * n
         batch_start = time.time()
+        # AP-LH-WHOLE-TRAJECTORY-CAPTURE: remember this trial's batch ids (no-op unless the flag is on).
+        self.note_trial_batches(
+            sorted({str(q["_eval_batch_id"]) for q in dispatch_questions}), batch_start
+        )
         writer: _EvalQuestionJsonlWriter | None = None
         artifact_root, artifact_root_source = _eval_artifact_root(self._trial_path_context)
         explicit_path: Path | None = None
@@ -8195,6 +8202,58 @@ class EvalTower:
     # ── trace capture ──────────────────────────────────────────
 
     TAP_PATH = Path("/mnt/raid0/llm/tmp/inference_tap.log")
+    #: REPL tap (src/graph/repl_tap.py); None = the ``repl_tap.log`` beside TAP_PATH.
+    REPL_TAP_PATH: Path | None = None
+
+    #: Trials whose batch ids ``note_trial_batches`` keeps (bounds the dict).
+    _TRIAL_BATCHES_KEEP = 8
+
+    def note_trial_batches(self, batch_ids: Sequence[str], started_at_s: float) -> None:
+        """Record the eval batch ids dispatched under the current trial id (the whole-trajectory join key).
+
+        No-op unless ``autopilot_lh_whole_trajectory_capture`` is on, and when there is no trial id (the tap
+        events carry no trial id for eval traffic, so without one there is nothing to join the trial to).
+        """
+        import whole_trajectory_capture
+
+        if not whole_trajectory_capture.flag_on():
+            return
+        trial = self._resolve_trial_id()
+        if trial is None:
+            return
+        entry = self._trial_batches.setdefault(trial, {"ids": [], "start": float(started_at_s)})
+        for bid in batch_ids:
+            if bid and bid not in entry["ids"]:
+                entry["ids"].append(bid)
+        entry["start"] = min(entry["start"], float(started_at_s))
+        while len(self._trial_batches) > self._TRIAL_BATCHES_KEEP:
+            self._trial_batches.pop(next(iter(self._trial_batches)))
+
+    def capture_whole_trajectory(self, trial_id: int | None = None):
+        """Join the trial's inference-tap events and REPL tap into one provably-whole (or honestly not) trace.
+
+        Returns a ``whole_trajectory_capture.Capture`` (``complete`` is a proof result, ``reasons`` lists what
+        failed it), or None when the flag is off, the trial has no recorded batches, or nothing joined. The
+        caller falls back to ``capture_recent_traces`` on None.
+        """
+        import whole_trajectory_capture as wtc
+
+        if not wtc.flag_on():
+            return None
+        trial = self._resolve_trial_id(trial_id)
+        entry = self._trial_batches.get(trial) if trial is not None else None
+        if not entry or not entry.get("ids"):
+            return None
+        try:
+            return wtc.build_capture(
+                wtc.events_path_for(Path(self.TAP_PATH)),
+                Path(self.REPL_TAP_PATH) if self.REPL_TAP_PATH else Path(self.TAP_PATH).with_name("repl_tap.log"),
+                entry["ids"],
+                entry["start"],
+            )
+        except Exception as exc:  # noqa: BLE001 - trace feedback must not affect the trial
+            log.warning("Whole-trajectory capture failed for trial %s: %s", trial, exc)
+            return None
 
     def capture_recent_traces(self, n_lines: int = 50) -> str:
         """Read the last n_lines from inference_tap.log for PromptForge feedback.
@@ -8264,6 +8323,7 @@ class EvalTower:
         max_trace_chars: int = 1600,
         complete: bool = False,
         source: str = eval_tower_trace_feedback.DEFAULT_TRACE_SOURCE,
+        full_trace: str | None = None,
     ) -> list[dict[str, Any]]:
         return eval_tower_trace_feedback.update_contrastive_trace_bank(
             trace_bank,
@@ -8277,6 +8337,7 @@ class EvalTower:
             max_trace_chars=max_trace_chars,
             complete=complete,
             source=source,
+            full_trace=full_trace,
         )
 
     def capture_contrastive_traces(

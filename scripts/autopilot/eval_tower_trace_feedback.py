@@ -17,6 +17,10 @@ from typing import Any
 TRACE_TRUNCATED_MARKER = "[trace truncated]"
 #: Provenance of the default capture: the last N lines of the inference tap (LLM text only, no REPL results).
 DEFAULT_TRACE_SOURCE = "inference_tap_tail"
+#: Provenance of a whole-trajectory capture (scripts/autopilot/whole_trajectory_capture.py).
+WHOLE_TRAJECTORY_SOURCE = "whole_trajectory"
+#: Failure items that keep their ``full_trace`` in the bank (the pre-check reads the newest MOTIVATING_K = 2).
+WHOLE_TRAJECTORY_KEEP = 2
 
 
 def trim_trace_text(trace_text: Any, max_chars: int) -> str:
@@ -211,6 +215,7 @@ def update_contrastive_trace_bank(
     max_trace_chars: int = 1600,
     complete: bool = False,
     source: str = DEFAULT_TRACE_SOURCE,
+    full_trace: str | None = None,
 ) -> list[dict[str, Any]]:
     """Append one labeled trace example and cap the in-state contrastive bank.
 
@@ -219,6 +224,12 @@ def update_contrastive_trace_bank(
     50 lines of the inference tap, which holds LLM prompt/response text only (REPL results live in
     ``repl_tap.log``), so it is never a whole trajectory and the default is ``complete=False``. A trace that
     ``trim_trace_text`` had to cut is never complete, whatever the caller asserted.
+
+    ``full_trace`` (AP-LH-WHOLE-TRAJECTORY-CAPTURE, failure items only) is the whole-trajectory text kept beside
+    the display ``trace``; ``complete`` is then judged on it (a cap-hit capture arrives carrying the truncation
+    marker and is never complete). Only the newest ``WHOLE_TRAJECTORY_KEEP`` failure items keep their
+    ``full_trace`` (bounds state size); an older one drops it and reads ``complete=False``. Left at None (the
+    default) no item gains a key and every path below behaves exactly as before.
     """
     normalized_outcome = str(outcome or "").strip().lower()
     if normalized_outcome not in {"success", "failure"}:
@@ -227,6 +238,10 @@ def update_contrastive_trace_bank(
     if not trace:
         return list(trace_bank or [])
     trace_complete = bool(complete) and not trace.startswith(TRACE_TRUNCATED_MARKER)
+    new_full = ""
+    if normalized_outcome == "failure" and full_trace is not None and str(full_trace).strip():
+        new_full = str(full_trace).strip()
+        trace_complete = bool(complete) and not new_full.startswith(TRACE_TRUNCATED_MARKER)
 
     normalized: list[dict[str, Any]] = []
     for raw in trace_bank or []:
@@ -238,24 +253,30 @@ def update_contrastive_trace_bank(
         raw_trace = trim_trace_text(raw.get("trace", ""), max_trace_chars)
         if not raw_trace:
             continue
-        normalized.append(
-            {
-                "outcome": raw_outcome,
-                "trial_id": raw.get("trial_id"),
-                "species": str(raw.get("species") or ""),
-                "action_type": str(raw.get("action_type") or ""),
-                "reason": str(raw.get("reason") or ""),
-                "trace": raw_trace,
-                "trace_hash": str(
-                    raw.get("trace_hash")
-                    or hashlib.sha256(raw_trace.encode("utf-8")).hexdigest()[:12]
-                ),
-                # Rows banked before provenance existed read as incomplete tap-tail captures.
-                "complete": raw.get("complete") is True
-                and not raw_trace.startswith(TRACE_TRUNCATED_MARKER),
-                "source": str(raw.get("source") or DEFAULT_TRACE_SOURCE),
-            }
-        )
+        kept = {
+            "outcome": raw_outcome,
+            "trial_id": raw.get("trial_id"),
+            "species": str(raw.get("species") or ""),
+            "action_type": str(raw.get("action_type") or ""),
+            "reason": str(raw.get("reason") or ""),
+            "trace": raw_trace,
+            "trace_hash": str(
+                raw.get("trace_hash")
+                or hashlib.sha256(raw_trace.encode("utf-8")).hexdigest()[:12]
+            ),
+            # Rows banked before provenance existed read as incomplete tap-tail captures.
+            "complete": raw.get("complete") is True
+            and not raw_trace.startswith(TRACE_TRUNCATED_MARKER),
+            "source": str(raw.get("source") or DEFAULT_TRACE_SOURCE),
+        }
+        raw_full = raw.get("full_trace")
+        if isinstance(raw_full, str) and raw_full.strip() and raw_outcome == "failure":
+            # The display trace of a whole-trajectory item is a cut tail, so judge completeness on the full text.
+            kept["full_trace"] = str(raw_full).strip()
+            kept["complete"] = raw.get("complete") is True and not kept["full_trace"].startswith(
+                TRACE_TRUNCATED_MARKER
+            )
+        normalized.append(kept)
 
     trace_hash = hashlib.sha256(trace.encode("utf-8")).hexdigest()[:12]
     normalized = [
@@ -267,19 +288,27 @@ def update_contrastive_trace_bank(
             and item.get("trace_hash") == trace_hash
         )
     ]
-    normalized.append(
-        {
-            "outcome": normalized_outcome,
-            "trial_id": trial_id,
-            "species": str(species or ""),
-            "action_type": str(action_type or ""),
-            "reason": str(reason or ""),
-            "trace": trace,
-            "trace_hash": trace_hash,
-            "complete": trace_complete,
-            "source": str(source or DEFAULT_TRACE_SOURCE),
-        }
-    )
+    new_item: dict[str, Any] = {
+        "outcome": normalized_outcome,
+        "trial_id": trial_id,
+        "species": str(species or ""),
+        "action_type": str(action_type or ""),
+        "reason": str(reason or ""),
+        "trace": trace,
+        "trace_hash": trace_hash,
+        "complete": trace_complete,
+        "source": str(source or DEFAULT_TRACE_SOURCE),
+    }
+    if new_full:
+        new_item["full_trace"] = new_full
+    normalized.append(new_item)
+
+    # Bound state size: only the newest WHOLE_TRAJECTORY_KEEP failure items keep a full_trace; an older one is
+    # no longer a whole trajectory in the bank, so it reads incomplete.
+    with_full = [i for i in normalized if i.get("outcome") == "failure" and "full_trace" in i]
+    for stale in with_full[: max(0, len(with_full) - WHOLE_TRAJECTORY_KEEP)]:
+        stale.pop("full_trace", None)
+        stale["complete"] = False
 
     capped: list[dict[str, Any]] = []
     for bucket in ("success", "failure"):
