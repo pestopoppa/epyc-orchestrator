@@ -70,8 +70,9 @@ realized_shape:
 # keep their legacy hand-carried master fields (compile warning) until migrated.
 drafter_selection:
   # Qwen3.8-27B-Q8_0 on MI210. Operator: 2026-08-27 ("the superior spec decode path
-  # for running qwen3.8-27b") and 2026-10-01 ("ALWAYS use dflash2"). Recipe:
-  # epyc-inference-research/artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+  # for running qwen3.8-27b") and 2026-10-01 ("ALWAYS use dflash2"). Served recipe
+  # (2026-11-24; the AutoKernel identity recipe ...-dflash2-np4.json is NOT the served shape):
+  # epyc-inference-research/artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
   architect_critic: dflash2
 
 # =============================================================================

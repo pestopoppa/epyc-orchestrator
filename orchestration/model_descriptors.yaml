@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-11-24T07:19:07Z'
+compiled_at: '2026-11-24T20:37:53Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: orchestration/model_registry.yaml
-    repo_commit: 28aee6e9
-    sha256: 70712c0f00cd512a2deab4c3d2ffa54a45cbc222141eda935917b2462b7af5b9
+    repo_commit: 9de4356f
+    sha256: a1b38496c3d9878d798302216b698634e187d815c11c58e03302681054ecca1d
   research:
     path: origin/main:orchestration/model_registry.yaml
-    repo_commit: 6522e7c0b
-    sha256: 30f0ecba6e34aaa30d853991d5416344ce94757599165a81a06b3b6f45761fc6
+    repo_commit: f956798de
+    sha256: a830707f65f0f811fd85e8eea97faa9241245e7960ecb3f87d4c3bd425b4ce02
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name

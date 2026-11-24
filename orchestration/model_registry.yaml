@@ -3,7 +3,7 @@
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/epyc-orchestrator/.worktrees/ak-vesc-recompile-20261124/orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/worktrees/sc27b-orch/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-11-24T07:19:07+00:00
-# Cache key:   38f8ee0a1817754d...
+# Compiled at: 2026-11-24T20:37:52+00:00
+# Cache key:   1126a7f0a9dc4bd2...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -1946,7 +1946,7 @@ server_mode:
         model_role: qwen38_27b_q8_local
         drafter: dflash2
         source: stack_topology.drafter_selection
-        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
         inherited_by: coder_escalation
     throughput: 47.79
     previous_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
@@ -2079,7 +2079,7 @@ server_mode:
         model_role: qwen38_27b_q8_local
         drafter: dflash2
         source: stack_topology.drafter_selection
-        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
     device: ROCm0
     ngl: all
     numa_instances: 1
@@ -2190,7 +2190,7 @@ server_mode:
         model_role: qwen38_27b_q8_local
         drafter: dflash2
         source: stack_topology.drafter_selection
-        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
         inherited_by: ingest_long_context
     throughput: null
     throughput_previous_model: 14.4-20.8
@@ -2311,7 +2311,7 @@ roles:
         model_role: qwen38_27b_q8_local
         drafter: dflash2
         source: stack_topology.drafter_selection
-        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
         inherited_by: coder_escalation
     performance:
       inherits_from: architect_critic
@@ -2400,7 +2400,7 @@ roles:
         model_role: qwen38_27b_q8_local
         drafter: dflash2
         source: stack_topology.drafter_selection
-        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
         inherited_by: ingest_long_context
     performance:
       baseline_tps: null
@@ -3297,7 +3297,7 @@ roles:
         draft_model: /mnt/raid0/llm/models/Qwen3.8-27B-DFlash2-Q8_0.gguf
         draft_max: 7
         ngld: 99
-        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4.json
+        recipe: artifacts/serving-recipes/qwen3.8-27b-q8-gpu-dflash2-np4-served.json
         min_kernel: production-consolidated-v10
         operator_rulings:
         - '2026-08-27 epyc-root handoffs/active/autokernel-champion-aggregate.md ruling 3: DFlash2 for Qwen3.8-27B, rest of stack on MTP; lean compiler selects per role'
