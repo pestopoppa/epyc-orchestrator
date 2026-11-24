@@ -297,6 +297,10 @@ def compute_group_metrics(rows: list[dict[str, Any]], *, k: int = 2) -> dict[str
         conf.append(float(c))
         corr.append(1.0 if dc else 0.0)
 
+    # AEI-REV-FLIPS: fix / break counts (reject verdicts split by gold).
+    fix_count = sum(1 for r in golded_terminal if is_reject_like(r) and gold_is_bad(r))
+    break_count = fr  # worker-right -> reviewer-reject (== false reject)
+
     # parse-failure rate over all rows.
     parse_fail = sum(1 for r in rows if is_parse_failure(r))
     parse_block = _rate_block(parse_fail, n_total)
@@ -313,6 +317,10 @@ def compute_group_metrics(rows: list[dict[str, Any]], *, k: int = 2) -> dict[str
         "fa_rate": fa_block,
         "fr_rate": fr_block,
         "fa_fr_ratio": fa_fr_ratio,
+        "fix_count": fix_count,
+        "break_count": break_count,
+        "n_worker_wrong": len(n_bad),
+        "n_worker_right": len(n_good),
         "acceptance_rate": acceptance_block,
         "request_evidence_yield": request_evidence_yield,
         "escalation_precision": escalation_precision,
@@ -381,12 +389,48 @@ def _consistency_and_passk(
     return cr, passk
 
 
+FAIRNESS_FIELDS = ("initial_prompt_strength", "oracle_stop", "matched_token_baseline")
+
+
+def fairness_line(fairness: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Kamoi-style fairness record for an arm report (intake-2929 claim 4).
+
+    Fields: initial-prompt strength (free text, e.g. ``comprehensive``/``basic``),
+    ``oracle_stop`` (True if an oracle decided when to stop revising; fair = False),
+    ``matched_token_baseline`` (True if a token-matched baseline is present).
+    Anything not supplied is reported ``"unrecorded"`` -- never guessed.
+    """
+    src = fairness or {}
+    out = {f: src.get(f, "unrecorded") for f in FAIRNESS_FIELDS}
+    out["fair"] = (
+        out["oracle_stop"] is False
+        and out["matched_token_baseline"] is True
+        and out["initial_prompt_strength"] not in ("unrecorded", None, "")
+    )
+    return out
+
+
+def render_fairness_line(fl: dict[str, Any]) -> str:
+    def yn(v: Any) -> str:
+        return "yes" if v is True else "no" if v is False else str(v)
+
+    base = fl["matched_token_baseline"]
+    base_s = "present" if base is True else "absent" if base is False else "unrecorded"
+    return (
+        f"Fairness (Kamoi-style): initial-prompt strength = {fl['initial_prompt_strength']}; "
+        f"oracle stop = {yn(fl['oracle_stop'])}; "
+        f"matched-token baseline = {base_s}; "
+        f"fair comparison = {yn(fl['fair'])}."
+    )
+
+
 def build_report(
     rows: list[dict[str, Any]],
     *,
     k: int = 2,
     instrument: dict[str, Any] | None = None,
     measurement: dict[str, Any] | None = None,
+    fairness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Group rows and compute per-group + overall metrics."""
     groups: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
@@ -406,6 +450,7 @@ def build_report(
         "measurement": measurement or dict(OBSERVATION_STAMP),
         "instrument": instrument or {},
         "group_fields": list(GROUP_FIELDS),
+        "fairness": fairness_line(fairness),
         "n_rows": len(rows),
         "n_groups": len(group_reports),
         "overall": compute_group_metrics(rows, k=k),
@@ -445,9 +490,9 @@ def render_markdown(report: dict[str, Any], *, k: int = 2) -> str:
     lines.append("")
     header = (
         "| reviewer | grader | rubric | corpus | domain | n | FA | FR | FA/FR | "
-        f"accept | yield | esc.prec | ECE | AUC | Brier | CR | pass^{k} | parse |"
+        f"fix | break | accept | yield | esc.prec | ECE | AUC | Brier | CR | pass^{k} | parse |"
     )
-    sep = "|" + "---|" * 19
+    sep = "|" + "---|" * 20
     lines.append(header)
     lines.append(sep)
 
@@ -463,6 +508,8 @@ def render_markdown(report: dict[str, Any], *, k: int = 2) -> str:
             f"| {_fmt(m['fa_rate'], pct=True)} "
             f"| {_fmt(m['fr_rate'], pct=True)} "
             f"| {(f'{ratio:.2f}' if ratio is not None else '—')} "
+            f"| {m['fix_count']}/{m['n_worker_wrong']} "
+            f"| {m['break_count']}/{m['n_worker_right']} "
             f"| {_fmt(m['acceptance_rate'], pct=True)} "
             f"| {_fmt(m['request_evidence_yield'], pct=True)} "
             f"| {_fmt(m['escalation_precision'], pct=True)} "
@@ -477,6 +524,13 @@ def render_markdown(report: dict[str, Any], *, k: int = 2) -> str:
     lines.append(row_line({"reviewer_model_quant": "**OVERALL**"}, report["overall"]))
     for g in report["groups"]:
         lines.append(row_line(g["group"], g["metrics"]))
+    lines.append("")
+    lines.append(
+        "fix = worker-wrong (gold bad) and reviewer rejects, higher-better; "
+        "break = worker-right (gold good) and reviewer rejects, lower-better (== FR count)."
+    )
+    lines.append("")
+    lines.append(render_fairness_line(report.get("fairness") or fairness_line()))
     lines.append("")
     lines.append(
         "Directions: FA/FR/parse **lower-better**; accept=context; "
@@ -506,6 +560,11 @@ def main(argv: list[str] | None = None) -> int:
             "and observation_only=false, stamp this report decision-grade."
         ),
     )
+    ap.add_argument("--prompt-strength", help="Fairness line: initial-prompt strength label.")
+    ap.add_argument("--oracle-stop", choices=("yes", "no"), help="Fairness line: oracle decided stop?")
+    ap.add_argument(
+        "--matched-token-baseline", choices=("present", "absent"), help="Fairness line: token-matched baseline."
+    )
     ap.add_argument("--print", dest="do_print", action="store_true", help="Print markdown to stdout.")
     args = ap.parse_args(argv)
 
@@ -526,6 +585,18 @@ def main(argv: list[str] | None = None) -> int:
         k=args.k,
         instrument={"source": source_desc},
         measurement=measurement_stamp_from_run_manifest(args.run_manifest),
+        fairness={
+            k_: v_
+            for k_, v_ in (
+                ("initial_prompt_strength", args.prompt_strength),
+                ("oracle_stop", None if args.oracle_stop is None else args.oracle_stop == "yes"),
+                (
+                    "matched_token_baseline",
+                    None if args.matched_token_baseline is None else args.matched_token_baseline == "present",
+                ),
+            )
+            if v_ is not None
+        },
     )
     md = render_markdown(report, k=args.k)
 
