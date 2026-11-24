@@ -135,8 +135,9 @@ def resolve_sampler_params(role_config: Any, request: Any) -> dict[str, Any]:
     (SPEC-DTREE-DICE step 1) records the same dict on its START event, so the logged
     values cannot drift from the sent ones. Temperature precedence: explicit request
     override -> role acceleration override -> role generation_defaults -> 0.0. A
-    negative temperature is not sent (``None``). ``min_p`` is never sent by this
-    backend today, so it is ``None``; the key is reserved. ``speculative_n_max`` is the
+    negative temperature is not sent (``None``). ``top_k``/``top_p``/``min_p``/``presence_penalty``/
+    ``repeat_penalty`` come from role generation_defaults when declared, else the legacy
+    constants (40/0.95/unset/unset/1.1). ``speculative_n_max`` is the
     per-request / in-context ``speculative.n_max`` (``None`` = key omitted, the server's
     launch default applies) and ``speculative_requested`` is ``n_max > 0`` (``None`` when
     unspecified). Pure: no I/O, never reads ``self``.
@@ -152,11 +153,21 @@ def resolve_sampler_params(role_config: Any, request: Any) -> dict[str, Any]:
     if n_max is None:
         n_max = spec_policy.current_override()
     n_max = max(0, int(n_max)) if isinstance(n_max, (int, float)) and not isinstance(n_max, bool) else None
+    gd = role_config.generation_defaults
+
+    def _gd(name: str, legacy: Any) -> Any:
+        # OFFICIAL-SAMPLING-20261124: role generation_defaults (vendor-recommended values,
+        # cited in the registry) beat the legacy backend constants; a request override wins.
+        v = getattr(gd, name, None) if gd is not None else None
+        return legacy if v is None else v
+
     return {
         "temperature": temp if temp >= 0 else None,
-        "top_k": request.top_k if request.top_k is not None else 40,
-        "top_p": request.top_p if request.top_p is not None else 0.95,
-        "min_p": None,
+        "top_k": request.top_k if request.top_k is not None else _gd("top_k", 40),
+        "top_p": request.top_p if request.top_p is not None else _gd("top_p", 0.95),
+        "min_p": _gd("min_p", None),
+        "presence_penalty": _gd("presence_penalty", None),
+        "repeat_penalty": _gd("repeat_penalty", 1.1),
         "speculative_n_max": n_max,
         "speculative_requested": None if n_max is None else n_max > 0,
     }
@@ -1775,7 +1786,11 @@ class LlamaServerBackend(ModelBackend):
             payload["temperature"] = sampler["temperature"]
         payload["top_k"] = sampler["top_k"]
         payload["top_p"] = sampler["top_p"]
-        payload["repeat_penalty"] = 1.1
+        payload["repeat_penalty"] = sampler["repeat_penalty"]
+        if sampler["min_p"] is not None:
+            payload["min_p"] = sampler["min_p"]
+        if sampler["presence_penalty"] is not None:
+            payload["presence_penalty"] = sampler["presence_penalty"]
         seed = getattr(request, "seed", None)
         payload["seed"] = seed if isinstance(seed, int) else _DETERMINISTIC_SAMPLING_SEED
 

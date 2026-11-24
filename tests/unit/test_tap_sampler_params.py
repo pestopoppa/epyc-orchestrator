@@ -46,6 +46,8 @@ def test_request_override_wins(tmp_path):
         "top_k": 10,
         "top_p": 0.5,
         "min_p": None,
+        "presence_penalty": None,
+        "repeat_penalty": 1.1,
         "speculative_n_max": None,
         "speculative_requested": None,
     }
@@ -95,3 +97,17 @@ def test_key_absent_without_role_config(tmp_path):
     """Backward compatible: no role_config -> no ``sampler`` key (reads as 'predates the hook')."""
     meta = _build_tap_metadata(_req(), role="coder", backend_url="u", port=1, task_id="t")
     assert "sampler" not in meta
+
+
+def test_official_sampling_from_generation_defaults():
+    """OFFICIAL-SAMPLING-20261124: declared vendor fields reach the resolved sampler and the wire."""
+    gen = SimpleNamespace(temperature=1.0, top_p=0.95, top_k=20, min_p=0.0,
+                          presence_penalty=1.5, repeat_penalty=1.0)
+    role = SimpleNamespace(acceleration=SimpleNamespace(temperature=None), generation_defaults=gen)
+    s = resolve_sampler_params(role, _req())
+    assert (s["temperature"], s["top_p"], s["top_k"], s["min_p"]) == (1.0, 0.95, 20, 0.0)
+    assert (s["presence_penalty"], s["repeat_penalty"]) == (1.5, 1.0)
+    assert resolve_sampler_params(role, _req(top_k=5))["top_k"] == 5
+    payload: dict = {}
+    LlamaServerBackend._apply_deterministic_sampling(None, payload, role, SimpleNamespace(**{**vars(_req()), "seed": None}))  # type: ignore[arg-type]
+    assert payload["min_p"] == 0.0 and payload["presence_penalty"] == 1.5 and payload["repeat_penalty"] == 1.0

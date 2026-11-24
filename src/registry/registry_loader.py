@@ -165,6 +165,12 @@ class GenerationDefaults:
     n_tokens: int = 512
     temperature: float | None = None  # None = use global default
     context_length: int | None = None
+    # OFFICIAL-SAMPLING-20261124: vendor-recommended sampler fields. None = backend legacy default.
+    top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    presence_penalty: float | None = None
+    repeat_penalty: float | None = None
 
 
 @dataclass
@@ -478,6 +484,11 @@ class RegistryLoader:
                 n_tokens=gen_data.get("n_tokens", 512),
                 temperature=gen_data.get("temperature"),
                 context_length=gen_data.get("context_length"),
+                top_p=gen_data.get("top_p"),
+                top_k=gen_data.get("top_k"),
+                min_p=gen_data.get("min_p"),
+                presence_penalty=gen_data.get("presence_penalty"),
+                repeat_penalty=gen_data.get("repeat_penalty"),
             )
 
         # Build backend config
