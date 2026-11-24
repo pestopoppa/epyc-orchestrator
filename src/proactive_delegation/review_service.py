@@ -552,6 +552,9 @@ Rules:
             architect_role = str(resolve_reviewer_role(override=reviewer_role, config=cfg))
         self.architect_role = architect_role
         self.max_review_tokens = deleg_cfg.max_review_tokens
+        # RD-2 / RPK-CONSUMER: majority-of-k grading in review(); 1 = single pass
+        # (byte-identical to the pre-knob behavior).
+        self.review_majority_k = max(1, int(getattr(deleg_cfg, "review_majority_k", 1) or 1))
         self.max_taskir_tokens = deleg_cfg.max_taskir_tokens
         self.max_plan_review_tokens = deleg_cfg.max_plan_review_tokens
         # EVL-42 1c-fix (b): reviewer sees up to this many chars of the candidate
@@ -712,6 +715,46 @@ Rules:
         return {"tokens_in": int(tokens_in), "tokens_out": int(tokens_out), "chars_out": len(text)}
 
     def review(
+        self,
+        spec: dict[str, Any],
+        subtask: dict[str, Any],
+        output: str,
+        quick_mode: bool = False,
+        *,
+        session_id: Any | None = None,
+        trial_id: int | None = None,
+        executor_model_id: str | None = None,
+        turn_ordinal: Any | None = None,
+    ) -> ArchitectReview:
+        """Grade ``output``; with ``review_majority_k > 1`` take the majority of k passes.
+
+        k == 1 (default) is exactly one ``_review_once`` call. For k > 1, k
+        independent grading passes run (each emits its own trace event) and the
+        plurality decision wins; ties go to the earliest pass among the tied
+        decisions. The returned review is the first pass carrying the winning
+        decision.
+        """
+        kwargs = dict(
+            quick_mode=quick_mode,
+            session_id=session_id,
+            trial_id=trial_id,
+            executor_model_id=executor_model_id,
+            turn_ordinal=turn_ordinal,
+        )
+        k = self.review_majority_k
+        if k <= 1:
+            return self._review_once(spec, subtask, output, **kwargs)
+        reviews = [self._review_once(spec, subtask, output, **kwargs) for _ in range(k)]
+        counts: dict[Any, int] = {}
+        for r in reviews:
+            counts[r.decision] = counts.get(r.decision, 0) + 1
+        top = max(counts.values())
+        for r in reviews:
+            if counts[r.decision] == top:
+                return r
+        return reviews[0]  # pragma: no cover - unreachable
+
+    def _review_once(
         self,
         spec: dict[str, Any],
         subtask: dict[str, Any],
