@@ -421,7 +421,7 @@ REVIEW_PLANE_KNOB_SPECS: dict[str, ReviewPlaneKnob] = {
             "falling back (RD-3/RD-4).",
         ),
         ReviewPlaneKnob(
-            "review_token_multiplier", "float", 2.0, 1.0, 2.0,
+            "review_token_multiplier", "float", 2.0, 1.0, 5.0,
             doc="Scales the reviewer's token budget relative to the base "
             "grading budget (H-LB latency lever).",
         ),

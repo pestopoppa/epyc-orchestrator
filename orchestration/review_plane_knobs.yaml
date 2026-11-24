@@ -158,8 +158,8 @@ knobs:
     dtype: float
     param_type: float
     low: 1.0
-    high: 2.0
-    default: 2.0      # hard ceiling → never throttles (behavior-preserving)
+    high: 5.0
+    default: 2.0      # default (k=1) never throttles; caps k at floor(m)
     proposed: 1.5     # target ≤1.5x; stretch 1.3x; hard ceiling 2.0x
     restart_cost: none
     application: runtime

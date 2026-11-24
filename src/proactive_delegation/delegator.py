@@ -138,7 +138,7 @@ class ReviewPlaneKnobs:
     review_majority_k: int = 1
     # RA-6 — request_evidence follow-up rounds; 0 = disabled
     request_evidence_round_budget: int = 0
-    # LB-2 — governed token multiplier vs single-model baseline (hard ceiling 2.0)
+    # LB-2 — governed token multiplier vs single-model baseline (range 1.0-5.0; caps majority-k passes at floor(m))
     review_token_multiplier: float = 2.0
     # LB-5 — shadow budget-violation logging (never blocks)
     budget_shadow_logging_enabled: bool = False

@@ -1404,7 +1404,7 @@ class DelegationConfig:
         default_factory=lambda: _review_plane_int("REQUEST_EVIDENCE_ROUND_BUDGET", 0, 0, 3)
     )
     review_token_multiplier: float = field(
-        default_factory=lambda: _review_plane_float("REVIEW_TOKEN_MULTIPLIER", 2.0, 1.0, 2.0)
+        default_factory=lambda: _review_plane_float("REVIEW_TOKEN_MULTIPLIER", 2.0, 1.0, 5.0)
     )
 
 

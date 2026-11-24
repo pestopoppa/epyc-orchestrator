@@ -262,7 +262,7 @@ Reviewer control-plane knobs (RPK-SURFACE; autopilot `numeric_swarm` surface `re
 | `ORCHESTRATOR_DELEGATION_REMINDER_CADENCE` | 0 | 0-50 | Steps between plan-reminder re-injections (0 = off) |
 | `ORCHESTRATOR_DELEGATION_REVIEW_MAJORITY_K` | 1 | 1-5 | Grading passes for near-band majority vote |
 | `ORCHESTRATOR_DELEGATION_REQUEST_EVIDENCE_ROUND_BUDGET` | 0 | 0-3 | request_evidence follow-up rounds |
-| `ORCHESTRATOR_DELEGATION_REVIEW_TOKEN_MULTIPLIER` | 2.0 | 1.0-2.0 | Governed review token multiplier (2.0 = ceiling, never throttles) |
+| `ORCHESTRATOR_DELEGATION_REVIEW_TOKEN_MULTIPLIER` | 2.0 | 1.0-5.0 | Governed review token multiplier; caps majority-k grading passes at floor(m) |
 
 ### Structured Output & Budget Interaction
 

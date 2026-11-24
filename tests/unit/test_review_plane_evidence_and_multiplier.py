@@ -91,7 +91,18 @@ def test_k3_m2_runs_two_passes(monkeypatch):
     assert len(_svc(monkeypatch, 3, 2.0).prompts) == 2
 
 
-def test_k3_m3_would_run_three_but_config_clamps_to_ceiling(monkeypatch):
+def test_env_k3_m3_runs_three_passes(monkeypatch):
+    assert len(_svc(monkeypatch, 3, 3.0).prompts) == 3
+
+
+def test_env_multiplier_clamped_to_5(monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REVIEW_TOKEN_MULTIPLIER", "9")
+    from src.config.models import DelegationConfig
+
+    assert DelegationConfig().review_token_multiplier == 5.0
+
+
+def test_direct_attrs_k3_m3_runs_three_passes(monkeypatch):
     p = P()
     s = ArchitectReviewService(p, trace_sink=lambda e: None)
     s.review_majority_k, s.review_token_multiplier = 3, 3.0
