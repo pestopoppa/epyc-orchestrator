@@ -45,6 +45,7 @@ from src.registry.drafter_selection import (
     resolve as resolve_drafters,
     selection_cache_bytes,
 )
+from src.registry.serving_alternates import validate_registry_alternates
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MASTER_PATH = Path(
@@ -325,6 +326,10 @@ def compile_lean(
             out[section] = _filter_server_mode(src, needed)
         else:
             out[section] = {k: v for k, v in src.items() if k in needed}
+
+    # PROMOTION-REGISTRY-SERVING-1: `serving_shape.alternates` rides through the whole-record
+    # copy above; a malformed slot must fail HERE, not ride into a signed promotion.
+    validate_registry_alternates(out)
 
     # DRAFT-SEL-1: the drafter is SELECTED by topology from the master's list, never
     # hand-carried per role. Resolution runs over the launching servers only.
