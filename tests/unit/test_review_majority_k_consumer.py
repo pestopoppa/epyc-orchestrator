@@ -29,6 +29,7 @@ def _run(monkeypatch, k, responses):
     prims = SeqPrimitives(responses)
     events: list = []
     svc = ArchitectReviewService(prims, trace_sink=events.append)
+    svc.review_token_multiplier = 3.0  # lift the LB-2 cap (default 2.0) for this test
     review = svc.review({"objective": "o"}, {"id": "s1", "action": "a"}, "out")
     return svc, prims, review, events
 

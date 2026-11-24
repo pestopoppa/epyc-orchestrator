@@ -134,7 +134,7 @@ class ReviewPlaneKnobs:
     decision_cache_enabled: bool = False
     # RD-9 — plan-reminder cadence (steps); 0 = disabled
     reminder_cadence: int = 0
-    # RD-2 — near-band majority-of-k grading (declared; enforced in review_service)
+    # RD-2 — majority-of-k grading, enforced in ArchitectReviewService.review() (all reviews)
     review_majority_k: int = 1
     # RA-6 — request_evidence follow-up rounds; 0 = disabled
     request_evidence_round_budget: int = 0
@@ -629,6 +629,29 @@ class ProactiveDelegator:
                 output=current_output,
                 turn_ordinal=ctx.subtask_iterations.get(subtask_id, 0),
             )
+
+            # RA-6 / RPK-CONSUMER: on REQUEST_EVIDENCE, up to N evidence rounds re-review
+            # the SAME output (no regeneration); after N, one re-review that must return
+            # approve or reject. N=0 (default) -> unchanged (treated like request_changes).
+            budget = self._review_knobs.request_evidence_round_budget
+            if budget > 0 and review.decision == ReviewDecision.REQUEST_EVIDENCE:
+                for _ in range(budget):
+                    review = self.review_service.review(
+                        spec=task_ir,
+                        subtask=step,
+                        output=current_output,
+                        turn_ordinal=ctx.subtask_iterations.get(subtask_id, 0),
+                    )
+                    if review.decision != ReviewDecision.REQUEST_EVIDENCE:
+                        break
+                else:
+                    review = self.review_service.review(
+                        spec=task_ir,
+                        subtask=step,
+                        output=current_output,
+                        turn_ordinal=ctx.subtask_iterations.get(subtask_id, 0),
+                        force_verdict=True,
+                    )
 
             # Record iteration
             self.iteration_context.record_iteration(

@@ -127,7 +127,12 @@ knobs:
     proposed: 3       # majority-of-3 near decision-band edges
     restart_cost: none
     application: runtime
-    enforcement_seam: review_service (declared here; enforced in the grading turn)
+    enforcement_seam: ArchitectReviewService.review()
+    semantics: >
+      Number of grading passes per review; plurality decision wins (ties -> earliest
+      pass). Applies to EVERY review: no near-band definition exists yet, so it is
+      not restricted to near-band cases. Effective passes =
+      min(k, max(1, floor(review_token_multiplier))).
     provenance: RD-2 / intake-834 (judge flakiness 2-9%) (proposed)
 
   # ── RA-6 — request_evidence follow-up rounds ────────────────────────────
@@ -140,7 +145,12 @@ knobs:
     proposed: 1       # one verifier-request round before a verdict is forced
     restart_cost: none
     application: runtime
-    enforcement_seam: review_service / gate_runner adapter (declared here)
+    enforcement_seam: ProactiveDelegator subtask loop (REQUEST_EVIDENCE branch)
+    semantics: >
+      On REQUEST_EVIDENCE, up to N evidence rounds re-review the SAME output without
+      regenerating it. After N rounds the re-review carries an explicit instruction
+      that the reviewer must return approve or reject. 0 = disabled: REQUEST_EVIDENCE
+      is treated like request_changes (current behavior).
     provenance: RA-6 / RD-4 / intake-842,843 (proposed)
 
   # ── LB-2 — governed token multiplier (the single knob H8 tunes) ─────────
@@ -153,11 +163,11 @@ knobs:
     proposed: 1.5     # target ≤1.5x; stretch 1.3x; hard ceiling 2.0x
     restart_cost: none
     application: runtime
-    enforcement_seam: review_service fan-out throttle (declared here; composed with LB-6 gate)
+    enforcement_seam: ArchitectReviewService.review() (caps majority-of-k passes)
     semantics: >
       total tokens with the plane ÷ single-augmented-LLM baseline tokens on the
-      same tasks. Above the ceiling the plane auto-throttles review fan-out
-      (LB-3 sampling) rather than spend.
+      same tasks. Enforced as a cap on grading fan-out: effective passes =
+      min(review_majority_k, max(1, floor(m))). Default 2.0 with k=1 -> no change.
     provenance: LB-2 token-multiplier / intake-839 (~2-3x cost) / intake-846 (~15x tokens) (proposed)
 
   # ── RD-10a — HANDOFF input_filter window ────────────────────────────────

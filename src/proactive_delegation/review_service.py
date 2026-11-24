@@ -10,6 +10,7 @@ exercised with stub/fake completion callables (zero real inference).
 
 from __future__ import annotations
 
+import math
 import hashlib
 import json
 import logging
@@ -417,6 +418,11 @@ class ArchitectReviewService:
     """
 
     # Concise review prompt - minimize architect output tokens
+    FORCE_VERDICT_SUFFIX = (
+        "\n\nEvidence rounds are exhausted. You MUST return a final decision now: "
+        "decision must be approve or reject (not request_evidence or request_changes)."
+    )
+
     REVIEW_PROMPT_TEMPLATE = """Review specialist output. Be BRIEF.
 
 Objective: {objective}
@@ -555,6 +561,11 @@ Rules:
         # RD-2 / RPK-CONSUMER: majority-of-k grading in review(); 1 = single pass
         # (byte-identical to the pre-knob behavior).
         self.review_majority_k = max(1, int(getattr(deleg_cfg, "review_majority_k", 1) or 1))
+        # LB-2 / RPK-CONSUMER: token multiplier caps the fan-out. Effective passes =
+        # min(review_majority_k, max(1, floor(m))); default m=2.0 with k=1 -> 1.
+        self.review_token_multiplier = float(
+            getattr(deleg_cfg, "review_token_multiplier", 2.0) or 2.0
+        )
         self.max_taskir_tokens = deleg_cfg.max_taskir_tokens
         self.max_plan_review_tokens = deleg_cfg.max_plan_review_tokens
         # EVL-42 1c-fix (b): reviewer sees up to this many chars of the candidate
@@ -725,6 +736,7 @@ Rules:
         trial_id: int | None = None,
         executor_model_id: str | None = None,
         turn_ordinal: Any | None = None,
+        force_verdict: bool = False,
     ) -> ArchitectReview:
         """Grade ``output``; with ``review_majority_k > 1`` take the majority of k passes.
 
@@ -740,8 +752,9 @@ Rules:
             trial_id=trial_id,
             executor_model_id=executor_model_id,
             turn_ordinal=turn_ordinal,
+            force_verdict=force_verdict,
         )
-        k = self.review_majority_k
+        k = min(self.review_majority_k, max(1, math.floor(self.review_token_multiplier)))
         if k <= 1:
             return self._review_once(spec, subtask, output, **kwargs)
         reviews = [self._review_once(spec, subtask, output, **kwargs) for _ in range(k)]
@@ -765,6 +778,7 @@ Rules:
         trial_id: int | None = None,
         executor_model_id: str | None = None,
         turn_ordinal: Any | None = None,
+        force_verdict: bool = False,
     ) -> ArchitectReview:
         """Have architect review a specialist's output.
 
@@ -803,6 +817,10 @@ Rules:
                 action=action,
                 output=output_truncated,
             )
+
+        if force_verdict:
+            # RA-6 / RPK-CONSUMER: evidence rounds exhausted -> a verdict is mandatory.
+            prompt += self.FORCE_VERDICT_SUFFIX
 
         start = time.perf_counter()
         parse_ok = True
