@@ -277,11 +277,105 @@ def mcnemar_verdict(
     }
 
 
+# --------------------------------------------------------------------------- #
+# Rerun arm (AEI-RERUN-ARM-OD; measurement/protocols/quality-eval.md P-AB-1 and
+# P-PAIRED "Rerun arm"). R is a second execution of baseline arm A under the
+# identical configuration. flip_rate = (f_AR + f_RA) / n_AR over tasks scored in
+# both A and R, with a 95% Wilson interval. A verdict whose |delta| = |b-c|/n is
+# at or below the flip rate is gated as "indistinguishable" / within_rerun_noise.
+# ADDITIVE: with no rerun supplied every output is byte-identical to before.
+# --------------------------------------------------------------------------- #
+class RerunArmMissingError(ValueError):
+    """Raised when a comparison for decision use has no rerun arm R (the
+    protocol refuses it exactly as it refuses a mismatched pair)."""
+
+
+_WILSON_Z_95 = 1.959963984540054
+
+
+def wilson_interval(k: int, n: int, *, z: float = _WILSON_Z_95) -> tuple[float, float]:
+    """Wilson score interval for k successes in n trials (``(0.0, 1.0)`` if n=0)."""
+    if n <= 0:
+        return 0.0, 1.0
+    p = k / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    centre = (p + z2 / (2.0 * n)) / denom
+    half = z * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n)) / denom
+    return round(max(0.0, centre - half), 6), round(min(1.0, centre + half), 6)
+
+
+def rerun_flip_rate(
+    vector_a: dict[str, QuestionOutcome],
+    vector_r: dict[str, QuestionOutcome],
+) -> dict[str, Any]:
+    """A-versus-R flip rate: McNemar discordants of A against R over n_AR.
+
+    Tasks absent from either vector (infra/scoring-failed) are excluded and
+    counted in ``excluded_a_only`` / ``excluded_r_only``.
+    """
+    res = mcnemar_from_vectors(vector_a, vector_r, "a", "r")
+    f_ar = res.a_correct_b_wrong
+    f_ra = res.a_wrong_b_correct
+    n_ar = res.shared_qids
+    lo, hi = wilson_interval(f_ar + f_ra, n_ar)
+    return {
+        "f_ar": f_ar,
+        "f_ra": f_ra,
+        "n_ar": n_ar,
+        "flip_rate": (f_ar + f_ra) / n_ar if n_ar else 0.0,
+        "wilson95_low": lo,
+        "wilson95_high": hi,
+        "excluded_a_only": len(set(vector_a) - set(vector_r)),
+        "excluded_r_only": len(set(vector_r) - set(vector_a)),
+    }
+
+
+def apply_rerun_noise_rule(
+    verdict: dict[str, Any],
+    *,
+    b: int,
+    c: int,
+    n_pairs: int,
+    rerun: Mapping[str, Any] | None,
+    require_rerun: bool = False,
+) -> dict[str, Any]:
+    """Attach the rerun flip rate to ``verdict`` and apply the no-claim rule.
+
+    ``rerun`` is the dict from :func:`rerun_flip_rate`. With ``rerun=None`` the
+    verdict is returned unchanged unless ``require_rerun`` (decision use), which
+    raises :class:`RerunArmMissingError`. Otherwise adds ``rerun``,
+    ``abs_delta`` (|b-c|/n), ``discordant_rate`` ((b+c)/n) and, when
+    ``verdict`` is a_better/b_better with ``abs_delta <= flip_rate``, downgrades
+    it to ``indistinguishable`` with ``reason='within_rerun_noise'`` (the
+    p-value stays; the prior verdict is kept in ``verdict_before_rerun``).
+    """
+    if rerun is None:
+        if require_rerun:
+            raise RerunArmMissingError(
+                "refusing paired comparison for decision use: no rerun arm R "
+                "(observation only; P-AB-1 / P-PAIRED rerun arm)"
+            )
+        return verdict
+    out = dict(verdict)
+    abs_delta = abs(b - c) / n_pairs if n_pairs else 0.0
+    out["rerun"] = dict(rerun)
+    out["abs_delta"] = abs_delta
+    out["discordant_rate"] = (b + c) / n_pairs if n_pairs else 0.0
+    if out["verdict"] in ("a_better", "b_better") and abs_delta <= rerun["flip_rate"]:
+        out["verdict_before_rerun"] = out["verdict"]
+        out["verdict"] = "indistinguishable"
+        out["reason"] = "within_rerun_noise"
+    return out
+
+
 def verdict_from_result(
     result: McNemarResult,
     *,
     alpha: float = 0.05,
     exact_max_discordant: int = MCNEMAR_EXACT_MAX_DISCORDANT,
+    rerun: Mapping[str, Any] | None = None,
+    require_rerun: bool = False,
 ) -> dict[str, Any]:
     """Convenience: derive :func:`mcnemar_verdict` straight from a McNemarResult.
 
@@ -289,11 +383,19 @@ def verdict_from_result(
     ``c``, so the verdict's ``a_better`` / ``b_better`` direction matches the
     result's ``trial_a`` / ``trial_b`` labelling.
     """
-    return mcnemar_verdict(
+    verdict = mcnemar_verdict(
         result.a_correct_b_wrong,
         result.a_wrong_b_correct,
         alpha=alpha,
         exact_max_discordant=exact_max_discordant,
+    )
+    return apply_rerun_noise_rule(
+        verdict,
+        b=result.a_correct_b_wrong,
+        c=result.a_wrong_b_correct,
+        n_pairs=result.shared_qids,
+        rerun=rerun,
+        require_rerun=require_rerun,
     )
 
 
@@ -463,7 +565,16 @@ def _cmd_mcnemar(args: argparse.Namespace) -> int:
     except KeyError as exc:
         raise SystemExit(f"trial has no question_results vector: {exc}") from exc
     result = mcnemar_from_vectors(a, b, str(args.trial_a), str(args.trial_b))
-    print(json.dumps(asdict(result), indent=2, sort_keys=True))
+    payload = asdict(result)
+    if getattr(args, "rerun_trial", None) is not None:
+        try:
+            r = vectors[args.rerun_trial]
+        except KeyError as exc:
+            raise SystemExit(f"rerun trial has no question_results vector: {exc}") from exc
+        payload["verdict"] = verdict_from_result(
+            result, rerun=rerun_flip_rate(a, r), require_rerun=True
+        )
+    print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 
 
@@ -489,6 +600,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     pm = sub.add_parser("mcnemar", help="compare two vector-bearing trials")
     pm.add_argument("trial_a", type=int)
     pm.add_argument("trial_b", type=int)
+    pm.add_argument(
+        "--rerun-trial",
+        type=int,
+        default=None,
+        help="trial id of rerun arm R (same config as trial_a); adds verdict + flip rate",
+    )
     pm.set_defaults(func=_cmd_mcnemar)
 
     pc = sub.add_parser("config-vs-baseline", help="compare majority vectors by fingerprint")
