@@ -124,6 +124,35 @@ def test_schema_store_dedup_across_calls_and_key_order(log_file, monkeypatch, tm
     assert len(list((tmp_path / "serving_calls" / sc.BODY_DIR).glob("*.json"))) == 2
 
 
+def test_raw_schema_preserves_property_order_round_trip(log_file, monkeypatch, tmp_path):
+    _flag(monkeypatch, True)
+    _call(SCHEMA)  # properties b before a
+    [row] = _rows(log_file)
+    cap = row["json_schema_capture"]
+    raw_path = tmp_path / "serving_calls" / sc.SCHEMA_STORE_DIR / sc.SCHEMA_RAW_SUBDIR / f"{cap['schema_raw_sha256']}.json"
+    text = raw_path.read_text()
+    assert hashlib.sha256(text.encode()).hexdigest() == cap["schema_raw_sha256"]
+    assert cap["schema_raw_chars"] == len(text)
+    assert list(json.loads(text)["properties"]) == ["b", "a"]
+    assert text == json.dumps(SCHEMA, separators=(",", ":"))
+    canon = tmp_path / "serving_calls" / sc.SCHEMA_STORE_DIR / f"{cap['schema_sha256']}.json"
+    assert list(json.loads(canon.read_text())["properties"]) == ["a", "b"]
+
+
+def test_reordered_schemas_share_canonical_sha_distinct_raw_sha(log_file, monkeypatch, tmp_path):
+    _flag(monkeypatch, True)
+    _call(SCHEMA, prompt="p1")
+    _call(SCHEMA_REORDERED, prompt="p2")
+    _call(SCHEMA, prompt="p3")
+    caps = [r["json_schema_capture"] for r in _rows(log_file)]
+    assert caps[0]["schema_sha256"] == caps[1]["schema_sha256"]
+    assert caps[0]["schema_raw_sha256"] != caps[1]["schema_raw_sha256"]
+    assert caps[0]["schema_raw_sha256"] == caps[2]["schema_raw_sha256"]
+    store = tmp_path / "serving_calls" / sc.SCHEMA_STORE_DIR
+    assert len(list(store.glob("*.json"))) == 1
+    assert len(list((store / sc.SCHEMA_RAW_SUBDIR).glob("*.json"))) == 2
+
+
 def test_flag_on_without_json_schema_is_unchanged(log_file, monkeypatch, tmp_path):
     _flag(monkeypatch, True)
     sc.stage_caller(role="frontdoor")

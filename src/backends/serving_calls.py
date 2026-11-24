@@ -717,6 +717,10 @@ def _maybe_rotate(path: Path) -> None:
 #: log file that references them rotates out of retention; schemas are tiny, deduped by
 #: sha, and kept.
 SCHEMA_STORE_DIR = "json_schema_store"
+#: Original-key-order schema text, deduped by its own sha (``schema_raw_sha256``):
+#: ``json_schema_store/raw/<raw_sha256>.json``. The canonical ``<sha>.json`` is
+#: sort_keys (alphabetical ``properties``) and is NOT replay-faithful.
+SCHEMA_RAW_SUBDIR = "raw"
 BODY_DIR = "json_schema_bodies"
 BODY_SCHEMA = "epyc.orchestrator.serving_call_body.v1"
 
@@ -769,12 +773,18 @@ def capture_json_schema(
         base = path.parent
         canonical = json.dumps(_json_safe(schema), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         schema_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        label, label_src = _request_class(request, staged, record.get("role"))
+        # Original key order (no sort_keys): llguidance emits properties in schema order,
+        # so replay must use this form, not the canonical (alphabetical) one.
+        raw = json.dumps(_json_safe(schema), ensure_ascii=False, separators=(",", ":"))
+        raw_sha = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        label,label_src = _request_class(request, staged, record.get("role"))
         text = _prompt_text_for_fingerprint(request)
         output = getattr(result, "output", None)
         block: dict[str, Any] = {
             "schema_sha256": schema_sha,
             "schema_chars": len(canonical),
+            "schema_raw_sha256": raw_sha,
+            "schema_raw_chars": len(raw),
             "request_class": label,
             "request_class_source": label_src,
             "output_text": output if isinstance(output, str) else None,
@@ -791,6 +801,11 @@ def capture_json_schema(
             target = store / f"{schema_sha}.json"
             if not target.exists():
                 _atomic_write(target, canonical)
+            raw_store = store / SCHEMA_RAW_SUBDIR
+            raw_store.mkdir(parents=True, exist_ok=True)
+            raw_target = raw_store / f"{raw_sha}.json"
+            if not raw_target.exists():
+                _atomic_write(raw_target, raw)
         except Exception as exc:
             _bump("write_failed", exc)
         if text:
