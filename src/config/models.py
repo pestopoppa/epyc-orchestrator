@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.env_parsing import env_float as _env_float_rp
+from src.env_parsing import env_int as _env_int_rp
 from src.roles import Role
 from src.registry.kernel_paths import (
     backend_dir as _kernel_backend_dir,
@@ -1357,6 +1359,15 @@ class ChatPipelineConfig:
     generation_max_tokens_hard: int | None = None
 
 
+def _review_plane_int(suffix: str, default: int, lo: int, hi: int) -> int:
+    """``ORCHESTRATOR_DELEGATION_<suffix>`` clamped to the knob bounds (RPK-READER)."""
+    return max(lo, min(hi, _env_int_rp(f"ORCHESTRATOR_DELEGATION_{suffix}", default)))
+
+
+def _review_plane_float(suffix: str, default: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, _env_float_rp(f"ORCHESTRATOR_DELEGATION_{suffix}", default)))
+
+
 @dataclass
 class DelegationConfig:
     """Configuration for proactive delegation."""
@@ -1372,6 +1383,29 @@ class DelegationConfig:
     reviewer in ``ArchitectReviewService.review()``. Over-budget outputs are
     condensed head+tail with an explicit elision marker (never a silent prefix
     cut), so a long-but-correct answer is not judged on its first 500 chars."""
+
+    # RPK-READER: reviewer control-plane knobs (orchestration/review_plane_knobs.yaml,
+    # config_applicator.REVIEW_PLANE_KNOB_SPECS). Read from ORCHESTRATOR_DELEGATION_*
+    # at config construction (env_restart: takes effect on API reload), clamped to the
+    # declared bounds. Defaults equal the previous behavior exactly.
+    review_trigger_complexity_threshold: int = field(
+        default_factory=lambda: _review_plane_int("REVIEW_TRIGGER_COMPLEXITY_THRESHOLD", 0, 0, 3)
+    )
+    max_review_iterations: int = field(
+        default_factory=lambda: _review_plane_int("MAX_REVIEW_ITERATIONS", 3, 1, 5)
+    )
+    reminder_cadence: int = field(
+        default_factory=lambda: _review_plane_int("REMINDER_CADENCE", 0, 0, 50)
+    )
+    review_majority_k: int = field(
+        default_factory=lambda: _review_plane_int("REVIEW_MAJORITY_K", 1, 1, 5)
+    )
+    request_evidence_round_budget: int = field(
+        default_factory=lambda: _review_plane_int("REQUEST_EVIDENCE_ROUND_BUDGET", 0, 0, 3)
+    )
+    review_token_multiplier: float = field(
+        default_factory=lambda: _review_plane_float("REVIEW_TOKEN_MULTIPLIER", 2.0, 1.0, 2.0)
+    )
 
 
 @dataclass

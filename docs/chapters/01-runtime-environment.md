@@ -253,7 +253,7 @@ Environment variables that control REPL turn budgets and token caps. These are s
 | `ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP` | 200000 | Max cumulative completion tokens per task |
 | `ORCHESTRATOR_CASCADING_TOOL_POLICY` | 1 | Enable PolicyLayer chain (legacy path denies all tools) |
 
-Reviewer control-plane knobs (RPK-SURFACE; autopilot `numeric_swarm` surface `review_plane`, apply keys `delegation.*`, env_restart = API reload; declared in `orchestration/review_plane_knobs.yaml`). Defaults preserve current behaviour; the autopilot writes these only while running a trial.
+Reviewer control-plane knobs (RPK-SURFACE; autopilot `numeric_swarm` surface `review_plane`, apply keys `delegation.*`, env_restart = API reload; declared in `orchestration/review_plane_knobs.yaml`). These knobs now take effect (RPK-READER): `DelegationConfig` reads them from the environment at construction, clamped to the range below, and `ReviewPlaneKnobs.from_config()` / `ProactiveDelegator` consume them (env_restart: applied on API reload). Defaults preserve current behaviour exactly; the autopilot writes these only while running a trial.
 
 | Variable | Default | Range | Purpose |
 |----------|---------|-------|---------|

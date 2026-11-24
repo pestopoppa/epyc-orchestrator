@@ -27,6 +27,10 @@ description: >
 # declares `none`). Knobs with no ENV_PARAMS route (max_total_review_iterations,
 # input_filter_window, decision_cache_enabled, budget_shadow_logging_enabled)
 # are declared here but not yet sweepable.
+# RPK-READER: the six swept knobs NOW TAKE EFFECT (env_restart). DelegationConfig
+# (src/config/models.py) reads ORCHESTRATOR_DELEGATION_<KNOB> at construction, clamped
+# to the bounds below, so an API reload applies them; max_review_iterations feeds
+# ProactiveDelegator's IterationContext.max_iterations (ReviewPlaneKnobs field).
 # The delegator reads ReviewPlaneKnobs.from_config()
 # (src/proactive_delegation/delegator.py): per-field values on
 # get_config().delegation (or a nested `review_plane` section), else the

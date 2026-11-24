@@ -125,6 +125,9 @@ class ReviewPlaneKnobs:
     # RD-10b — complexity-gated per-subtask review placement
     per_subtask_review_enabled: bool = True
     review_trigger_complexity_threshold: int = 0  # 0=TRIVIAL → review all (inert)
+    # Max review->revise cycles per subtask (RPK-READER; was the hard-coded 3 in
+    # ProactiveDelegator.__init__). Wire-point: IterationContext.max_iterations.
+    max_review_iterations: int = 3
     # RD-10a — HANDOFF input_filter window (was hard-coded [-3:])
     input_filter_window: int = 3
     # RD-10c — sticky decision cache
@@ -198,7 +201,7 @@ class ProactiveDelegator:
         primitives: "LLMPrimitives",
         progress_logger: "ProgressLogger | None" = None,
         hybrid_router: Any | None = None,
-        max_iterations: int = 3,
+        max_iterations: int | None = None,
         max_total_iterations: int = 10,
         skip_complexity_check: bool = False,
         review_knobs: "ReviewPlaneKnobs | None" = None,
@@ -212,13 +215,18 @@ class ProactiveDelegator:
         self.review_service = ArchitectReviewService(primitives)
         self.aggregation_service = AggregationService()
         self.skip_complexity_check = skip_complexity_check
-        self.iteration_context = IterationContext(
-            max_iterations=max_iterations,
-            max_total_iterations=max_total_iterations,
-        )
         # RD-10/RD-11 control-plane knobs. Default knobs preserve current behavior
         # (see ReviewPlaneKnobs); from_config() is the autopilot (AP-1) merge point.
         self._review_knobs = review_knobs or ReviewPlaneKnobs.from_config()
+        # An explicit constructor max_iterations wins; else the review-plane knob (default 3).
+        self.iteration_context = IterationContext(
+            max_iterations=(
+                max_iterations
+                if max_iterations is not None
+                else self._review_knobs.max_review_iterations
+            ),
+            max_total_iterations=max_total_iterations,
+        )
         # RD-10a AS-TOOL output-extraction seam (default = identity passthrough).
         self._output_extractor = output_extractor or _identity_output_extractor
         # RD-10c: honor the sticky-cache flag on the shared iteration context.

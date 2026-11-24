@@ -416,3 +416,75 @@ class TestReviewPlaneManifest:
         assert b["rubric_authoring"]["token_budget"] == 800
         assert b["rubric_authoring"]["amortized"] is True
         assert b["rubric_grading"]["token_budget"] == 180
+
+
+# ── RPK-READER: ORCHESTRATOR_DELEGATION_* env reach the review plane ────────
+
+_RPK_ENV = {
+    "review_trigger_complexity_threshold": ("REVIEW_TRIGGER_COMPLEXITY_THRESHOLD", "2", 2),
+    "max_review_iterations": ("MAX_REVIEW_ITERATIONS", "5", 5),
+    "reminder_cadence": ("REMINDER_CADENCE", "7", 7),
+    "review_majority_k": ("REVIEW_MAJORITY_K", "3", 3),
+    "request_evidence_round_budget": ("REQUEST_EVIDENCE_ROUND_BUDGET", "2", 2),
+    "review_token_multiplier": ("REVIEW_TOKEN_MULTIPLIER", "1.5", 1.5),
+}
+
+
+class TestReviewPlaneEnvReader:
+    @staticmethod
+    def _clear(monkeypatch):
+        for suffix, _, _ in _RPK_ENV.values():
+            monkeypatch.delenv(f"ORCHESTRATOR_DELEGATION_{suffix}", raising=False)
+
+    def test_no_env_defaults_unchanged(self, monkeypatch):
+        from src.config.models import DelegationConfig
+
+        self._clear(monkeypatch)
+        d = DelegationConfig()
+        assert d.review_trigger_complexity_threshold == 0
+        assert d.max_review_iterations == 3
+        assert d.reminder_cadence == 0
+        assert d.review_majority_k == 1
+        assert d.request_evidence_round_budget == 0
+        assert d.review_token_multiplier == 2.0
+        assert d.max_iterations == 3
+        assert ReviewPlaneKnobs.from_config() == ReviewPlaneKnobs()
+
+    @pytest.mark.parametrize("knob", list(_RPK_ENV))
+    def test_env_changes_value_review_plane_uses(self, monkeypatch, knob):
+        self._clear(monkeypatch)
+        suffix, raw, expected = _RPK_ENV[knob]
+        monkeypatch.setenv(f"ORCHESTRATOR_DELEGATION_{suffix}", raw)
+        from src.config.models import DelegationConfig
+
+        cfg = Mock()
+        cfg.delegation = DelegationConfig()
+        monkeypatch.setattr("src.config.get_config", lambda: cfg)
+        assert getattr(ReviewPlaneKnobs.from_config(), knob) == expected
+
+    def test_max_review_iterations_reaches_delegator(self, monkeypatch):
+        self._clear(monkeypatch)
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_MAX_REVIEW_ITERATIONS", "5")
+        from src.config.models import DelegationConfig
+
+        cfg = Mock()
+        cfg.delegation = DelegationConfig()
+        monkeypatch.setattr("src.config.get_config", lambda: cfg)
+        d = ProactiveDelegator(Mock(), Mock())
+        assert d.iteration_context.max_iterations == 5
+        # explicit constructor arg still wins
+        assert ProactiveDelegator(Mock(), Mock(), max_iterations=2).iteration_context.max_iterations == 2
+
+    def test_bounds_clamped_and_match_specs(self, monkeypatch):
+        from scripts.autopilot.config_applicator import REVIEW_PLANE_KNOB_SPECS
+        from src.config.models import DelegationConfig
+
+        self._clear(monkeypatch)
+        for knob, (suffix, _, _) in _RPK_ENV.items():
+            spec = REVIEW_PLANE_KNOB_SPECS[knob]
+            monkeypatch.setenv(f"ORCHESTRATOR_DELEGATION_{suffix}", "9999")
+            assert getattr(DelegationConfig(), knob) == spec.hi
+            monkeypatch.setenv(f"ORCHESTRATOR_DELEGATION_{suffix}", "-9999")
+            assert getattr(DelegationConfig(), knob) == spec.lo
+            monkeypatch.delenv(f"ORCHESTRATOR_DELEGATION_{suffix}")
+            assert getattr(DelegationConfig(), knob) == spec.default
