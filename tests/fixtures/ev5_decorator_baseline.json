@@ -377,8 +377,12 @@
     "test_calibration_metrics_empty_is_all_none": [],
     "test_calibration_metrics_length_mismatch_raises": [],
     "_tiny_math_set": [],
-    "test_score_math_rebaseline_answers_uses_real_math_verify": [],
-    "test_score_math_rebaseline_handles_nested_boxed_latex": [],
+    "test_score_math_rebaseline_answers_uses_real_math_verify": [
+      "requires_math_verify"
+    ],
+    "test_score_math_rebaseline_handles_nested_boxed_latex": [
+      "requires_math_verify"
+    ],
     "test_score_math_rebaseline_hard_fails_without_math_verify": [],
     "test_score_math_rebaseline_length_mismatch_raises": [],
     "test_eval_math_rebaseline_refuses_without_math500": [],
@@ -409,9 +413,13 @@
     "test_verifier_mode_apply_blocks_on_live_stack_contract_drift": [],
     "_qr": [],
     "_MathAdapter.extract_all": [],
-    "test_eval_math_rebaseline_threads_real_confidence_provenance": [],
+    "test_eval_math_rebaseline_threads_real_confidence_provenance": [
+      "requires_math_verify"
+    ],
     "test_eval_math_rebaseline_threads_real_confidence_provenance.fake_batch": [],
-    "test_eval_math_rebaseline_straddled_confidence_emits_none_not_zero": [],
+    "test_eval_math_rebaseline_straddled_confidence_emits_none_not_zero": [
+      "requires_math_verify"
+    ],
     "test_eval_math_rebaseline_straddled_confidence_emits_none_not_zero.fake_batch": [],
     "test_eval_calibration_threads_confidence_provenance": [],
     "test_eval_calibration_threads_confidence_provenance.fake_batch": [],
