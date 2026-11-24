@@ -19,7 +19,10 @@ import scorer_fuzz as sf  # noqa: E402
 # Pinned fixture identity: a change to the gold fixture or to the generators must be a
 # deliberate act (re-file the fuzz report under EV-SCORER-FUZZ-1 with the new digest).
 GOLD_SHA256 = "2cb68261937d35d04a74bbe1a4a8c0f066be3a178ec4dc1a2572aab4cb4ff4cb"
-CASES_DIGEST = "a651969fa5f0c67897b6578352b7303cd33ac3926bfca1ed7cfb2de2097a1ac3"
+# Re-pinned 2026-11-24 (schema v2): the 2 unit/base-suffix golds (106^\circ, 2516_8) moved
+# from gold_prefix_collision (strict reject) to format_variants/suffix_dropped (strict
+# accept). v1 digest: a651969fa5f0c67897b6578352b7303cd33ac3926bfca1ed7cfb2de2097a1ac3.
+CASES_DIGEST = "502c54e2869e8d618397ce3e575ba8a5c883997e41e1e62d16e69668e2bcb533"
 
 
 @pytest.fixture(scope="module")
@@ -110,60 +113,92 @@ def _rows(scorer, cases):
     return sf.run_fuzz([c for c in cases], [scorer])
 
 
-def test_exact_match_findings_are_characterised(cases):
-    table = {(r["source"], r["category"], r["template"]): r for r in sf.aggregate(_rows("exact_match", cases), by_template=True)}
-    # controls behave
-    assert table[("gsm8k", "clean_correct", "boxed")]["fnr"] == 0.0
-    assert table[("gsm8k", "clean_wrong", "boxed")]["fpr"] == 0.0
-    # no FP on prose-only partial answers
-    for tpl in ("considered", "intermediate"):
-        assert table[("gsm8k", "partial_answer", tpl)]["fpr"] == 0.0
-    # BY DESIGN last-line fallback accepts a bare correct line
-    assert table[("gsm8k", "missing_marker", "bare_last_line")]["fpr"] == 1.0
-    # DEFECT-vs-strict: the last boxed final wins, the FIRST <answer> tag wins
-    assert table[("gsm8k", "contradictory_finals", "wrong_then_gold_boxed")]["fpr"] == 1.0
-    assert table[("gsm8k", "contradictory_finals", "gold_then_wrong_answer_tags")]["fpr"] == 1.0
-    # DEFECT-vs-strict: absolute 1e-6 numeric tolerance accepts a 1e-7 drift, not 1e-5
-    assert table[("gsm8k", "loose_float", "drift_1e-7")]["fpr"] == 1.0
-    assert table[("gsm8k", "loose_float", "drift_1e-5")]["fpr"] == 0.0
-    assert table[("gsm8k", "loose_float", "drift_1e-3")]["fpr"] == 0.0
-    # retraction + one committed final is accepted
-    assert table[("gsm8k", "wrong_then_correct", "retracted")]["fnr"] == 0.0
+def test_exact_match_scorer_semantics_v2(cases):
+    """SCORER-EM-CONTRADICTORY + SCORER-EM-FLOAT-TOL landed (scorer semantics v2)."""
+    rows = sf.aggregate(_rows("exact_match", cases), by_template=True)
+    table = {(r["source"], r["category"], r["template"]): r for r in rows}
+    for src in ("gsm8k", "math500"):
+        # controls behave
+        assert table[(src, "clean_correct", "boxed")]["fnr"] == 0.0
+        assert table[(src, "clean_wrong", "boxed")]["fpr"] == 0.0
+        # no FP on prose-only partial answers
+        for tpl in ("considered", "intermediate"):
+            assert table[(src, "partial_answer", tpl)]["fpr"] == 0.0
+        # BY DESIGN (unchanged at v2): the last-line fallback accepts a bare correct line
+        assert table[(src, "missing_marker", "bare_last_line")]["fpr"] == 1.0
+        # FIXED: conflicting finals are rejected on every template, either order
+        for tpl in ("wrong_then_gold_boxed", "gold_then_wrong_boxed", "gold_then_wrong_answer_tags", "wrong_then_gold_hashes"):
+            assert table[(src, "contradictory_finals", tpl)]["fpr"] == 0.0, tpl
+        # FIXED: no drift is accepted, and an equal value with a trailing zero still is
+        for tpl in ("drift_1e-3", "drift_1e-5", "drift_1e-7"):
+            assert table[(src, "loose_float", tpl)]["fpr"] == 0.0, tpl
+        assert table[(src, "loose_float", "trailing_zero_equal")]["fnr"] == 0.0
+        # retraction + one committed final is accepted
+        assert table[(src, "wrong_then_correct", "retracted")]["fnr"] == 0.0
+        assert table[(src, "wrong_then_correct", "retracted_tags")]["fnr"] == 0.0
+    for r in rows:
+        # no new FNR on the gold fixture. suffix_dropped (106 for 106^\circ) is a
+        # math-equivalence convention a string scorer cannot know: exact_match rejects it
+        # at v1 and v2 alike, and math_verify (the math-suite scorer) accepts it.
+        if r["template"] != "suffix_dropped":
+            assert r["fn"] == 0, r
+        assert r["coverage"] == 1.0, r
 
 
 # ── math_verify: needs the package ───────────────────────────────────────
 
 
-def test_math_verify_findings_are_characterised(cases):
+def test_math_verify_scorer_semantics_v2(cases):
+    """SCORER-MV-GOLDWRAP + SCORER-MV-STRICT-FINAL landed (scorer semantics v2)."""
     pytest.importorskip("math_verify")
-    table = {(r["source"], r["category"], r["template"]): r for r in sf.aggregate(_rows("math_verify", cases), by_template=True)}
-    # partial / unmarked prose is accepted whenever the gold value is the last number (intake-2889 replay)
-    assert table[("gsm8k", "partial_answer", "considered")]["fpr"] == 1.0
-    assert table[("gsm8k", "missing_marker", "sentence")]["fpr"] == 1.0
-    # loose float is NOT accepted
-    assert table[("gsm8k", "loose_float", "drift_1e-3")]["fpr"] == 0.0
-    # CHARACTERISATION of the bare-LaTeX-gold defect (flip these when the fix box lands):
-    # a wrong leading-number final is accepted and correct non-trivial finals are rejected
-    assert table[("math500", "gold_prefix_collision", "leading_number")]["fpr"] == 1.0
-    assert table[("math500", "clean_correct", "boxed")]["fnr"] > 0.0
-    assert table[("math500", "clean_correct", "boxed")]["coverage"] < 1.0
-
-
-def test_goldwrap_candidate_removes_the_gold_parse_defect(cases):
-    pytest.importorskip("math_verify")
-    table = {
-        (r["source"], r["category"], r["template"]): r
-        for r in sf.aggregate(_rows("math_verify_goldwrap", cases), by_template=True)
-    }
-    assert table[("math500", "clean_correct", "boxed")]["fnr"] == 0.0
-    assert table[("math500", "clean_correct", "boxed")]["coverage"] > 0.95
-
-
-def test_strict_candidate_zeroes_partial_missing_and_contradictory(cases):
-    pytest.importorskip("math_verify")
-    for r in sf.aggregate(_rows("math_verify_strict_candidate", cases)):
-        if r["category"] in ("partial_answer", "missing_marker", "contradictory_finals", "loose_float", "clean_wrong"):
+    rows = sf.aggregate(_rows("math_verify", cases), by_template=True)
+    for r in rows:
+        if r["category"] in (
+            "partial_answer",
+            "missing_marker",
+            "contradictory_finals",
+            "loose_float",
+            "clean_wrong",
+            "gold_prefix_collision",
+        ):
             assert r["fp"] == 0, r
+        assert r["fn"] == 0, r
+        assert r["coverage"] == 1.0, r
+
+
+def test_exact_match_v2_edge_cases():
+    ds = sf.load_debug_scorer()
+
+    def em(answer, expected):
+        return ds.score_answer(answer, expected, "exact_match", {})
+
+    assert em("<answer>0.30000000000000004</answer>", "0.3") is True  # float64 rendering noise
+    assert em("<answer>70000.0000001</answer>", "70000") is False  # a stated drift
+    assert em("<answer>18.00</answer>", "18") is True
+    assert em("<answer>1,000</answer>", "1000") is True
+    assert em("<answer>\\boxed{42}</answer>", "42") is True  # inner box is the tag's own wrapper
+    assert em("<answer>42</answer> and so \\boxed{42}", "42") is True  # agreeing finals
+    assert em("#### 42\n#### 41", "42") is False  # conflicting finals
+    assert em("work...\n42", "42") is True  # documented bare-last-line fallback, unchanged
+
+
+def test_math_verify_v2_edge_cases():
+    pytest.importorskip("math_verify")
+    ds = sf.load_debug_scorer()
+
+    def mv(answer, expected):
+        return ds.score_answer(answer, expected, "math_verify", {"extraction_mode": "latex"})
+
+    assert mv("so <answer>3</answer>", "3") is True  # an <answer> tag is a committed final
+    assert mv("so the answer is 3", "3") is False  # prose only
+    assert mv("\\boxed{3\\sqrt{13}}", "3\\sqrt{13}") is True  # bare-LaTeX gold
+    assert mv("\\boxed{3}", "3\\sqrt{13}") is False
+    assert mv("\\boxed{32,348}", "\\$32,\\!348") is True  # escaped dollar is not a delimiter
+    assert mv("\\boxed{\\frac{1}{2}} ... \\boxed{0.5}", "\\frac12") is True  # equivalent finals agree
+
+
+def test_scorer_semantics_version_is_v2():
+    assert sf.load_debug_scorer().SCORER_SEMANTICS_VERSION == "strict_finals_v2_20261124"
 
 
 def test_unknown_scorer_is_refused(cases):

@@ -56,9 +56,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "scorer_fuzz" / "gold_v1.jsonl"
 
 SCORERS = ("math_verify", "exact_match")
-#: Candidate (non-production) scorer variants that size the proposed fixes; reported separately.
-DIAGNOSTIC_SCORERS = ("math_verify_goldwrap", "math_verify_strict_candidate")
-SCHEMA = "epyc.scorer_fuzz.v1"
+# The v1 report also ran two candidate variants (math_verify_goldwrap,
+# math_verify_strict_candidate) that sized the fixes. Both landed in production at scorer
+# semantics v2 (debug_scorer.SCORER_SEMANTICS_VERSION), so the variants were removed.
+SCHEMA = "epyc.scorer_fuzz.v2"
 
 CATEGORIES = (
     "clean_correct",  # control: strict accept
@@ -73,6 +74,8 @@ CATEGORIES = (
 )
 
 _NUMERIC = re.compile(r"^-?\d+(\.\d+)?$")
+# A gold suffix that only decorates the leading number: degrees, a base subscript, percent.
+_CONVENTION_SUFFIX = re.compile(r"\^\{?\\circ\}?|_\{?\d+\}?|\\%")
 
 # Per-source scorer config exactly as the dataset adapters declare it
 # (scripts/benchmark/dataset_adapter_modules/math_adapter.py).
@@ -262,7 +265,21 @@ def _templates(gold: Gold, wrong: str) -> list[tuple[str, str, str, bool]]:
         ),
     ]
     lead = re.match(r"-?\d+", g)
-    if not _NUMERIC.match(g) and lead and lead.group() != g:
+    suffix = g[lead.end() :] if lead else ""
+    if not _NUMERIC.match(g) and lead and _CONVENTION_SUFFIX.fullmatch(suffix):
+        # NOT a collision: the gold is the leading number plus a unit/base decoration
+        # (106^\circ, 2516_8, 25\%), which MATH grading conventions (and math-verify's
+        # normaliser) treat as the same answer. Under schema v1 these were labelled
+        # strict-reject collisions; they were the "2 residual" cases.
+        t.append(
+            (
+                "format_variants",
+                "suffix_dropped",
+                f"{reason} Therefore the final answer is $\\boxed{{{lead.group()}}}$.",
+                True,
+            )
+        )
+    elif not _NUMERIC.match(g) and lead and lead.group() != g:
         # gold_prefix_collision: a WRONG boxed final equal to the leading number of a
         # non-numeric gold (3 for 3\sqrt{13}). Strict reject; it is accepted when the scorer
         # mis-parses a bare LaTeX gold down to its leading number.
@@ -332,59 +349,8 @@ def cases_digest(cases: Iterable[Case]) -> str:
 # ── scoring and aggregation ──────────────────────────────────────────────
 
 
-_BOXED = re.compile(r"\\boxed\{")
-
-
-def _boxed_payloads(text: str) -> list[str]:
-    """All balanced ``\\boxed{...}`` payloads in order."""
-    out: list[str] = []
-    for m in _BOXED.finditer(text):
-        i, depth, buf = m.end(), 1, []
-        while i < len(text):
-            ch = text[i]
-            depth += (ch == "{") - (ch == "}")
-            if depth == 0:
-                out.append("".join(buf).strip())
-                break
-            buf.append(ch)
-            i += 1
-    return out
-
-
-def _diagnostic_math_verify(scorer: str, case: Case) -> str:
-    """Candidate variants of the math_verify scorer (NOT production; they size the fix).
-
-    * ``math_verify_goldwrap``: identical to production except the GOLD is wrapped in ``$...$``
-      before ``parse`` (math-verify's documented contract for a bare LaTeX gold).
-    * ``math_verify_strict_candidate``: goldwrap plus the strict completion contract: the
-      completion must carry exactly one distinct ``\\boxed{}`` final.
-    """
-    from math_verify import parse, verify
-
-    gold_text = case.expected if ("$" in case.expected or "\\boxed" in case.expected) else f"${case.expected}$"
-    try:
-        gold = parse(gold_text)
-    except Exception:  # noqa: BLE001
-        return "excluded"
-    if not gold:
-        return "excluded"
-    answer = case.answer.strip()
-    if scorer == "math_verify_strict_candidate" and len(set(_boxed_payloads(answer))) != 1:
-        return "reject"
-    try:
-        pred = parse(answer)
-    except Exception:  # noqa: BLE001
-        return "reject"
-    try:
-        return "accept" if verify(gold, pred) else "reject"
-    except Exception:  # noqa: BLE001
-        return "error"
-
-
 def score_case(scorer: str, case: Case, module: Any | None = None) -> str:
     """Return ``accept`` | ``reject`` | ``excluded`` | ``error``."""
-    if scorer in DIAGNOSTIC_SCORERS:
-        return _diagnostic_math_verify(scorer, case)
     module = module or load_debug_scorer()
     if scorer not in SCORERS:
         raise ValueError(f"unknown scorer {scorer!r}")
@@ -506,7 +472,7 @@ def findings(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def run_report(
-    fixture: Path = DEFAULT_FIXTURE, scorers: Sequence[str] = SCORERS + DIAGNOSTIC_SCORERS
+    fixture: Path = DEFAULT_FIXTURE, scorers: Sequence[str] = SCORERS
 ) -> dict[str, Any]:
     golds = read_gold(fixture)
     cases = generate_cases(golds)

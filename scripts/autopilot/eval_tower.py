@@ -6579,6 +6579,12 @@ class EvalTower:
                 # failures rather than a genuinely wrong model answer.
                 "task_failed": task_failed_count,
                 "quality_denominator_policy": QUALITY_DENOMINATOR_POLICY,
+                # EV-SCORER-FUZZ-1 fix boxes (2026-11-24): the deterministic
+                # scorer semantics this arm was scored under. Absent = pre-v2
+                # (first-tag/last-boxed, bare-LaTeX gold, prose-only math
+                # accepted, 1e-6 float window). Verdicts with different values
+                # are different instruments and must never be pooled.
+                "scorer_semantics_version": _load_orchestrator_debug_scorer().SCORER_SEMANTICS_VERSION,
                 # TD-21.11..21.14 (2026-07-20 standing rule): the per-arm
                 # parse-failure rate reported beside `quality`/`accuracy`.
                 # Additive keys — absent under a pre-TD-21.11 details dict

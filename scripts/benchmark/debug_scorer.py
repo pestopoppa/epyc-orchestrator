@@ -49,6 +49,22 @@ _SCORER_TMP_ROOT = Path("/mnt/raid0/llm/tmp")
 # decision, not a side effect of a role relabel.
 DEFAULT_LLM_JUDGE_ROLE = "architect_critic"
 
+# Scorer-semantics version (EV-SCORER-FUZZ-1 fix boxes, operator "land now as a new
+# era" 2026-11-24). Bumped whenever a deterministic scorer's verdict on the SAME
+# (answer, expected) pair changes, so verdicts from two semantics never mix: eval_tower
+# stamps it into every result's details as ``scorer_semantics_version`` (absent = the
+# pre-boundary semantics). v2 = SCORER-MV-GOLDWRAP + SCORER-MV-STRICT-FINAL +
+# SCORER-EM-CONTRADICTORY + SCORER-EM-FLOAT-TOL:
+#   * math_verify wraps a bare-LaTeX gold in ``$...$`` before parse;
+#   * math_verify requires a committed final (``\boxed{}`` / ``<answer>`` / ``####``)
+#     and every committed final must verify against gold (no prose-only, no
+#     contradictory finals);
+#   * exact_match rejects conflicting structured finals (first-tag vs last-boxed is no
+#     longer an order accident);
+#   * exact_match numeric equality is exact at the gold's stated decimal precision,
+#     tolerating only float64 representation noise (was: absolute 1e-6).
+SCORER_SEMANTICS_VERSION = "strict_finals_v2_20261124"
+
 # ``start_new_session`` keeps an untrusted scorer's descendants out of the
 # caller's process group, but it also means an externally interrupted caller
 # can leave the direct scorer child alive.  Set PR_SET_PDEATHSIG *inside* that
@@ -411,15 +427,14 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
     pattern = config.get("extract_pattern", r"<answer>(.*?)</answer>")
     normalize = config.get("normalize", True)
 
-    # Try to extract via pattern first
-    extracted = _extract_answer(answer, pattern)
-    if extracted is None:
-        # Legacy fallback: try #### pattern for backward compatibility
-        extracted = _extract_answer(answer, r"####[ \t]*\n?(\S+)")
-    if extracted is None:
-        boxed = _extract_boxed_answer(answer)
-        if boxed is not None:
-            extracted = boxed
+    # SCORER-EM-CONTRADICTORY (scorer semantics v2): gather EVERY structured final —
+    # all extract_pattern matches, all ``####`` lines and all ``\boxed{}`` payloads —
+    # instead of the first tag / first #### / LAST boxed. A completion whose structured
+    # finals disagree with each other has not committed to an answer and scores False,
+    # whatever order the finals came in (before v2 the first <answer> tag won but the
+    # last \boxed{} won, so a contradictory completion passed in one order of each).
+    structured = _structured_finals(answer, pattern)
+    extracted = structured[0] if structured else None
     if extracted is None:
         # Last resort: try to find the expected value anywhere in the last line
         last_line = answer.strip().split("\n")[-1]
@@ -436,48 +451,20 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
     candidate_found = bool(extracted)
 
     if normalize:
-        extracted = extracted.strip().lower().rstrip(".")
         expected_norm = expected.strip().lower().rstrip(".")
     else:
         expected_norm = expected.strip()
 
-    # Numeric comparison for numbers (including word forms like "three" vs "3")
-    _NUMBER_WORDS = {
-        "zero": 0,
-        "one": 1,
-        "two": 2,
-        "three": 3,
-        "four": 4,
-        "five": 5,
-        "six": 6,
-        "seven": 7,
-        "eight": 8,
-        "nine": 9,
-        "ten": 10,
-        "eleven": 11,
-        "twelve": 12,
-        "thirteen": 13,
-        "fourteen": 14,
-        "fifteen": 15,
-        "sixteen": 16,
-        "seventeen": 17,
-        "eighteen": 18,
-        "nineteen": 19,
-        "twenty": 20,
-    }
+    def _norm(s: str) -> str:
+        return s.strip().lower().rstrip(".") if normalize else s
 
-    def _to_number(s: str) -> float | None:
-        try:
-            return float(s.replace(",", ""))
-        except (ValueError, TypeError):
-            return _NUMBER_WORDS.get(s.lower()) if isinstance(s, str) else None
-
-    ext_num = _to_number(extracted)
-    exp_num = _to_number(expected_norm)
-    if ext_num is not None and exp_num is not None:
-        matched = abs(ext_num - exp_num) < 1e-6
-    else:
-        matched = extracted == expected_norm
+    if len(structured) > 1:
+        verdicts = {_em_value_matches(_norm(c), expected_norm) for c in structured}
+        if len(verdicts) > 1:
+            # Conflicting committed finals (one agrees with gold, another does not).
+            return False
+    extracted = _norm(extracted)
+    matched = _em_value_matches(extracted, expected_norm)
 
     # Fallback: vision models wrap OCR results in prose like
     #   'The text in the image is "iRaeenlc".' or 'The image contains the text: iRaeenlc'
@@ -485,8 +472,8 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
     if not matched and normalize:
         answer_lower = _final_answer_region(answer).lower()
         # Check quoted: "answer" or 'answer'
-        for q in ('"', "'", "\u201c"):
-            q_end = "\u201d" if q == "\u201c" else q
+        for q in ('"', "'", "“"):
+            q_end = "”" if q == "“" else q
             idx = answer_lower.find(q)
             if idx >= 0:
                 end = answer_lower.find(q_end, idx + 1)
@@ -518,8 +505,111 @@ def _score_exact_match(answer: str, expected: str, config: dict[str, Any]) -> bo
         "exact_match",
         "the model's answer was empty/whitespace-only; no <answer>/#### "
         "/\\boxed{} marker and no last-line candidate could be extracted",
-        config=config,
+        config,
     )
+
+
+_EM_NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+}
+
+
+_DECIMAL_LITERAL = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+# float64 carries ~15.95 significant decimal digits; a literal with MORE significant
+# digits than this is a float rendering (0.30000000000000004), not a stated value.
+_FLOAT64_SIG_DIGITS = 16
+_FLOAT64_REL_TOL = 1e-15
+
+
+def _em_decimal(s: str) -> "Decimal | None":
+    from decimal import Decimal, InvalidOperation
+
+    s = s.replace(",", "").strip()
+    if _DECIMAL_LITERAL.match(s):
+        try:
+            return Decimal(s)
+        except InvalidOperation:  # pragma: no cover - regex-guarded
+            return None
+    word = _EM_NUMBER_WORDS.get(s.lower())
+    return Decimal(word) if word is not None else None
+
+
+def _em_sig_digits(s: str) -> int:
+    mantissa = re.split(r"[eE]", s.replace(",", "").strip().lstrip("+-"))[0]
+    digits = mantissa.replace(".", "").lstrip("0")
+    return len(digits)
+
+
+def _em_value_matches(extracted: str, expected_norm: str) -> bool:
+    """exact_match value equality (SCORER-EM-FLOAT-TOL, scorer semantics v2).
+
+    Numbers compare EXACTLY as decimals at the gold's stated precision (``18`` ==
+    ``18.0`` == ``18.00``; ``70000.0000001`` != ``70000``). The only tolerance is a
+    relative one sized to float64 representation (1e-15), admitted only when the
+    candidate carries more significant digits than float64 can state
+    (``0.30000000000000004`` == ``0.3``). Before v2 an absolute 1e-6 window accepted a
+    1e-7 drift on any gold and rejected legitimate float noise on golds above ~1e10.
+    Non-numbers compare as strings.
+    """
+    ext_num = _em_decimal(extracted)
+    exp_num = _em_decimal(expected_norm)
+    if ext_num is None or exp_num is None:
+        return extracted == expected_norm
+    if ext_num == exp_num:
+        return True
+    if _em_sig_digits(extracted) >= _FLOAT64_SIG_DIGITS:
+        return math.isclose(float(ext_num), float(exp_num), rel_tol=_FLOAT64_REL_TOL, abs_tol=0.0)
+    return False
+
+
+def _unwrap_final(s: str) -> str:
+    """Strip presentational wrappers from one structured final: ``$..$``, ``**..**``, an
+    inner ``\\boxed{..}``."""
+    s = s.strip()
+    inner = _extract_boxed_answer(s)
+    if inner is not None and s.lstrip("$* ").startswith("\\boxed{"):
+        s = inner
+    return s.strip().strip("*").strip().strip("$").strip()
+
+
+def _structured_finals(answer: str, pattern: str) -> list[str]:
+    """Every structured final in ``answer``, in text order: ``extract_pattern`` matches,
+    ``####`` lines and ``\\boxed{}`` payloads (SCORER-EM-CONTRADICTORY)."""
+    found: list[tuple[int, str]] = []
+    compiled = _compile_single_group_pattern(pattern)
+    for m in compiled.finditer(answer):
+        if m.group(1) and m.group(1).strip():
+            found.append((m.start(), _unwrap_final(m.group(1))))
+    tag_spans = [m.span() for m in compiled.finditer(answer)]
+    for m in re.finditer(r"####[ \t]*\n?(\S+)", answer):
+        found.append((m.start(), _unwrap_final(m.group(1))))
+    for start, payload in _boxed_payloads_with_pos(answer):
+        # a \boxed{} INSIDE an extract_pattern match is that match's own wrapper
+        if any(a <= start < b for a, b in tag_spans):
+            continue
+        found.append((start, _unwrap_final(payload)))
+    found.sort(key=lambda t: t[0])
+    return [v for _, v in found if v]
 
 
 def _score_multiple_choice(answer: str, expected: str, config: dict[str, Any]) -> bool:
@@ -1766,33 +1856,72 @@ def _score_math_verify(answer: str, expected: str, config: dict[str, Any]) -> bo
         parse_kwargs["parsing_timeout"] = None
         verify_kwargs["timeout_seconds"] = None
 
-    try:
-        gold = parse(expected, **parse_kwargs)
-    except Exception as exc:
+    gold = _math_verify_parse_gold(parse, expected, parse_kwargs)
+
+    # SCORER-MV-STRICT-FINAL (scorer semantics v2): the completion must COMMIT to a
+    # final — a ``\boxed{}`` payload, an ``<answer>`` tag or a ``####`` line — and
+    # every committed final must verify against gold. Before v2 the whole completion
+    # went to ``parse``, which falls back to the LAST number/expression in prose, so a
+    # prose-only partial answer ("I considered whether it could be 18 ...") passed and
+    # of two contradictory finals the last one won.
+    finals = _structured_finals(answer, r"<answer>(.*?)</answer>")
+    if not finals:
+        return False
+    for final in finals:
+        try:
+            pred = parse(f"$\\boxed{{{final}}}$", **parse_kwargs)
+        except Exception:
+            # The model's own answer failing to parse is a task failure, not a
+            # scorer-unavailability condition — score it wrong, don't raise.
+            return False
+        try:
+            # gold-first argument order — verify() is asymmetric.
+            ok = bool(verify(gold, pred, **verify_kwargs))
+        except Exception as exc:
+            raise ScoringUnavailableError(
+                "math_verify.verify() raised while comparing parsed answers (scorer defect)"
+            ) from exc
+        if not ok:
+            return False
+    return True
+
+
+def _math_verify_parse_gold(parse: Any, expected: str, parse_kwargs: dict[str, Any]) -> Any:
+    """Parse a gold for math_verify (SCORER-MV-GOLDWRAP, scorer semantics v2).
+
+    math-verify's LaTeX extractor only reads delimited math (``$..$``, ``\\boxed``);
+    a BARE LaTeX gold such as ``3\\sqrt{13}`` fell through to the expression
+    extractor, which reads the leading number (``3``) — so a wrong ``\\boxed{3}`` was
+    accepted and a correct ``\\boxed{3\\sqrt{13}}`` rejected (or the gold yielded
+    nothing and the row was excluded: MATH-500 coverage 0.88). A gold with no
+    delimiter is wrapped in ``$...$``; if that extracts nothing the raw gold is tried.
+    An escaped ``\\$`` (a currency sign, ``\\$32,\\!348``) is not a delimiter.
+    """
+    expected = expected.strip()
+    delimited = re.search(r"(?<!\\)\$", expected) is not None or "\\boxed" in expected
+    attempts = [expected] if delimited else [f"${expected}$", expected]
+    last_exc: Exception | None = None
+    for text in attempts:
+        try:
+            gold = parse(text, **parse_kwargs)
+        except Exception as exc:
+            last_exc = exc
+            continue
+        if text is not expected and not any(not isinstance(g, str) for g in gold):
+            # The wrap only echoed the raw string back (no math extracted): a
+            # malformed gold such as ``\begin{invalid`` must stay a gold defect.
+            continue
+        if gold:
+            return gold
+    if last_exc is not None:
         raise ScoringUnavailableError(
             "math_verify could not parse the GOLD/expected answer "
             f"{expected!r} (dataset/gold defect)"
-        ) from exc
-    if not gold:
-        raise ScoringUnavailableError(
-            "math_verify extracted nothing from the GOLD/expected answer "
-            f"{expected!r} (dataset/gold defect)"
-        )
-
-    try:
-        pred = parse(answer.strip(), **parse_kwargs)
-    except Exception:
-        # The model's own answer failing to parse is a task failure, not a
-        # scorer-unavailability condition — score it wrong, don't raise.
-        return False
-
-    try:
-        # gold-first argument order — verify() is asymmetric.
-        return bool(verify(gold, pred, **verify_kwargs))
-    except Exception as exc:
-        raise ScoringUnavailableError(
-            "math_verify.verify() raised while comparing parsed answers (scorer defect)"
-        ) from exc
+        ) from last_exc
+    raise ScoringUnavailableError(
+        "math_verify extracted nothing from the GOLD/expected answer "
+        f"{expected!r} (dataset/gold defect)"
+    )
 
 
 # ── f1_list (tulving_episodic) + structural_exact_match (longcot_mini) ────
@@ -1952,6 +2081,25 @@ def _extract_boxed_answer(text: str) -> str | None:
             out.append(ch)
         i += 1
     return None
+
+
+def _boxed_payloads_with_pos(text: str) -> list[tuple[int, str]]:
+    """Every balanced ``\\boxed{...}`` payload as ``(start, payload)``, in text order.
+    An unbalanced trailing ``\\boxed{`` yields nothing."""
+    out: list[tuple[int, str]] = []
+    for m in re.finditer(r"\\boxed\{", text):
+        i, depth = m.end(), 1
+        while i < len(text):
+            ch = text[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    out.append((m.start(), text[m.end() : i]))
+                    break
+            i += 1
+    return out
 
 
 def _final_answer_region(text: str) -> str:

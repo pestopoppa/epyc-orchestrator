@@ -1,0 +1,78 @@
+{
+  "inputs_sha256": {
+    "debug_scorer.py": "3c110586c260844083acf2351561691602dedc33288a1206948d521ad0bec65c",
+    "gsm8k_test_parquet": "ee7b8da9e381df27b9e3f7758a159ab2bdaa4dbaa910546cbbc47e0cb44e4f59",
+    "math500_test_jsonl": "35dc41080a3680858b27fa7e0533d2d547825316fc5dafe5d316f4ccc5a06132",
+    "question_results.ev11-worker_general.jsonl": "5705081e2b285b1ab6e1e9588f6566317853088c5727c19a4fad00d1e1919cab",
+    "question_results.ev11-worker_math.jsonl": "50ece19a75f3c0bb1ee0e850705b7f13c35eb1df48f7b63460511cd6b255fdc1"
+  },
+  "labels": {
+    "ev11-worker_general": {
+      "banked_accuracy": 0.7300714678394722,
+      "banked_outcomes": {
+        "False": 491,
+        "True": 1328
+      },
+      "by_source": {
+        "gsm8k": {
+          "banked_correct": 1002,
+          "flips_false_to_true": 270,
+          "flips_true_to_false": 2,
+          "n_scorable": 1319,
+          "replayed_correct": 1270
+        },
+        "math500": {
+          "banked_correct": 326,
+          "flips_false_to_true": 42,
+          "flips_true_to_false": 1,
+          "n_scorable": 500,
+          "replayed_correct": 367
+        }
+      },
+      "flips_false_to_true": 312,
+      "flips_true_to_false": 3,
+      "n_rows": 1819,
+      "n_scorable_both": 1819,
+      "replayed_accuracy": 0.8999450247388675,
+      "replayed_outcomes": {
+        "False": 182,
+        "True": 1637
+      }
+    },
+    "ev11-worker_math": {
+      "banked_accuracy": 0.6981858163826278,
+      "banked_outcomes": {
+        "False": 549,
+        "True": 1270
+      },
+      "by_source": {
+        "gsm8k": {
+          "banked_correct": 999,
+          "flips_false_to_true": 265,
+          "flips_true_to_false": 3,
+          "n_scorable": 1319,
+          "replayed_correct": 1261
+        },
+        "math500": {
+          "banked_correct": 271,
+          "flips_false_to_true": 36,
+          "flips_true_to_false": 0,
+          "n_scorable": 500,
+          "replayed_correct": 307
+        }
+      },
+      "flips_false_to_true": 301,
+      "flips_true_to_false": 3,
+      "n_rows": 1819,
+      "n_scorable_both": 1819,
+      "replayed_accuracy": 0.8620120945574491,
+      "replayed_outcomes": {
+        "False": 251,
+        "True": 1568
+      }
+    }
+  },
+  "schema": "epyc.math_baseline_scorer_replay.v1",
+  "scorer_semantics_version": "strict_finals_v2_20261124",
+  "source_report_dir": "orchestration/reports/eval_tower_math_rebaseline_E7c"
+}
