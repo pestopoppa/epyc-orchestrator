@@ -39,6 +39,7 @@ from src.repl_environment.parallel_dispatch import (
 from src.repl_environment.security import ASTSecurityVisitor, harden_exception_handlers
 from src.repl_environment.unicode_sanitizer import sanitize_code_unicode
 from src.repl_environment import exception_schema as _exception_schema
+from src import denial_hints as _denial_hints
 from src.repl_environment.combined_ops import _CombinedOpsMixin
 from src.repl_environment.suggestions import _SuggestionsMixin
 from src.repl_environment.file_tools import _FileToolsMixin
@@ -903,6 +904,10 @@ class REPLEnvironment(
                     "vars": " Hint: dir/vars/globals/locals are blocked; use list_tools() / list_dir(path) to explore.",
                     "input": " Hint: input() is not available; the task input is the variable `context`.",
                 }.get(_fn, " Hint: see the SANDBOX CONTRACT in the prompt for the blocked names and the allowed helpers.")
+                if _fn not in ("open", "eval", "exec", "compile", "getattr", "hasattr", "dir", "vars", "input"):
+                    hints = _denial_hints.sandbox_hint_fallback(hints, self.config.allowed_builtins, self.SAFE_IMPORT_MODULES)
+            elif not hints:
+                hints = _denial_hints.sandbox_hint_fallback(hints, self.config.allowed_builtins, self.SAFE_IMPORT_MODULES)
             raise REPLSecurityError(
                 f"Dangerous operation not allowed: {violation}.{hints}"
             )

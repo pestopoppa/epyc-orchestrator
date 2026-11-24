@@ -28,7 +28,14 @@ Before each experiment session:
 
 ## What You Can Modify
 
-**Principle**: You can modify ANYTHING in the orchestrator codebase as long as strict git versioning is in place. Every change is committed before eval, and reverted if quality regresses. Git is the safety net — not file-level permissions.
+**Principle**: git versioning is the safety net (every change is committed before eval and reverted if quality regresses), but it is NOT the only boundary. The autopilot's real reach is bounded in code:
+
+- **prompt_mutation surfaces** — `orchestration/prompts/*.md` and the other prompt surfaces PromptForge exposes.
+- **code_mutation** — only the 5 files in `CODE_MUTATION_ALLOWLIST` (`src/autopilot_core/mutation_guards.py`): `src/prompt_builders/resolver.py`, `src/escalation.py`, `src/graph/escalation_helpers.py`, `src/tool_policy.py`, `src/api/routes/chat.py`. Every other file is immutable to the loop (the eval trust boundary).
+- **structural flag flips** — only flags listed in `HOT_SWAP_FEATURES` (`scripts/autopilot/config_applicator.py`); security flags are pinned observe-only.
+- **numeric_trial knobs** — the parameters declared in `species/numeric_swarm.py` `SURFACES`.
+
+Harness fixes are NOT made by editing arbitrary code: they are offered as default-OFF flags the loop can toggle (operator decision 2026-11-24). The sections below list the surfaces by kind; where an entry names a path outside the four bullets above, it is reachable only through a session-authored flag, not a direct loop edit.
 
 ### Hot-Swap (no restart, immediate effect)
 - `orchestration/prompts/*.md` — prompt templates (read on every request)
@@ -39,12 +46,7 @@ Before each experiment session:
 - Cheap-first quality threshold and escalation policy parameters
 
 ### Code Changes (require API restart for affected component)
-- `src/graph/` — REPL loop logic, escalation flow, tool dispatch, early-exit conditions
-- `src/api/routes/` — routing logic, pipeline behavior, request handling
-- `src/tools/` — tool implementations, tool registration, tool wiring
-- `src/classifiers/` — classification logic, risk scoring, routing decisions
-- `src/features.py` — feature flag definitions and defaults
-- Any bug fix, wiring fix, or behavioral improvement that eval validates
+Limited to the 5-file `CODE_MUTATION_ALLOWLIST` above. Other areas (`src/graph/` REPL loop, `src/api/routes/` beyond `chat.py`, `src/tools/`, `src/classifiers/`, `src/features.py`) are NOT loop-editable; a fix there ships as a default-OFF flag added by a session and toggled via `HOT_SWAP_FEATURES`.
 
 ### TOON & Context Transfer
 - TOON encoding parameters
@@ -249,6 +251,7 @@ Single-variable rule (AP-9): one flag per trial. The REPL flags below apply to t
 | `timeout_contention_class` | off (default) / on | HF-TIMEOUT-CLASS: timeout provenance rows carry `contention_class` in {contention, model_slow, unknown} from host_inflight / loadavg_per_core; aggregate reports timeout rate per class. Label only: quality denominators unchanged | Judge by `eval_timeout_class_rates`; a high contention share means re-run, not model change |
 | `thinking_budget_headroom` (pairs with `repl_thinking_budget`; numeric `thinking.answer_floor_tokens` 64-1024, default 256, env_restart) | off (default) / on | AEI-THINK-HEADROOM: nothing enforced max_tokens >= thinking_budget + answer room, so a turn that spends its cap thinking returns output=="" (reasoning split into reasoning_content). On: the chat-lane `thinking_budget_tokens` is clamped to max_tokens - floor, and an empty-content / non-empty-reasoning / finish_reason=length reply is stamped `failure_reason=thinking_exhausted` (distinct from `empty_generation`) | `thinking_exhausted` count by role (usage/serving rows); empty-output rate on thinking roles; task score | A lower thinking budget can cost accuracy on hard prompts: a high floor on small caps starves thinking. If max_tokens <= floor the budget is left unchanged (logged). |
 | `truncation_narrowing_hint` | off (default) / on | AEI-TRUNC-NOTICE: the three llm_call output-cap markers add how to get the rest (narrower request, smaller n_tokens), matching the REPL spill footer. Fewer repeated full-output calls | Judge by repeat-call rate on capped outputs |
+| `tool_denial_names_allowed` | off (default) / on | HF-DENIALS: every tool denial string (blocked shell command, run_shell safety block, path not allowed, REPL sandbox hint) names the allowed set or says none exists. Fewer blind retries after a refusal | Judge by repeat-denial rate per request |
 
 **Pinned, observe only (security): `exec_containment`, `untrusted_tool_text`, `http_post_guard`.** `http_post_guard` (default ON, `ORCHESTRATOR_HTTP_POST_GUARD=0` kill switch) makes `http_post` refuse private, loopback, link-local and metadata destinations through the SEC-EXEC-3 `web_guard` check. The autopilot never proposes, enables or disables these; `StructuralLab.propose_flag_experiment` refuses any proposal that names them (`PINNED_OBSERVE_ONLY_FLAGS`) and they are absent from `HOT_SWAP_FEATURES`. Observe them in `/config/attest`: a trial result is invalid if either reads off. `exec_containment` is Landlock + seccomp for model-exec children (`ORCHESTRATOR_EXEC_CONTAINMENT=0` is the operator's kill switch); `untrusted_tool_text` labels, defangs and caps untrusted tool text before it re-enters model context (`ORCHESTRATOR_UNTRUSTED_TOOL_TEXT=0`). A score gain bought by switching either off is a security regression, not an optimisation.
 

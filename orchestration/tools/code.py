@@ -97,7 +97,9 @@ def run_shell(command: str, timeout: int = 30, cwd: str | None = None) -> dict:
     normalized = " ".join(command.split())
     if any(p.search(normalized) for p in _DANGEROUS_PATTERNS):
         logger.warning("Blocked dangerous command: %.200s", command)
-        return {"error": "Command blocked for safety"}
+        from src.denial_hints import shell_blocked_message
+
+        return {"error": shell_blocked_message("Command blocked for safety")}
 
     # Validate cwd is on RAID if specified
     if cwd and not cwd.startswith("/mnt/raid0/"):

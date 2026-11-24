@@ -22,10 +22,16 @@ def _is_path_allowed(path: str) -> bool:
     return any(abs_path.startswith(allowed) for allowed in ALLOWED_PATHS)
 
 
+def _path_denied(path: str) -> str:
+    from src.denial_hints import path_not_allowed_message
+
+    return path_not_allowed_message(path, ALLOWED_PATHS)
+
+
 def read_file(path: str, encoding: str = "utf-8", max_bytes: int = 1000000) -> dict:
     """Read file contents safely."""
     if not _is_path_allowed(path):
-        return {"error": f"Path not allowed: {path}"}
+        return {"error": _path_denied(path)}
 
     try:
         p = Path(path)
@@ -51,7 +57,7 @@ def read_file(path: str, encoding: str = "utf-8", max_bytes: int = 1000000) -> d
 def write_file(path: str, content: str, mode: str = "w") -> dict:
     """Write content to file safely."""
     if not _is_path_allowed(path):
-        return {"error": f"Path not allowed: {path}"}
+        return {"error": _path_denied(path)}
 
     if mode not in ("w", "a"):
         return {"error": f"Invalid mode: {mode}"}
@@ -74,7 +80,7 @@ def write_file(path: str, content: str, mode: str = "w") -> dict:
 def list_directory(path: str, pattern: str = "*", recursive: bool = False) -> list[dict]:
     """List directory contents."""
     if not _is_path_allowed(path):
-        return [{"error": f"Path not allowed: {path}"}]
+        return [{"error": _path_denied(path)}]
 
     try:
         p = Path(path)

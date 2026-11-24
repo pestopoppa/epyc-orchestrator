@@ -240,7 +240,9 @@ class _ExternalAccessMixin:
         base_cmd = parts[0].split("/")[-1]  # Handle /usr/bin/ls -> ls
 
         if base_cmd in BLOCKED_COMMANDS:
-            return f"[ERROR: Command '{base_cmd}' is blocked for security]"
+            from src.denial_hints import blocked_command_message
+
+            return blocked_command_message(base_cmd, SAFE_COMMANDS)
 
         if base_cmd not in SAFE_COMMANDS:
             return f"[ERROR: Command '{base_cmd}' not in allowlist: {sorted(SAFE_COMMANDS)}]"

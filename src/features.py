@@ -436,6 +436,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("test_result_skip_aware", False, False, "TEST_RESULT_SKIP_AWARE", "HF-SKIPS: pytest runs parse passed/failed/skipped/xfailed + skip reasons from the FULL output; an all-skipped or zero-passed rc==0 run is inconclusive (cause 'skipped'), not passed (default off)", env_on="1", env_off="0"),
     FeatureSpec("timeout_contention_class", False, False, "TIMEOUT_CONTENTION_CLASS", "HF-TIMEOUT-CLASS: label every eval timeout provenance row contention/model_slow/unknown from host covariates and report timeout rate per class; label only, no exclusion change (default off)", env_on="1", env_off="0"),
     FeatureSpec("thinking_budget_headroom", False, False, "THINKING_BUDGET_HEADROOM", "AEI-THINK-HEADROOM: a chat-lane request's thinking_budget_tokens is clamped to max_tokens minus an answer floor (ORCHESTRATOR_THINKING_ANSWER_FLOOR_TOKENS, default 256) so a turn cannot spend its whole cap thinking; a reply with empty content, non-empty reasoning_content and finish_reason=length is stamped failure_reason=thinking_exhausted (distinct from empty_generation). Off = byte-identical request bodies and results"),
+    FeatureSpec("tool_denial_names_allowed", False, False, "TOOL_DENIAL_NAMES_ALLOWED", "HF-DENIALS: every tool denial string (blocked shell commands, run_shell safety block, path-not-allowed, REPL sandbox hint) names the allowed set or says there is none (default off; off = legacy text)", env_on="1", env_off="0"),
     FeatureSpec("delegation_untrusted_data_field", False, False, "DELEGATION_UNTRUSTED_DATA_FIELD", "AEI-LAUNDER-FIX-1: previous-turn REPL output/error and specialist reports travel in a delimited data block labelled as data, not interpolated into the child-role instruction (default off)", env_on="1", env_off="0"),
     FeatureSpec("http_post_guard", True, True, "HTTP_POST_GUARD", "SECURITY (AEI-HTTPPOST-GUARD): http_post refuses private, loopback, link-local and metadata destinations via the SEC-EXEC-3 web_guard check (ORCHESTRATOR_HTTP_POST_GUARD=0 is the kill switch); autopilot pinned, observe only", env_on="1", env_off="0"),
     FeatureSpec("repl_write_dedupe", True, True, "REPL_WRITE_DEDUPE", "REPL: an identical write call that already succeeded in this request is skipped, not re-run (ORCHESTRATOR_REPL_WRITE_DEDUPE=0 is the kill switch)", env_on="1", env_off="0"),
@@ -1006,6 +1007,7 @@ class Features:
     test_result_skip_aware: bool = False  # HF-SKIPS: skipped/zero-passed pytest runs are inconclusive, not passed
     timeout_contention_class: bool = False  # HF-TIMEOUT-CLASS: timeout rows labelled contention/model_slow/unknown
     thinking_budget_headroom: bool = False  # AEI-THINK-HEADROOM: thinking budget clamped to max_tokens - answer floor; thinking_exhausted stamp
+    tool_denial_names_allowed: bool = False  # HF-DENIALS: denial strings name the allowed set
     delegation_untrusted_data_field: bool = False  # AEI-LAUNDER-FIX-1: untrusted text in a labelled data block, not the instruction
     http_post_guard: bool = True  # AEI-HTTPPOST-GUARD: http_post refuses non-global destinations
     repl_write_dedupe: bool = True

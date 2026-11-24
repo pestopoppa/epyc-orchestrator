@@ -210,6 +210,7 @@ flags:
   test_result_skip_aware: baseline
   timeout_contention_class: baseline
   thinking_budget_headroom: baseline
+  tool_denial_names_allowed: baseline
   delegation_untrusted_data_field: baseline
   http_post_guard: baseline
   ure_uncertainty_shadow_log: baseline
