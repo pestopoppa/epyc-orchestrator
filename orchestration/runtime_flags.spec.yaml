@@ -206,6 +206,7 @@ flags:
   serving_calls_json_schema_capture: baseline
   chat_finish_reason: baseline
   truncation_narrowing_hint: baseline
+  empty_output_vacuity_guard: baseline
   delegation_untrusted_data_field: baseline
   http_post_guard: baseline
   ure_uncertainty_shadow_log: baseline

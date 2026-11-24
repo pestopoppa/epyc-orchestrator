@@ -231,6 +231,14 @@ class _ContextMixin:
                 f"FINAL() received a {type(answer).__name__} object, not a string. "
                 "Pass the source code as a string: FINAL('''def foo(): ...''')"
             )
+        from src.features import features as _get_features
+
+        if _get_features().empty_output_vacuity_guard and not str(answer).strip():
+            self.artifacts["_empty_final_refused"] = True
+            raise ValueError(
+                "FINAL() was called with an empty answer, so it was not accepted. "
+                "Call FINAL() again with the actual answer text."
+            )
         raise FinalSignal(str(answer))
 
     def _final_var(self, var_name: str) -> None:

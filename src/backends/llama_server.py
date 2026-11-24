@@ -81,6 +81,12 @@ def _empty_generation_failure_after_s() -> float:
 
 
 def _is_empty_long_generation(output: str, elapsed_s: float) -> bool:
+    from src.features import features as _get_features
+
+    if _get_features().empty_output_vacuity_guard:
+        # Vacuity guard: an empty output is a failure at any elapsed time (callers already
+        # exclude tool-call turns).
+        return not (output or "").strip()
     threshold = _empty_generation_failure_after_s()
     return threshold > 0 and not (output or "").strip() and elapsed_s >= threshold
 

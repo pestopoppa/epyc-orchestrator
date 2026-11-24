@@ -868,7 +868,11 @@ async def _execute_repl_body(
         tool_outputs = repl.artifacts.get("_tool_outputs", [])
         cleaned_output = _strip_tool_outputs(last_output, tool_outputs) if last_output else ""
 
-        if cleaned_output and len(cleaned_output) > 20:
+        from src.features import features as _get_features
+
+        if _get_features().empty_output_vacuity_guard and repl.artifacts.get("_empty_final_refused"):
+            answer = "[FINAL() was called with an empty answer and was refused; no answer was produced]"
+        elif cleaned_output and len(cleaned_output) > 20:
             answer = f"[Max turns ({max_turns}) reached without FINAL()]\n\n{cleaned_output}"
         elif last_output:
             answer = (

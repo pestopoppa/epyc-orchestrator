@@ -25,7 +25,18 @@ from __future__ import annotations
 import json
 import re
 
+from typing import Any
+
 from src.batch_edit import PatchSet, FilePatch, Hunk, validate_patchset
+
+_LINE_SUFFIX_RE = re.compile(r"(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)$")
+
+
+def _strip_line_suffix(path: Any) -> Any:
+    """Drop a trailing ``#L<n>[-L<m>]`` or ``:<n>`` line reference from a model-emitted path."""
+    if not isinstance(path, str):
+        return path
+    return _LINE_SUFFIX_RE.sub("", path) or path
 
 # Matches a ```patchset ... ``` fenced block (case-insensitive language tag).
 _FENCE = re.compile(r"```patchset\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
@@ -101,10 +112,18 @@ def parse_patchset_from_model_output(text: str | None, *, validate: bool = True)
     if data is None:
         return None
 
+    from src.features import features as _get_features
+
+    strip_suffix = _get_features().empty_output_vacuity_guard
     files: list[FilePatch] = []
     for fd in data.get("files", []):
         if not isinstance(fd, dict) or "path" not in fd:
             raise ValueError(f"patchset file entry missing 'path': {fd!r}")
+        if strip_suffix:
+            fd = dict(fd)
+            fd["path"] = _strip_line_suffix(fd["path"])
+            if fd.get("rename_to"):
+                fd["rename_to"] = _strip_line_suffix(fd["rename_to"])
         hunks = [
             Hunk(
                 start_line=h.get("start_line"),

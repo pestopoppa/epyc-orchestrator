@@ -929,10 +929,15 @@ def _batch_edit_verify_fn(sandbox_root: Path, *, verify_cmd: str | None = None) 
     import py_compile
     import subprocess
 
+    from src.features import features as _get_features
+
+    vacuity_guard = _get_features().empty_output_vacuity_guard
     root = Path(sandbox_root)
+    compiled_any = False
     for p in root.rglob("*.py"):
         try:
             py_compile.compile(str(p), doraise=True)
+            compiled_any = True
         except Exception:
             return False
     if verify_cmd is None:
@@ -940,6 +945,10 @@ def _batch_edit_verify_fn(sandbox_root: Path, *, verify_cmd: str | None = None) 
         # configured command as before. Production batch flow passes its snapshot.
         verify_cmd = os.environ.get("ORCHESTRATOR_BATCH_EDIT_VERIFY_CMD", "").strip()
     if not verify_cmd:
+        if vacuity_guard and not compiled_any:
+            # Nothing verifiable was staged and no check ran: a vacuous pass is not a pass.
+            log.warning("batch-edit verify: no verifiable file and no verify command; refusing")
+            return False
         return True
     try:
         timeout = float(os.environ.get("ORCHESTRATOR_BATCH_EDIT_VERIFY_TIMEOUT_SEC", "120"))
