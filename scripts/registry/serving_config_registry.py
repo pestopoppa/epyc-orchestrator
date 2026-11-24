@@ -17,20 +17,28 @@ Nothing here writes the live registry, the shared research clone or the live der
 write lands under ``--scratch`` / ``--out``, and the dry-run proves that by comparing the live
 lean registry's digest before and after.
 
-Serving-config shape consumed (per served ``server_mode`` key)::
+Serving-config shape consumed (schema ``epyc.champion.serving_config.v1``; the authoritative
+parser is ``scripts/champion/serving_config/validate_serving_config.py`` in epyc-root, which this
+module loads via ``--validator`` rather than re-parsing)::
 
-    {"schema": "epyc.champion.serving_config.v1", "champion": "<name>",
-     "roles": {"<server_mode key>": {
-         "optimal":   {"server": {<sibling knobs: slots, cache_ram, ctx_checkpoints, no_mmap, ...>},
-                       "serving_shape": {<n_ctx, slots_by_shape, kv_quant, batch, ...>},
-                       "provenance": {row_id, result_json, result_sha256, [store]}},
-         "alternates": {"<name>": {"argv_delta": {...}, "provenance": {...}}},
-         "tradeoffs":  [...]}}}
+    {"schema": ..., "champion": "C22",
+     "servers": [{"server_mode": "architect_critic", ...,
+         "registry_serving_shape": {...},
+         "optimal":   {"status": "measured"|"pending", "config": {n_ctx, np, batch, ubatch, kv_k, kv_v,
+                       kv_unified, ctx_checkpoints, cache_ram_mib, drafter, sampling},
+                       "argv_delta": [{flag, value?, reason}], "provenance": {...}},
+         "alternates": [{"name", "status", "argv_delta": [...], "provenance": {...}}],
+         "tradeoffs": [...]}]}
 
-``optimal.server`` keys become siblings of ``serving_shape`` (that is where the registry keeps the
-argv knobs); ``optimal.serving_shape`` keys merge into ``serving_shape``; ``alternates`` become
-``serving_shape.alternates`` and REPLACE the declared set (an alternate the artifact no longer
-lists is removed, so a stale one cannot survive a promotion).
+Only MEASURED entries are written. ``optimal.config`` maps onto the registry knobs (``np`` ->
+``slots``, ``cache_ram_mib`` -> ``cache_ram``, ``ctx_checkpoints``, and ``serving_shape.{n_ctx,batch,
+ubatch,kv_unified,kv_quant}``); a value equal to the registry's is not an op, so a measured optimum
+that IS the served recipe yields an empty diff. ``drafter`` and ``sampling`` are not registry
+serving_shape and are not written. A measured alternate becomes ``serving_shape.alternates.<name>``
+(``argv_delta`` as ``{flag: value}``, against the registry serving_shape). A PENDING optimal skips its
+whole server and a PENDING alternate is skipped (an existing master alternate of that name is left
+alone); both are listed in the diff's ``skipped_pending`` so the package shows what the signature
+does not cover. Measured alternates the artifact no longer lists are removed.
 
 The diff records the value it replaces (``old``/``had_old``). ``apply`` refuses a master that has
 drifted from those olds: the operator signs a diff against a known master, not "whatever is there".
@@ -69,7 +77,6 @@ DIFF_SCHEMA = "epyc.registry_serving_diff.v1"
 PREFLIGHT_CMD_ENV = "SERVING_CONFIG_PREFLIGHT_CMD"
 #: Directories left out of the scratch repo copy (bulky, never read by the pipeline check).
 _SCRATCH_EXCLUDES = ("artifacts", "benchmarks", "docs", "handoffs", "progress", "orchestration/reports")
-_PROVENANCE_REQUIRED = ("row_id", "result_json", "result_sha256")
 #: Pipeline steps that read the LIVE HOST (listeners on declared ports, running-process env), not
 #: the registry under test. A failure there is host state -- another session's server on a stack
 #: port -- and says nothing about a registry diff, so it is recorded (`host_state_failures`) but
@@ -86,8 +93,27 @@ class ServingConfigError(ValueError):
 # --------------------------------------------------------------------------- artifact
 
 
-def load_serving_config(path: Path) -> dict[str, Any]:
-    """Load and validate the champion serving-config artifact."""
+def _load_validator(path: Path | None):
+    """Import the root repo's ``validate_serving_config.py`` (the one parser of this artifact)."""
+    if path is None:
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_serving_config_validator", str(path))
+    if spec is None or spec.loader is None:
+        raise ServingConfigError(f"cannot load serving-config validator {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_serving_config(
+    path: Path, *, validator: Path | None = None, registry: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Load the champion serving-config artifact; validate it with the root validator when given.
+
+    ``registry`` (the master doc) turns on the validator's ``registry_serving_shape`` drift check.
+    """
     path = Path(path)
     if not path.is_file():
         raise ServingConfigError(f"serving-config artifact not found: {path}")
@@ -95,43 +121,35 @@ def load_serving_config(path: Path) -> dict[str, Any]:
         cfg = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
         raise ServingConfigError(f"{path} is not valid JSON: {exc}") from exc
-    return validate_serving_config(cfg, source=str(path))
+    mod = _load_validator(validator)
+    if mod is not None:
+        rep = mod.validate(cfg, False, registry)
+        if rep.errors:
+            raise ServingConfigError(
+                f"{path} fails validate_serving_config.py:\n  " + "\n  ".join(rep.errors)
+            )
+    return check_shape(cfg, source=str(path))
 
 
-def validate_serving_config(cfg: Any, *, source: str = "serving-config") -> dict[str, Any]:
+def check_shape(cfg: Any, *, source: str = "serving-config") -> dict[str, Any]:
+    """The minimum this module relies on (full validation is the root validator's job)."""
     if not isinstance(cfg, dict) or cfg.get("schema") != CONFIG_SCHEMA:
         raise ServingConfigError(f"{source}: schema must be {CONFIG_SCHEMA!r}")
     if not cfg.get("champion") or not isinstance(cfg["champion"], str):
         raise ServingConfigError(f"{source}: `champion` (string) is required")
-    roles = cfg.get("roles")
-    if not isinstance(roles, dict) or not roles:
-        raise ServingConfigError(f"{source}: `roles` must be a non-empty mapping of server_mode key to config")
-    for role, entry in roles.items():
-        where = f"{source}: roles.{role}"
-        if not isinstance(entry, dict):
-            raise ServingConfigError(f"{where} must be a mapping")
-        optimal = entry.get("optimal")
-        if not isinstance(optimal, dict):
-            raise ServingConfigError(f"{where}.optimal is required")
-        server = optimal.get("server") or {}
-        shape = optimal.get("serving_shape") or {}
-        if not isinstance(server, dict) or not isinstance(shape, dict) or not (server or shape):
-            raise ServingConfigError(f"{where}.optimal must declare `server` and/or `serving_shape` knobs")
-        if "serving_shape" in server or ALTERNATES_KEY in shape:
-            raise ServingConfigError(
-                f"{where}.optimal: `serving_shape` is not a server knob and `alternates` is not an optimal knob"
-            )
-        prov = optimal.get("provenance")
-        if not isinstance(prov, dict) or any(not prov.get(k) for k in _PROVENANCE_REQUIRED):
-            raise ServingConfigError(
-                f"{where}.optimal.provenance must carry {list(_PROVENANCE_REQUIRED)}"
-            )
-        if "tradeoffs" not in entry:
-            raise ServingConfigError(f"{where}.tradeoffs is required (the table that makes a move informed)")
-        try:
-            parse_alternates(entry.get("alternates"), source=f"{where}.alternates")
-        except ServingAlternatesError as exc:
-            raise ServingConfigError(str(exc)) from exc
+    servers = cfg.get("servers")
+    if not isinstance(servers, list) or not servers:
+        raise ServingConfigError(f"{source}: `servers` must be a non-empty list")
+    for i, srv in enumerate(servers):
+        if not isinstance(srv, dict) or not isinstance(srv.get("server_mode"), str):
+            raise ServingConfigError(f"{source}: servers[{i}].server_mode required")
+        for where, entry in [("optimal", srv.get("optimal"))] + [
+            (f"alternates[{j}]", a) for j, a in enumerate(srv.get("alternates") or [])
+        ]:
+            if not isinstance(entry, dict) or entry.get("status") not in ("measured", "pending"):
+                raise ServingConfigError(
+                    f"{source}: servers[{i}]({srv['server_mode']}).{where}.status must be measured|pending"
+                )
     return cfg
 
 
@@ -147,6 +165,20 @@ def _sha256(path: Path) -> str:
 
 _ABSENT = object()
 
+#: optimal.config key -> registry path under server_mode.<role> (drafter and sampling are not
+#: serving_shape: the drafter is topology-selected and sampling is a per-request default).
+_CONFIG_TO_REGISTRY: dict[str, tuple[str, ...]] = {
+    "np": ("slots",),
+    "ctx_checkpoints": ("ctx_checkpoints",),
+    "cache_ram_mib": ("cache_ram",),
+    "n_ctx": ("serving_shape", "n_ctx"),
+    "batch": ("serving_shape", "batch"),
+    "ubatch": ("serving_shape", "ubatch"),
+    "kv_unified": ("serving_shape", "kv_unified"),
+    "kv_k": ("serving_shape", "kv_quant", "k"),
+    "kv_v": ("serving_shape", "kv_quant", "v"),
+}
+
 
 def _get(doc: Any, path: list[str]) -> Any:
     cur = doc
@@ -157,15 +189,26 @@ def _get(doc: Any, path: list[str]) -> Any:
     return cur
 
 
+def argv_delta_mapping(delta: list[dict[str, Any]]) -> dict[str, Any]:
+    """The artifact's ``[{flag, value?, reason}]`` as the registry slot's ``{flag: value}``."""
+    return {d["flag"]: d.get("value", True) for d in delta}
+
+
 def build_registry_diff(
     cfg: dict[str, Any], master: dict[str, Any], *, config_sha256: str | None = None
 ) -> dict[str, Any]:
-    """The registry edits that make ``master`` serve ``cfg``. Pure; reads nothing else."""
-    cfg = validate_serving_config(cfg)
+    """The registry edits that make ``master`` serve ``cfg``. Pure; reads nothing else.
+
+    Only MEASURED entries are written. A pending optimal skips its whole server; a pending alternate
+    is skipped (and an existing master alternate of the same name is left alone). Skips are listed in
+    ``skipped_pending`` so the package shows what the signature does NOT cover.
+    """
+    cfg = check_shape(cfg)
     server_mode = master.get("server_mode")
     if not isinstance(server_mode, dict):
         raise ServingConfigError("master registry has no server_mode section")
     ops: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
 
     def put(path: list[str], new: Any, provenance: Any) -> None:
         old = _get(master, path)
@@ -180,23 +223,46 @@ def build_registry_diff(
             "provenance": provenance,
         })
 
-    for role, entry in cfg["roles"].items():
+    for srv in cfg["servers"]:
+        role = srv["server_mode"]
+        optimal = srv["optimal"]
+        if optimal["status"] != "measured":
+            skipped.append({"server_mode": role, "entry": "optimal", "row_id": optimal.get("row_id"),
+                            "reason": optimal.get("pending_reason")})
+            for alt in srv.get("alternates") or []:
+                skipped.append({"server_mode": role, "entry": alt.get("name"), "row_id": alt.get("row_id"),
+                                "reason": "server optimal is pending"})
+            continue
         if role not in server_mode or not isinstance(server_mode[role], dict):
             raise ServingConfigError(
                 f"serving config names role {role!r}, which is not a server_mode record in the master registry"
             )
-        optimal = entry["optimal"]
         base = ["server_mode", role]
-        for knob, value in (optimal.get("server") or {}).items():
-            put(base + [knob], value, optimal["provenance"])
-        for knob, value in (optimal.get("serving_shape") or {}).items():
-            put(base + ["serving_shape", knob], value, optimal["provenance"])
-        declared = parse_alternates(entry.get("alternates"), source=f"roles.{role}.alternates")
+        config = optimal["config"]
+        for key, rel in _CONFIG_TO_REGISTRY.items():
+            if key in config:
+                put(base + list(rel), config[key], optimal["provenance"])
+
+        declared: dict[str, dict[str, Any]] = {}
+        pending_names: set[str] = set()
+        for alt in srv.get("alternates") or []:
+            name = alt["name"]
+            if alt["status"] != "measured":
+                pending_names.add(name)
+                skipped.append({"server_mode": role, "entry": name, "row_id": alt.get("row_id"),
+                                "reason": alt.get("pending_reason")})
+                continue
+            declared[name] = {"argv_delta": argv_delta_mapping(alt["argv_delta"]),
+                              "provenance": {k: alt["provenance"][k] for k in
+                                             ("row_id", "result_json", "result_sha256", "store")
+                                             if k in alt["provenance"]}}
+        # validate the slot's own schema before it can reach a signed diff
+        parse_alternates(declared, source=f"servers({role}).alternates")
         current = _get(master, base + ["serving_shape", ALTERNATES_KEY])
         current = {} if current is _ABSENT or current is None else current
         for name, alt in declared.items():
             put(base + ["serving_shape", ALTERNATES_KEY, name], alt, alt["provenance"])
-        for name in sorted(set(current) - set(declared)):
+        for name in sorted(set(current) - set(declared) - pending_names):
             ops.append({
                 "op": "remove",
                 "path": base + ["serving_shape", ALTERNATES_KEY, name],
@@ -212,17 +278,18 @@ def build_registry_diff(
         "target": "master registry (research orchestration/model_registry.yaml)",
         "serving_config_sha256": config_sha256,
         "ops": ops,
-        "summary": summarize_diff(ops),
+        "skipped_pending": skipped,
+        "summary": summarize_diff(ops, skipped),
     }
 
 
-def summarize_diff(ops: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize_diff(ops: list[dict[str, Any]], skipped: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     roles: dict[str, dict[str, int]] = {}
     for op in ops:
         role = op["path"][1]
         kind = "alternates" if ALTERNATES_KEY in op["path"] else "knobs"
         roles.setdefault(role, {"knobs": 0, "alternates": 0})[kind] += 1
-    return {"ops": len(ops), "roles": roles}
+    return {"ops": len(ops), "roles": roles, "skipped_pending": len(skipped or [])}
 
 
 def render_diff(diff: dict[str, Any]) -> list[str]:
@@ -237,6 +304,8 @@ def render_diff(diff: dict[str, Any]) -> list[str]:
             op["new"].get("argv_delta") if ALTERNATES_KEY in op["path"] and isinstance(op["new"], dict) else op["new"]
         )
         lines.append(f"{path}: {old} -> {new}")
+    for sk in diff.get("skipped_pending") or []:
+        lines.append(f"SKIPPED (pending, never written) {sk['server_mode']}.{sk['entry']} row={sk.get('row_id')}")
     return lines
 
 
@@ -386,6 +455,16 @@ def dry_run(
             passed = False
             break
         record["host_state_failures"] = host_state
+        record["host_state_carve_out"] = {
+            "excluded_steps": sorted(HOST_STATE_STEPS),
+            "failures_excluded": host_state,
+            "rationale": (
+                "these pipeline steps read the live host (unmanaged listeners on declared stack "
+                "ports, running-process env), not the registry under test; a failure there is "
+                "another session's server and says nothing about the diff. Every other failed "
+                "step fails the dry-run."
+            ),
+        }
         live_after = _digest_or_none(live_lean)
         record["live_registry_untouched"] = live_before == live_after
         record["status"] = "pass" if passed and record["live_registry_untouched"] else "fail"
@@ -415,11 +494,11 @@ def _load_master(path: str | None) -> tuple[Path, Callable[[], None]]:
 
 def build_package_sections(
     config_path: Path, master_path: Path, *, run_dry: bool = True, repo_root: Path = REPO_ROOT,
-    scratch: Path | None = None, python: str | None = None,
+    scratch: Path | None = None, python: str | None = None, validator: Path | None = None,
 ) -> dict[str, Any]:
-    cfg = load_serving_config(config_path)
-    sha = _sha256(config_path)
     master = yaml.safe_load(Path(master_path).read_text())
+    cfg = load_serving_config(config_path, validator=validator, registry=master)
+    sha = _sha256(config_path)
     diff = build_registry_diff(cfg, master, config_sha256=sha)
     sections: dict[str, Any] = {
         "serving_config": {"path": str(config_path), "sha256": sha, "schema": CONFIG_SCHEMA,
@@ -443,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--config", required=True, type=Path)
         p.add_argument("--master", help="master registry file (default: research origin/main)")
         p.add_argument("--out", type=Path)
+        p.add_argument("--validator", type=Path, default=None,
+                       help="epyc-root scripts/champion/serving_config/validate_serving_config.py")
         if name != "diff":
             p.add_argument("--scratch", type=Path)
             p.add_argument("--repo-root", type=Path, default=REPO_ROOT)
@@ -463,25 +544,22 @@ def main(argv: list[str] | None = None) -> int:
             args.out.write_text(yaml.safe_dump(patched, sort_keys=False, width=1000))
             print(f"patched copy written to {args.out}")
             return 0
+        if args.cmd in ("diff", "dryrun"):
+            master_doc = yaml.safe_load(master_path.read_text())
+            cfg = load_serving_config(args.config, validator=args.validator, registry=master_doc)
+            diff = build_registry_diff(cfg, master_doc, config_sha256=_sha256(args.config))
         if args.cmd == "diff":
-            cfg = load_serving_config(args.config)
-            diff = build_registry_diff(
-                cfg, yaml.safe_load(master_path.read_text()), config_sha256=_sha256(args.config)
-            )
             payload: Any = diff
             print("\n".join(render_diff(diff)), file=sys.stderr)
         else:
             if args.cmd == "dryrun":
-                cfg = load_serving_config(args.config)
-                diff = build_registry_diff(
-                    cfg, yaml.safe_load(master_path.read_text()), config_sha256=_sha256(args.config)
-                )
                 payload = dry_run(diff, master_path, repo_root=args.repo_root,
                                   scratch=args.scratch, python=args.python)
             else:
                 payload = build_package_sections(
                     args.config, master_path, run_dry=not args.no_dry_run,
                     repo_root=args.repo_root, scratch=args.scratch, python=args.python,
+                    validator=args.validator,
                 )
         text = json.dumps(payload, indent=2) + "\n"
         if args.out:

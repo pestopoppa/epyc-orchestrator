@@ -10,8 +10,9 @@ carries the fastest screened config (``optimal``) plus 2-3 named alternates (``l
         argv_delta: {<knob or --flag>: <scalar | list of scalars>, ...}
         provenance: {row_id, result_json, result_sha256, [store]}
 
-An alternate is a DELTA against the declared optimum, never a second full recipe: it names only
-what differs. It is declared data, not selected data -- nothing in the launcher reads it, and
+An alternate is a DELTA against the declared registry serving recipe (the optimum, once promoted),
+never a second full recipe: it names only what differs. ``argv_delta`` keys are llama-server flags
+(``-b``, ``--parallel``...) with their value (``true`` for a bare flag). It is declared data, not selected data -- nothing in the launcher reads it, and
 the compiled argv is unchanged by its presence. It exists so that moving off the optimum (a
 temperature move, a latency pin) is an informed, evidenced, one-key choice instead of a re-derivation.
 
