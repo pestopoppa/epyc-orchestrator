@@ -126,6 +126,8 @@ class GateResult:
     verdict: str | None = None
     #: Mandatory on ``out-of-coverage``, forbidden otherwise.
     cause: str | None = None
+    #: HF-SKIPS (flag ``test_result_skip_aware``): pytest outcome counts + skip reasons.
+    test_counts: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.verdict is None:
@@ -174,6 +176,10 @@ class GateResult:
             "required": self.required,
             "verdict": self.verdict,
         }
+        if self.test_counts is not None:
+            d["skipped"] = self.test_counts["skipped"]
+            d["skip_reasons"] = self.test_counts["skip_reasons"]
+            d["test_counts"] = {k: v for k, v in self.test_counts.items() if k != "skip_reasons"}
         if self.cause is not None:
             d["cause"] = self.cause
             d["cause_means"] = gate_verdict_vocab.CAUSE_MEANINGS[self.cause]
@@ -325,6 +331,25 @@ class GateRunner:
             # Parse errors and warnings from output
             errors, warnings = self._parse_output(output, gate.name)
 
+            test_counts = None
+            verdict = None
+            cause = None
+            from src.features import features as _features
+
+            if _features().test_result_skip_aware:
+                # HF-SKIPS: parse the FULL output; rc==0 with nothing passed decided nothing.
+                from src.tools.pytest_summary import is_inconclusive, parse_pytest_summary
+
+                test_counts = parse_pytest_summary(output)
+                if is_inconclusive(result.returncode, test_counts):
+                    passed = False
+                    verdict = gate_verdict_vocab.VERDICT_OUT_OF_COVERAGE
+                    cause = gate_verdict_vocab.CAUSE_SKIPPED
+                    errors = [
+                        f"Gate ran but nothing passed (skipped={test_counts['skipped']}, "
+                        f"xfailed={test_counts['xfailed']}): inconclusive, not passed"
+                    ]
+
             gate_result = GateResult(
                 gate_name=gate.name,
                 passed=passed,
@@ -335,6 +360,9 @@ class GateRunner:
                 warnings=warnings,
                 attempt=attempt,
                 required=gate.required,
+                verdict=verdict,
+                cause=cause,
+                test_counts=test_counts,
             )
 
         except subprocess.TimeoutExpired:

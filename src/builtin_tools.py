@@ -170,6 +170,10 @@ def _register_code_tools(registry: ToolRegistry) -> None:
         if verbose:
             cmd.append("-v")
         cmd.append("--tb=short")
+        from src.features import features as _features_rs
+
+        if _features_rs().test_result_skip_aware:
+            cmd.append("-rs")  # HF-SKIPS: emit skip reasons
 
         try:
             proc = subprocess.run(
@@ -178,12 +182,30 @@ def _register_code_tools(registry: ToolRegistry) -> None:
                 text=True,
                 timeout=120,
             )
-            return {
+            response = {
                 "passed": proc.returncode == 0,
                 "return_code": proc.returncode,
                 "stdout": proc.stdout[-2000:] if len(proc.stdout) > 2000 else proc.stdout,
                 "stderr": proc.stderr[-1000:] if len(proc.stderr) > 1000 else proc.stderr,
             }
+            from src.features import features as _features
+
+            if _features().test_result_skip_aware:
+                # HF-SKIPS: parse the full stdout, not the 2000-char tail kept above.
+                from src.tools.pytest_summary import is_inconclusive, parse_pytest_summary
+
+                counts = parse_pytest_summary(proc.stdout)
+                if counts is not None:
+                    response["skipped"] = counts["skipped"]
+                    response["xfailed"] = counts["xfailed"]
+                    response["skip_reasons"] = counts["skip_reasons"]
+                    response["tests_passed"] = counts["passed"]
+                    response["tests_failed"] = counts["failed"]
+                    if is_inconclusive(proc.returncode, counts):
+                        response["passed"] = False
+                        response["verdict"] = "inconclusive"
+                        response["cause"] = "skipped"
+            return response
         except subprocess.TimeoutExpired:
             return {"error": "Test execution timed out after 120s", "passed": False}
         except Exception as e:

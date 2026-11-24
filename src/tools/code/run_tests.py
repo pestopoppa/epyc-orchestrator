@@ -104,6 +104,11 @@ def run_tests(
     # Always show summary
     cmd.append("-q")
 
+    from src.features import features as _features_rs
+
+    if _features_rs().test_result_skip_aware:
+        cmd.append("-rs")  # HF-SKIPS: emit skip reasons
+
     try:
         result = subprocess.run(
             cmd,
@@ -116,6 +121,15 @@ def run_tests(
         output = result.stdout
         if result.stderr:
             output += "\n[STDERR]\n" + result.stderr
+
+        # HF-SKIPS: parse the FULL output, before truncation drops the summary line.
+        from src.features import features as _features
+
+        skip_counts = None
+        if _features().test_result_skip_aware:
+            from src.tools.pytest_summary import parse_pytest_summary
+
+            skip_counts = parse_pytest_summary(output)
 
         # Truncate if needed
         output, truncated = truncate_output(output, max_length=16000)
@@ -146,7 +160,7 @@ def run_tests(
                 if match:
                     errors = int(match.group(1))
 
-        return {
+        response = {
             "success": result.returncode == 0,
             "output": output,
             "test_path": test_path,
@@ -156,6 +170,21 @@ def run_tests(
             "errors": errors,
             "truncated": truncated,
         }
+        if skip_counts is not None:
+            response["skipped"] = skip_counts["skipped"]
+            response["xfailed"] = skip_counts["xfailed"]
+            response["skip_reasons"] = skip_counts["skip_reasons"]
+            # The full-output counts are authoritative over the truncated-output scan above.
+            response["passed"] = skip_counts["passed"]
+            response["failed"] = skip_counts["failed"]
+            response["errors"] = skip_counts["errors"]
+            from src.tools.pytest_summary import is_inconclusive
+
+            if is_inconclusive(result.returncode, skip_counts):
+                response["success"] = False
+                response["verdict"] = "inconclusive"
+                response["cause"] = "skipped"
+        return response
 
     except subprocess.TimeoutExpired:
         return {

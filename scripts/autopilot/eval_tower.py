@@ -1428,7 +1428,31 @@ def _capture_host_timing_covariates(
     except Exception as exc:  # noqa: BLE001
         log.debug("host timing covariates unavailable: %s", exc)
         return {}
-    return _compact_host_covariates(covariates)
+    compact = _compact_host_covariates(covariates)
+    if _timeout_contention_class_on():
+        # HF-TIMEOUT-CLASS: the classifier needs loadavg, which the compact key set omits.
+        for key in ("loadavg_1min", "loadavg_per_core"):
+            value = _finite_float(covariates.get(key))
+            if value is not None:
+                compact[key] = round(value, 4)
+    return compact
+
+
+def _timeout_class_rates(results: Sequence["QuestionResult"]) -> dict[str, Any]:
+    """HF-TIMEOUT-CLASS aggregate: timeout counts/rates per contention class (label only)."""
+    from src.autopilot_core.timeout_contention import timeout_rate_by_class
+
+    return timeout_rate_by_class((r.failure_provenance, None) for r in results)
+
+
+def _timeout_contention_class_on() -> bool:
+    """HF-TIMEOUT-CLASS flag read (default off; fails closed)."""
+    try:
+        from src.features import features as _features
+
+        return bool(_features().timeout_contention_class)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _speed_analytics_ge_128(
@@ -5266,6 +5290,11 @@ class EvalTower:
             if error and isinstance(resp.get("failure_provenance"), dict)
             else None
         )
+        if failure_provenance is not None and _timeout_contention_class_on():
+            # HF-TIMEOUT-CLASS: label only. No disposition / denominator is touched.
+            from src.autopilot_core.timeout_contention import label_timeout_provenance
+
+            label_timeout_provenance(failure_provenance, outcome.host_covariates)
         provenance_role = (
             str(failure_provenance.get("role") or "") if failure_provenance is not None else ""
         )
@@ -6686,6 +6715,13 @@ class EvalTower:
                 "eval_backend_drain_reports": backend_drain_reports,
                 "eval_backend_drain_failure_count": backend_drain_failure_count,
                 "eval_client_transport_timeout_count": client_transport_timeout_count,
+                **(
+                    {
+                        "eval_timeout_class_rates": _timeout_class_rates(results),
+                    }
+                    if _timeout_contention_class_on()
+                    else {}
+                ),
                 "eval_retrieval_compaction_count": len(retrieval_compaction_rows),
                 "eval_retrieval_compaction_rows": retrieval_compaction_rows,
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",

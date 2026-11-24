@@ -433,6 +433,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("chat_finish_reason", False, False, "CHAT_FINISH_REASON", "AEI-CHAT-FINISH-REASON: /chat response carries finish_reason and truncated from the backend completion_reason (default off; fields omitted when off)", env_on="1", env_off="0"),
     FeatureSpec("empty_output_vacuity_guard", False, False, "EMPTY_OUTPUT_VACUITY_GUARD", "Vacuity guard: an empty/whitespace model output with no tool calls fails at any elapsed time (empty_generation); the batch-edit verifier fails when nothing was verifiable/executed; FINAL('') is refused with a model-facing message and not labelled max-turns; batch-edit patch paths drop trailing #L<n>/:<n> suffixes (default off)", env_on="1", env_off="0"),
     FeatureSpec("truncation_narrowing_hint", False, False, "TRUNCATION_NARROWING_HINT", "AEI-TRUNC-NOTICE: the llm_call output-cap markers say how to get the rest (narrower request) instead of a bare '[... truncated at N chars]' (default off)", env_on="1", env_off="0"),
+    FeatureSpec("test_result_skip_aware", False, False, "TEST_RESULT_SKIP_AWARE", "HF-SKIPS: pytest runs parse passed/failed/skipped/xfailed + skip reasons from the FULL output; an all-skipped or zero-passed rc==0 run is inconclusive (cause 'skipped'), not passed (default off)", env_on="1", env_off="0"),
+    FeatureSpec("timeout_contention_class", False, False, "TIMEOUT_CONTENTION_CLASS", "HF-TIMEOUT-CLASS: label every eval timeout provenance row contention/model_slow/unknown from host covariates and report timeout rate per class; label only, no exclusion change (default off)", env_on="1", env_off="0"),
     FeatureSpec("delegation_untrusted_data_field", False, False, "DELEGATION_UNTRUSTED_DATA_FIELD", "AEI-LAUNDER-FIX-1: previous-turn REPL output/error and specialist reports travel in a delimited data block labelled as data, not interpolated into the child-role instruction (default off)", env_on="1", env_off="0"),
     FeatureSpec("http_post_guard", True, True, "HTTP_POST_GUARD", "SECURITY (AEI-HTTPPOST-GUARD): http_post refuses private, loopback, link-local and metadata destinations via the SEC-EXEC-3 web_guard check (ORCHESTRATOR_HTTP_POST_GUARD=0 is the kill switch); autopilot pinned, observe only", env_on="1", env_off="0"),
     FeatureSpec("repl_write_dedupe", True, True, "REPL_WRITE_DEDUPE", "REPL: an identical write call that already succeeded in this request is skipped, not re-run (ORCHESTRATOR_REPL_WRITE_DEDUPE=0 is the kill switch)", env_on="1", env_off="0"),
@@ -1000,6 +1002,8 @@ class Features:
     chat_finish_reason: bool = False  # AEI-CHAT-FINISH-REASON: finish_reason/truncated on /chat
     empty_output_vacuity_guard: bool = False  # empty output / unverified batch-edit / FINAL("") are failures
     truncation_narrowing_hint: bool = False  # AEI-TRUNC-NOTICE: output-cap markers carry a narrowing hint
+    test_result_skip_aware: bool = False  # HF-SKIPS: skipped/zero-passed pytest runs are inconclusive, not passed
+    timeout_contention_class: bool = False  # HF-TIMEOUT-CLASS: timeout rows labelled contention/model_slow/unknown
     delegation_untrusted_data_field: bool = False  # AEI-LAUNDER-FIX-1: untrusted text in a labelled data block, not the instruction
     http_post_guard: bool = True  # AEI-HTTPPOST-GUARD: http_post refuses non-global destinations
     repl_write_dedupe: bool = True
