@@ -73,7 +73,16 @@ def _itt_delta_text(eval_result: EvalResult, reference_details: Mapping[str, Any
         )
         if flag["scorer_dependent"]:
             text += "; SCORER-DEPENDENT: sign or significance differs, second-scorer rescore required before acting"
-        return text + "]"
+        text += "]"
+        from src.autopilot_core.drops_manifest import graded_fraction_flag
+
+        gf = graded_fraction_flag(reference_details, cand)
+        if gf.get("comparable") and gf["imbalanced"]:
+            text += (
+                f" [GRADED-FRACTION IMBALANCE: {gf['baseline_graded_fraction']:.3f} vs "
+                f"{gf['candidate_graded_fraction']:.3f}; the quality delta compares different graded subsets]"
+            )
+        return text
     except Exception:  # noqa: BLE001 - report text only
         return ""
 

@@ -1243,6 +1243,9 @@ from src.autopilot_core.measurement_guards import (  # noqa: E402
     measurement_disposition,
 )
 from src.autopilot_core.itt_quality import itt_counts  # noqa: E402  (EV-18)
+from src.autopilot_core.drops_manifest import (  # noqa: E402  (AEI-DROPS-MANIFEST)
+    drops_manifest as build_drops_manifest,
+)
 
 # ETR-1 (handoffs/active/eval-tower-loop-robustness-audit-2026-07-20.md,
 # operator ruling 2026-09-23): names the quality-denominator policy applied
@@ -6206,6 +6209,14 @@ class EvalTower:
             parse_failure_count=parse_failure_count,
             scoring_failed_count=scoring_failed_count,
         )
+        _sidecar = _question_sidecar_status(results) or {}
+        _drops_manifest = build_drops_manifest(
+            n_scheduled=max(total_count, _nonnegative_int(_sidecar.get("requested_n"), 0)),
+            n_attempted=total_count,
+            n_scored=n_scored,
+            infra_failed_reasons=infra_failed_reasons,
+            scoring_failed=scoring_failed_count,
+        )
         # `quality` is a plain float on the Pareto/SafetyGate contract and cannot
         # become None without breaking every consumer — so the honesty lives in
         # an explicit companion flag instead. With n_scored == 0 the 0.0 above is
@@ -6600,6 +6611,9 @@ class EvalTower:
                 "quality_itt": _itt["quality_itt"],
                 "itt_denominator": _itt["itt_denominator"],
                 "itt_unparseable_counted_as_failure": _itt["itt_unparseable_counted_as_failure"],
+                # AEI-DROPS-MANIFEST: what was dropped and the graded fraction, beside ITT.
+                "drops_manifest": _drops_manifest,
+                "graded_fraction": _drops_manifest["graded_fraction"],
                 "parse_failure_rate": parse_failure_rate,
                 # TD-21.9/21.10/21.15: judge-parse-outcome rollup, ALWAYS on
                 # (zero score effect, independent of `CONSTRAIN_JUDGE_OUTPUT`)
