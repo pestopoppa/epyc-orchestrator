@@ -29,6 +29,10 @@ from src.constants import (
 from src.delegation_reports import store_report
 from src.env_parsing import env_int as _env_int
 from src.exceptions import InferenceError
+from src.prompt_builders.untrusted_data import (
+    append_untrusted_data_field,
+    delegation_untrusted_data_field,
+)
 from src.security.control_tokens import neutralise_control_tokens
 from src.repl_environment import REPLEnvironment
 from src.repl_environment.child_lane import closes_lanes
@@ -122,6 +126,13 @@ def _run_architect_decision(
     for _aturn in range(4):  # Max 4 computation turns
         if _aturn == 0:
             full_prompt = prompt_text
+        elif delegation_untrusted_data_field():
+            # AEI-LAUNDER-FIX-1: the computation result rides in a labelled data block.
+            full_prompt = append_untrusted_data_field(
+                prompt_text,
+                [("computation result", arch_last_output)],
+                trailer="Now make your decision (D|answer or I|brief:...|to:role):",
+            )
         else:
             full_prompt = (
                 f"{prompt_text}\n\n"
@@ -1195,11 +1206,19 @@ def _architect_delegated_answer_inner(
             return full_reports[-1], stats
         # Force architect to synthesize with whatever we have
         log.warning(f"Architect delegation capped at {max_loops} loops, forcing synthesis")
-        forced_prompt = (
-            f"You MUST answer now. Synthesize from all available information.\n\n"
-            f"Question: {question[:2000]}\n\n"
-            f"Investigation reports:\n" + neutralise_control_tokens("\n---\n".join(reports[-3:]))  # Last 3 reports (CT-12.3c)
-        )
+        if delegation_untrusted_data_field():
+            # AEI-LAUNDER-FIX-1: the specialist reports ride in a labelled data block.
+            forced_prompt = append_untrusted_data_field(
+                f"You MUST answer now. Synthesize from all available information.\n\n"
+                f"Question: {question[:2000]}",
+                [("investigation reports (last 3)", "\n---\n".join(reports[-3:]))],
+            )
+        else:
+            forced_prompt = (
+                f"You MUST answer now. Synthesize from all available information.\n\n"
+                f"Question: {question[:2000]}\n\n"
+                f"Investigation reports:\n" + neutralise_control_tokens("\n---\n".join(reports[-3:]))  # Last 3 reports (CT-12.3c)
+            )
         try:
             answer = primitives.llm_call(
                 forced_prompt,

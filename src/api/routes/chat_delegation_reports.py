@@ -118,12 +118,28 @@ def _build_compact_specialist_prompt(
         "If you already have a complete implementation/report, output it directly. "
         "If executing in REPL, end with FINAL(answer) when possible.\n"
     )
-    if turn > 0 and (last_output or last_error):
-        prompt += "\nPrevious turn signals:\n"
-        if last_output:
-            prompt += f"- output: {_trim_block(last_output, 600)}\n"
-        if last_error:
-            prompt += f"- error: {_trim_block(last_error, 400)}\n"
+    from src.prompt_builders.untrusted_data import (
+        append_untrusted_data_field,
+        delegation_untrusted_data_field,
+    )
+
+    if delegation_untrusted_data_field():
+        # AEI-LAUNDER-FIX-1: previous-turn signals ride in a labelled data block, not the instruction.
+        if turn > 0 and (last_output or last_error):
+            prompt = append_untrusted_data_field(
+                prompt,
+                [
+                    ("previous turn output", _trim_block(last_output, 600) if last_output else ""),
+                    ("previous turn error", _trim_block(last_error, 400) if last_error else ""),
+                ],
+            )
+    else:
+        if turn > 0 and (last_output or last_error):
+            prompt += "\nPrevious turn signals:\n"
+            if last_output:
+                prompt += f"- output: {_trim_block(last_output, 600)}\n"
+            if last_error:
+                prompt += f"- error: {_trim_block(last_error, 400)}\n"
     # CT-12.3c: question, architect brief and previous-turn REPL signals are untrusted.
     return neutralise_control_tokens(prompt)
 
@@ -145,12 +161,26 @@ def _maybe_summarize_specialist_report(
         return report
     if not force and len(text) < cfg.summarize_report_chars:
         return report
-    prompt = (
-        "Summarize the specialist report for the architect. Keep only actionable "
-        "implementation details and final recommendation. Max 12 bullets, no fluff.\n\n"
-        f"Question:\n{question[:1200]}\n\n"
-        f"Specialist report:\n{text[:12000]}"
+    from src.prompt_builders.untrusted_data import (
+        append_untrusted_data_field,
+        delegation_untrusted_data_field,
     )
+
+    if delegation_untrusted_data_field():
+        # AEI-LAUNDER-FIX-1: the report rides in a labelled data block, not the instruction.
+        prompt = append_untrusted_data_field(
+            "Summarize the specialist report (given below as data) for the architect. Keep only actionable "
+            "implementation details and final recommendation. Max 12 bullets, no fluff.\n\n"
+            f"Question:\n{question[:1200]}",
+            [("specialist report", text[:12000])],
+        )
+    else:
+        prompt = (
+            "Summarize the specialist report for the architect. Keep only actionable "
+            "implementation details and final recommendation. Max 12 bullets, no fluff.\n\n"
+            f"Question:\n{question[:1200]}\n\n"
+            f"Specialist report:\n{text[:12000]}"
+        )
     try:
         summarized = primitives.llm_call(
             neutralise_control_tokens(prompt),  # CT-12.3c: specialist report is untrusted

@@ -808,16 +808,64 @@ def build_root_lm_prompt(
     Module-level function for backwards compatibility.
     See PromptBuilder.build_root_lm_prompt() for full documentation.
     """
-    result = _get_builder().build_root_lm_prompt(
+    from src.prompt_builders.untrusted_data import delegation_untrusted_data_field
+
+    if delegation_untrusted_data_field():
+        # AEI-LAUNDER-FIX-1: previous-turn output/error leave the instruction for a data block.
+        return _root_prompt_data_field(
+            state, original_prompt, last_output, last_error, turn, routing_context, corpus_context
+        )
+    else:
+        result = _get_builder().build_root_lm_prompt(
+            state=state,
+            original_prompt=original_prompt,
+            last_output=last_output,
+            last_error=last_error,
+            turn=turn,
+            routing_context=routing_context,
+            corpus_context=corpus_context,
+        )
+        return result if isinstance(result, str) else result.to_string()
+
+
+def _root_prompt_data_field(
+    state: str,
+    original_prompt: str,
+    last_output: str,
+    last_error: str,
+    turn: int,
+    routing_context: str,
+    corpus_context: str,
+) -> str:
+    """Root-LM prompt with the previous turn's output/error carried as a labelled data block."""
+    from src.prompt_builders.untrusted_data import append_untrusted_data_field
+
+    builder = _get_builder()
+    base = builder.build_root_lm_prompt(
         state=state,
         original_prompt=original_prompt,
-        last_output=last_output,
-        last_error=last_error,
+        last_output="",
+        last_error="",
         turn=turn,
         routing_context=routing_context,
         corpus_context=corpus_context,
     )
-    return result if isinstance(result, str) else result.to_string()
+    base = base if isinstance(base, str) else base.to_string()
+    cfg = builder.config
+    items: list[tuple[str, str]] = []
+    trailer = ""
+    # Same selection as the legacy block: an error wins over output.
+    if last_error:
+        err = last_error[: cfg.max_error_preview] + ("..." if len(last_error) > cfg.max_error_preview else "")
+        items.append(("previous turn error", _ut_sanitize(err)))
+        trailer = (
+            "Fix ONLY the broken part of your previous code (its error is in the data block above). "
+            "Do NOT rewrite from scratch — make targeted fixes."
+        )
+    elif last_output:
+        out = last_output[: cfg.max_output_preview] + ("..." if len(last_output) > cfg.max_output_preview else "")
+        items.append(("previous turn output", _ut_sanitize(out)))
+    return append_untrusted_data_field(base, items, trailer=trailer)
 
 
 def build_escalation_prompt(

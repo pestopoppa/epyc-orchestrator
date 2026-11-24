@@ -205,6 +205,7 @@ flags:
   usage_root_capture: baseline
   chat_finish_reason: baseline
   truncation_narrowing_hint: baseline
+  delegation_untrusted_data_field: baseline
   http_post_guard: baseline
   ure_uncertainty_shadow_log: baseline
   user_modeling: baseline

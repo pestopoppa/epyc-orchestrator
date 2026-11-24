@@ -285,17 +285,36 @@ def build_architect_synthesis_prompt(
     else:
         investigate_option = "\nDo NOT delegate or request further investigation. Answer now.\n"
 
-    report_section = report[:6000]
-    if report_section and _architect_boundary_on():
-        # CT-21: the template ends its header with "Specialist Report:", so the sentence
-        # opens the substituted block, directly above the report text.
-        report_section = f"{ARCHITECT_REPORT_BOUNDARY_SENTENCE}\n\n{report_section}"
+    from src.prompt_builders.untrusted_data import (
+        append_untrusted_data_field,
+        delegation_untrusted_data_field,
+    )
 
-    # CT-12.3c: the specialist report is delegated sub-task output (untrusted).
-    return _ct_neutralise(resolve_prompt(
-        "architect_synthesis",
-        _ARCHITECT_SYNTHESIS_FALLBACK,
-        investigate_option=investigate_option,
-        question=_apply_ceiling(question, ARCHITECT_QUESTION_CEILING_CHARS, "question"),  # HS-4-PB-TRUNC
-        report=report_section,
-    ))
+    if delegation_untrusted_data_field():
+        # AEI-LAUNDER-FIX-1: the report leaves the instruction; the template carries a pointer to
+        # the labelled data block appended after it.
+        return append_untrusted_data_field(
+            _ct_neutralise(resolve_prompt(
+                "architect_synthesis",
+                _ARCHITECT_SYNTHESIS_FALLBACK,
+                investigate_option=investigate_option,
+                question=_apply_ceiling(question, ARCHITECT_QUESTION_CEILING_CHARS, "question"),  # HS-4-PB-TRUNC
+                report="[the specialist report is in the data block 'specialist report' below]",
+            )),
+            [("specialist report", report[:6000])],
+        )
+    else:
+        report_section = report[:6000]
+        if report_section and _architect_boundary_on():
+            # CT-21: the template ends its header with "Specialist Report:", so the sentence
+            # opens the substituted block, directly above the report text.
+            report_section = f"{ARCHITECT_REPORT_BOUNDARY_SENTENCE}\n\n{report_section}"
+
+        # CT-12.3c: the specialist report is delegated sub-task output (untrusted).
+        return _ct_neutralise(resolve_prompt(
+            "architect_synthesis",
+            _ARCHITECT_SYNTHESIS_FALLBACK,
+            investigate_option=investigate_option,
+            question=_apply_ceiling(question, ARCHITECT_QUESTION_CEILING_CHARS, "question"),  # HS-4-PB-TRUNC
+            report=report_section,
+        ))

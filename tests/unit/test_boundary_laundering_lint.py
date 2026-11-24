@@ -17,6 +17,16 @@ requires every site to be in exactly one of three buckets:
   green today and a NEW violation fails. Fixing these is follow-up work; do NOT
   silence a new site by adding it here without a ticket.
 
+AEI-LAUNDER-FIX-1: the lint is flag-aware. Behind ``delegation_untrusted_data_field`` the
+untrusted text travels in a labelled data block (``append_untrusted_data_field``), not the
+instruction. The scan therefore runs in two views of the same source: ``flag_on`` keeps the
+flag-on branches (``if delegation_untrusted_data_field():``) and must have EMPTY
+``KNOWN_VIOLATIONS``; ``flag_off`` keeps the legacy branches and must match
+``FLAG_OFF_VIOLATIONS`` (the default behaviour, kept byte-identical; delete the registry and the
+legacy branches together when the flag becomes the default). A call whose name contains
+``data_field`` is the sanctioned carrier (taint stops there); in the flag-on view the
+prompt builders in ``_DATA_FIELD_BUILDERS`` are carriers too (their own returns are still scanned).
+
 Stale allowlist entries (site no longer exists / no longer flagged) fail too.
 This is a heuristic (names, one function at a time): it cannot see taint that
 crosses a function boundary under an innocuous name. Run with ``-s`` to print the
@@ -72,6 +82,35 @@ _COUNT_PREFIX = re.compile(r"^(n|num|max|min|len|count)_", re.I)
 _BUILDER_RE = re.compile(r"^_?build_\w*prompt\w*$")
 
 
+# AEI-LAUNDER-FIX-1 flag awareness.
+_FLAG_FN = "delegation_untrusted_data_field"
+_DATA_FIELD_RE = re.compile(r"data_field")  # sanctioned carrier: the untrusted text rides in a data block
+_DATA_FIELD_BUILDERS = {"build_root_lm_prompt", "_build_compact_specialist_prompt"}  # carriers when the flag is on
+
+
+def _is_flag_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and _callee_name(node) == _FLAG_FN
+
+
+def _prune_flag(tree: ast.AST, flag_on: bool) -> ast.AST:
+    """Keep only the branches live for ``flag_on`` of every ``if [not] delegation_untrusted_data_field():``."""
+
+    class _P(ast.NodeTransformer):
+        def visit_If(self, node: ast.If):
+            node = self.generic_visit(node)  # type: ignore[assignment]
+            t = node.test
+            if _is_flag_call(t):
+                keep = node.body if flag_on else node.orelse
+            elif isinstance(t, ast.UnaryOp) and isinstance(t.op, ast.Not) and _is_flag_call(t.operand):
+                keep = node.orelse if flag_on else node.body
+            else:
+                return node
+            return keep or ast.Pass()
+
+    out = _P().visit(tree)
+    return ast.fix_missing_locations(out)
+
+
 def _is_untrusted_name(name: str) -> bool:
     if _COUNT_PREFIX.match(name):  # n_chunks, max_reports: counts, not content
         return False
@@ -95,7 +134,8 @@ class Site:
 
 # --- analysis ----------------------------------------------------------------
 class _FuncAnalyzer:
-    def __init__(self, fn: ast.AST):
+    def __init__(self, fn: ast.AST, flag_on: bool | None = None):
+        self.flag_on = flag_on
         self.assigns: dict[str, list[ast.AST]] = {}
         for node in ast.walk(fn):
             if isinstance(node, ast.Assign):
@@ -132,6 +172,9 @@ class _FuncAnalyzer:
         if isinstance(expr, ast.Subscript):
             return self.taint(expr.value, seen) + self.taint(expr.slice, seen)
         if isinstance(expr, ast.Call):
+            _cn = _callee_name(expr) or ""
+            if _DATA_FIELD_RE.search(_cn) or (self.flag_on and _cn in _DATA_FIELD_BUILDERS):
+                return out  # untrusted text is carried in a labelled data block (AEI-LAUNDER-FIX-1)
             for a in expr.args:
                 out += self.taint(a.value if isinstance(a, ast.Starred) else a, seen)
             for k in expr.keywords:
@@ -202,12 +245,14 @@ def _own_calls(fn: ast.AST):
         stack.extend(ast.iter_child_nodes(n))
 
 
-def analyze_source(source: str, rel: str) -> list[Site]:
+def analyze_source(source: str, rel: str, flag_on: bool | None = None) -> list[Site]:
     tree = ast.parse(source)
+    if flag_on is not None:
+        tree = _prune_flag(tree, flag_on)
     sites: list[Site] = []
     for qual, fn in _iter_functions(tree):
         if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and _BUILDER_RE.match(fn.name):
-            an = _FuncAnalyzer(fn)
+            an = _FuncAnalyzer(fn, flag_on)
             rets = [
                 n
                 for n in ast.walk(fn)
@@ -223,7 +268,7 @@ def analyze_source(source: str, rel: str) -> list[Site]:
         )
         if not calls:
             continue
-        an = _FuncAnalyzer(fn)
+        an = _FuncAnalyzer(fn, flag_on)
         counts: dict[str, int] = {}
         for c in calls:
             callee = _callee_name(c) or "?"
@@ -240,13 +285,13 @@ def analyze_source(source: str, rel: str) -> list[Site]:
     return sites
 
 
-def collect_sites() -> list[Site]:
+def collect_sites(flag_on: bool | None = None) -> list[Site]:
     sites: list[Site] = []
     for root in SCAN_ROOTS:
         for p in sorted((REPO / root).rglob("*.py")):
             rel = p.relative_to(REPO).as_posix()
             try:
-                sites += analyze_source(p.read_text(encoding="utf-8"), rel)
+                sites += analyze_source(p.read_text(encoding="utf-8"), rel, flag_on)
             except SyntaxError:
                 continue
     return sites
@@ -258,7 +303,7 @@ ALLOWLIST: dict[str, str] = {}
 
 # Real violations at the time of writing (see report). Reason = the laundering path.
 _M = " Mitigation today: neutralise_control_tokens (CT-12.3c) strips control tokens only; the text still carries instruction authority."
-KNOWN_VIOLATIONS: dict[str, str] = {
+FLAG_OFF_VIOLATIONS: dict[str, str] = {
     "src/api/routes/chat.py::chat_stream.generate::llm_call#1": (
         "root_prompt embeds previous-turn REPL output/error (build_root_lm_prompt last_output/last_error) in the root-LM instruction."
     ),
@@ -290,7 +335,11 @@ KNOWN_VIOLATIONS: dict[str, str] = {
         "specialist report substituted into the architect synthesis template; CT-21 adds a boundary sentence (flag-gated) but the report is still in the instruction."
     ),
 }
-KNOWN_VIOLATIONS = {k: v + _M for k, v in KNOWN_VIOLATIONS.items()}
+FLAG_OFF_VIOLATIONS = {k: v + _M for k, v in FLAG_OFF_VIOLATIONS.items()}
+
+# AEI-LAUNDER-FIX-1: every site above is fixed behind ``delegation_untrusted_data_field``; each entry
+# was deleted from this registry as its site moved to a data block. Empty under the flag.
+KNOWN_VIOLATIONS: dict[str, str] = {}
 
 
 # --- self-tests of the linter -------------------------------------------------
@@ -337,9 +386,34 @@ def test_lint_forwarder_is_not_a_violation():
     assert s.verdict == "forwarder"
 
 
+def test_lint_flag_views_and_data_field_carrier():
+    src = (
+        "def f(p, tool_output):\n"
+        "    if delegation_untrusted_data_field():\n"
+        "        prompt = append_untrusted_data_field('Summarise.', [('d', tool_output)])\n"
+        "    else:\n"
+        "        prompt = f'Summarise: {tool_output}'\n"
+        "    return p.llm_call(prompt, role='worker')\n"
+    )
+    assert [s.verdict for s in analyze_source(src, "x.py", flag_on=True)] == ["clean"]
+    assert [s.verdict for s in analyze_source(src, "x.py", flag_on=False)] == ["violation"]
+    assert [s.verdict for s in analyze_source(src, "x.py")] == ["violation"]  # unpruned: legacy branch still seen
+
+
 # --- the repository check -----------------------------------------------------
-def test_every_delegation_call_site_is_classified(capsys):
-    sites = collect_sites()
+def test_every_delegation_call_site_is_classified_flag_on(capsys):
+    """Under delegation_untrusted_data_field: KNOWN_VIOLATIONS is empty and no site is flagged."""
+    assert KNOWN_VIOLATIONS == {}
+    _check_view(capsys, True, KNOWN_VIOLATIONS)
+
+
+def test_every_delegation_call_site_is_classified_flag_off(capsys):
+    """Default behaviour (legacy branches): exactly the recorded legacy violations."""
+    _check_view(capsys, False, FLAG_OFF_VIOLATIONS)
+
+
+def _check_view(capsys, flag_on, KNOWN_VIOLATIONS):
+    sites = collect_sites(flag_on)
     assert sites, "no delegation call sites found: scanner is vacuous"
 
     rows: list[tuple[str, str, str]] = []
