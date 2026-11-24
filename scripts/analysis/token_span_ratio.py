@@ -13,7 +13,8 @@ counts or a zero root is reported with a named ``status`` and ``ratio = null``.
 Usage:
     token_span_ratio.py --ledger usage_provenance.jsonl --root roots.json [--field completion_tokens]
 
-``roots.json`` maps request_id -> {"output_tokens_reported": int|null, "prompt_tokens": int|null}.
+``--root`` is either ``roots.json`` or the ``usage_roots.jsonl`` written by the ``usage_root_capture``
+flag (AEI-TOKEN-ROOT-CAPTURE). ``roots.json`` maps request_id -> {"output_tokens_reported": int|null, "prompt_tokens": int|null}.
 """
 
 from __future__ import annotations
@@ -88,6 +89,33 @@ def check(
     return {"field": field, "n_requests": len(per_request), "summary": dict(summary), "requests": per_request}
 
 
+ROOT_SCHEMA = "epyc.request_root_usage.v1"
+
+
+def load_roots(path: str) -> dict[str, dict[str, Any]]:
+    """Read ``--root``: a roots.json mapping, or the ``usage_roots.jsonl`` the usage_root_capture
+    flag writes beside the ledger (one ``epyc.request_root_usage.v1`` row per request; last wins)."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    try:
+        loaded = json.loads(text)
+        if isinstance(loaded, dict) and loaded.get("schema") != ROOT_SCHEMA:
+            return loaded
+        rows = [loaded]
+    except ValueError:
+        rows = []
+        for line in text.splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    return {
+        str(r["request_id"]): {k: r.get(k) for k in ("prompt_tokens", "output_tokens_reported", "path")}
+        for r in rows
+        if isinstance(r, dict) and r.get("schema") == ROOT_SCHEMA and r.get("request_id")
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--ledger", required=True)
@@ -96,8 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     with open(args.ledger, encoding="utf-8") as fh:
         rows = [json.loads(line) for line in fh if line.strip()]
-    with open(args.root, encoding="utf-8") as fh:
-        roots = json.load(fh)
+    roots = load_roots(args.root)
     report = check(rows, roots, field=args.field)
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

@@ -359,6 +359,16 @@ async def chat(
                 content=response.model_dump(),
                 headers=headers or None,
             )
+        # AEI-TOKEN-ROOT-CAPTURE: one root-token row per completed request (flag off: no-op).
+        try:
+            from src.llm_primitives.usage_root import path_tag, record_root
+
+            record_root(
+                request.request_id, response.prompt_tokens, response.output_tokens_reported,
+                path_tag(response.routed_to),
+            )
+        except Exception:
+            log.warning("usage root capture failed", exc_info=True)
         handler_outcome = "completed"
         return response
     except asyncio.CancelledError:
