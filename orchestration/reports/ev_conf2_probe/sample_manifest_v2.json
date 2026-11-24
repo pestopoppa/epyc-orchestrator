@@ -1,0 +1,2351 @@
+{
+  "draw": "random.Random(seed).sample(sorted(ids)) wrong then right, then shuffle; v2 labels, pooled wrong set",
+  "e7c_dataset_sha256": "38e582cf652f1ecfea8e8f9704d7b08120920da41d789c0478c2dbfc2ab6fa91",
+  "n_right": 100,
+  "n_wrong": 65,
+  "pool_sizes": {
+    "right_pool": 1625,
+    "wrong_pool_any_arm": 65,
+    "wrong_primary_arm_only": 47
+  },
+  "rows": [
+    {
+      "e7c_answer_hash": "2391985cdd6bbbf0",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 537,
+      "e7c_tokens_generated": 460,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 0,
+      "qid": "72cb7123dd34e9fb",
+      "question_id": "gsm8k_00537",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "55a081681554a8ea",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 817,
+      "e7c_tokens_generated": 150,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 1,
+      "qid": "790063f25da8d379",
+      "question_id": "gsm8k_00817",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "30bf69d76d0ad129",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 791,
+      "e7c_tokens_generated": 200,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 2,
+      "qid": "ce6b4b749d799a66",
+      "question_id": "gsm8k_00791",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "cba8d6be9e92e5ee",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1061,
+      "e7c_tokens_generated": 435,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 3,
+      "qid": "ffaa6167d898aa23",
+      "question_id": "gsm8k_01061",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "bb0bcc95a841f2e7",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 552,
+      "e7c_tokens_generated": 652,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 4,
+      "qid": "453a865eebacb627",
+      "question_id": "gsm8k_00552",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "b04c3b7f227a7f48",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 339,
+      "e7c_tokens_generated": 309,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 5,
+      "qid": "e21b2ebe5a8e92fc",
+      "question_id": "gsm8k_00339",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a52d2049530f9e53",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 515,
+      "e7c_tokens_generated": 247,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 6,
+      "qid": "c300340123820f56",
+      "question_id": "gsm8k_00515",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a569f34e3137eef5",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 244,
+      "e7c_tokens_generated": 443,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 7,
+      "qid": "aa7195b3080f91de",
+      "question_id": "gsm8k_00244",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "0179db90778430a4",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1733,
+      "e7c_tokens_generated": 579,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 8,
+      "qid": "43d84ab714ff9770",
+      "question_id": "math500_Algebra_00414",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "4dd478dd4adff931",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 409,
+      "e7c_tokens_generated": 988,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 9,
+      "qid": "072ad42e5edb8c7b",
+      "question_id": "gsm8k_00409",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "6c990786f52669c5",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 118,
+      "e7c_tokens_generated": 363,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 10,
+      "qid": "9e5ef734b2400342",
+      "question_id": "gsm8k_00118",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "1c91c6f0a188a06b",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 346,
+      "e7c_tokens_generated": 297,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 11,
+      "qid": "bfc72d1b9d37b578",
+      "question_id": "gsm8k_00346",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "62cb531f5045a11b",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 782,
+      "e7c_tokens_generated": 782,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 12,
+      "qid": "98fa2666f1ad9fd0",
+      "question_id": "gsm8k_00782",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "b5c559ee33ab7fb2",
+      "e7c_confidence": 0.999983,
+      "e7c_correct": true,
+      "e7c_ordinal": 1799,
+      "e7c_tokens_generated": 805,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 13,
+      "qid": "0b0e47d243664d45",
+      "question_id": "math500_Precalculus_00480",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "8ee2dfba19ad4c36",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1288,
+      "e7c_tokens_generated": 395,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 14,
+      "qid": "4a4a067a1cf8a888",
+      "question_id": "gsm8k_01288",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "eda503a3945e65b6",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 806,
+      "e7c_tokens_generated": 463,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 15,
+      "qid": "84cffec146f14dee",
+      "question_id": "gsm8k_00806",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "18078bdff4b03e16",
+      "e7c_confidence": 0.999805,
+      "e7c_correct": false,
+      "e7c_ordinal": 1604,
+      "e7c_tokens_generated": 1042,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 16,
+      "qid": "95e54e90e92145f6",
+      "question_id": "math500_Intermediate Algebra_00285",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general"
+      ]
+    },
+    {
+      "e7c_answer_hash": "10cfb0e16597be06",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 812,
+      "e7c_tokens_generated": 581,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 17,
+      "qid": "56019f7ecd3f4796",
+      "question_id": "gsm8k_00812",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "7c4448dee5ae6dfc",
+      "e7c_confidence": 0.999992,
+      "e7c_correct": true,
+      "e7c_ordinal": 193,
+      "e7c_tokens_generated": 321,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 18,
+      "qid": "007579dc5db667eb",
+      "question_id": "gsm8k_00193",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a58fb90a8ffc6419",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 93,
+      "e7c_tokens_generated": 565,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 19,
+      "qid": "5e45c940757f7640",
+      "question_id": "gsm8k_00093",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "c2a3394c103ce668",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1017,
+      "e7c_tokens_generated": 266,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 20,
+      "qid": "a812f7e383676d35",
+      "question_id": "gsm8k_01017",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general"
+      ]
+    },
+    {
+      "e7c_answer_hash": "00b52e946fda672e",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 693,
+      "e7c_tokens_generated": 361,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 21,
+      "qid": "df0ddb2a9411052a",
+      "question_id": "gsm8k_00693",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "8670f00bd74ceee3",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1217,
+      "e7c_tokens_generated": 407,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 22,
+      "qid": "806bc1180f6a88c0",
+      "question_id": "gsm8k_01217",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "4efc36ca45af2e17",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1324,
+      "e7c_tokens_generated": 305,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 23,
+      "qid": "b69176cc881076c2",
+      "question_id": "math500_Prealgebra_00005",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "9747d874c268ae62",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 777,
+      "e7c_tokens_generated": 521,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 24,
+      "qid": "51192bae6a862609",
+      "question_id": "gsm8k_00777",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "d3337c8b1eaf22f6",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1688,
+      "e7c_tokens_generated": 1190,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 25,
+      "qid": "d56e38a7179b67cb",
+      "question_id": "math500_Prealgebra_00369",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "c22a3fd86911d927",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 325,
+      "e7c_tokens_generated": 482,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 26,
+      "qid": "736c7890a281e9cf",
+      "question_id": "gsm8k_00325",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "821941eaf490b648",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1155,
+      "e7c_tokens_generated": 261,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 27,
+      "qid": "470cd0f70b9f1ccf",
+      "question_id": "gsm8k_01155",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "1567284ee246b9f2",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1059,
+      "e7c_tokens_generated": 303,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 28,
+      "qid": "f24e51ccf25d072a",
+      "question_id": "gsm8k_01059",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "d681e984917e8031",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 823,
+      "e7c_tokens_generated": 306,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 29,
+      "qid": "381a3e1133c88df5",
+      "question_id": "gsm8k_00823",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "b0f8783c77a1de4d",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1048,
+      "e7c_tokens_generated": 465,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 30,
+      "qid": "83e0f3d1b9be14c1",
+      "question_id": "gsm8k_01048",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "3559d8067b56a384",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 916,
+      "e7c_tokens_generated": 348,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 31,
+      "qid": "7fe2bb8bd6e78fc2",
+      "question_id": "gsm8k_00916",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "3f513dbb944c8439",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 353,
+      "e7c_tokens_generated": 710,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 32,
+      "qid": "672c80b7464f9f5e",
+      "question_id": "gsm8k_00353",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "ba43732274365e18",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 450,
+      "e7c_tokens_generated": 301,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 33,
+      "qid": "002259374785704b",
+      "question_id": "gsm8k_00450",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a76c847009570bfd",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 989,
+      "e7c_tokens_generated": 331,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 34,
+      "qid": "3485f3b7f90315d1",
+      "question_id": "gsm8k_00989",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "1c6956e9c753343a",
+      "e7c_confidence": 0.99959,
+      "e7c_correct": false,
+      "e7c_ordinal": 611,
+      "e7c_tokens_generated": 150,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 35,
+      "qid": "47011f0717ad3d87",
+      "question_id": "gsm8k_00611",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a1455407ccc7545e",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1161,
+      "e7c_tokens_generated": 405,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 36,
+      "qid": "c4fe1a1b85cdca5b",
+      "question_id": "gsm8k_01161",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "cb75d0ba3191b0c4",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 24,
+      "e7c_tokens_generated": 509,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 37,
+      "qid": "360168569cac9d92",
+      "question_id": "gsm8k_00024",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "d83b3e185f2ffb17",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1512,
+      "e7c_tokens_generated": 1135,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 38,
+      "qid": "6db073a1e3cb53d1",
+      "question_id": "math500_Intermediate Algebra_00193",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "fda2cd0d8d0880a8",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1405,
+      "e7c_tokens_generated": 258,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 39,
+      "qid": "8d440b4a4fe16a13",
+      "question_id": "math500_Prealgebra_00086",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "127ef40a97ccbad9",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1176,
+      "e7c_tokens_generated": 1330,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 40,
+      "qid": "d3921151fc1bce70",
+      "question_id": "gsm8k_01176",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general"
+      ]
+    },
+    {
+      "e7c_answer_hash": "86c7666f4f551ecd",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 970,
+      "e7c_tokens_generated": 181,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 41,
+      "qid": "f9712665c19fe671",
+      "question_id": "gsm8k_00970",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "350dad593e813446",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 471,
+      "e7c_tokens_generated": 320,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 42,
+      "qid": "a645ebdfa250a2d6",
+      "question_id": "gsm8k_00471",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "b66585c1bb54897f",
+      "e7c_confidence": 0.999993,
+      "e7c_correct": true,
+      "e7c_ordinal": 294,
+      "e7c_tokens_generated": 209,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 43,
+      "qid": "ff9427f777690482",
+      "question_id": "gsm8k_00294",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "e9350e4a134d0ac9",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 652,
+      "e7c_tokens_generated": 273,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 44,
+      "qid": "fec10ee095839382",
+      "question_id": "gsm8k_00652",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "5e387d1a4865b0cb",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1309,
+      "e7c_tokens_generated": 310,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 45,
+      "qid": "598b5cb08a1a89f5",
+      "question_id": "gsm8k_01309",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "1495b86ad73a918c",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 454,
+      "e7c_tokens_generated": 221,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 46,
+      "qid": "4824721b7bb0503e",
+      "question_id": "gsm8k_00454",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "657ea7ffce5f93b5",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1603,
+      "e7c_tokens_generated": 2048,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 47,
+      "qid": "f2a8ac95826d9f3a",
+      "question_id": "math500_Precalculus_00284",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general"
+      ]
+    },
+    {
+      "e7c_answer_hash": "7e30a8ada2714ef4",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 140,
+      "e7c_tokens_generated": 284,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 48,
+      "qid": "8d8e7ec794be7160",
+      "question_id": "gsm8k_00140",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "6c48b2dd214225d2",
+      "e7c_confidence": 0.999716,
+      "e7c_correct": false,
+      "e7c_ordinal": 1622,
+      "e7c_tokens_generated": 959,
+      "metadata_arm": "ev11-worker_math",
+      "probe_ordinal": 49,
+      "qid": "32eafd8d52b732da",
+      "question_id": "math500_Geometry_00303",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "eba6db10e7f1a14c",
+      "e7c_confidence": 0.999997,
+      "e7c_correct": true,
+      "e7c_ordinal": 1189,
+      "e7c_tokens_generated": 233,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 50,
+      "qid": "b267c3dddac41207",
+      "question_id": "gsm8k_01189",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "f9b462ec33425b79",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 406,
+      "e7c_tokens_generated": 313,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 51,
+      "qid": "6bb49d0fda0f71d7",
+      "question_id": "gsm8k_00406",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "b506e22ac4e1091a",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 524,
+      "e7c_tokens_generated": 209,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 52,
+      "qid": "08d004b82f069569",
+      "question_id": "gsm8k_00524",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a7426a1e54bac711",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1196,
+      "e7c_tokens_generated": 204,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 53,
+      "qid": "f2201c8c2ebbb500",
+      "question_id": "gsm8k_01196",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "4e4e948062156365",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 673,
+      "e7c_tokens_generated": 300,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 54,
+      "qid": "c2912885e1889757",
+      "question_id": "gsm8k_00673",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "deacd2b4f11c1078",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 453,
+      "e7c_tokens_generated": 268,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 55,
+      "qid": "5d688d3a96dd60d9",
+      "question_id": "gsm8k_00453",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "266c9efe83dff52b",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1319,
+      "e7c_tokens_generated": 460,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 56,
+      "qid": "deca0a911b2a3c2f",
+      "question_id": "math500_Precalculus_00000",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "1962ea630515f6ee",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 903,
+      "e7c_tokens_generated": 333,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 57,
+      "qid": "2704424c37f47d45",
+      "question_id": "gsm8k_00903",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "fb650a57f183186f",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 335,
+      "e7c_tokens_generated": 218,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 58,
+      "qid": "da86c6c382f11967",
+      "question_id": "gsm8k_00335",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "ef3911795e1bddae",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 491,
+      "e7c_tokens_generated": 205,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 59,
+      "qid": "ff52d5730bcb23d8",
+      "question_id": "gsm8k_00491",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "fa55913407c387ad",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1275,
+      "e7c_tokens_generated": 268,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 60,
+      "qid": "4e625b84581211ce",
+      "question_id": "gsm8k_01275",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "b8b1aa19655a5e73",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 814,
+      "e7c_tokens_generated": 450,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 61,
+      "qid": "de217c85f3fd9dc5",
+      "question_id": "gsm8k_00814",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "b0b7eab244df6029",
+      "e7c_confidence": 0.999997,
+      "e7c_correct": true,
+      "e7c_ordinal": 860,
+      "e7c_tokens_generated": 275,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 62,
+      "qid": "35867fe6d1dd7b79",
+      "question_id": "gsm8k_00860",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "3713a1ecd551c027",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1135,
+      "e7c_tokens_generated": 233,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 63,
+      "qid": "1c7dc3e4e233ffe6",
+      "question_id": "gsm8k_01135",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "bbf69d82398d3b10",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 566,
+      "e7c_tokens_generated": 355,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 64,
+      "qid": "8b01e6287f9ba28a",
+      "question_id": "gsm8k_00566",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "8c8ee5f5a03f4ef8",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 296,
+      "e7c_tokens_generated": 348,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 65,
+      "qid": "ca08dc60a5e58977",
+      "question_id": "gsm8k_00296",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "5ef0b3a62ccda136",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1306,
+      "e7c_tokens_generated": 441,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 66,
+      "qid": "02a9175600c33f3a",
+      "question_id": "gsm8k_01306",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "0117ecf2a881fc4a",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1145,
+      "e7c_tokens_generated": 406,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 67,
+      "qid": "2c1900362d91ae73",
+      "question_id": "gsm8k_01145",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "2c48c196a16599eb",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 835,
+      "e7c_tokens_generated": 734,
+      "metadata_arm": "ev11-worker_math",
+      "probe_ordinal": 68,
+      "qid": "a777ecb5e72312eb",
+      "question_id": "gsm8k_00835",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "f25da5063553a948",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1074,
+      "e7c_tokens_generated": 212,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 69,
+      "qid": "bdfbff3399bc17ed",
+      "question_id": "gsm8k_01074",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "0453fc2fa8cec4c3",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 232,
+      "e7c_tokens_generated": 231,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 70,
+      "qid": "3f9fbc6a0b708caa",
+      "question_id": "gsm8k_00232",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "3af17504bb3596e5",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 67,
+      "e7c_tokens_generated": 291,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 71,
+      "qid": "0de241b7a8793735",
+      "question_id": "gsm8k_00067",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "728ae70dcbc4efd4",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1665,
+      "e7c_tokens_generated": 689,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 72,
+      "qid": "778e67c0b88ebc81",
+      "question_id": "math500_Algebra_00346",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "871133742cf3a942",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 234,
+      "e7c_tokens_generated": 278,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 73,
+      "qid": "b5e6ba2b950aac6c",
+      "question_id": "gsm8k_00234",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "e0a6785961e2d679",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 952,
+      "e7c_tokens_generated": 383,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 74,
+      "qid": "2f25e16c5c28421a",
+      "question_id": "gsm8k_00952",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "c7e61051bdbb44f5",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1278,
+      "e7c_tokens_generated": 287,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 75,
+      "qid": "a71a227fe2f7dd0c",
+      "question_id": "gsm8k_01278",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "bb6b12cb405dccda",
+      "e7c_confidence": 0.999997,
+      "e7c_correct": true,
+      "e7c_ordinal": 237,
+      "e7c_tokens_generated": 146,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 76,
+      "qid": "33d1cb53f68b2fbb",
+      "question_id": "gsm8k_00237",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "13331828f94dd0d0",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 725,
+      "e7c_tokens_generated": 277,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 77,
+      "qid": "3679a2e837a2ac4f",
+      "question_id": "gsm8k_00725",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "10214a9e1439d3ec",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": false,
+      "e7c_ordinal": 241,
+      "e7c_tokens_generated": 263,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 78,
+      "qid": "b0f3759bf1ab538c",
+      "question_id": "gsm8k_00241",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "1e53089ae47a7cfa",
+      "e7c_confidence": 0.999994,
+      "e7c_correct": true,
+      "e7c_ordinal": 675,
+      "e7c_tokens_generated": 323,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 79,
+      "qid": "57d7f3cb1fe2dd61",
+      "question_id": "gsm8k_00675",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "f2900eda971609e7",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 182,
+      "e7c_tokens_generated": 725,
+      "metadata_arm": "ev11-worker_math",
+      "probe_ordinal": 80,
+      "qid": "06a0e8568c9cf19b",
+      "question_id": "gsm8k_00182",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "5071cc61aa046623",
+      "e7c_confidence": 0.999998,
+      "e7c_correct": true,
+      "e7c_ordinal": 340,
+      "e7c_tokens_generated": 382,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 81,
+      "qid": "530bdc8517ac4551",
+      "question_id": "gsm8k_00340",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "792ac61e03e71a58",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 984,
+      "e7c_tokens_generated": 553,
+      "metadata_arm": "ev11-worker_math",
+      "probe_ordinal": 82,
+      "qid": "ce6f291bd9609b34",
+      "question_id": "gsm8k_00984",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "ab138393b92427a8",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1279,
+      "e7c_tokens_generated": 294,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 83,
+      "qid": "35adba6f4a10f84d",
+      "question_id": "gsm8k_01279",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "277563359d780581",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 528,
+      "e7c_tokens_generated": 439,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 84,
+      "qid": "e920bd6338169d7f",
+      "question_id": "gsm8k_00528",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "57692c88778940fa",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1035,
+      "e7c_tokens_generated": 488,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 85,
+      "qid": "12e33fc2c5d245aa",
+      "question_id": "gsm8k_01035",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "4fed2d29dff14938",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 347,
+      "e7c_tokens_generated": 272,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 86,
+      "qid": "50f1dd30c95950cd",
+      "question_id": "gsm8k_00347",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "0ee12725b1364a64",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 757,
+      "e7c_tokens_generated": 378,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 87,
+      "qid": "86fb562875d7b1af",
+      "question_id": "gsm8k_00757",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "fb04db1117244a02",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 62,
+      "e7c_tokens_generated": 939,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 88,
+      "qid": "9f328b94589fed5a",
+      "question_id": "gsm8k_00062",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "4a60d244a54add69",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1534,
+      "e7c_tokens_generated": 591,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 89,
+      "qid": "e696b360dbfbd142",
+      "question_id": "math500_Algebra_00215",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "1b44ee70531a8e6d",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1697,
+      "e7c_tokens_generated": 605,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 90,
+      "qid": "1eb78b3cd3a9bf18",
+      "question_id": "math500_Prealgebra_00378",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "b2db0d709badb9a9",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 214,
+      "e7c_tokens_generated": 530,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 91,
+      "qid": "5ba3c4aa37bb0bee",
+      "question_id": "gsm8k_00214",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "8598bcc811f54f84",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 562,
+      "e7c_tokens_generated": 317,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 92,
+      "qid": "878f782ed3f1126e",
+      "question_id": "gsm8k_00562",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "7e9f7d8c99e8b556",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 119,
+      "e7c_tokens_generated": 1083,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 93,
+      "qid": "7a290c3015140964",
+      "question_id": "gsm8k_00119",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "14408934c8b30adc",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 12,
+      "e7c_tokens_generated": 522,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 94,
+      "qid": "61e34a32979e1add",
+      "question_id": "gsm8k_00012",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "714c659313d96610",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 213,
+      "e7c_tokens_generated": 299,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 95,
+      "qid": "cf5713cde5f2cb22",
+      "question_id": "gsm8k_00213",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "2dfa49693d66d2b8",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 572,
+      "e7c_tokens_generated": 388,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 96,
+      "qid": "2ba7166b2d16b680",
+      "question_id": "gsm8k_00572",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "137fc27327291647",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1095,
+      "e7c_tokens_generated": 419,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 97,
+      "qid": "62b5428e37fbbf2c",
+      "question_id": "gsm8k_01095",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "fd200487b8ad9822",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 825,
+      "e7c_tokens_generated": 470,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 98,
+      "qid": "7773d758306bbf0c",
+      "question_id": "gsm8k_00825",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "727d8cee7e5b5c72",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 849,
+      "e7c_tokens_generated": 278,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 99,
+      "qid": "631e5c4045eb1778",
+      "question_id": "gsm8k_00849",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "214926f3e9cd3015",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1151,
+      "e7c_tokens_generated": 230,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 100,
+      "qid": "7277069069b528dd",
+      "question_id": "gsm8k_01151",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "554803cdd11e7160",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1698,
+      "e7c_tokens_generated": 488,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 101,
+      "qid": "0c95a96b1d338faa",
+      "question_id": "math500_Prealgebra_00379",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "38d9c37e00f3e995",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 151,
+      "e7c_tokens_generated": 390,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 102,
+      "qid": "a1e7848f9ac862b3",
+      "question_id": "gsm8k_00151",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "0781ecf850af6d48",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 576,
+      "e7c_tokens_generated": 402,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 103,
+      "qid": "e54af39066178ed9",
+      "question_id": "gsm8k_00576",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a1ae4881bbcea1bd",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1001,
+      "e7c_tokens_generated": 365,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 104,
+      "qid": "f6ab0c2b1b338059",
+      "question_id": "gsm8k_01001",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "bde4c3155a833292",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1003,
+      "e7c_tokens_generated": 363,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 105,
+      "qid": "0fd21c7389724be7",
+      "question_id": "gsm8k_01003",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "eafcab8152876d1b",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1629,
+      "e7c_tokens_generated": 489,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 106,
+      "qid": "d524bf188f220962",
+      "question_id": "math500_Algebra_00310",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a8a9c8b1cd3f8658",
+      "e7c_confidence": 0.999993,
+      "e7c_correct": true,
+      "e7c_ordinal": 457,
+      "e7c_tokens_generated": 243,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 107,
+      "qid": "d5937218fec3fac9",
+      "question_id": "gsm8k_00457",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a2c8eef4eb4abb4b",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1413,
+      "e7c_tokens_generated": 1264,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 108,
+      "qid": "1ae2c23841d9a7a8",
+      "question_id": "math500_Prealgebra_00094",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "2fd896f10801e60c",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 779,
+      "e7c_tokens_generated": 486,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 109,
+      "qid": "f30c78d57bce56f1",
+      "question_id": "gsm8k_00779",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "560bf9fb5b10e5e8",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1533,
+      "e7c_tokens_generated": 475,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 110,
+      "qid": "bc38d2317a2a05fa",
+      "question_id": "math500_Counting & Probability_00214",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "0073e5dccb1ab5d5",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": false,
+      "e7c_ordinal": 1042,
+      "e7c_tokens_generated": 444,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 111,
+      "qid": "435920c7ced980b1",
+      "question_id": "gsm8k_01042",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "caddf591eb8321c7",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 306,
+      "e7c_tokens_generated": 406,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 112,
+      "qid": "a07fdf400f7c8fc8",
+      "question_id": "gsm8k_00306",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "1d6170d4ad2f5aee",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 187,
+      "e7c_tokens_generated": 497,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 113,
+      "qid": "9eb77ad10e4891db",
+      "question_id": "gsm8k_00187",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a52b00be6b94d270",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 135,
+      "e7c_tokens_generated": 306,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 114,
+      "qid": "b56e776be420517f",
+      "question_id": "gsm8k_00135",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a0167d393b3b762e",
+      "e7c_confidence": 0.999998,
+      "e7c_correct": false,
+      "e7c_ordinal": 255,
+      "e7c_tokens_generated": 255,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 115,
+      "qid": "77d3e523919cfba1",
+      "question_id": "gsm8k_00255",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "da4f33460f459a2d",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 85,
+      "e7c_tokens_generated": 340,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 116,
+      "qid": "5d42518c4301aae8",
+      "question_id": "gsm8k_00085",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "18b1cfdd0bcdc8fc",
+      "e7c_confidence": 0.99989,
+      "e7c_correct": false,
+      "e7c_ordinal": 1646,
+      "e7c_tokens_generated": 1469,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 117,
+      "qid": "16df9fed3ce98571",
+      "question_id": "math500_Intermediate Algebra_00327",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general"
+      ]
+    },
+    {
+      "e7c_answer_hash": "5a1115999a1fc218",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 813,
+      "e7c_tokens_generated": 277,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 118,
+      "qid": "206828e45f1bf848",
+      "question_id": "gsm8k_00813",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "03a4b26b3b2f7797",
+      "e7c_confidence": 0.999993,
+      "e7c_correct": true,
+      "e7c_ordinal": 981,
+      "e7c_tokens_generated": 255,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 119,
+      "qid": "41510c9533e7f064",
+      "question_id": "gsm8k_00981",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "3650c9c7acd8098f",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1226,
+      "e7c_tokens_generated": 639,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 120,
+      "qid": "68ce9f7a3f503fb5",
+      "question_id": "gsm8k_01226",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a565b98d5a67e032",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 990,
+      "e7c_tokens_generated": 713,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 121,
+      "qid": "edfa76f11978f2bd",
+      "question_id": "gsm8k_00990",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "958cc4cf82d3c579",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 364,
+      "e7c_tokens_generated": 264,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 122,
+      "qid": "7ebc8b6468f737e8",
+      "question_id": "gsm8k_00364",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "734e46e9563b6427",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1528,
+      "e7c_tokens_generated": 613,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 123,
+      "qid": "d3e3f4db72804d0e",
+      "question_id": "math500_Number Theory_00209",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "cf2cc29006d9b0b5",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1252,
+      "e7c_tokens_generated": 368,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 124,
+      "qid": "bf4b0a68e9b3575e",
+      "question_id": "gsm8k_01252",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "96bb0912914ed9d5",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1349,
+      "e7c_tokens_generated": 413,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 125,
+      "qid": "50c2271b9edc2df7",
+      "question_id": "math500_Number Theory_00030",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "89ebde293e129a5f",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1589,
+      "e7c_tokens_generated": 349,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 126,
+      "qid": "62370169656107d0",
+      "question_id": "math500_Algebra_00270",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "b5fcb9a6bc9901c2",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 831,
+      "e7c_tokens_generated": 790,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 127,
+      "qid": "242c56b17b43801c",
+      "question_id": "gsm8k_00831",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "019a9119cd2cd28d",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 768,
+      "e7c_tokens_generated": 270,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 128,
+      "qid": "15c84d72b853dc21",
+      "question_id": "gsm8k_00768",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "f1234e0b2f307c31",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1813,
+      "e7c_tokens_generated": 1315,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 129,
+      "qid": "ea5bf8e97d01d2d5",
+      "question_id": "math500_Intermediate Algebra_00494",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "7d4ca31fecec287d",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 627,
+      "e7c_tokens_generated": 316,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 130,
+      "qid": "64e9f9568da94adf",
+      "question_id": "gsm8k_00627",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "d9bb0831e6914778",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 649,
+      "e7c_tokens_generated": 334,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 131,
+      "qid": "09f95d0d321a135b",
+      "question_id": "gsm8k_00649",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "47c65845d7c78738",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1205,
+      "e7c_tokens_generated": 382,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 132,
+      "qid": "2eca829685e97395",
+      "question_id": "gsm8k_01205",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "a1d631455c1c79f4",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1499,
+      "e7c_tokens_generated": 433,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 133,
+      "qid": "558e056964494206",
+      "question_id": "math500_Prealgebra_00180",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "9ae0e808afbfdf3c",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1067,
+      "e7c_tokens_generated": 408,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 134,
+      "qid": "417cf9a11680d9f8",
+      "question_id": "gsm8k_01067",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "10e380183bbf40ac",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1163,
+      "e7c_tokens_generated": 696,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 135,
+      "qid": "e89254a0a10f1b7a",
+      "question_id": "gsm8k_01163",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "d3dd9dc4160f3605",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1363,
+      "e7c_tokens_generated": 445,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 136,
+      "qid": "0e988f4191e241a7",
+      "question_id": "math500_Prealgebra_00044",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "d20acfc65e635cd2",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 951,
+      "e7c_tokens_generated": 391,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 137,
+      "qid": "6946c0c8c254bd06",
+      "question_id": "gsm8k_00951",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "97e4c6b5bb9788a7",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 798,
+      "e7c_tokens_generated": 1013,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 138,
+      "qid": "f1771e0acff18fdd",
+      "question_id": "gsm8k_00798",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "1bc17b522486ce75",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1360,
+      "e7c_tokens_generated": 1000,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 139,
+      "qid": "684aaa7364cf20df",
+      "question_id": "math500_Geometry_00041",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "f901eda4e06a6241",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 672,
+      "e7c_tokens_generated": 991,
+      "metadata_arm": "ev11-worker_math",
+      "probe_ordinal": 140,
+      "qid": "f991fc663ee6ac09",
+      "question_id": "gsm8k_00672",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "22a6caeed5d07efb",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 590,
+      "e7c_tokens_generated": 273,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 141,
+      "qid": "b3135a1a785b15de",
+      "question_id": "gsm8k_00590",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a5e2597cd4ac5220",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1488,
+      "e7c_tokens_generated": 571,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 142,
+      "qid": "188bf4ee83b2acf3",
+      "question_id": "math500_Geometry_00169",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "28b01ac48c3773ee",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1618,
+      "e7c_tokens_generated": 475,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 143,
+      "qid": "b8c6461c02ce163d",
+      "question_id": "math500_Geometry_00299",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "aca663eca3f2949c",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 749,
+      "e7c_tokens_generated": 336,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 144,
+      "qid": "2c1ef589d8ef3914",
+      "question_id": "gsm8k_00749",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "d706abad4bc90a30",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 380,
+      "e7c_tokens_generated": 599,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 145,
+      "qid": "5d7f024f3eb76891",
+      "question_id": "gsm8k_00380",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "6ad89604b476a71a",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1254,
+      "e7c_tokens_generated": 344,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 146,
+      "qid": "461126b377770559",
+      "question_id": "gsm8k_01254",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "f4fcb36039456256",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1531,
+      "e7c_tokens_generated": 505,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 147,
+      "qid": "8e87dcadec7e0722",
+      "question_id": "math500_Algebra_00212",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "27aaa4f6e2618d75",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 929,
+      "e7c_tokens_generated": 284,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 148,
+      "qid": "21c38a437ca640c6",
+      "question_id": "gsm8k_00929",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "d0f525b400b5c4c3",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 100,
+      "e7c_tokens_generated": 394,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 149,
+      "qid": "5d9be6de55cf420f",
+      "question_id": "gsm8k_00100",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "227526dd79b7f0ee",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1443,
+      "e7c_tokens_generated": 551,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 150,
+      "qid": "ecf66e3926c2bd31",
+      "question_id": "math500_Algebra_00124",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "9898756928330abf",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 962,
+      "e7c_tokens_generated": 238,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 151,
+      "qid": "5c7fcef12d588d8c",
+      "question_id": "gsm8k_00962",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a5bfac2b0ef2d73b",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 1558,
+      "e7c_tokens_generated": 1768,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 152,
+      "qid": "391a87e79f145121",
+      "question_id": "math500_Geometry_00239",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "630d951041c3f964",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": false,
+      "e7c_ordinal": 1555,
+      "e7c_tokens_generated": 2048,
+      "metadata_arm": "ev11-worker_math",
+      "probe_ordinal": 153,
+      "qid": "cc390b046f6d79a5",
+      "question_id": "math500_Precalculus_00236",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "a7924d876e55f5fd",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 403,
+      "e7c_tokens_generated": 356,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 154,
+      "qid": "2a7c9fc1608d05e4",
+      "question_id": "gsm8k_00403",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "97f3a885140ffaba",
+      "e7c_confidence": 0.999997,
+      "e7c_correct": true,
+      "e7c_ordinal": 1419,
+      "e7c_tokens_generated": 953,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 155,
+      "qid": "16578cec141c2128",
+      "question_id": "math500_Geometry_00100",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "94ee4418d842df54",
+      "e7c_confidence": 0.999999,
+      "e7c_correct": true,
+      "e7c_ordinal": 1595,
+      "e7c_tokens_generated": 755,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 156,
+      "qid": "5c460e8df17b573b",
+      "question_id": "math500_Algebra_00276",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "242fdb74c3b4161c",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 570,
+      "e7c_tokens_generated": 296,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 157,
+      "qid": "69dce6d8ca513c4d",
+      "question_id": "gsm8k_00570",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "3633ada04dd87a29",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 1019,
+      "e7c_tokens_generated": 383,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 158,
+      "qid": "e3c23921811b4223",
+      "question_id": "gsm8k_01019",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "496eb2bfbfe1526f",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 772,
+      "e7c_tokens_generated": 361,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 159,
+      "qid": "9a238a74f05cdaa7",
+      "question_id": "gsm8k_00772",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "22ab7251c1711d88",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 423,
+      "e7c_tokens_generated": 1155,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 160,
+      "qid": "d8f65003500f35dd",
+      "question_id": "gsm8k_00423",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "626735f6e7d1f26b",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 856,
+      "e7c_tokens_generated": 315,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 161,
+      "qid": "8f382c83923ae1e4",
+      "question_id": "gsm8k_00856",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "e2f7a240bb97bc0f",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 594,
+      "e7c_tokens_generated": 216,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 162,
+      "qid": "5e91b54d0e32b03c",
+      "question_id": "gsm8k_00594",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    },
+    {
+      "e7c_answer_hash": "67f0529e7b9839a7",
+      "e7c_confidence": 1.0,
+      "e7c_correct": false,
+      "e7c_ordinal": 368,
+      "e7c_tokens_generated": 269,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 163,
+      "qid": "eebf9af26189e200",
+      "question_id": "gsm8k_00368",
+      "stratum": "v2_wrong",
+      "v2_wrong_in_arms": [
+        "ev11-worker_general",
+        "ev11-worker_math"
+      ]
+    },
+    {
+      "e7c_answer_hash": "c7fd7efa82612adc",
+      "e7c_confidence": 1.0,
+      "e7c_correct": true,
+      "e7c_ordinal": 303,
+      "e7c_tokens_generated": 428,
+      "metadata_arm": "ev11-worker_general",
+      "probe_ordinal": 164,
+      "qid": "e16123910c0e5a55",
+      "question_id": "gsm8k_00303",
+      "stratum": "v2_right",
+      "v2_wrong_in_arms": []
+    }
+  ],
+  "sample_sha256": "e42594f43bb9b52b23164b39c3aeba90026765b100aa6e012eabd46b6bf161f6",
+  "schema": "epyc.ev_conf2_probe_manifest.v2",
+  "scorer": "strict_finals_v2_20261124",
+  "seed": 42,
+  "source_accuracy": 0.9721,
+  "source_replay": {
+    "path": "orchestration/reports/eval_tower_math_rebaseline_E7c_replay_scorer_v2/replay.jsonl",
+    "sha256": "800442de723f2d3a304c98dd861e727628b2b6113b0468fc2c922872898a5cea"
+  },
+  "source_role": "worker_general",
+  "source_scored": 1684,
+  "source_sidecars": {
+    "ev11-worker_general": {
+      "path": "orchestration/reports/eval_tower_math_rebaseline_E7c/question_results.ev11-worker_general.jsonl",
+      "sha256": "5705081e2b285b1ab6e1e9588f6566317853088c5727c19a4fad00d1e1919cab"
+    },
+    "ev11-worker_math": {
+      "path": "orchestration/reports/eval_tower_math_rebaseline_E7c/question_results.ev11-worker_math.jsonl",
+      "sha256": "50ece19a75f3c0bb1ee0e850705b7f13c35eb1df48f7b63460511cd6b255fdc1"
+    }
+  }
+}

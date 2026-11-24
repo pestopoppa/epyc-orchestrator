@@ -213,6 +213,30 @@ def test_real_e7c_manifest_draws_100_100() -> None:
     assert len({r["qid"] for r in m["rows"]}) == 200
 
 
+def test_v2_manifest_is_drawn_from_v2_labels_and_matches_committed_file() -> None:
+    e7c = cp.DEFAULT_E7C_SIDECAR.parent
+    replay = e7c.parent / (e7c.name + "_replay_scorer_v2") / "replay.jsonl"
+    committed = cp.DEFAULT_OUT_DIR / "sample_manifest_v2.json"
+    if not (cp.DEFAULT_E7C_SIDECAR.exists() and replay.exists() and committed.exists()):
+        pytest.skip("E7c sidecars / v2 replay / v2 manifest not present")
+    m = cp.build_manifest_v2(
+        sidecars={
+            "ev11-worker_general": cp.DEFAULT_E7C_SIDECAR,
+            "ev11-worker_math": e7c / "question_results.ev11-worker_math.jsonl",
+        },
+        replay=replay, summary=cp.DEFAULT_E7C_SUMMARY, n_wrong=None, n_right=100, seed=42,
+    )
+    assert m["sample_sha256"] == json.loads(committed.read_text())["sample_sha256"]
+    assert m["source_accuracy"] == 0.9721
+    assert m["pool_sizes"] == {"wrong_pool_any_arm": 65, "wrong_primary_arm_only": 47, "right_pool": 1625}
+    assert sum(r["stratum"] == "v2_wrong" for r in m["rows"]) == 65
+    labels = cp.load_replay_labels(replay)
+    for r in m["rows"]:  # strata are v2-only and disjoint
+        wrong = bool(r["v2_wrong_in_arms"])
+        assert wrong == (r["stratum"] == "v2_wrong")
+        assert labels[(r["metadata_arm"], r["question_id"])] == r["e7c_correct"]
+
+
 # ── request shape ─────────────────────────────────────────────────────────
 
 

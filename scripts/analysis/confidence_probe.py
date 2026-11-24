@@ -273,6 +273,93 @@ def build_manifest(
     }
 
 
+MANIFEST_SCHEMA_V2 = "epyc.ev_conf2_probe_manifest.v2"
+
+
+def load_replay_labels(path: Path) -> dict[tuple[str, str], bool]:
+    """``(label, question_id) -> v2 replayed verdict`` from a scorer-replay ``replay.jsonl``."""
+    out: dict[tuple[str, str], bool] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            r = json.loads(line)
+            out[(str(r["label"]), str(r["question_id"]))] = bool(r["replayed"])
+    return out
+
+
+def build_manifest_v2(
+    *,
+    sidecars: Mapping[str, Path],
+    replay: Path,
+    summary: Path | None,
+    n_wrong: int | None,
+    n_right: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Re-draw the probe sample from v2 (replayed) labels.
+
+    ``sidecars`` maps replay label -> E7c sidecar; the FIRST entry is the primary arm
+    (worker_general: the arm whose prevalence is reweighted and whose metadata rows carry).
+    The wrong stratum is pooled: a question is wrong when ANY arm scores it wrong under v2.
+    The right stratum is right in the primary arm and wrong in no arm, so strata are disjoint.
+    Questions the primary arm errored on take their metadata from the first arm that scored
+    them. ``n_wrong=None`` takes the whole pool. Same seeded draw as v1 (``draw_stratified``).
+    """
+    labels = load_replay_labels(replay)
+    per_arm = {lab: load_e7c_outcomes(p) for lab, p in sidecars.items()}
+    primary = next(iter(sidecars))
+    wrong_in: dict[str, list[str]] = {}
+    for lab, outs in per_arm.items():
+        for qn in outs:
+            if not labels[(lab, qn)]:
+                wrong_in.setdefault(qn, []).append(lab)
+    pooled: dict[str, dict[str, Any]] = {}
+    for qn, o in per_arm[primary].items():
+        pooled[qn] = {**o, "correct": qn not in wrong_in, "meta_arm": primary}
+    for qn, labs in wrong_in.items():
+        if qn not in pooled:
+            src = labs[0]
+            pooled[qn] = {**per_arm[src][qn], "correct": False, "meta_arm": src}
+    n_w_pool = sum(1 for v in pooled.values() if not v["correct"])
+    rows = draw_stratified(
+        pooled, n_wrong=n_w_pool if n_wrong is None else n_wrong, n_right=n_right, seed=seed
+    )
+    for r in rows:
+        qn = r["question_id"]
+        r["stratum"] = "v2_wrong" if r["stratum"] == "e7c_wrong" else "v2_right"
+        r["v2_wrong_in_arms"] = sorted(wrong_in.get(qn, []))
+        r["metadata_arm"] = pooled[qn]["meta_arm"]
+        # run_probe reads e7c_correct: here it is the v2 label in the metadata arm.
+        r["e7c_correct"] = bool(labels[(pooled[qn]["meta_arm"], qn)])
+    dataset_sha = None
+    if summary is not None and summary.exists():
+        dataset_sha = (json.loads(summary.read_text()).get("result") or {}).get("dataset_sha256")
+    prim = per_arm[primary]
+    n_ok = sum(1 for qn in prim if labels[(primary, qn)])
+    return {
+        "schema": MANIFEST_SCHEMA_V2,
+        "scorer": "strict_finals_v2_20261124",
+        "source_replay": {"path": _rel(replay), "sha256": _sha256_file(replay)},
+        "source_sidecars": {
+            lab: {"path": _rel(p), "sha256": _sha256_file(p)} for lab, p in sidecars.items()
+        },
+        "source_role": "worker_general",
+        "source_scored": len(prim),
+        "source_accuracy": round(n_ok / len(prim), 4),
+        "pool_sizes": {
+            "wrong_pool_any_arm": n_w_pool,
+            "wrong_primary_arm_only": sum(1 for qn in prim if not labels[(primary, qn)]),
+            "right_pool": sum(1 for v in pooled.values() if v["correct"]),
+        },
+        "e7c_dataset_sha256": dataset_sha,
+        "seed": seed,
+        "n_wrong": sum(1 for r in rows if r["stratum"] == "v2_wrong"),
+        "n_right": n_right,
+        "draw": "random.Random(seed).sample(sorted(ids)) wrong then right, then shuffle; v2 labels, pooled wrong set",
+        "sample_sha256": sample_digest(rows),
+        "rows": rows,
+    }
+
+
 def _rel(path: Path) -> str:
     try:
         return str(Path(path).resolve().relative_to(REPO_ROOT))
@@ -280,9 +367,11 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
-def ensure_manifest(out_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+def ensure_manifest(
+    out_dir: Path, manifest: dict[str, Any], name: str = "sample_manifest.json"
+) -> dict[str, Any]:
     """Write the manifest, or verify that an existing one draws the identical sample."""
-    path = out_dir / "sample_manifest.json"
+    path = out_dir / name
     if path.exists():
         existing = json.loads(path.read_text())
         if existing.get("sample_sha256") != manifest["sample_sha256"]:
@@ -838,6 +927,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--questions-jsonl", type=Path, default=None)
     ap.add_argument("--allow-dataset-drift", action="store_true")
     ap.add_argument("--manifest-only", action="store_true", help="draw and write the sample; no inference")
+    ap.add_argument("--replay", type=Path, default=None, help="v2 replay.jsonl: draw from v2 labels (v2 manifest)")
+    ap.add_argument("--also-sidecar", type=Path, default=None, help="second arm sidecar to pool wrong rows (with --replay)")
+    ap.add_argument("--manifest-name", default=None, help="manifest filename in --out-dir")
     ap.add_argument("--print-recipes", action="store_true", help="print the GPU launch recipes and exit")
     args = ap.parse_args(argv)
 
@@ -847,15 +939,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"# arm {arm}\n{rec['launch']}\n{rec['probe']}\n")
         return EXIT_OK
     try:
-        manifest = ensure_manifest(
-            args.out_dir,
-            build_manifest(
+        if args.replay is not None:
+            sidecars = {"ev11-worker_general": args.e7c_sidecar}
+            if args.also_sidecar is not None:
+                sidecars["ev11-worker_math"] = args.also_sidecar
+            built = build_manifest_v2(
+                sidecars=sidecars,
+                replay=args.replay,
+                summary=args.e7c_summary,
+                n_wrong=None,
+                n_right=args.n_right,
+                seed=args.seed,
+            )
+        else:
+            built = build_manifest(
                 sidecar=args.e7c_sidecar,
                 summary=args.e7c_summary,
                 n_wrong=args.n_wrong,
                 n_right=args.n_right,
                 seed=args.seed,
-            ),
+            )
+        manifest = ensure_manifest(
+            args.out_dir, built, args.manifest_name or "sample_manifest.json"
         )
         if args.manifest_only:
             print(json.dumps({k: v for k, v in manifest.items() if k != "rows"}, indent=2, sort_keys=True))
