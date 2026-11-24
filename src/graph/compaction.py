@@ -200,11 +200,22 @@ _FAILED_ACTION_RE = re.compile(
     r"|^\s*(?:\[?tool[^\n\]]*\]?\s*)?(?:error|fatal|failed)\b"
     r"|\b\w*(?:error|exception)\s*:"
     r"|\btool (?:call )?failed\b"
-    r"|\bcommand not found\b|\bno such file or directory\b|\bpermission denied\b)"
+    r"|\bcommand not found\b|\bno such file or directory\b|\bpermission denied\b"
+    # Real shape from the BEP sandbox traces (HAR-COMPACT-LEDGER-1 replay): the loop guard's refusal
+    # "** LOOP HALTED ** You just emitted the SAME action with no progress" is a failed action.
+    r"|\bloop halted\b)"
 )
+
+_FILE_EXTS = r"(?:py|md|json|jsonl|yaml|yml|toml|sh|txt|gguf|cfg|ini|csv|sqlite)"
 
 _PINNED_RES = (
     re.compile(r"(?<![\w/.])/(?:[\w.\-+@]+/)+[\w.\-+@]+"),  # absolute paths
+    # Replay-found shapes (BEP sandbox traces): a root-level absolute path ('/shapes.py'), a relative path
+    # with a directory ('tests/unit/test_mod.py'), and a bare file name ('tax.py'), none of which the
+    # absolute-path pattern matches. The lookbehinds keep URL tails ('http://host/a.py') out.
+    re.compile(r"(?<![\w/.:\-])/[\w\-+@]+\.%s\b" % _FILE_EXTS),
+    re.compile(r"(?<![\w/.:\-])(?:[\w.\-+@]+/)+[\w\-+@]+\.%s\b" % _FILE_EXTS),
+    re.compile(r"(?<![\w/.:\-])[\w\-+@]+\.%s\b" % _FILE_EXTS),
     re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),  # UUIDs
     re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"),  # hex digests / commit ids (at least one a-f)
     re.compile(r"\b[A-Z][A-Z0-9]{1,}(?:-[A-Za-z0-9]+)+\b"),  # ticket / box ids

@@ -109,6 +109,44 @@ def test_blocks_are_bounded():
     assert len(extract_failed_actions(old)) == 50
 
 
+# --- extractor gaps found by the retained-trajectory replay (scripts/har_compact_ledger_replay.py) ---
+# Snippets are verbatim from data/bep_sandbox/*/traces/*.jsonl (TOC-SP-5 corpus).
+
+REAL_LOOP_HALT = (
+    "** LOOP HALTED ** You just emitted the SAME action with no progress. STOP repeating it. "
+    "Do NOT peek/read again - you already have what you need."
+)
+
+
+def test_real_loop_halted_is_a_failed_action():
+    assert extract_failed_actions("noise\n" + REAL_LOOP_HALT + "\nnoise") == [REAL_LOOP_HALT]
+
+
+@pytest.mark.parametrize(
+    "snippet, expected",
+    [
+        ("peek(99999, file_path='/shapes.py')", "/shapes.py"),  # root-level absolute path
+        ('peek(1000, file_path="tax.py")', "tax.py"),  # bare file name
+        ('{"path": "pkg/new.py", "operation": "create"}', "pkg/new.py"),  # relative path
+        ('"postconditions": ["pytest tests/unit/test_mod.py passes"]', "tests/unit/test_mod.py"),
+        ('peek(99999, file_path="/mnt/raid0/llm/tmp/report.py")', "/mnt/raid0/llm/tmp/report.py"),
+    ],
+)
+def test_real_path_shapes_are_pinned(snippet, expected):
+    assert expected in extract_pinned_tokens(snippet)
+
+
+def test_url_tail_is_not_a_path():
+    toks = extract_pinned_tokens("GET http://localhost:8102/v1/models.json ok")
+    assert "models.json" not in toks and "/v1/models.json" not in toks
+
+
+def test_real_path_and_halt_survive_compaction():
+    old = "peek(99999, file_path='/shapes.py')\n" + REAL_LOOP_HALT + "\n" + FILLER + "\n" + "tail line\n" * 400
+    out = apply_integrity(old, "[Recent Context]\n" + old[-500:])
+    assert REAL_LOOP_HALT in out and "/shapes.py" in out
+
+
 def test_flag_defaults_off():
     from src.features import Features
 
