@@ -202,6 +202,9 @@ flags:
   typed_decisions_validate_first: baseline
   unified_streaming: baseline
   untrusted_tool_text: baseline
+  chat_finish_reason: baseline
+  truncation_narrowing_hint: baseline
+  http_post_guard: baseline
   ure_uncertainty_shadow_log: baseline
   user_modeling: baseline
   v1_client_session_guard: baseline

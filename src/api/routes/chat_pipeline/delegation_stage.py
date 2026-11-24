@@ -11,6 +11,7 @@ import time
 from collections import Counter
 
 from src.api.models import ChatRequest, ChatResponse
+from src.api.routes.chat_pipeline.finish_reason import finish_reason_fields
 from src.api.routes.chat_delegation import _architect_delegated_answer
 from src.api.routes.chat_pipeline.telemetry import (
     llm_completion_meta,
@@ -319,4 +320,5 @@ def _execute_delegated(
         skills_retrieved=len(routing.skill_ids),
         skill_ids=routing.skill_ids,
         web_research_results=web_research_results,
+        **finish_reason_fields(primitives),
     )

@@ -36,7 +36,8 @@ STRATEGY_STORE_CHECKPOINT = "strategy_store"
 #: AP-BSV2-RIGOR-PIN: the BSV-2 accept gate and its R1-R5 rigor extension are pinned for a different reason (not
 #: security): they decide what the proposer's own mutations are judged by, so the proposer must not flip them.
 PINNED_OBSERVE_ONLY_FLAGS: frozenset[str] = frozenset(
-    {"exec_containment", "untrusted_tool_text", "autopilot_bsv2_accept_gate", "autopilot_bsv2_accept_rigor"}
+    {"exec_containment", "untrusted_tool_text", "http_post_guard",
+     "autopilot_bsv2_accept_gate", "autopilot_bsv2_accept_rigor"}
 )
 
 AUTOPILOT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"

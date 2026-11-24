@@ -29,6 +29,19 @@ from src.roles import Role
 from src.workload_model import infer_workload_class
 
 
+def _truncation_notice(cap: int) -> str:
+    """AEI-TRUNC-NOTICE: the marker appended when an llm_call result exceeds ``output_cap``.
+
+    Flag off (``truncation_narrowing_hint``): the bare legacy marker. Flag on: the marker also
+    says how to get the rest, matching the REPL spill footer's peek/grep hint. The cut text is
+    not kept anywhere, so the way to the rest is a narrower request, not a file.
+    """
+    from src.features import features as _get_features
+
+    hint = "; the rest was not kept: re-ask for a narrower part (one section, a shorter answer or a smaller n_tokens), or have the call write to a file and use peek/grep on it" if _get_features().truncation_narrowing_hint else ""
+    return f"\n[... truncated at {cap} chars{hint}]"
+
+
 _NO_PROMPT_USAGE_ATTEMPT = object()
 _NO_OUTPUT_USAGE_ATTEMPT = object()
 
@@ -1264,7 +1277,7 @@ class LLMPrimitives(
             if len(result) > self.config.output_cap:
                 result = (
                     result[: self.config.output_cap]
-                    + f"\n[... truncated at {self.config.output_cap} chars]"
+                    + _truncation_notice(self.config.output_cap)
                 )
 
             log_entry.result = result[:500]  # Truncate for log
@@ -1406,7 +1419,7 @@ class LLMPrimitives(
                 if len(result) > self.config.output_cap:
                     result = (
                         result[: self.config.output_cap]
-                        + f"\n[... truncated at {self.config.output_cap} chars]"
+                        + _truncation_notice(self.config.output_cap)
                     )
                 capped_results.append(result)
 
@@ -1526,7 +1539,7 @@ class LLMPrimitives(
                 if len(result) > self.config.output_cap:
                     result = (
                         result[: self.config.output_cap]
-                        + f"\n[... truncated at {self.config.output_cap} chars]"
+                        + _truncation_notice(self.config.output_cap)
                     )
                 capped_results.append(result)
 

@@ -73,6 +73,8 @@ HOT_SWAP_FEATURES = {
     "repl_turn_memory", "codemode_prompt_v2", "codemode_stubs", "repl_tool_search",
     "structured_read_only", "repl_classify", "repl_handles", "repl_write_dedupe",
     "pdf_route_lighton", "l3_textrow",
+    # AEI-CHAT-FINISH-REASON / AEI-TRUNC-NOTICE. http_post_guard is a security flag: ABSENT, pinned observe-only.
+    "chat_finish_reason", "truncation_narrowing_hint",
     # REPL harness-robustness guards (default off): see FeatureSpec comments in src/features.py.
     "repl_syntax_loop_breaker", "repl_plan_narration_nudge", "harness_failure_ratio_guard",
     # Prefix-cache layout (default off): read per prompt build / per turn-memory add via features().

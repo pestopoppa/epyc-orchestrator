@@ -12,6 +12,7 @@ import re
 import time
 
 from src.api.models import ChatRequest, ChatResponse
+from src.api.routes.chat_pipeline.finish_reason import finish_reason_fields
 from src.api.routes.chat_utils import (
     QWEN_STOP,
     RoutingResult,
@@ -314,4 +315,5 @@ def _execute_direct_with_budget(
         http_overhead_ms=primitives.total_http_overhead_ms,
         skills_retrieved=len(routing.skill_ids),
         skill_ids=routing.skill_ids,
+        **finish_reason_fields(primitives),
     )

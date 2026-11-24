@@ -428,6 +428,9 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("repl_classify", False, False, "REPL_CLASSIFY", "CM-4: classify / route_classify / risk_bands / q_scores in the REPL (per-session item budget ORCHESTRATOR_REPL_CLASSIFY_BUDGET)", env_on="1", env_off="0"),
     FeatureSpec("repl_handles", False, False, "REPL_HANDLES", "CM-5: store / load / handles (branch-replayed handle store) in the REPL; turns replay recording on by default while on", env_on="1", env_off="0"),
     FeatureSpec("untrusted_tool_text", True, True, "UNTRUSTED_TOOL_TEXT", "SECURITY: label, defang and cap UNTRUSTED tool text before it re-enters model context (ORCHESTRATOR_UNTRUSTED_TOOL_TEXT=0 is the kill switch); autopilot pinned, observe only", env_on="1", env_off="0"),
+    FeatureSpec("chat_finish_reason", False, False, "CHAT_FINISH_REASON", "AEI-CHAT-FINISH-REASON: /chat response carries finish_reason and truncated from the backend completion_reason (default off; fields omitted when off)", env_on="1", env_off="0"),
+    FeatureSpec("truncation_narrowing_hint", False, False, "TRUNCATION_NARROWING_HINT", "AEI-TRUNC-NOTICE: the llm_call output-cap markers say how to get the rest (narrower request) instead of a bare '[... truncated at N chars]' (default off)", env_on="1", env_off="0"),
+    FeatureSpec("http_post_guard", True, True, "HTTP_POST_GUARD", "SECURITY (AEI-HTTPPOST-GUARD): http_post refuses private, loopback, link-local and metadata destinations via the SEC-EXEC-3 web_guard check (ORCHESTRATOR_HTTP_POST_GUARD=0 is the kill switch); autopilot pinned, observe only", env_on="1", env_off="0"),
     FeatureSpec("repl_write_dedupe", True, True, "REPL_WRITE_DEDUPE", "REPL: an identical write call that already succeeded in this request is skipped, not re-run (ORCHESTRATOR_REPL_WRITE_DEDUPE=0 is the kill switch)", env_on="1", env_off="0"),
     FeatureSpec("pdf_route_lighton", False, False, "PDF_ROUTE_LIGHTON", "PDF ingest: needs_ocr documents go to the LightOnOCR-2-1B aux server, the rest to LiteParse (PIP-04 held-out rule); the stack launcher sets ORCHESTRATOR_PDF_ROUTE_LIGHTON=1", env_on="1", env_off="0"),
     FeatureSpec("l3_textrow", False, False, "L3_TEXTROW", "L3 empty-table fallback: text-row table extraction on pages with no parser table (method=textrow); the stack launcher sets ORCHESTRATOR_L3_TEXTROW=1", env_parse=_env_in("1"), env_on="1", env_off="0"),
@@ -988,6 +991,9 @@ class Features:
     repl_classify: bool = False
     repl_handles: bool = False
     untrusted_tool_text: bool = True
+    chat_finish_reason: bool = False  # AEI-CHAT-FINISH-REASON: finish_reason/truncated on /chat
+    truncation_narrowing_hint: bool = False  # AEI-TRUNC-NOTICE: output-cap markers carry a narrowing hint
+    http_post_guard: bool = True  # AEI-HTTPPOST-GUARD: http_post refuses non-global destinations
     repl_write_dedupe: bool = True
     pdf_route_lighton: bool = False
     l3_textrow: bool = False

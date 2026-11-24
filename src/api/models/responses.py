@@ -94,6 +94,22 @@ class ChatResponse(BaseModel):
     )
 
     answer: str = Field(..., description="The final answer")
+    finish_reason: str | None = Field(
+        default=None,
+        description=(
+            "AEI-CHAT-FINISH-REASON: backend completion_reason of the last generation call "
+            "(stop | length | context_limit | ...). Present only with chat_finish_reason on."
+        ),
+        **_omit_when_none(),
+    )
+    truncated: bool | None = Field(
+        default=None,
+        description=(
+            "True when finish_reason is length, context_limit or context_overflow: the answer "
+            "was cut off, not completed. Present only with chat_finish_reason on."
+        ),
+        **_omit_when_none(),
+    )
     turns: int = Field(..., description="Number of orchestration turns used")
     tokens_used: int = Field(default=0, description="Approximate tokens used")
     prompt_tokens: int | None = Field(

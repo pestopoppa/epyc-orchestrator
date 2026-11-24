@@ -62,8 +62,33 @@ def http_post(url: str, data: dict | None = None, headers: dict | None = None,
     body_bytes = json.dumps(data).encode("utf-8") if data else None
     request = urllib.request.Request(url, data=body_bytes, headers=req_headers, method="POST")
 
+    opener = urllib.request.urlopen
+    from src.features import features
+
+    if features().http_post_guard:
+        # AEI-HTTPPOST-GUARD: same SEC-EXEC-3 destination deny as web_fetch/fetch_docs.
+        from src.repl_environment import web_guard
+
+        reason = web_guard.check_url(url)
+        if reason is not None:
+            web_guard.log_refusal("http_post", url, reason)
+            return {
+                "status_code": 0,
+                "headers": {},
+                "body": "",
+                "elapsed_ms": int((time.time() - start) * 1000),
+                "error": f"http_post refused: {reason}",
+                "refused": True,
+            }
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args, **kwargs):  # a redirect hop is never followed
+                return None
+
+        opener = urllib.request.build_opener(_NoRedirect).open
+
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener(request, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             return {
                 "status_code": response.status,

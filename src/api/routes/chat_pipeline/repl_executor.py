@@ -23,6 +23,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from src.api.models import ChatRequest, ChatResponse
+from src.api.routes.chat_pipeline.finish_reason import finish_reason_fields
 from src.api.routes.chat_pipeline.telemetry import (
     llm_completion_meta,
     work_completion_meta,
@@ -1152,6 +1153,7 @@ async def _execute_repl_body(
         web_research_results=web_research_results,
         # Scratchpad insights (Search-R1 Step 5)
         scratchpad_insights=scratchpad_insights,
+        **finish_reason_fields(primitives),
         # INF-78 OAB-7: bundle pull accounting (None without a bundle)
         context_pulls=context_pulls,
     )
