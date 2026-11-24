@@ -207,19 +207,22 @@ def test_verdict_exact_max_discordant_override_forces_normal() -> None:
     assert v["exact_max_discordant"] == 4
 
 
-def test_verdict_from_result_matches_direct_call() -> None:
+def test_verdict_from_result_refuses_without_rerun_and_matches_direct_with_one() -> None:
     rows = [
         _row(1, "a", [(f"q{i}", i <= 4) for i in range(1, 13)]),
         _row(2, "b", [(f"q{i}", True) for i in range(1, 13)]),
     ]
     vectors = paired_stats.trial_vectors(rows)
     result = paired_stats.mcnemar_from_vectors(vectors[1], vectors[2], "1", "2")
-    derived = paired_stats.verdict_from_result(result)
+    with pytest.raises(paired_stats.RerunArmMissingError):
+        paired_stats.verdict_from_result(result)
+    zero_flip = paired_stats.rerun_flip_rate(vectors[1], vectors[1])
+    derived = paired_stats.verdict_from_result(result, rerun=zero_flip)
     direct = paired_stats.mcnemar_verdict(
         result.a_correct_b_wrong, result.a_wrong_b_correct
     )
-    assert derived == direct
-    assert derived["verdict"] == "b_better"
+    assert derived["verdict"] == direct["verdict"] == "b_better"
+    assert derived["p_value"] == direct["p_value"]
 
 
 def test_verdict_is_json_serializable() -> None:

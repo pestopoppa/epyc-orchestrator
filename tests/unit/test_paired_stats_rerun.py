@@ -33,24 +33,21 @@ for i in range(60, 72):
 VA, VB = _vec(A), _vec(B_list)
 
 
-def test_golden_no_rerun_is_byte_identical() -> None:
-    """Absent R: verdict dict is exactly the pre-change literal."""
+def test_no_rerun_is_observation_only_refused_for_decision() -> None:
+    """Absent R: a b_better/a_better is never returned as a usable verdict."""
     result = ps.mcnemar_from_vectors(VA, VB, "a", "b")
-    got = ps.verdict_from_result(result)
-    expected = {
-        "verdict": "b_better",
-        "method": "mcnemar",
-        "approximation": "exact_binomial",
-        "n_discordant": 14,
-        "p_value": 0.01293945,
-        "z": None,
-        "alpha": 0.05,
-        "exact_max_discordant": 25,
-    }
-    assert json.dumps(got, sort_keys=True) == json.dumps(expected, sort_keys=True)
-    assert got == ps.mcnemar_verdict(2, 12)
-    # explicit None is the same as omitted
-    assert ps.verdict_from_result(result, rerun=None) == got
+    assert ps.mcnemar_verdict(2, 12)["verdict"] == "b_better"  # raw stats intact
+    with pytest.raises(ps.RerunArmMissingError, match="observation only"):
+        ps.verdict_from_result(result)
+    with pytest.raises(ps.RerunArmMissingError):
+        ps.verdict_from_result(result, rerun=None)
+    swapped = ps.mcnemar_from_vectors(VB, VA, "b", "a")
+    assert ps.mcnemar_verdict(12, 2)["verdict"] == "a_better"
+    with pytest.raises(ps.RerunArmMissingError):
+        ps.verdict_from_result(swapped)
+    # same family as the mismatched-pair refusal
+    assert issubclass(ps.RerunArmMissingError, ValueError)
+    assert issubclass(ps.PairedComparisonMismatchError, ValueError)
 
 
 def test_wilson_interval_known_values() -> None:
@@ -80,7 +77,7 @@ def test_downgrade_when_delta_within_flip_rate() -> None:
     flip = ps.rerun_flip_rate(VA, vr)
     assert flip["flip_rate"] == pytest.approx(0.12)
     result = ps.mcnemar_from_vectors(VA, VB, "a", "b")
-    out = ps.verdict_from_result(result, rerun=flip, require_rerun=True)
+    out = ps.verdict_from_result(result, rerun=flip)
     assert out["verdict"] == "indistinguishable"
     assert out["reason"] == "within_rerun_noise"
     assert out["verdict_before_rerun"] == "b_better"
@@ -93,18 +90,14 @@ def test_downgrade_when_delta_within_flip_rate() -> None:
 def test_tie_is_no_claim() -> None:
     vr = _vec(_flipped(A, range(0, 10)))  # flip_rate exactly 0.10 == |delta|
     flip = ps.rerun_flip_rate(VA, vr)
-    out = ps.verdict_from_result(
-        ps.mcnemar_from_vectors(VA, VB, "a", "b"), rerun=flip, require_rerun=True
-    )
+    out = ps.verdict_from_result(ps.mcnemar_from_vectors(VA, VB, "a", "b"), rerun=flip)
     assert out["verdict"] == "indistinguishable" and out["reason"] == "within_rerun_noise"
 
 
 def test_claim_survives_when_delta_above_flip_rate() -> None:
     vr = _vec(_flipped(A, range(0, 3)))  # flip_rate 0.03 < 0.10
     flip = ps.rerun_flip_rate(VA, vr)
-    out = ps.verdict_from_result(
-        ps.mcnemar_from_vectors(VA, VB, "a", "b"), rerun=flip, require_rerun=True
-    )
+    out = ps.verdict_from_result(ps.mcnemar_from_vectors(VA, VB, "a", "b"), rerun=flip)
     assert out["verdict"] == "b_better"
     assert "reason" not in out and "verdict_before_rerun" not in out
     assert out["rerun"]["flip_rate"] == pytest.approx(0.03)
@@ -113,7 +106,7 @@ def test_claim_survives_when_delta_above_flip_rate() -> None:
 
 def test_a_better_direction_also_downgrades() -> None:
     result = ps.mcnemar_from_vectors(VB, VA, "b", "a")  # arms swapped: a_better
-    assert ps.verdict_from_result(result)["verdict"] == "a_better"
+    assert ps.mcnemar_verdict(12, 2)["verdict"] == "a_better"
     flip = ps.rerun_flip_rate(VB, _vec(_flipped(B_list, range(0, 15))))
     out = ps.verdict_from_result(result, rerun=flip)
     assert out["verdict"] == "indistinguishable" and out["reason"] == "within_rerun_noise"
@@ -126,14 +119,6 @@ def test_indistinguishable_stays_with_no_reason() -> None:
     assert out["verdict"] == "indistinguishable"
     assert "reason" not in out
     assert out["rerun"]["flip_rate"] == 0.0
-
-
-def test_refuses_decision_use_without_rerun() -> None:
-    result = ps.mcnemar_from_vectors(VA, VB, "a", "b")
-    with pytest.raises(ps.RerunArmMissingError):
-        ps.verdict_from_result(result, require_rerun=True)
-    # observation use (default) is not refused
-    assert ps.verdict_from_result(result)["verdict"] == "b_better"
 
 
 def test_cli_rerun_trial(tmp_path, capsys) -> None:
@@ -153,6 +138,9 @@ def test_cli_rerun_trial(tmp_path, capsys) -> None:
     assert ps.main(["--journal", str(j), "mcnemar", "1", "2", "--rerun-trial", "3"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["verdict"]["reason"] == "within_rerun_noise"
-    # without --rerun-trial: payload has no verdict key (unchanged)
-    assert ps.main(["--journal", str(j), "mcnemar", "1", "2"]) == 0
-    assert "verdict" not in json.loads(capsys.readouterr().out)
+    # without --rerun-trial: raw stats, no verdict key, refusal on stderr, exit 2
+    assert ps.main(["--journal", str(j), "mcnemar", "1", "2"]) == 2
+    cap = capsys.readouterr()
+    payload = json.loads(cap.out)
+    assert "verdict" not in payload and payload["a_correct_b_wrong"] == 2
+    assert "no rerun arm R" in cap.err

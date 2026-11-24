@@ -3214,9 +3214,11 @@ from paired_stats import (  # noqa: E402
     MCNEMAR_EXACT_MAX_DISCORDANT,
     PairedComparisonMismatchError,
     QuestionOutcome,
+    apply_rerun_noise_rule,
     mcnemar_from_vectors,
     mcnemar_verdict,
     require_matched_comparison,
+    rerun_flip_rate,
 )
 
 DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
@@ -3856,6 +3858,11 @@ def screen_paired_arms(
 
     Each ``arm`` is a mapping with:
       * ``label``    — arm identity (e.g. an EV-11 ``arm`` stamp or a role name);
+      * ``rerun_outcomes`` — optional rerun arm R (same shape as ``outcomes``): a
+                       second independent run of this arm as the BASELINE (the
+                       earlier arm of a pair). A pair whose baseline has none is
+                       refused for decision use (``mismatched_pairs``, reason
+                       ``no_rerun_arm_observation_only``);
       * ``outcomes`` — ``{qid: correct}`` (bool, ``{"correct": ...}``, a
                        ``QuestionResult``-like object, or a ``QuestionOutcome``);
       * ``profile``  — optional ``{dataset_sha256, test_profile}`` (or a
@@ -3890,6 +3897,13 @@ def screen_paired_arms(
                 "label": label,
                 "vector": vector,
                 "profile": arm.get("profile"),
+                # Rerun arm R (second run of THIS arm as baseline), same shape as
+                # ``outcomes``; None when not supplied.
+                "rerun_vector": (
+                    _arm_outcome_vector(arm["rerun_outcomes"])
+                    if arm.get("rerun_outcomes")
+                    else None
+                ),
                 # CJ-9. Rows excluded for a non-quality disposition, by disposition.
                 "excluded": _arm_outcome_excluded(raw),
             }
@@ -3954,6 +3968,27 @@ def screen_paired_arms(
             result = mcnemar_from_vectors(
                 arm_a["vector"], arm_b["vector"], arm_a["label"], arm_b["label"]
             )
+            # Rerun arm (P-AB-1 / P-PAIRED, AEI-RERUN-ARM-OD): R is a second run of
+            # the baseline arm A. A pair with no R is refused for decision use
+            # exactly as a mismatched pair is (recorded under ``mismatched_pairs``,
+            # no verdict, never in ``pairs``); the raw McNemar counts stay on the
+            # refusal entry as observation.
+            if arm_a["rerun_vector"] is None:
+                mismatched.append(
+                    {
+                        "arm_a": arm_a["label"],
+                        "arm_b": arm_b["label"],
+                        "reason": "no_rerun_arm_observation_only",
+                        "observation": {
+                            "shared_qids": result.shared_qids,
+                            "a_correct_b_wrong": result.a_correct_b_wrong,
+                            "a_wrong_b_correct": result.a_wrong_b_correct,
+                            "mcnemar_p_two_sided": result.p_value_two_sided,
+                        },
+                    }
+                )
+                continue
+            rerun_flip = rerun_flip_rate(arm_a["vector"], arm_a["rerun_vector"])
             shared = sorted(set(arm_a["vector"]) & set(arm_b["vector"]))
             a_correct = sum(1 for qid in shared if arm_a["vector"][qid].correct)
             b_correct = sum(1 for qid in shared if arm_b["vector"][qid].correct)
@@ -3984,11 +4019,17 @@ def screen_paired_arms(
                     # (indistinguishable / a_better / b_better) with p (and z on
                     # the normal branch), discordant count, and method. This is
                     # what downstream keep/prefer decisions read.
-                    "verdict": mcnemar_verdict(
-                        result.a_correct_b_wrong,
-                        result.a_wrong_b_correct,
-                        alpha=alpha,
-                        exact_max_discordant=mcnemar_exact_max_discordant,
+                    "verdict": apply_rerun_noise_rule(
+                        mcnemar_verdict(
+                            result.a_correct_b_wrong,
+                            result.a_wrong_b_correct,
+                            alpha=alpha,
+                            exact_max_discordant=mcnemar_exact_max_discordant,
+                        ),
+                        b=result.a_correct_b_wrong,
+                        c=result.a_wrong_b_correct,
+                        n_pairs=result.shared_qids,
+                        rerun=rerun_flip,
                     ),
                 }
             )

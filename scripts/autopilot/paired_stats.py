@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import math
+import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
@@ -283,7 +284,8 @@ def mcnemar_verdict(
 # identical configuration. flip_rate = (f_AR + f_RA) / n_AR over tasks scored in
 # both A and R, with a 95% Wilson interval. A verdict whose |delta| = |b-c|/n is
 # at or below the flip rate is gated as "indistinguishable" / within_rerun_noise.
-# ADDITIVE: with no rerun supplied every output is byte-identical to before.
+# A pair with no R is refused for decision use (RerunArmMissingError), exactly
+# as a mismatched pair is (PairedComparisonMismatchError); raw stats remain.
 # --------------------------------------------------------------------------- #
 class RerunArmMissingError(ValueError):
     """Raised when a comparison for decision use has no rerun arm R (the
@@ -338,25 +340,24 @@ def apply_rerun_noise_rule(
     c: int,
     n_pairs: int,
     rerun: Mapping[str, Any] | None,
-    require_rerun: bool = False,
 ) -> dict[str, Any]:
     """Attach the rerun flip rate to ``verdict`` and apply the no-claim rule.
 
-    ``rerun`` is the dict from :func:`rerun_flip_rate`. With ``rerun=None`` the
-    verdict is returned unchanged unless ``require_rerun`` (decision use), which
-    raises :class:`RerunArmMissingError`. Otherwise adds ``rerun``,
+    ``rerun`` is the dict from :func:`rerun_flip_rate`. With ``rerun=None`` this
+    raises :class:`RerunArmMissingError` (a pair with no R is refused for
+    decision use exactly as a mismatched pair is; there is no opt-out, and the
+    raw counts stay available from :func:`mcnemar_from_vectors` /
+    :func:`mcnemar_verdict`). Otherwise adds ``rerun``,
     ``abs_delta`` (|b-c|/n), ``discordant_rate`` ((b+c)/n) and, when
     ``verdict`` is a_better/b_better with ``abs_delta <= flip_rate``, downgrades
     it to ``indistinguishable`` with ``reason='within_rerun_noise'`` (the
     p-value stays; the prior verdict is kept in ``verdict_before_rerun``).
     """
     if rerun is None:
-        if require_rerun:
-            raise RerunArmMissingError(
-                "refusing paired comparison for decision use: no rerun arm R "
-                "(observation only; P-AB-1 / P-PAIRED rerun arm)"
-            )
-        return verdict
+        raise RerunArmMissingError(
+            "refusing paired comparison for decision use: no rerun arm R "
+            "(observation only; P-AB-1 / P-PAIRED rerun arm)"
+        )
     out = dict(verdict)
     abs_delta = abs(b - c) / n_pairs if n_pairs else 0.0
     out["rerun"] = dict(rerun)
@@ -375,9 +376,11 @@ def verdict_from_result(
     alpha: float = 0.05,
     exact_max_discordant: int = MCNEMAR_EXACT_MAX_DISCORDANT,
     rerun: Mapping[str, Any] | None = None,
-    require_rerun: bool = False,
 ) -> dict[str, Any]:
     """Convenience: derive :func:`mcnemar_verdict` straight from a McNemarResult.
+
+    Raises :class:`RerunArmMissingError` when ``rerun`` is None (no R: refused
+    for decision use, like a mismatched pair).
 
     ``result.a_correct_b_wrong`` is ``b`` and ``result.a_wrong_b_correct`` is
     ``c``, so the verdict's ``a_better`` / ``b_better`` direction matches the
@@ -395,7 +398,6 @@ def verdict_from_result(
         c=result.a_wrong_b_correct,
         n_pairs=result.shared_qids,
         rerun=rerun,
-        require_rerun=require_rerun,
     )
 
 
@@ -566,14 +568,20 @@ def _cmd_mcnemar(args: argparse.Namespace) -> int:
         raise SystemExit(f"trial has no question_results vector: {exc}") from exc
     result = mcnemar_from_vectors(a, b, str(args.trial_a), str(args.trial_b))
     payload = asdict(result)
-    if getattr(args, "rerun_trial", None) is not None:
+    if getattr(args, "rerun_trial", None) is None:
+        # No R: raw McNemar stats only (observation); refused for decision use.
+        print(json.dumps(payload, indent=2, sort_keys=True))
         try:
-            r = vectors[args.rerun_trial]
-        except KeyError as exc:
-            raise SystemExit(f"rerun trial has no question_results vector: {exc}") from exc
-        payload["verdict"] = verdict_from_result(
-            result, rerun=rerun_flip_rate(a, r), require_rerun=True
-        )
+            verdict_from_result(result)
+        except RerunArmMissingError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
+    try:
+        r = vectors[args.rerun_trial]
+    except KeyError as exc:
+        raise SystemExit(f"rerun trial has no question_results vector: {exc}") from exc
+    payload["verdict"] = verdict_from_result(result, rerun=rerun_flip_rate(a, r))
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
 

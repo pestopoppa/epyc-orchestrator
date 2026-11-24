@@ -41,8 +41,14 @@ def _vector(outcomes: dict[str, bool]) -> dict[str, QuestionOutcome]:
     }
 
 
-def _arm(label: str, outcomes: dict[str, bool], profile=MATCHED_PROFILE) -> dict:
+def _arm(
+    label: str, outcomes: dict[str, bool], profile=MATCHED_PROFILE, rerun: bool = True
+) -> dict:
     arm: dict = {"label": label, "outcomes": outcomes}
+    if rerun:
+        # R = an identical rerun of the arm (flip rate 0): the rerun rule never
+        # downgrades, so tests that are not about R see the plain verdict.
+        arm["rerun_outcomes"] = dict(outcomes)
     if profile is not None:
         arm["profile"] = profile
     return arm
@@ -123,6 +129,29 @@ def test_screen_gates_on_matched_dataset_and_profile() -> None:
     mism = out["mismatched_pairs"][0]
     assert {mism["arm_a"], mism["arm_b"]} == {"A", "B"}
     assert "dataset_sha256" in mism["reason"]
+
+
+def test_screen_without_rerun_arm_is_observation_only_like_mismatched_pair() -> None:
+    out = screen_paired_arms([_arm("A", ARM_A, rerun=False), _arm("B", ARM_B)])
+    assert out["pairs"] == []  # no a_better/b_better verdict is emitted
+    assert len(out["mismatched_pairs"]) == 1
+    mism = out["mismatched_pairs"][0]
+    assert mism["reason"] == "no_rerun_arm_observation_only"
+    assert mism["observation"]["a_wrong_b_correct"] == 8  # raw stats kept
+    per_role = {"ra": {"arm": "A"}, "rb": {"arm": "B"}}
+    attach_role_paired_verdicts(per_role, out)
+    assert per_role["rb"]["paired_verdicts"] == []
+
+
+def test_screen_rerun_noise_downgrades_pair_verdict() -> None:
+    # R flips 10 of 12 tasks of A -> flip_rate 0.83 >= |delta| 0.67
+    r = {q: (not v) if i <= 10 else v for i, (q, v) in enumerate(ARM_A.items(), 1)}
+    a = _arm("A", ARM_A)
+    a["rerun_outcomes"] = r
+    out = screen_paired_arms([a, _arm("B", ARM_B)])
+    v = out["pairs"][0]["verdict"]
+    assert v["verdict"] == "indistinguishable" and v["reason"] == "within_rerun_noise"
+    assert v["verdict_before_rerun"] == "b_better"
 
 
 def test_screen_refuses_one_sided_provenance() -> None:
@@ -221,7 +250,7 @@ def test_screen_pair_carries_verdict_block_matching_primitive() -> None:
     verdict = pair["verdict"]
     # Cross-check against the landed primitive on the SAME discordant counts.
     ref = mcnemar_verdict(pair["a_correct_b_wrong"], pair["a_wrong_b_correct"])
-    assert verdict == ref
+    assert {k: verdict[k] for k in ref} == ref
     # 0 A-right/B-wrong, 8 A-wrong/B-right => clean, significant b_better verdict.
     assert verdict["verdict"] == "b_better"
     assert verdict["method"] == "mcnemar"

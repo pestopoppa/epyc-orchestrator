@@ -193,7 +193,12 @@ from actions import (
     _public_pending_copy,
     served_content_record,
 )
-from paired_stats import QuestionOutcome, mcnemar_from_vectors, verdict_from_result
+from paired_stats import (
+    QuestionOutcome,
+    RerunArmMissingError,
+    mcnemar_from_vectors,
+    verdict_from_result,
+)
 from src.autopilot_core.action_identity import (
     EPHEMERAL_ACTION_KEYS,
     action_signature,
@@ -1861,7 +1866,14 @@ def _seq_paired_baseline_diagnostics(
         label_b=f"candidate:{candidate_trial_id}",
     )
     payload = asdict(result)
-    payload["mcnemar_verdict"] = verdict_from_result(result)
+    # The baseline-reference vector has no rerun arm R, so under P-AB-1 / P-PAIRED
+    # this pair is observation only: the raw McNemar counts above stay, but no
+    # a_better/b_better verdict is emitted (refused like a mismatched pair).
+    try:
+        payload["mcnemar_verdict"] = verdict_from_result(result)
+    except RerunArmMissingError as exc:
+        payload["mcnemar_verdict"] = None
+        payload["mcnemar_verdict_refused"] = str(exc)
     payload.update(
         {
             "status": "ok" if result.shared_qids > 0 else "no_shared_qids",
