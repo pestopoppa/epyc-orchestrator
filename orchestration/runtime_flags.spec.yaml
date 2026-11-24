@@ -54,6 +54,7 @@ flags:
   claude_code_mcp_chat: baseline
   codemode_prompt_v2: baseline
   codemode_stubs: baseline
+  compaction_failed_action_ledger: baseline
   compaction_shadow: baseline
   content_cache: baseline
   context_arm_ab: baseline

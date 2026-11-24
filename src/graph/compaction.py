@@ -176,6 +176,132 @@ def _cap_index_input(ctx: Any, text: str, prompt_chars: int = 0) -> str:
     return text[-cap:] if cap and len(text) > cap else text
 
 
+# --- HAR-COMPACT-LEDGER-1 (flag ``compaction_failed_action_ledger``, default off) ---------------
+# Two integrity pieces from DMC-5 (intake-2875) that the one-shot index lacks:
+#   1. a failed-action ledger: every failed tool-call line of the pre-compaction context is kept
+#      VERBATIM across compactions (a ledger entry is the raw line, so a later compaction re-finds it);
+#   2. pinned pointers (paths, IDs, numbers) are extracted from the pre-compaction context and
+#      restored byte-exact when the compacted text lost them.
+# Pure functions: no I/O, no model call.
+
+LEDGER_HEADER = "[Failed-Action Ledger]"
+LEDGER_FOOTER = "[/Failed-Action Ledger]"
+PINNED_HEADER = "[Pinned Pointers]"
+PINNED_FOOTER = "[/Pinned Pointers]"
+#: Bounds so the blocks cannot themselves overflow the window (entries are never truncated, only dropped
+#: oldest-first, because a truncated entry would not be byte-exact).
+LEDGER_MAX_ENTRIES = 50
+PINNED_MAX_TOKENS = 200
+
+#: A line that records a failed tool call: non-zero exit / error result shapes.
+_FAILED_ACTION_RE = re.compile(
+    r"(?i)(?:\btraceback \(most recent call last\)"
+    r"|\b(?:exit(?:ed)?(?: with)?(?: status| code)?|returncode|return code|rc)\s*[=:]?\s*-?[1-9]\d*\b"
+    r"|^\s*(?:\[?tool[^\n\]]*\]?\s*)?(?:error|fatal|failed)\b"
+    r"|\b\w*(?:error|exception)\s*:"
+    r"|\btool (?:call )?failed\b"
+    r"|\bcommand not found\b|\bno such file or directory\b|\bpermission denied\b)"
+)
+
+_PINNED_RES = (
+    re.compile(r"(?<![\w/.])/(?:[\w.\-+@]+/)+[\w.\-+@]+"),  # absolute paths
+    re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),  # UUIDs
+    re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"),  # hex digests / commit ids (at least one a-f)
+    re.compile(r"\b[A-Z][A-Z0-9]{1,}(?:-[A-Za-z0-9]+)+\b"),  # ticket / box ids
+    re.compile(r"\b\d+(?:\.\d+)+\b|\b\d{4,}\b"),  # decimals and 4+ digit numbers
+)
+
+
+def _strip_integrity_blocks(text: str) -> str:
+    """Remove ledger/pinned blocks so an earlier compaction's own blocks are not re-scanned."""
+    for head, foot in ((LEDGER_HEADER, LEDGER_FOOTER), (PINNED_HEADER, PINNED_FOOTER)):
+        while True:
+            a = text.find(head)
+            if a < 0:
+                break
+            b = text.find(foot, a)
+            if b < 0:
+                break
+            text = text[:a] + text[b + len(foot):]
+    return text
+
+
+def _parse_block(text: str, head: str, foot: str) -> list[str]:
+    """Lines of every ``head``..``foot`` block in ``text`` (verbatim, blank lines dropped)."""
+    out: list[str] = []
+    pos = 0
+    while True:
+        a = text.find(head, pos)
+        if a < 0:
+            return out
+        b = text.find(foot, a)
+        if b < 0:
+            return out
+        out.extend(ln for ln in text[a + len(head):b].split("\n") if ln.strip())
+        pos = b + len(foot)
+
+
+def extract_failed_actions(text: str) -> list[str]:
+    """Failed-action lines of ``text`` verbatim, in first-seen order, de-duplicated.
+
+    Entries already carried in an earlier ledger block come first (they are the oldest), then new
+    matches from the rest of the text. Capped to the newest ``LEDGER_MAX_ENTRIES``.
+    """
+    carried = _parse_block(text, LEDGER_HEADER, LEDGER_FOOTER)
+    fresh = [ln for ln in _strip_integrity_blocks(text).split("\n") if ln.strip() and _FAILED_ACTION_RE.search(ln)]
+    seen: set[str] = set()
+    entries: list[str] = []
+    for ln in carried + fresh:
+        if ln not in seen:
+            seen.add(ln)
+            entries.append(ln)
+    return entries[-LEDGER_MAX_ENTRIES:]
+
+
+def extract_pinned_tokens(text: str) -> list[str]:
+    """Paths, IDs and numbers of ``text`` as exact substrings, first-seen order, de-duplicated.
+
+    Tokens carried in an earlier pinned block count too. Capped to the newest ``PINNED_MAX_TOKENS``.
+    """
+    carried = _parse_block(text, PINNED_HEADER, PINNED_FOOTER)
+    body = _strip_integrity_blocks(text)
+    found: list[tuple[int, str]] = []
+    for rx in _PINNED_RES:
+        found.extend((m.start(), m.group(0)) for m in rx.finditer(body))
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for tok in carried + [t for _, t in sorted(found)]:
+        if tok not in seen:
+            seen.add(tok)
+            tokens.append(tok)
+    return tokens[-PINNED_MAX_TOKENS:]
+
+
+def render_ledger_block(entries: list[str]) -> str:
+    return f"{LEDGER_HEADER}\n" + "\n".join(entries) + f"\n{LEDGER_FOOTER}" if entries else ""
+
+
+def survivors_missing(old_context: str, new_context: str) -> tuple[list[str], list[str]]:
+    """(failed-action entries, pinned tokens) of ``old_context`` NOT present byte-exact in ``new_context``."""
+    return (
+        [e for e in extract_failed_actions(old_context) if e not in new_context],
+        [t for t in extract_pinned_tokens(old_context) if t not in new_context],
+    )
+
+
+def apply_integrity(old_context: str, new_context: str) -> str:
+    """Return ``new_context`` plus a ledger block (missing failed actions) and a pinned-pointer block
+    (missing tokens), so every failed action and pinned pointer of ``old_context`` is present
+    byte-exact. Idempotent: nothing missing means ``new_context`` comes back unchanged."""
+    missing_actions, missing_pins = survivors_missing(old_context, new_context)
+    parts = [new_context]
+    if missing_actions:
+        parts.append(render_ledger_block(missing_actions))
+    if missing_pins:
+        parts.append(f"{PINNED_HEADER}\n" + "\n".join(missing_pins) + f"\n{PINNED_FOOTER}")
+    return "\n\n".join(parts) if len(parts) > 1 else new_context
+
+
 async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
     """Compact old context via context externalization.
 
@@ -314,6 +440,9 @@ async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
             f"{keep_verbatim}\n\n"
             f'Full context available: read_file("{ctx_file_path}")'
         )
+        if _get_features().compaction_failed_action_ledger is True:
+            # HAR-COMPACT-LEDGER-1: failed actions + pinned pointers survive byte-exact.
+            state.context = apply_integrity(old_context, state.context)
 
         state.compaction_count += 1
         state.last_compaction_turn = state.turns

@@ -338,6 +338,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Off = deterministic index, no LLM call (the bug fix). On = the old LLM
     # index with its input capped to the worker's window, for a future renderer.
     FeatureSpec("session_compaction_llm_index", False, False, "SESSION_COMPACTION_LLM_INDEX", "UFH14-B1: LLM-written compaction index (worker_general, input capped to its window); off = deterministic index, since TaskState.context is not rendered into turn prompts"),
+    FeatureSpec("compaction_failed_action_ledger", False, False, "COMPACTION_FAILED_ACTION_LEDGER", "HAR-COMPACT-LEDGER-1 (DMC-5 integrity, intake-2875): session compaction keeps every failed tool-call line verbatim in a ledger block and restores pinned pointers (paths, IDs, numbers) byte-exact when the compacted text lost them. Logic in src/graph/compaction.py::apply_integrity. Off = unchanged compaction output"),
     # OAB-19 (operator decision 2026-11-18): REPL turns keep their full context. Session compaction
     # rewrites TaskState.context, which no REPL turn prompt renders, so on a REPL turn it only produced
     # an externalised file and a rewritten field nobody reads. Retired by default (like the worker
@@ -942,6 +943,8 @@ class Features:
     derived_prefill_timeout: bool = False
     # UFH14-B1: LLM-written session-compaction index (off = deterministic).
     session_compaction_llm_index: bool = False
+    # HAR-COMPACT-LEDGER-1: failed-action ledger + pinned-pointer restore across compaction (off = unchanged).
+    compaction_failed_action_ledger: bool = False
     # OAB-19: session compaction on REPL turns (off = retired, full context kept).
     repl_compaction: bool = False
     # UFH14-B1 F2: wall-time forced-answer turn in the REPL graph.

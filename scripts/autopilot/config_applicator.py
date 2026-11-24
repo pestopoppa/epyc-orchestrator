@@ -103,6 +103,9 @@ HOT_SWAP_FEATURES = {
     # AP-ALFWORLD-SUITE (2026-11-23): ALFWorld slice on the T1 eval, default off, read live by the autopilot process
     # through src.flag_env. Adds ~5 episodes of wall clock per T1 eval when on; the slice never enters scalar quality.
     "autopilot_alfworld_suite",
+    # HAR-COMPACT-LEDGER-1 (2026-11-24): failed-action ledger + pinned-pointer restore in session compaction,
+    # default off, read live per compaction via features().
+    "compaction_failed_action_ledger",
 }
 
 # Parameters applied via env vars (require API restart)

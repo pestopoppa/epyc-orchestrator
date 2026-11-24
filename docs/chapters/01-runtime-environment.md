@@ -26,6 +26,7 @@ Independent feature flags let us turn orchestration modules on and off without t
 | `generation_monitor` | `ORCHESTRATOR_GENERATION_MONITOR` | Early failure detection (Phase 6) | None |
 | `mock_mode` | `ORCHESTRATOR_MOCK_MODE` | Mock responses (test safety) | None |
 | `cascading_tool_policy` | `ORCHESTRATOR_CASCADING_TOOL_POLICY` | PolicyLayer chain for tool permissions | None |
+| `compaction_failed_action_ledger` | `ORCHESTRATOR_COMPACTION_FAILED_ACTION_LEDGER` | HAR-COMPACT-LEDGER-1 (DMC-5 integrity): session compaction keeps every failed tool-call line verbatim in a ledger block and restores pinned pointers (paths, IDs, numbers) byte-exact when the compacted text lost them (default off) | `session_compaction` |
 | `session_log` | `ORCHESTRATOR_SESSION_LOG` | Append-only REPL processing journal per task | None |
 | `session_scratchpad` | `ORCHESTRATOR_SESSION_SCRATCHPAD` | Model-extracted semantic insights per turn | `session_log` |
 | `structured_tool_output` | `ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT` | ToolOutput envelope (human + machine modes) | None |
