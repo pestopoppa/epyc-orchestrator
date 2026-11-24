@@ -203,6 +203,7 @@ flags:
   unified_streaming: baseline
   untrusted_tool_text: baseline
   usage_root_capture: baseline
+  serving_calls_json_schema_capture: baseline
   chat_finish_reason: baseline
   truncation_narrowing_hint: baseline
   delegation_untrusted_data_field: baseline

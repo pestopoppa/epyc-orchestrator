@@ -696,6 +696,7 @@ def _maybe_rotate(path: Path) -> None:
         src = path if i == 1 else path.with_name(f"{path.name}.{i - 1}")
         dst = path.with_name(f"{path.name}.{i}")
         if i == keep:
+            _prune_bodies_of(dst)
             try:
                 dst.unlink()
             except OSError:
@@ -705,6 +706,140 @@ def _maybe_rotate(path: Path) -> None:
                 src.rename(dst)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# json_schema capture (SPEC-GRAM-JSON-1 enabler; flag serving_calls_json_schema_capture)
+# ---------------------------------------------------------------------------
+
+#: Content-addressed schema store (``<sha256>.json``) and per-call prompt bodies
+#: (``<record_id>.json``), both beside the production log. Bodies are pruned when the
+#: log file that references them rotates out of retention; schemas are tiny, deduped by
+#: sha, and kept.
+SCHEMA_STORE_DIR = "json_schema_store"
+BODY_DIR = "json_schema_bodies"
+BODY_SCHEMA = "epyc.orchestrator.serving_call_body.v1"
+
+
+def _capture_enabled() -> bool:
+    try:
+        from src.features import features
+
+        return bool(features().serving_calls_json_schema_capture)
+    except Exception:
+        return False
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(text, encoding="utf-8", errors="surrogatepass")
+    os.replace(tmp, path)
+
+
+def _request_class(request: Any, staged: dict[str, Any] | None, role: Any) -> tuple[str, str]:
+    """``<kind>:<who>`` where kind is ``tool_call`` (client tools on the wire) or ``json``
+    and who is the typed client class, else the role. Returns (label, source)."""
+    payload = getattr(request, "chat_payload", None)
+    kind = "tool_call" if isinstance(payload, dict) and payload.get("tools") else "json"
+    client_class = (staged or {}).get("client_class")
+    if isinstance(client_class, str) and client_class:
+        return f"{kind}:{client_class}", "caller.client_class"
+    if role:
+        return f"{kind}:{role}", "record.role"
+    return f"{kind}:unknown", "absent"
+
+
+def capture_json_schema(
+    record: dict[str, Any], request: Any, result: Any, staged: dict[str, Any] | None
+) -> bool:
+    """Add the ``json_schema_capture`` block to ``record`` and persist the schema and
+    prompt body, for a call that carries a ``json_schema`` constraint.
+
+    Gated by ``serving_calls_json_schema_capture`` (default off: nothing is touched and
+    the row is unchanged). Local files only. Never raises; a store failure leaves the
+    block's pointer fields None rather than dropping the row.
+    """
+    try:
+        schema = getattr(request, "json_schema", None)
+        if not schema or not isinstance(schema, dict) or not _capture_enabled():
+            return False
+        path = log_path()
+        if path is None:
+            return False
+        base = path.parent
+        canonical = json.dumps(_json_safe(schema), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        schema_sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        label, label_src = _request_class(request, staged, record.get("role"))
+        text = _prompt_text_for_fingerprint(request)
+        output = getattr(result, "output", None)
+        block: dict[str, Any] = {
+            "schema_sha256": schema_sha,
+            "schema_chars": len(canonical),
+            "request_class": label,
+            "request_class_source": label_src,
+            "output_text": output if isinstance(output, str) else None,
+            "output_chars": len(output) if isinstance(output, str) else None,
+            "prompt_sha256": (
+                hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest() if text else None
+            ),
+            "prompt_chars": len(text) if text else None,
+            "prompt_body": None,
+        }
+        try:
+            store = base / SCHEMA_STORE_DIR
+            store.mkdir(parents=True, exist_ok=True)
+            target = store / f"{schema_sha}.json"
+            if not target.exists():
+                _atomic_write(target, canonical)
+        except Exception as exc:
+            _bump("write_failed", exc)
+        if text:
+            try:
+                bodies = base / BODY_DIR
+                bodies.mkdir(parents=True, exist_ok=True)
+                body = {
+                    "schema": BODY_SCHEMA,
+                    "record_id": record.get("record_id"),
+                    "prompt_sha256": block["prompt_sha256"],
+                    "prompt_kind": "chat_payload"
+                    if isinstance(getattr(request, "chat_payload", None), dict) else "prompt",
+                    "prompt_text": text,
+                }
+                _atomic_write(
+                    bodies / f"{record['record_id']}.json",
+                    json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                )
+                block["prompt_body"] = f"{BODY_DIR}/{record['record_id']}.json"
+            except Exception as exc:
+                _bump("write_failed", exc)
+        record["json_schema_capture"] = block
+        return True
+    except Exception as exc:
+        _bump("build_failed", exc)
+        return False
+
+
+def _prune_bodies_of(dropped: Path) -> None:
+    """A log file is leaving retention: delete the prompt bodies its rows point at."""
+    try:
+        bodies = dropped.parent / BODY_DIR
+        if not bodies.is_dir() or not dropped.exists():
+            return
+        with open(dropped, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if '"json_schema_capture"' not in line:
+                    continue
+                try:
+                    rid = json.loads(line).get("record_id")
+                except ValueError:
+                    continue
+                if isinstance(rid, str) and rid.isalnum():
+                    try:
+                        (bodies / f"{rid}.json").unlink()
+                    except OSError:
+                        pass
+    except Exception:
+        pass
 
 
 def record_digest(record: dict[str, Any]) -> str:
@@ -1285,6 +1420,7 @@ def recorded_call(method: str) -> Callable:
                         staged=staged,
                         notes=notes,
                     )
+                    capture_json_schema(record, request, result, staged)
                     if write_record(record):
                         _LAST_CALL.set(_last_call_summary(record))
                     _spec_canary_observe(record, result)

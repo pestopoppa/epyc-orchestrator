@@ -75,6 +75,7 @@ HOT_SWAP_FEATURES = {
     "pdf_route_lighton", "l3_textrow",
     # AEI-CHAT-FINISH-REASON / AEI-TRUNC-NOTICE. http_post_guard is a security flag: ABSENT, pinned observe-only.
     "chat_finish_reason", "truncation_narrowing_hint", "usage_root_capture", "delegation_untrusted_data_field",
+    "serving_calls_json_schema_capture",
     # REPL harness-robustness guards (default off): see FeatureSpec comments in src/features.py.
     "repl_syntax_loop_breaker", "repl_plan_narration_nudge", "harness_failure_ratio_guard",
     # Prefix-cache layout (default off): read per prompt build / per turn-memory add via features().

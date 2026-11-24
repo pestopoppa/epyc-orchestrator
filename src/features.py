@@ -429,6 +429,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("repl_handles", False, False, "REPL_HANDLES", "CM-5: store / load / handles (branch-replayed handle store) in the REPL; turns replay recording on by default while on", env_on="1", env_off="0"),
     FeatureSpec("untrusted_tool_text", True, True, "UNTRUSTED_TOOL_TEXT", "SECURITY: label, defang and cap UNTRUSTED tool text before it re-enters model context (ORCHESTRATOR_UNTRUSTED_TOOL_TEXT=0 is the kill switch); autopilot pinned, observe only", env_on="1", env_off="0"),
     FeatureSpec("usage_root_capture", False, False, "USAGE_ROOT_CAPTURE", "AEI-TOKEN-ROOT-CAPTURE: append one root-token row (request_id, prompt_tokens, output_tokens_reported, path cpu/gpu/stream) per completed /chat request to usage_roots.jsonl beside the usage ledger, for token_span_ratio.py --root (default off; off = no file)", env_on="1", env_off="0"),
+    FeatureSpec("serving_calls_json_schema_capture", False, False, "SERVING_CALLS_JSON_SCHEMA_CAPTURE", "SPEC-GRAM-JSON-1 enabler: for serving_calls rows whose call carries a json_schema constraint, add a json_schema_capture block (schema sha256 into a content-addressed json_schema_store/, output text, request class, prompt sha256 + pointer to a json_schema_bodies/<record_id>.json body); rides serving_calls retention/rotation and kill switch (default off; off = rows byte-identical, no files)", env_on="1", env_off="0"),
     FeatureSpec("chat_finish_reason", False, False, "CHAT_FINISH_REASON", "AEI-CHAT-FINISH-REASON: /chat response carries finish_reason and truncated from the backend completion_reason (default off; fields omitted when off)", env_on="1", env_off="0"),
     FeatureSpec("truncation_narrowing_hint", False, False, "TRUNCATION_NARROWING_HINT", "AEI-TRUNC-NOTICE: the llm_call output-cap markers say how to get the rest (narrower request) instead of a bare '[... truncated at N chars]' (default off)", env_on="1", env_off="0"),
     FeatureSpec("delegation_untrusted_data_field", False, False, "DELEGATION_UNTRUSTED_DATA_FIELD", "AEI-LAUNDER-FIX-1: previous-turn REPL output/error and specialist reports travel in a delimited data block labelled as data, not interpolated into the child-role instruction (default off)", env_on="1", env_off="0"),
@@ -994,6 +995,7 @@ class Features:
     repl_handles: bool = False
     untrusted_tool_text: bool = True
     usage_root_capture: bool = False  # AEI-TOKEN-ROOT-CAPTURE: root token row per /chat request
+    serving_calls_json_schema_capture: bool = False  # SPEC-GRAM-JSON-1: schema/output/prompt-body capture for json_schema calls
     chat_finish_reason: bool = False  # AEI-CHAT-FINISH-REASON: finish_reason/truncated on /chat
     truncation_narrowing_hint: bool = False  # AEI-TRUNC-NOTICE: output-cap markers carry a narrowing hint
     delegation_untrusted_data_field: bool = False  # AEI-LAUNDER-FIX-1: untrusted text in a labelled data block, not the instruction
