@@ -3,7 +3,7 @@
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
 # master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/epyc-orchestrator/.worktrees/sc-os-apply-20261124/orchestration/stack_topology.yaml
+# with drafter selection from /mnt/raid0/llm/epyc-orchestrator/.worktrees/ak-vesc-recompile-20261124/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +12,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-11-24T06:59:05+00:00
-# Cache key:   b99ace32d7d50ecd...
+# Compiled at: 2026-11-24T07:19:07+00:00
+# Cache key:   38f8ee0a1817754d...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -2870,6 +2870,14 @@ roles:
 
       '
   vision_escalation:
+    generation_defaults:
+      n_tokens: -1
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      repeat_penalty: 1.0
     alias_of: worker_vision
     tier: C
     port: 8086
