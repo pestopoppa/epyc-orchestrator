@@ -107,6 +107,11 @@ SURFACES: dict[str, list[ParamSpec]] = {
         ParamSpec("tool_selector.k_max", 6, 24, "int"),
         ParamSpec("tool_selector.family_cap", 1, 6, "int"),
     ],
+    "thinking_headroom": [
+        # Meaningful only while thinking_budget_headroom (+ repl_thinking_budget) is on. Answer tokens kept free of
+        # thinking: below ~64 the answer itself truncates, above ~1024 it starves thinking on small caps.
+        ParamSpec("thinking.answer_floor_tokens", 64, 1024, "int"),
+    ],
     "pdf_lighton": [
         # Pages in flight against the LightOnOCR aux server, which runs -np 4: above 4 only queues.
         ParamSpec("pdf.lighton_concurrency", 1, 4, "int"),

@@ -184,3 +184,61 @@ def request_fields(request: Any, template_kwargs: dict | None) -> dict[str, Any]
         return {}
     tokens = getattr(request, "thinking_budget", None)
     return thinking_budget_fields(tokens) if tokens is not None else {}
+
+
+# -- AEI-THINK-HEADROOM (flag ``thinking_budget_headroom``, default off) -----------------
+DEFAULT_ANSWER_FLOOR_TOKENS = 256
+ANSWER_FLOOR_ENV = "ORCHESTRATOR_THINKING_ANSWER_FLOOR_TOKENS"
+
+
+def headroom_enabled() -> bool:
+    from src.features import features
+
+    return bool(getattr(features(), "thinking_budget_headroom", False))
+
+
+def answer_floor_tokens() -> int:
+    """Answer tokens kept free of thinking; autopilot sweeps ``thinking.answer_floor_tokens``."""
+    from src.env_parsing import env_int
+
+    return max(0, env_int(ANSWER_FLOOR_ENV, DEFAULT_ANSWER_FLOOR_TOKENS))
+
+
+def clamp_payload_thinking_budget(payload: dict[str, Any]) -> None:
+    """Clamp ``thinking_budget_tokens`` to ``max_tokens - floor`` in a chat body, in place.
+
+    No-op with the flag off or when the body carries no budget / no cap. When max_tokens <= floor
+    there is no room for any budget that preserves the floor; the body is left unchanged (warned).
+    """
+    if not headroom_enabled():
+        return
+    budget = payload.get("thinking_budget_tokens")
+    cap = payload.get("max_tokens")
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+        return
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap <= 0:
+        return
+    room = cap - answer_floor_tokens()
+    if room <= 0:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "thinking_budget_headroom: max_tokens=%d leaves no room above the %d-token answer floor; "
+            "thinking budget %d left unclamped", cap, answer_floor_tokens(), budget,
+        )
+        return
+    if budget > room:
+        payload["thinking_budget_tokens"] = room
+
+
+def is_thinking_exhausted(
+    output: str | None, reasoning_content: str | None, finish_reason: str | None, tool_calls: Any = None
+) -> bool:
+    """Empty content, non-empty reasoning, finish_reason=length: the cap was spent thinking."""
+    if not headroom_enabled() or tool_calls:
+        return False
+    return (
+        not (output or "").strip()
+        and bool((reasoning_content or "").strip())
+        and finish_reason == "length"
+    )

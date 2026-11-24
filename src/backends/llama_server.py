@@ -1020,9 +1020,10 @@ class LlamaServerBackend(ModelBackend):
         if ctk:
             payload["chat_template_kwargs"] = ctk
 
-        from src.backends.repl_thinking_budget import request_fields
+        from src.backends.repl_thinking_budget import clamp_payload_thinking_budget, request_fields
 
         payload.update(request_fields(request, ctk))
+        clamp_payload_thinking_budget(payload)
 
         try:
             http_start = time.perf_counter()
@@ -1159,6 +1160,17 @@ class LlamaServerBackend(ModelBackend):
 
             # A tool-call-only turn legitimately has empty content.
             empty_generation = not tool_calls and _is_empty_long_generation(output, elapsed)
+            from src.backends.repl_thinking_budget import is_thinking_exhausted
+
+            thinking_exhausted = is_thinking_exhausted(
+                output, reasoning_content, completion_reason, tool_calls
+            )
+            if thinking_exhausted:
+                empty_generation = False  # distinct, more specific failure
+                logger.warning(
+                    "Thinking exhausted the cap for %s (tokens=%s): empty content, reasoning present",
+                    role_config.name, tokens_generated,
+                )
             if empty_generation:
                 logger.warning(
                     "Empty chat_completions response after %.1fs for %s "
@@ -1175,15 +1187,21 @@ class LlamaServerBackend(ModelBackend):
                 tokens_generated=tokens_generated,
                 generation_speed=speed,
                 elapsed_time=elapsed,
-                success=not empty_generation,
+                success=not (empty_generation or thinking_exhausted),
                 error_message=(
                     f"Empty generation after {elapsed:.1f}s"
-                    if empty_generation else None
+                    if empty_generation else (
+                        "Thinking exhausted the token cap before any answer"
+                        if thinking_exhausted else None
+                    )
                 ),
                 partial=False,
-                degraded=empty_generation,
-                failure_stage="generation" if empty_generation else "",
-                failure_reason="empty_generation" if empty_generation else "",
+                degraded=empty_generation or thinking_exhausted,
+                failure_stage="generation" if (empty_generation or thinking_exhausted) else "",
+                failure_reason=(
+                    "empty_generation" if empty_generation
+                    else ("thinking_exhausted" if thinking_exhausted else "")
+                ),
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=predicted_per_second,
@@ -2085,9 +2103,10 @@ class LlamaServerBackend(ModelBackend):
         if ctk:
             payload["chat_template_kwargs"] = ctk
 
-        from src.backends.repl_thinking_budget import request_fields
+        from src.backends.repl_thinking_budget import clamp_payload_thinking_budget, request_fields
 
         payload.update(request_fields(request, ctk))
+        clamp_payload_thinking_budget(payload)
 
         chunks: list[str] = []
         reasoning_chunks: list[str] = []
@@ -2341,6 +2360,17 @@ class LlamaServerBackend(ModelBackend):
                 not tool_call_parts and completion_reason != "read_timeout"
                 and _is_empty_long_generation(output, elapsed)
             )
+            from src.backends.repl_thinking_budget import is_thinking_exhausted
+
+            thinking_exhausted = is_thinking_exhausted(
+                output, "".join(reasoning_chunks), completion_reason, tool_call_parts
+            )
+            if thinking_exhausted:
+                empty_generation = False  # distinct, more specific failure
+                logger.warning(
+                    "Thinking exhausted the cap for %s (stream): empty content, reasoning present",
+                    role_config.name,
+                )
             if empty_generation:
                 logger.warning(
                     "Empty chat_completions stream after %.1fs for %s "
@@ -2358,15 +2388,21 @@ class LlamaServerBackend(ModelBackend):
                 success=(
                     bool(output)
                     or (completion_reason != "read_timeout" and not empty_generation)
-                ),
+                ) and not thinking_exhausted,
                 error_message=(
                     f"Empty generation after {elapsed:.1f}s"
-                    if empty_generation else None
+                    if empty_generation else (
+                        "Thinking exhausted the token cap before any answer"
+                        if thinking_exhausted else None
+                    )
                 ),
                 partial=interrupted,
-                degraded=empty_generation,
-                failure_stage="generation" if empty_generation else "",
-                failure_reason="empty_generation" if empty_generation else "",
+                degraded=empty_generation or thinking_exhausted,
+                failure_stage="generation" if (empty_generation or thinking_exhausted) else "",
+                failure_reason=(
+                    "empty_generation" if empty_generation
+                    else ("thinking_exhausted" if thinking_exhausted else "")
+                ),
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=speed,

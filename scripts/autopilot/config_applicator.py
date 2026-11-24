@@ -77,6 +77,7 @@ HOT_SWAP_FEATURES = {
     "chat_finish_reason", "truncation_narrowing_hint", "usage_root_capture", "delegation_untrusted_data_field",
     "serving_calls_json_schema_capture", "empty_output_vacuity_guard",
     "test_result_skip_aware", "timeout_contention_class",
+    "thinking_budget_headroom",
     # REPL harness-robustness guards (default off): see FeatureSpec comments in src/features.py.
     "repl_syntax_loop_breaker", "repl_plan_narration_nudge", "harness_failure_ratio_guard",
     # Prefix-cache layout (default off): read per prompt build / per turn-memory add via features().
@@ -171,6 +172,9 @@ ENV_PARAMS["tool_selector"] = {
     "k_min": "ORCHESTRATOR_TOOL_SELECTOR_K_MIN",
     "k_max": "ORCHESTRATOR_TOOL_SELECTOR_K_MAX",
     "family_cap": "ORCHESTRATOR_TOOL_SELECTOR_FAMILY_CAP",
+}
+ENV_PARAMS["thinking"] = {
+    "answer_floor_tokens": "ORCHESTRATOR_THINKING_ANSWER_FLOOR_TOKENS",  # answer headroom kept free of thinking when thinking_budget_headroom is on (default 256)
 }
 ENV_PARAMS["pdf"] = {
     "lighton_concurrency": "ORCHESTRATOR_PDF_LIGHTON_CONCURRENCY",  # pages in flight; the ocr_pdf_lighton server runs -np 4
