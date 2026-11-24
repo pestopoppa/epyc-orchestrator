@@ -428,6 +428,53 @@ def _warn_if_ubatch_exceeds_batch(
         )
 
 
+# MMID-UB-CEIL-1 (intake-2868): on HIP, ggml-cuda sets smpbo from
+# sharedMemPerBlock (ggml-cuda.cu:360 @ 98ff8a4), 65536 B on the MI210, and
+# mm_ids_helper keeps one int32 per token in shared memory, so mul_mat_id
+# GGML_ASSERT-aborts above 65536 / 4 = 16384 tokens per ubatch. The guard covers
+# every GPU-device role, not only MoE ones: the argv does not say whether the
+# model is MoE, and a missed MoE role aborts mid-request. No served role is
+# anywhere near the ceiling today.
+GPU_MMID_UBATCH_CEILING = 16384
+
+
+def _flag_int(cmd: list[str], flags: tuple[str, ...]) -> int | None:
+    value: int | None = None
+    for i, tok in enumerate(cmd[:-1]):
+        if tok in flags:
+            try:
+                value = int(cmd[i + 1])
+            except (TypeError, ValueError):
+                value = None
+    return value
+
+
+def _refuse_gpu_ubatch_above_mmid_ceiling(role_name: str, cmd: list[str]) -> None:
+    """Refuse a GPU-device launch whose EFFECTIVE ubatch exceeds the MMID ceiling.
+
+    Effective ubatch is min(-ub, -b), with -b defaulting to 2048 when it is not
+    emitted (the K4 clamp). CPU launches (``--device none`` or no device) pass.
+    """
+    device = None
+    for i, tok in enumerate(cmd[:-1]):
+        if tok in _CPU_ONLY_DEVICE_FLAGS:
+            device = cmd[i + 1]
+    if not device or device.strip().lower() in ("none", "cpu"):
+        return
+    ubatch = _flag_int(cmd, ("-ub", "--ubatch-size"))
+    if ubatch is None:
+        return
+    batch = _flag_int(cmd, ("-b", "--batch-size"))
+    effective = min(ubatch, batch if batch is not None else 2048)
+    if effective > GPU_MMID_UBATCH_CEILING:
+        raise ValueError(
+            f"{role_name}: effective ubatch {effective} on GPU device {device} exceeds "
+            f"the MI210 mul_mat_id ceiling {GPU_MMID_UBATCH_CEILING} (65536 B shared "
+            "memory / 4 B per token); llama-server would GGML_ASSERT-abort in "
+            "mm_ids_helper on the first full ubatch. Lower -ub/-b. MMID-UB-CEIL-1."
+        )
+
+
 def _runtime_nonnegative_int(
     container: dict[str, Any],
     key: str,
@@ -1824,6 +1871,8 @@ def build_server_command(
     # which launch shape a role happens to use.
     prior_flags = _runtime_flags(_stack_prior_launch(prior_role)[1]) if prior_role else None
     _append_device_args(cmd, prior_flags)
+    # MMID-UB-CEIL-1: refuse a GPU launch whose effective ubatch would abort mul_mat_id.
+    _refuse_gpu_ubatch_above_mmid_ceiling(prior_role or "server", cmd)
     # SEC-ART-2/4: the FINAL argv is checked against the registry's GGUF sha256 pins and the served
     # chat-template pin before anything can reach subprocess.Popen. Raises ArtifactIntegrityError.
     _verify_artifact_integrity(cmd, prior_role, prior_flags)
