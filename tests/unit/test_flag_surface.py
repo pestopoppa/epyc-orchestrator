@@ -449,7 +449,8 @@ def test_flags_are_on_the_autopilot_hot_swap_surface_except_pinned_security_flag
     from scripts.autopilot.species.structural_lab import PINNED_OBSERVE_ONLY_FLAGS
 
     assert PINNED_OBSERVE_ONLY_FLAGS == {
-        "exec_containment", "untrusted_tool_text", "autopilot_bsv2_accept_gate", "autopilot_bsv2_accept_rigor",
+        "exec_containment", "untrusted_tool_text", "http_post_guard",
+        "autopilot_bsv2_accept_gate", "autopilot_bsv2_accept_rigor",
     }
     for bsv2 in ("autopilot_bsv2_accept_gate", "autopilot_bsv2_accept_rigor"):  # AP-BSV2-RIGOR-PIN
         assert bsv2 not in HOT_SWAP_FEATURES and bsv2 in _REGISTRY_BY_NAME
@@ -509,7 +510,7 @@ def test_planner_flag_block_names_the_pinned_flags():
 
     lab = SimpleNamespace(current_flags=lambda: {"tool_selector": False}, flag_schema=lambda: [{"name": "tool_selector", "dependencies": []}])
     block = ap._build_feature_flags_block(lab)
-    assert "Pinned observe-only security flags: autopilot_bsv2_accept_gate, autopilot_bsv2_accept_rigor, exec_containment, untrusted_tool_text" in block
+    assert "Pinned observe-only security flags: autopilot_bsv2_accept_gate, autopilot_bsv2_accept_rigor, exec_containment, http_post_guard, untrusted_tool_text" in block
     assert "repl_child_lane" not in block.split("Pinned observe-only security flags:")[1].split("\n")[0]
 
 

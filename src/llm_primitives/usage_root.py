@@ -89,6 +89,18 @@ def record_root(
         return False
 
 
+def record_stream_root(request_id: str | None, primitives: Any, *, enabled: bool | None = None) -> bool:
+    """Streaming root row: totals read from the request's primitives once the stream has finished
+    (the same getters /chat finalizes from), path ``stream``. Never raises."""
+    try:
+        prompt = getattr(primitives, "get_request_prompt_tokens", lambda: None)()
+        output = getattr(primitives, "get_request_output_usage", lambda: (None, "unknown", []))()[0]
+        return record_root(request_id, prompt, output, "stream", enabled=enabled)
+    except Exception:
+        _log.warning("usage stream root capture failed", exc_info=True)
+        return False
+
+
 def read_roots(rows: Iterable[str]) -> dict[str, dict[str, Any]]:
     """request_id -> {prompt_tokens, output_tokens_reported, path}; the last row per request wins."""
     out: dict[str, dict[str, Any]] = {}

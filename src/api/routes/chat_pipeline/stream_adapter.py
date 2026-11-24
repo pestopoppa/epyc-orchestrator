@@ -514,3 +514,7 @@ async def generate_stream(
     # Real-mode REPL streaming
     async for event in _stream_repl(request, routing, primitives, state, start_time):
         yield event
+    # AEI-TOKEN-ROOT-CAPTURE: root totals for the finished stream (flag off: no-op).
+    from src.llm_primitives.usage_root import record_stream_root
+
+    record_stream_root(request.request_id, primitives)

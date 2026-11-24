@@ -47,6 +47,25 @@ def test_flag_off_writes_nothing(tmp_path, monkeypatch):
     assert not (tmp_path / "usage_roots.jsonl").exists()
 
 
+def test_stream_root_row_from_primitives(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage_log, "log_path", lambda: tmp_path / "usage_provenance.jsonl")
+
+    class _Prim:
+        def get_request_prompt_tokens(self):
+            return 40
+
+        def get_request_output_usage(self):
+            return (7, "reported", ["tokens_predicted"])
+
+    assert usage_root.record_stream_root("req-s", _Prim(), enabled=False) is False
+    assert not (tmp_path / "usage_roots.jsonl").exists()
+    assert usage_root.record_stream_root("req-s", _Prim(), enabled=True) is True
+    roots = usage_root.read_roots((tmp_path / "usage_roots.jsonl").read_text().splitlines())
+    assert roots["req-s"] == {"prompt_tokens": 40, "output_tokens_reported": 7, "path": "stream"}
+    ledger = [_ledger_row("req-s", "a", 7)]
+    assert tsr.check(ledger, roots)["requests"]["req-s"]["ratio"] == 1.0
+
+
 def test_default_flag_is_off_and_unknown_path_never_guessed():
     from src.features import features
 
