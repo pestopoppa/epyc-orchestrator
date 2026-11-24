@@ -566,6 +566,14 @@ Rules:
         self.review_token_multiplier = float(
             getattr(deleg_cfg, "review_token_multiplier", 2.0) or 2.0
         )
+        # RPK-NEAR-BAND: extra grading passes run only when the first pass's score is
+        # within this distance of the 0.5 decision midpoint; 0.5 = every score in
+        # [0, 1] is near-band (the pre-knob behavior).
+        self.review_near_band_width = float(
+            getattr(deleg_cfg, "review_near_band_width", 0.5)
+            if getattr(deleg_cfg, "review_near_band_width", None) is not None
+            else 0.5
+        )
         self.max_taskir_tokens = deleg_cfg.max_taskir_tokens
         self.max_plan_review_tokens = deleg_cfg.max_plan_review_tokens
         # EVL-42 1c-fix (b): reviewer sees up to this many chars of the candidate
@@ -744,7 +752,8 @@ Rules:
         independent grading passes run (each emits its own trace event) and the
         plurality decision wins; ties go to the earliest pass among the tied
         decisions. The returned review is the first pass carrying the winning
-        decision.
+        decision. RPK-NEAR-BAND: extra passes run only when the first pass's
+        ``score`` is within ``review_near_band_width`` of 0.5 (default 0.5 = always).
         """
         kwargs = dict(
             quick_mode=quick_mode,
@@ -757,7 +766,12 @@ Rules:
         k = min(self.review_majority_k, max(1, math.floor(self.review_token_multiplier)))
         if k <= 1:
             return self._review_once(spec, subtask, output, **kwargs)
-        reviews = [self._review_once(spec, subtask, output, **kwargs) for _ in range(k)]
+        first = self._review_once(spec, subtask, output, **kwargs)
+        # RPK-NEAR-BAND: a far-band first pass (score farther than the width from the
+        # 0.5 midpoint) keeps the single pass; the default width 0.5 admits every score.
+        if abs(float(first.score) - 0.5) > self.review_near_band_width:
+            return first
+        reviews = [first] + [self._review_once(spec, subtask, output, **kwargs) for _ in range(k - 1)]
         counts: dict[Any, int] = {}
         for r in reviews:
             counts[r.decision] = counts.get(r.decision, 0) + 1

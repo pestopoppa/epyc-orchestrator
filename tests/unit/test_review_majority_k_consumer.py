@@ -54,3 +54,40 @@ def test_k1_same_inputs_keeps_first_pass(monkeypatch):
     _, prims, review, _ = _run(monkeypatch, 1, [_APPROVE, _CHANGES, _CHANGES])
     assert prims.calls == 1
     assert review.decision == ReviewDecision.APPROVE
+
+
+# ── RPK-NEAR-BAND ────────────────────────────────────────────────────────────
+_NEAR = '{"d":"approve","s":0.55,"f":"ok"}'
+_FAR = '{"d":"approve","s":0.95,"f":"ok"}'
+
+
+def _run_band(monkeypatch, width, responses, k=3):
+    monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REVIEW_MAJORITY_K", str(k))
+    if width is None:
+        monkeypatch.delenv("ORCHESTRATOR_DELEGATION_REVIEW_NEAR_BAND_WIDTH", raising=False)
+    else:
+        monkeypatch.setenv("ORCHESTRATOR_DELEGATION_REVIEW_NEAR_BAND_WIDTH", str(width))
+    prims = SeqPrimitives(responses)
+    svc = ArchitectReviewService(prims, trace_sink=lambda e: None)
+    svc.review_token_multiplier = 3.0
+    review = svc.review({"objective": "o"}, {"id": "s1", "action": "a"}, "out")
+    return svc, prims, review
+
+
+def test_near_band_default_width_fans_out_on_every_review(monkeypatch):
+    assert DelegationConfig().review_near_band_width == 0.5
+    _, prims, _ = _run_band(monkeypatch, None, [_FAR, _FAR, _FAR])
+    assert prims.calls == 3
+
+
+def test_near_band_review_runs_extra_passes(monkeypatch):
+    svc, prims, review = _run_band(monkeypatch, 0.2, [_NEAR, _CHANGES, _CHANGES])
+    assert svc.review_near_band_width == 0.2
+    assert prims.calls == 3
+    assert review.decision == ReviewDecision.REQUEST_CHANGES
+
+
+def test_far_band_review_runs_single_pass(monkeypatch):
+    _, prims, review = _run_band(monkeypatch, 0.2, [_FAR, _CHANGES, _CHANGES])
+    assert prims.calls == 1
+    assert review.decision == ReviewDecision.APPROVE

@@ -427,6 +427,7 @@ _RPK_ENV = {
     "review_majority_k": ("REVIEW_MAJORITY_K", "3", 3),
     "request_evidence_round_budget": ("REQUEST_EVIDENCE_ROUND_BUDGET", "2", 2),
     "review_token_multiplier": ("REVIEW_TOKEN_MULTIPLIER", "1.5", 1.5),
+    "review_near_band_width": ("REVIEW_NEAR_BAND_WIDTH", "0.2", 0.2),
 }
 
 

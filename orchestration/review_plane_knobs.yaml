@@ -130,8 +130,8 @@ knobs:
     enforcement_seam: ArchitectReviewService.review()
     semantics: >
       Number of grading passes per review; plurality decision wins (ties -> earliest
-      pass). Applies to EVERY review: no near-band definition exists yet, so it is
-      not restricted to near-band cases. Effective passes =
+      pass). Fan-out is restricted to near-band reviews via review_near_band_width
+      (default admits every review). Effective passes =
       min(k, max(1, floor(review_token_multiplier))).
     provenance: RD-2 / intake-834 (judge flakiness 2-9%) (proposed)
 
@@ -169,6 +169,23 @@ knobs:
       same tasks. Enforced as a cap on grading fan-out: effective passes =
       min(review_majority_k, max(1, floor(m))). Default 2.0 with k=1 -> no change.
     provenance: LB-2 token-multiplier / intake-839 (~2-3x cost) / intake-846 (~15x tokens) (proposed)
+
+  # ── RPK-NEAR-BAND — near-band gate for majority-of-k ───────────────────
+  - name: review_plane.review_near_band_width
+    dtype: float
+    param_type: float
+    low: 0.0
+    high: 0.5
+    default: 0.5      # |score-0.5| <= 0.5 holds for every score in [0,1] -> fan-out on every review (current behavior)
+    proposed: 0.2     # extra passes only when the first-pass score is in [0.3, 0.7]
+    restart_cost: none
+    application: runtime
+    enforcement_seam: ArchitectReviewService.review()
+    semantics: >
+      Half-width of the near-band window around the 0.5 score midpoint. The first
+      grading pass always runs; the remaining k-1 passes run only when
+      |first.score - 0.5| <= width. Smaller = fewer extra passes.
+    provenance: RPK-NEAR-BAND / RD-2 (proposed)
 
   # ── RD-10a — HANDOFF input_filter window ────────────────────────────────
   - name: review_plane.input_filter_window

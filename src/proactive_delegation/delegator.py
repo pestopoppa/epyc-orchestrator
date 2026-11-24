@@ -140,6 +140,8 @@ class ReviewPlaneKnobs:
     request_evidence_round_budget: int = 0
     # LB-2 — governed token multiplier vs single-model baseline (range 1.0-5.0; caps majority-k passes at floor(m))
     review_token_multiplier: float = 2.0
+    # RPK-NEAR-BAND: |score - 0.5| half-width inside which majority-k fan-out runs (0.5 = always)
+    review_near_band_width: float = 0.5
     # LB-5 — shadow budget-violation logging (never blocks)
     budget_shadow_logging_enabled: bool = False
     # LB-2 per-decision budgets (ceilings; used only by the shadow budget hook)

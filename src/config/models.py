@@ -1406,6 +1406,9 @@ class DelegationConfig:
     review_token_multiplier: float = field(
         default_factory=lambda: _review_plane_float("REVIEW_TOKEN_MULTIPLIER", 2.0, 1.0, 5.0)
     )
+    review_near_band_width: float = field(
+        default_factory=lambda: _review_plane_float("REVIEW_NEAR_BAND_WIDTH", 0.5, 0.0, 0.5)
+    )
 
 
 @dataclass

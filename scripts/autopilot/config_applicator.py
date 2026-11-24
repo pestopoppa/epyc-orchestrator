@@ -211,6 +211,7 @@ ENV_PARAMS["delegation"] = {
     "review_majority_k": "ORCHESTRATOR_DELEGATION_REVIEW_MAJORITY_K",
     "request_evidence_round_budget": "ORCHESTRATOR_DELEGATION_REQUEST_EVIDENCE_ROUND_BUDGET",
     "review_token_multiplier": "ORCHESTRATOR_DELEGATION_REVIEW_TOKEN_MULTIPLIER",
+    "review_near_band_width": "ORCHESTRATOR_DELEGATION_REVIEW_NEAR_BAND_WIDTH",
 }
 
 _REVIEW_PLANE_SECTION = "delegation"
@@ -424,6 +425,11 @@ REVIEW_PLANE_KNOB_SPECS: dict[str, ReviewPlaneKnob] = {
             "review_token_multiplier", "float", 2.0, 1.0, 5.0,
             doc="Scales the reviewer's token budget relative to the base "
             "grading budget (H-LB latency lever).",
+        ),
+        ReviewPlaneKnob(
+            "review_near_band_width", "float", 0.5, 0.0, 0.5,
+            doc="Majority-k fan-out runs only when the first pass's score is within "
+            "this distance of 0.5 (RPK-NEAR-BAND). 0.5 = every review (default).",
         ),
     )
 }

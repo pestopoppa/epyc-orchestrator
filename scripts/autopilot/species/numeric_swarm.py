@@ -157,6 +157,7 @@ SURFACES: dict[str, list[ParamSpec]] = {
         ParamSpec("delegation.review_majority_k", 1, 5, "int"),
         ParamSpec("delegation.request_evidence_round_budget", 0, 3, "int"),
         ParamSpec("delegation.review_token_multiplier", 1.0, 5.0, "float"),
+        ParamSpec("delegation.review_near_band_width", 0.0, 0.5, "float"),
     ],
     "spec_decode_role_restart": [
         # AP-3 class-2 launch knobs. These are expensive role-restart params:

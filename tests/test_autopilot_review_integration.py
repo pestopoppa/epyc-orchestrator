@@ -54,6 +54,7 @@ _EXPECTED_KNOBS = {
     "review_majority_k",
     "request_evidence_round_budget",
     "review_token_multiplier",
+    "review_near_band_width",
 }
 
 _EXPECTED_AXA3_KNOBS = {
