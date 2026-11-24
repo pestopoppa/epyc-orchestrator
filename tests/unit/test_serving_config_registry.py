@@ -1,6 +1,7 @@
 """serving-config artifact -> registry diff -> scratch dry-run (PROMOTION-REGISTRY-SERVING-1)."""
 from __future__ import annotations
 
+import os
 import copy
 import json
 import subprocess
@@ -11,7 +12,7 @@ import yaml
 
 from scripts.registry import serving_config_registry as scr
 
-ROOT_WORKTREE = Path("/mnt/raid0/llm/worktrees/f2-promoreg-root")
+ROOT_WORKTREE = Path(os.environ.get("EPYC_ROOT", "/workspace"))
 REAL_C22 = ROOT_WORKTREE / "docs/reference/kernel-manifests/serving-configs/C22.serving-config.json"
 ROOT_VALIDATOR = ROOT_WORKTREE / "scripts/champion/serving_config/validate_serving_config.py"
 needs_real = pytest.mark.skipif(
