@@ -204,6 +204,54 @@ def test_measured_alternate_with_empty_delta_is_refused():
         scr.build_registry_diff(cfg, _master())
 
 
+def test_alternates_write_path_end_to_end_with_a_measured_alternate(tmp_path: Path):
+    """A MEASURED alternate: artifact -> diff op -> patched master -> the pipeline's alternates step (wiring-audit
+    defect A3: the real C22 diff is empty, so no preflight ever exercised this)."""
+    from scripts.registry import stack_change_pipeline as pipeline
+
+    master = _master()
+    diff = scr.build_registry_diff(_config(), master)
+    assert any(".alternates.latency" in ".".join(o["path"]) and o["op"] == "set" for o in diff["ops"])
+    patched = scr.apply_registry_diff(master, diff)
+    reg = tmp_path / "patched.yaml"
+    reg.write_text(yaml.safe_dump(patched, sort_keys=False))
+    step = pipeline._serving_alternates_step(pipeline.StackChangePipelineConfig(
+        mode="check", repo_root=tmp_path, lean_registry=reg, research_registry=reg))
+    assert step.status == "ok", step
+    assert any("server_mode.frontdoor.serving_shape.alternates" in d for d in step.details)
+    # the same step also runs when the diff is EMPTY (patched is already the served recipe) and still catches a bad slot
+    assert scr.build_registry_diff(_config(), patched)["ops"] == []
+    patched["server_mode"]["frontdoor"]["serving_shape"]["alternates"]["latency"]["argv_delta"]["-b"] = True
+    reg.write_text(yaml.safe_dump(patched, sort_keys=False))
+    bad = pipeline._serving_alternates_step(pipeline.StackChangePipelineConfig(
+        mode="check", repo_root=tmp_path, lean_registry=reg, research_registry=reg))
+    assert bad.status == "failed" and any("takes a value" in e for e in bad.errors)
+
+
+def test_a_flag_without_its_value_cannot_reach_a_signed_diff():
+    cfg = _config()
+    cfg["servers"][0]["alternates"][0]["argv_delta"] = [{"flag": "-b", "reason": "no value"}]
+    with pytest.raises(scr.ServingAlternatesError, match="takes a value"):
+        scr.build_registry_diff(cfg, _master())
+    cfg["servers"][0]["alternates"][0]["argv_delta"] = [{"flag": "-ub", "value": "1024|2048", "reason": "sweep"}]
+    with pytest.raises(scr.ServingAlternatesError, match="'\\|'"):
+        scr.build_registry_diff(cfg, _master())
+
+
+@needs_real
+def test_a_fabricated_sha_with_a_missing_result_json_is_refused_strict(tmp_path: Path):
+    """Defect 5: the audit's fabricated-sha probe. Callers validate strict by default."""
+    doc = json.loads(REAL_C22.read_text())
+    prov = doc["servers"][0]["optimal"]["provenance"]
+    prov["result_json"], prov["result_sha256"] = "/nonexistent/fabricated/RESULT.json", "f" * 64
+    p = tmp_path / "fab.json"
+    p.write_text(json.dumps(doc))
+    with pytest.raises(scr.ServingConfigError, match="not present on this host"):
+        scr.load_serving_config(p, validator=ROOT_VALIDATOR)
+    # the lax mode is opt-in only, and is the behaviour the audit caught
+    assert scr.load_serving_config(p, validator=ROOT_VALIDATOR, strict_files=False)["champion"] == doc["champion"]
+
+
 def test_apply_patches_a_copy_and_keeps_pending_and_siblings():
     master = _master()
     before = copy.deepcopy(master)

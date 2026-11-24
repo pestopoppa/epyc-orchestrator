@@ -21,7 +21,8 @@ from src.registry.serving_alternates import (
 PROV = {"row_id": "ROW-1", "result_json": "x/RESULT.json", "result_sha256": "b" * 64}
 GOOD = {
     "latency": {"argv_delta": {"--parallel": 1, "cache_ram": 8192}, "provenance": dict(PROV)},
-    "high-temperature": {"argv_delta": {"temp": 1.0, "stop": ["a", "b"]}, "provenance": dict(PROV)},
+    "low-temperature": {"argv_delta": {"temp": 0.6, "stop": ["a", "b"], "--no-warmup": True},
+                        "provenance": dict(PROV)},
 }
 
 
@@ -41,6 +42,21 @@ def test_valid_alternates_round_trip():
         (lambda a: a["latency"].update(argv_delta={}), "non-empty"),
         (lambda a: a["latency"].update(argv_delta={"k": {"nested": 1}}), "scalar"),
         (lambda a: a["latency"].update(argv_delta={"k": [{"x": 1}]}), "scalars only"),
+        (lambda a: a["latency"].update(argv_delta={"-b": True}), "takes a value"),
+        (lambda a: a["latency"].update(argv_delta={"-ub": None}), "takes a value"),
+        (lambda a: a["latency"].update(argv_delta={"-ub": "1024|2048"}), "contains '|'"),
+        (lambda a: a["latency"].update(argv_delta={"-ctk": "q8_0 q4_0"}), "whitespace"),
+        (lambda a: a["latency"].update(argv_delta={"-ub": "big"}), "non-negative integer"),
+        (lambda a: a["latency"].update(argv_delta={"-ub": 1.5}), "non-negative integer"),
+        (lambda a: a["latency"].update(argv_delta={"-ub": [1, 2]}), "one value, not a list"),
+        (lambda a: a["latency"].update(argv_delta={"--no-warmup": 1}), "bare switch"),
+        (lambda a: a["latency"].update(argv_delta={"--new-flag": True}), "takes a value"),
+        (lambda a: a["latency"].update(argv_delta={"cache_ram": "lots"}), "non-negative integer"),
+        (lambda a: a["latency"].update(argv_delta={"temp": 1.5}), "no high-temperature testing"),
+        (lambda a: a["latency"].update(argv_delta={"--temp": 1.5}), "no high-temperature testing"),
+        (lambda a: a["latency"].update(argv_delta={"temp": -0.1}), "non-negative"),
+        (lambda a: a["latency"].update(argv_delta={"k": None}), "must not be null"),
+        (lambda a: a["latency"].update(argv_delta={"a|b": 1}), "'|'"),
         (lambda a: a["latency"].pop("provenance"), "provenance must be a mapping"),
         (lambda a: a["latency"]["provenance"].pop("row_id"), "missing"),
         (lambda a: a["latency"]["provenance"].update(result_sha256="short"), "64 lowercase hex"),
@@ -51,6 +67,33 @@ def test_malformed_alternates_are_rejected(mutate, needle):
     mutate(alts)
     with pytest.raises(ServingAlternatesError, match=needle):
         parse_alternates(alts)
+
+
+def test_typed_values_are_accepted():
+    ok = {"a": {"argv_delta": {"-ub": 256, "-b": "1024", "--temp": 0.0, "-ctk": "q4_0", "--kv-unified": True,
+                               "--ctx-checkpoints": 16, "--cache-ram": 32768, "-np": 6},
+                "provenance": dict(PROV)}}
+    assert parse_alternates(copy.deepcopy(ok)) == ok
+
+
+def test_flag_tables_match_the_root_validator():
+    """The orchestrator cannot import the root validator at runtime, so the two flag tables are kept in step here."""
+    import importlib.util
+    import os
+
+    root = Path(os.environ.get("EPYC_ROOT", "/workspace"))
+    path = root / "scripts/champion/serving_config/validate_serving_config.py"
+    if not path.is_file():
+        pytest.skip("epyc-root validator not on this host")
+    spec = importlib.util.spec_from_file_location("_v", str(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    if not hasattr(mod, "BARE_FLAGS"):
+        pytest.skip("epyc-root validator predates the typed flag tables")
+    from src.registry import serving_alternates as sa
+
+    for name in ("BARE_FLAGS", "INT_FLAGS", "FLOAT_FLAGS", "TEMP_FLAGS", "MAX_TEMPERATURE"):
+        assert getattr(sa, name) == getattr(mod, name), name
 
 
 def test_alternates_must_be_a_mapping():

@@ -411,6 +411,8 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         # 2026-10-03 STACKCHG-DFLASH2: the import-time capacity gate re-run in a fresh
         # process on the lean THIS run wrote (update was green over an over-capacity lean).
         "serving_shape_capacity",
+        # wiring-audit defect A3: alternates validated every run, not only when the diff has alternates ops.
+        "serving_alternates",
         "stack_manifest_registry",
         "q_scorer_priors",
         "runtime_attestation",
@@ -1088,6 +1090,43 @@ def test_serving_shape_capacity_is_not_a_pass_for_a_non_default_lean(tmp_path) -
     assert step.status == "skipped"
     assert step.ok is True and step.errors == []
     assert any("COULD-NOT-CHECK" in d for d in step.details)
+
+
+_ALT_PROV = {"row_id": "R", "result_json": "/x/RESULT.json", "result_sha256": "a" * 64}
+
+
+def _alt_registry(tmp_path, alternates):
+    reg = {"server_mode": {"frontdoor": {"slots": 2, "serving_shape": {"n_ctx": 4096}}}}
+    if alternates is not None:
+        reg["server_mode"]["frontdoor"]["serving_shape"]["alternates"] = alternates
+    path = tmp_path / "reg.yaml"
+    path.write_text(yaml.safe_dump(reg))
+    return path
+
+
+def test_serving_alternates_step_passes_with_and_without_alternates(tmp_path) -> None:
+    for alts, expect in ((None, "0 alternates"), ({"latency": {"argv_delta": {"-ub": 256}, "provenance": _ALT_PROV}}, "1 alternates")):
+        reg = _alt_registry(tmp_path, alts)
+        step = pipeline._serving_alternates_step(
+            StackChangePipelineConfig(mode="check", repo_root=tmp_path, lean_registry=reg, research_registry=reg))
+        assert step.status == "ok" and any(expect in d for d in step.details), step
+
+
+def test_serving_alternates_step_fails_a_valueless_flag_in_either_registry(tmp_path) -> None:
+    good = _alt_registry(tmp_path, None)
+    bad_dir = tmp_path / "bad"
+    bad_dir.mkdir()
+    bad = _alt_registry(bad_dir, {"throughput": {"argv_delta": {"-b": True}, "provenance": _ALT_PROV}})
+    for lean, master in ((bad, good), (good, bad)):
+        step = pipeline._serving_alternates_step(
+            StackChangePipelineConfig(mode="check", repo_root=tmp_path, lean_registry=lean, research_registry=master))
+        assert step.status == "failed" and any("takes a value" in e for e in step.errors), step
+
+
+def test_serving_alternates_step_is_not_a_pass_when_nothing_is_readable(tmp_path) -> None:
+    step = pipeline._serving_alternates_step(StackChangePipelineConfig(
+        mode="check", repo_root=tmp_path, lean_registry=tmp_path / "none.yaml", research_registry=None))
+    assert step.status == "skipped" and any("COULD-NOT-CHECK" in d for d in step.details)
 
 
 def test_lean_bootstrap_roles_from_sources_match_role_launch_meta() -> None:

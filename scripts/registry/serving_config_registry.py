@@ -108,11 +108,15 @@ def _load_validator(path: Path | None):
 
 
 def load_serving_config(
-    path: Path, *, validator: Path | None = None, registry: dict[str, Any] | None = None
+    path: Path, *, validator: Path | None = None, registry: dict[str, Any] | None = None,
+    strict_files: bool = True,
 ) -> dict[str, Any]:
     """Load the champion serving-config artifact; validate it with the root validator when given.
 
-    ``registry`` (the master doc) turns on the validator's ``registry_serving_shape`` drift check.
+    ``registry`` (the master doc) turns on the validator's ``registry_serving_shape`` / ``registry_runtime``
+    drift check. ``strict_files`` (default True, defect 5 of the 2026-11-24 wiring audit) makes a RESULT.json
+    that is absent from this host, or whose sha256 differs, an error: the signed diff must not rest on
+    provenance nobody could open.
     """
     path = Path(path)
     if not path.is_file():
@@ -123,7 +127,7 @@ def load_serving_config(
         raise ServingConfigError(f"{path} is not valid JSON: {exc}") from exc
     mod = _load_validator(validator)
     if mod is not None:
-        rep = mod.validate(cfg, False, registry)
+        rep = mod.validate(cfg, strict_files, registry)
         if rep.errors:
             raise ServingConfigError(
                 f"{path} fails validate_serving_config.py:\n  " + "\n  ".join(rep.errors)

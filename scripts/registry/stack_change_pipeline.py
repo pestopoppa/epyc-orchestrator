@@ -1245,6 +1245,46 @@ def _artifact_integrity_step(config: StackChangePipelineConfig) -> PipelineStep:
     )
 
 
+def _serving_alternates_step(config: StackChangePipelineConfig) -> PipelineStep:
+    """Validate every ``serving_shape.alternates`` slot in the lean AND master registry, on every run.
+
+    PROMOTION-REGISTRY-SERVING-1 / wiring-audit defect A3: the champion serving-config diff can be EMPTY
+    (the optimum already is the served recipe, alternates still pending), and then nothing in the check
+    exercised an alternates write. This step does not depend on the diff: a malformed slot (a value-taking
+    flag without its value, ``1024|2048``, a mistyped knob, T > 1.0) fails the check whether the slot was just
+    written by a promotion diff or has been sitting in the registry.
+    """
+    from src.registry.serving_alternates import ServingAlternatesError, validate_registry_alternates
+
+    errors: list[str] = []
+    details: list[str] = []
+    seen = 0
+    for label, path in (("lean", config.lean_registry), ("master", config.research_registry)):
+        if path is None or not Path(path).is_file():
+            details.append(f"{label}: no registry at {path}; not checked")
+            continue
+        try:
+            doc = yaml.safe_load(Path(path).read_text()) or {}
+        except (OSError, yaml.YAMLError) as exc:  # the lean_registry step owns unreadable-file findings
+            details.append(f"{label}: unreadable ({exc}); not checked")
+            continue
+        seen += 1
+        try:
+            declared = validate_registry_alternates(doc)
+        except ServingAlternatesError as exc:
+            errors.append(f"{label} registry alternates: {exc}")
+            continue
+        details.append(f"{label}: {len(declared)} alternates slot(s) valid" + (f" ({', '.join(declared)})" if declared else ""))
+    if not seen:
+        return PipelineStep(
+            name="serving_alternates", status="skipped",
+            details=details + ["COULD-NOT-CHECK: neither the lean nor the master registry could be read"],
+        )
+    return PipelineStep(
+        name="serving_alternates", status="failed" if errors else "ok", errors=errors, details=details,
+    )
+
+
 def _promotion_gate_command() -> list[str]:
     # The pipeline can validate a fully isolated temporary stack world, where
     # ``config.repo_root`` is not a Python project. Run the unchanged gate suite
@@ -1740,6 +1780,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
     report.steps.append(_reasoning_effort_certifications_step(config))
     report.steps.append(_artifact_integrity_step(config))
     report.steps.append(_serving_shape_capacity_step(config))
+    report.steps.append(_serving_alternates_step(config))
     report.steps.append(_stack_manifest_registry_step(config, prior_ok=report.ok))
     report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))
     if config.duration_baselines != "off":
