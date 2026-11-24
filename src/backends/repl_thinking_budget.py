@@ -231,6 +231,33 @@ def clamp_payload_thinking_budget(payload: dict[str, Any]) -> None:
         payload["thinking_budget_tokens"] = room
 
 
+@contextmanager
+def fixed_cap_budget_scope(n_tokens: int) -> Iterator[None]:
+    """HF-THINK-CAPS-2: guard a call site that hardcodes ``n_tokens`` (stages.py escalation 2048,
+    stream_adapter 1024) against an inherited thinking budget that would eat the whole cap.
+
+    Flag ``thinking_budget_headroom`` off, no inherited budget, or a budget that already fits:
+    yields with the context untouched. Otherwise the budget is clamped to ``n_tokens - floor``;
+    when no room exists above the floor the budget is refused (dropped) for this call only.
+    """
+    budget = current_budget()
+    if (
+        budget is None
+        or not headroom_enabled()
+        or isinstance(n_tokens, bool)
+        or not isinstance(n_tokens, int)
+        or n_tokens <= 0
+    ):
+        yield
+        return
+    room = n_tokens - answer_floor_tokens()
+    if budget <= room:
+        yield
+        return
+    with budget_scope(room if room > 0 else None):
+        yield
+
+
 def is_thinking_exhausted(
     output: str | None, reasoning_content: str | None, finish_reason: str | None, tool_calls: Any = None
 ) -> bool:

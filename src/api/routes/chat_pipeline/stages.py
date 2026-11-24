@@ -100,13 +100,16 @@ def _quality_escalate(
                     "escalation_skipped_roles": list(skipped_roles),
                 })
             try:
-                escalated = primitives.llm_call(
-                    prompt,
-                    role=candidate_name,
-                    n_tokens=2048,
-                    skip_suffix=True,
-                    raise_parked_errors=True,
-                )
+                from src.backends.repl_thinking_budget import fixed_cap_budget_scope
+
+                with fixed_cap_budget_scope(2048):
+                    escalated = primitives.llm_call(
+                        prompt,
+                        role=candidate_name,
+                        n_tokens=2048,
+                        skip_suffix=True,
+                        raise_parked_errors=True,
+                    )
             except RoleParkedError:
                 skipped_roles.append(candidate_name)
                 if skipped_roles_out is not None:
