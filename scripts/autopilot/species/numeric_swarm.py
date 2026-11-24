@@ -145,6 +145,19 @@ SURFACES: dict[str, list[ParamSpec]] = {
         ParamSpec("placement_policy.lease_batch_weight", 0.0, 4.0, "float"),
         ParamSpec("placement_policy.lease_eval_weight", 0.0, 4.0, "float"),
     ],
+    "review_plane": [
+        # RPK-SURFACE: reviewer control-plane class-1 numeric knobs declared in
+        # orchestration/review_plane_knobs.yaml. Names are the apply keys
+        # (`delegation.*`, env_restart via ENV_PARAMS["delegation"]); bounds mirror
+        # config_applicator.REVIEW_PLANE_KNOB_SPECS. Bool knobs are not swept (numeric
+        # surface). Absent a trial the knob defaults stay in force (behavior unchanged).
+        ParamSpec("delegation.review_trigger_complexity_threshold", 0, 3, "int"),
+        ParamSpec("delegation.max_review_iterations", 1, 5, "int"),
+        ParamSpec("delegation.reminder_cadence", 0, 50, "int"),
+        ParamSpec("delegation.review_majority_k", 1, 5, "int"),
+        ParamSpec("delegation.request_evidence_round_budget", 0, 3, "int"),
+        ParamSpec("delegation.review_token_multiplier", 1.0, 2.0, "float"),
+    ],
     "spec_decode_role_restart": [
         # AP-3 class-2 launch knobs. These are expensive role-restart params:
         # apply_params classifies them as role_restart and live application is

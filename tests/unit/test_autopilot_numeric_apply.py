@@ -115,6 +115,80 @@ def test_spec_decode_role_restart_surface_exposes_numeric_only() -> None:
     assert "role_restart.worker_kv_profile" not in by_name
 
 
+def test_review_plane_surface_matches_applicator_specs_and_routes_env_restart() -> None:
+    """RPK-SURFACE: every swept review_plane knob is an applicator knob with the same bounds."""
+    ca = importlib.import_module("scripts.autopilot.config_applicator")
+    specs = numeric_swarm.SURFACES["review_plane"]
+    assert specs
+    for spec in specs:
+        section, bare = spec.name.split(".", 1)
+        assert section == "delegation"
+        knob = ca.REVIEW_PLANE_KNOB_SPECS[bare]
+        assert knob.apply_key == spec.name
+        assert knob.kind == spec.param_type
+        assert (knob.lo, knob.hi) == (spec.low, spec.high)
+        assert bare in ca.ENV_PARAMS["delegation"]
+        assert knob.validate(spec.low) is None and knob.validate(spec.high) is None
+    names = {s.name for s in specs}
+    assert "delegation.max_review_iterations" in names
+    assert "delegation.per_subtask_review_enabled" not in names  # bool, not swept
+
+
+def test_review_plane_trial_is_proposable_and_appliable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The swarm can propose a delegation.max_review_iterations trial and apply_params applies it."""
+    ca = importlib.import_module("scripts.autopilot.config_applicator")
+    spec = next(s for s in numeric_swarm.SURFACES["review_plane"] if s.name == "delegation.max_review_iterations")
+    # Proposal: suggest_trial draws int values inside [low, high] for exactly these names.
+    class _T:
+        def suggest_int(self, name, lo, hi):
+            assert lo <= hi
+            return hi
+
+        def suggest_float(self, name, lo, hi, log=False):
+            return lo
+
+    drawn = {
+        s.name: (_T().suggest_int(s.name, int(s.low), int(s.high)) if s.param_type == "int"
+                 else _T().suggest_float(s.name, s.low, s.high))
+        for s in numeric_swarm.SURFACES["review_plane"]
+    }
+    assert drawn["delegation.max_review_iterations"] == spec.high
+
+    seen: dict[str, object] = {}
+
+    def fake_env(env_params, url=None, **_kw):
+        seen.update(env_params)
+        return {"status": "ok", "applied": dict(env_params), "errors": []}
+
+    monkeypatch.setattr(ca, "apply_env_params", fake_env)
+    result = ca.apply_params({"delegation.max_review_iterations": 2})
+    assert result["classified"]["env_restart"] == {"delegation.max_review_iterations": 2}
+    assert result["status"] == "ok"
+    assert seen == {"delegation.max_review_iterations": 2}
+
+    # Out of bounds is rejected before any write.
+    seen.clear()
+    bad = ca.apply_params({"delegation.max_review_iterations": spec.high + 1})
+    assert bad["status"] == "error" and seen == {}
+
+
+def test_review_plane_surface_off_is_behavior_identical(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a trial nothing is written and the delegator defaults equal the declared defaults."""
+    ca = importlib.import_module("scripts.autopilot.config_applicator")
+    delegator = importlib.import_module("src.proactive_delegation.delegator")
+    calls: list[object] = []
+    monkeypatch.setattr(ca, "apply_env_params", lambda *a, **k: calls.append(a) or {"status": "ok", "errors": []})
+    ca.apply_params({})
+    assert calls == []
+    knobs = delegator.ReviewPlaneKnobs()
+    for name, knob in ca.REVIEW_PLANE_KNOB_SPECS.items():
+        if hasattr(knobs, name):
+            assert getattr(knobs, name) == knob.default, name
+    # The new surface does not disturb the existing ones.
+    for existing in ("memrl_retrieval", "think_harder", "gpu_placement_policy", "spec_decode_role_restart"):
+        assert existing in numeric_swarm.SURFACES
+
+
 def test_suggested_numeric_trial_env_restart_skips_without_marking_failed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

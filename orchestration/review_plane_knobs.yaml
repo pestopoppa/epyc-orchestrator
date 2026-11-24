@@ -14,23 +14,23 @@ description: >
   values are the LB-2 targets and are PROPOSED / observation-grade — none may
   gate an enforce-mode flip on its own (blocked on H-LB LB-6 budget gate).
 
-# ── Merge point for the autopilot agent (AP-1) ──────────────────────────────
-# The delegator reads these knobs via ReviewPlaneKnobs.from_config()
-# (src/proactive_delegation/delegator.py): it looks for each field on
-# get_config().delegation (or a nested `review_plane` section) and otherwise
-# uses the behavior-preserving default. To wire this manifest into the live,
-# hot-swappable surface the autopilot should:
-#   1. Add the sweepable int/float knobs below to numeric_swarm.SURFACES as a new
-#      surface "review_plane" (ParamSpec(name, low, high, param_type)); names use
-#      the dotted "review_plane.<knob>" form.
-#   2. Route them in config_applicator: runtime (restart_cost: none) knobs go to a
-#      hot-swap path (POST /config → runtime flags), NOT ENV_PARAMS (those force an
-#      API restart). Boolean knobs route like HOT_SWAP_FEATURES.
-#   3. Surface each on get_config().delegation.review_plane so from_config() picks
-#      it up with no delegator change. Until then, defaults apply (behavior
-#      unchanged).
-#   4. Seed initial values via the strategy store (flag-gate + SQLite write),
-#      per seeding discipline.
+# ── How this file is wired (RPK-SURFACE, 2026-11-24) ────────────────────────
+# This file IS loaded: scripts/autopilot/config_applicator.py
+# ::load_review_plane_knob_manifest reads it and overlays bounds/defaults on the
+# built-in REVIEW_PLANE_KNOB_SPECS (the built-ins apply when it is absent).
+# The autopilot sweep surface is numeric_swarm.SURFACES["review_plane"]: the
+# int/float knobs below that have an ENV_PARAMS["delegation"] route, under their
+# `delegation.<knob>` apply keys (this file's `review_plane.<knob>` names map to
+# them; bool knobs are not swept). apply_params validates the bounds and writes
+# ORCHESTRATOR_DELEGATION_<KNOB> via the env_restart path (an API reload, NOT the
+# hot-swap path: the realized restart_cost is api_restart even where this file
+# declares `none`). Knobs with no ENV_PARAMS route (max_total_review_iterations,
+# input_filter_window, decision_cache_enabled, budget_shadow_logging_enabled)
+# are declared here but not yet sweepable.
+# The delegator reads ReviewPlaneKnobs.from_config()
+# (src/proactive_delegation/delegator.py): per-field values on
+# get_config().delegation (or a nested `review_plane` section), else the
+# behavior-preserving default. Absent a trial, defaults apply (unchanged).
 merge_point:
   consumer: scripts/autopilot/config_applicator.py::apply_params
   delegator_reader: src/proactive_delegation/delegator.py::ReviewPlaneKnobs.from_config

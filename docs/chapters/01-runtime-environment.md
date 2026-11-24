@@ -253,6 +253,17 @@ Environment variables that control REPL turn budgets and token caps. These are s
 | `ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP` | 200000 | Max cumulative completion tokens per task |
 | `ORCHESTRATOR_CASCADING_TOOL_POLICY` | 1 | Enable PolicyLayer chain (legacy path denies all tools) |
 
+Reviewer control-plane knobs (RPK-SURFACE; autopilot `numeric_swarm` surface `review_plane`, apply keys `delegation.*`, env_restart = API reload; declared in `orchestration/review_plane_knobs.yaml`). Defaults preserve current behaviour; the autopilot writes these only while running a trial.
+
+| Variable | Default | Range | Purpose |
+|----------|---------|-------|---------|
+| `ORCHESTRATOR_DELEGATION_REVIEW_TRIGGER_COMPLEXITY_THRESHOLD` | 0 | 0-3 | Per-subtask review runs only at or above this TaskComplexity rank |
+| `ORCHESTRATOR_DELEGATION_MAX_REVIEW_ITERATIONS` | 3 | 1-5 | Review turns per task on the shared iteration ledger |
+| `ORCHESTRATOR_DELEGATION_REMINDER_CADENCE` | 0 | 0-50 | Steps between plan-reminder re-injections (0 = off) |
+| `ORCHESTRATOR_DELEGATION_REVIEW_MAJORITY_K` | 1 | 1-5 | Grading passes for near-band majority vote |
+| `ORCHESTRATOR_DELEGATION_REQUEST_EVIDENCE_ROUND_BUDGET` | 0 | 0-3 | request_evidence follow-up rounds |
+| `ORCHESTRATOR_DELEGATION_REVIEW_TOKEN_MULTIPLIER` | 2.0 | 1.0-2.0 | Governed review token multiplier (2.0 = ceiling, never throttles) |
+
 ### Structured Output & Budget Interaction
 
 The REPL turn token budget (`ORCHESTRATOR_REPL_TURN_N_TOKENS`) is shared across regular completion output, the `structured_tool_output` envelope (when enabled), and any `session_log` / `session_scratchpad` summary injection. When both `structured_tool_output` and the session log/scratchpad features are enabled, the effective budget available for code-execution prose may be noticeably lower than the raw token cap suggests.
