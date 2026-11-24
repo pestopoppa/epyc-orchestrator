@@ -98,3 +98,46 @@ def test_flag_default_off_and_aggregate_helper(monkeypatch):
     b.failure_provenance = None
     out = eval_tower._timeout_class_rates([a, b])
     assert out["counts"]["model_slow"] == 1 and out["rates"]["model_slow"] == 0.5
+
+
+def _genexc_result(monkeypatch, exc):
+    import types
+
+    fake = types.ModuleType("host_health")
+    fake.host_timing_covariates = lambda **kw: {
+        "host_inflight": 4, "loadavg_1min": 9.0, "loadavg_per_core": 0.9,
+    }
+    monkeypatch.setitem(sys.modules, "host_health", fake)
+
+    def _boom(**kw):
+        raise exc
+
+    monkeypatch.setattr(eval_tower, "call_orchestrator_forced", _boom)
+    tower = eval_tower.EvalTower()
+    q = {"id": "q", "suite": "unit", "prompt": "2+2", "expected": "4",
+         "scoring_method": "exact_match"}
+    return tower._generate_question(q, None).final_result
+
+
+def test_generation_exception_timeout_labelled_when_on(monkeypatch):
+    import httpx
+
+    _on(monkeypatch)
+    row = _genexc_result(monkeypatch, httpx.ReadTimeout("slow"))
+    prov = row.failure_provenance
+    assert prov["class"] == "backend_timeout" and prov["phase"] == "generation_exception"
+    assert prov["contention_class"] == "contention"
+    assert prov["contention_inputs"]["host_inflight"] == 4
+    # Non-timeout exceptions stay unlabelled.
+    other = _genexc_result(monkeypatch, ValueError("bad"))
+    assert other.failure_provenance is None
+    # Aggregate counts it.
+    assert eval_tower._timeout_class_rates([row])["counts"]["contention"] == 1
+
+
+def test_generation_exception_timeout_unchanged_when_off(monkeypatch):
+    import httpx
+
+    row = _genexc_result(monkeypatch, httpx.ReadTimeout("slow"))
+    assert row.failure_provenance is None
+    assert row.disposition == eval_tower.DISPOSITION_INFRA_FAILED

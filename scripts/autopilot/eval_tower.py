@@ -5160,6 +5160,34 @@ class EvalTower:
                 eval_partition=eval_partition,
                 host_covariates=host_covariates,
             )
+            if _timeout_contention_class_on():
+                # HF-TIMEOUT-GENEXC: label only. A timeout that surfaced as a
+                # generation exception gets a provenance row (class
+                # backend_timeout, so no existing transport-timeout counter or
+                # retry branch changes) carrying contention_class.
+                _raw_reason = _exception_reason(e)
+                if _raw_reason in {"connect_timeout", "read_timeout", "timeout"} or isinstance(
+                    e, TimeoutError
+                ):
+                    from src.autopilot_core.timeout_contention import (
+                        label_timeout_provenance,
+                    )
+
+                    if not _raw_reason.endswith("timeout"):
+                        _raw_reason = "timeout"
+                    failed.failure_provenance = label_timeout_provenance(
+                        {
+                            "schema": "epyc.failure_provenance.v1",
+                            "class": "backend_timeout",
+                            "code": _raw_reason,
+                            "phase": "generation_exception",
+                            "role": "",
+                            "exception_class": type(e).__name__,
+                            "exception_reason": _raw_reason,
+                            "workload_class": "eval_batch",
+                        },
+                        host_covariates,
+                    )
             return _GenOutcome(gen_ended_at_s=start + elapsed, final_result=failed)
 
     def _score_generation(
