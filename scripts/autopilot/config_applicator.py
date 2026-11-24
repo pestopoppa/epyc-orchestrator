@@ -106,6 +106,9 @@ HOT_SWAP_FEATURES = {
     # HAR-COMPACT-LEDGER-1 (2026-11-24): failed-action ledger + pinned-pointer restore in session compaction,
     # default off, read live per compaction via features().
     "compaction_failed_action_ledger",
+    # CTE-CFAB-A8 (2026-11-24): digest-catalog / unfold context arms, default off. The flag is read live by features(); the
+    # arm itself is selected by ORCHESTRATOR_CONTEXT_ARM, which is an env var and needs an API restart (and context_arm_ab).
+    "context_fold_digest",
 }
 
 # Parameters applied via env vars (require API restart)

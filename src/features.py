@@ -187,6 +187,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("session_log", False, True, "SESSION_LOG", "Append-only processing journal"),
     FeatureSpec("session_log_verbatim", False, False, "SESSION_LOG_VERBATIM", "Verbatim experiment history"),
     FeatureSpec("context_arm_ab", False, False, "CONTEXT_ARM_AB", "Context compression experiment arms", ("session_log_verbatim",)),
+    FeatureSpec("context_fold_digest", False, False, "CONTEXT_FOLD_DIGEST", "CTE-CFAB-A8 (CF-AB-1 arm A8): digest catalog of every past turn plus agent-selected unfold via the peek pointer in each digest line, under the declared history budget; arms digest_unfold and digest_unfold_compressor (second-role compressor with pinned-pointer restoration) selected by ORCHESTRATOR_CONTEXT_ARM; needs context_arm_ab; runs only after TOC-SP-5 shows a binding window at the role (default off)", ("context_arm_ab",)),
     FeatureSpec("session_scratchpad", False, True, "SESSION_SCRATCHPAD", "Model-extracted semantic insights"),
     FeatureSpec("depth_model_overrides", False, True, "DEPTH_MODEL_OVERRIDES", "Map nested depth to cheaper roles"),
     FeatureSpec("resume_tokens", False, True, "RESUME_TOKENS", "Base64url continuation tokens"),
@@ -774,6 +775,7 @@ class Features:
     session_log: bool = False  # Append-only processing journal across REPL turns
     session_log_verbatim: bool = False
     context_arm_ab: bool = False
+    context_fold_digest: bool = False  # CTE-CFAB-A8: digest catalog + unfold arms of the context-arm A/B (default off)
     session_scratchpad: bool = False  # Model-extracted semantic insights from session log
     depth_model_overrides: bool = False  # Map nested llm_call depth to cheaper roles
     resume_tokens: bool = False  # Base64url continuation tokens for crash recovery

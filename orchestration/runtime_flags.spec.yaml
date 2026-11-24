@@ -59,6 +59,7 @@ flags:
   content_cache: baseline
   context_arm_ab: baseline
   context_compression: baseline
+  context_fold_digest: baseline
   credential_redaction: baseline
   dcp_for_consult: baseline
   dcp_pre_assembly: baseline

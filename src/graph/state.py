@@ -158,6 +158,9 @@ class TaskState:
     history_invalid_reason: str = ""
     history_token_count_source: str = ""
     history_log_write_wall_s: float = 0.0
+    history_digest_catalog: str = ""  # CTE-CFAB-A8 digest catalog text (frozen at the last boundary)
+    history_digest_stats: dict[str, Any] = field(default_factory=dict)
+    history_unfolded: list[int] = field(default_factory=list)  # turn ids the agent unfolded (pinned in the compressor arm)
 
     # Session scratchpad (model-extracted semantic insights)
     scratchpad_entries: list[Any] = field(default_factory=list)

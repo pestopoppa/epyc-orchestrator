@@ -11,6 +11,10 @@ from typing import Any
 from src.graph.toc_openclaw_prompts import (
     SUMMARIZATION_PROMPT, SUMMARIZATION_SYSTEM_PROMPT, UPDATE_SUMMARIZATION_PROMPT,
 )
+from src.graph.context_fold_digest import (
+    COMPRESSOR_ROLE_ENV, DIGEST_ARMS, catalog as _digest_catalog, compressor_prompt, parse_compressor,
+    render as _digest_render,
+)
 from src.security.control_tokens import neutralise_control_tokens
 
 ARMS = frozenset({'summary_only', 'summary_pointer', 'pointer_only', 'prune_pointer', 'full_history', 'persistence_floor'})
@@ -42,7 +46,12 @@ def settings() -> tuple[str, int, float, set[int]]:
     arm = os.environ.get('ORCHESTRATOR_CONTEXT_ARM', '')
     if arm in UNIMPLEMENTED_ARMS:
         raise ValueError(f'context arm {arm!r} is scheduled by the TOC-CMP-4 v2 runner but not implemented yet')
-    if arm not in ARMS:
+    if arm in DIGEST_ARMS:
+        if not flags.context_fold_digest:
+            raise ValueError(f'context arm {arm!r} requires context_fold_digest')
+        if arm == 'digest_unfold_compressor' and not os.environ.get(COMPRESSOR_ROLE_ENV, '').strip():
+            raise ValueError(f'digest_unfold_compressor requires {COMPRESSOR_ROLE_ENV} (the second role)')
+    elif arm not in ARMS:
         raise ValueError(f'invalid context arm {arm!r}')
     budget = int(os.environ.get('ORCHESTRATOR_CONTEXT_BUDGET_TOKENS', '16384'))
     fraction = float(os.environ.get('ORCHESTRATOR_CONTEXT_TRIGGER_FRACTION', '.5'))
@@ -130,6 +139,8 @@ def render(state: Any, repl: Any = None, count_tokens=None) -> str:
     if not state.history_boundaries or arm == 'full_history':
         from src.graph.file_artifacts import _spill_if_truncated
         return '\n'.join(_turn_text(t, output=_spill_if_truncated(t['output'], 1500, 'output', state, repl=repl)) for t in turns)
+    if arm in DIGEST_ARMS:
+        return _digest_render(state, arm, turns[state.history_tail_start:], _turn_text)
     if arm in {'summary_only', 'summary_pointer', 'pointer_only', 'persistence_floor'}:
         tail = state.history_tail_start
         parts = []
@@ -225,6 +236,17 @@ async def boundary(ctx: Any, *, force: bool = False) -> None:
     if arm == 'prune_pointer':
         state.history_pruned_outputs = _prune_at_boundary(state, budget, fraction, count_tokens)
     state.history_tail_start = _tail_start(state.history_turns, budget, count_tokens)
+    if arm in DIGEST_ARMS:
+        older = state.history_turns[:state.history_tail_start]
+        sentences = None
+        if arm == 'digest_unfold_compressor' and older:
+            role =os.environ[COMPRESSOR_ROLE_ENV].strip()
+            messages = [{'role': 'user', 'content': neutralise_control_tokens(compressor_prompt(older))}]
+            result = await asyncio.to_thread(ctx.deps.primitives.chat_completion_call, messages,
+                role=role, n_tokens=min(4096, 96 * len(older)), temperature=0)
+            sentences = parse_compressor(result.get('content', ''), older)
+        state.history_digest_catalog, state.history_digest_stats = _digest_catalog(
+            state, older, budget, count_tokens, sentences)
     state.history_boundaries.append(state.turns)
     state.history_boundary_index = len(state.history_turns)
     after = _estimate_context_tokens(ctx, render(state, ctx.deps.repl, count_tokens))
