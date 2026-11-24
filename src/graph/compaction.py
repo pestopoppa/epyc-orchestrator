@@ -217,7 +217,7 @@ _PINNED_RES = (
     re.compile(r"(?<![\w/.:\-])(?:[\w.\-+@]+/)+[\w\-+@]+\.%s\b" % _FILE_EXTS),
     re.compile(r"(?<![\w/.:\-])[\w\-+@]+\.%s\b" % _FILE_EXTS),
     re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),  # UUIDs
-    re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"),  # hex digests / commit ids (at least one a-f)
+    re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,64}\b"),  # hex digests / commit ids, sha1 and sha256 (at least one a-f)
     re.compile(r"\b[A-Z][A-Z0-9]{1,}(?:-[A-Za-z0-9]+)+\b"),  # ticket / box ids
     re.compile(r"\b\d+(?:\.\d+)+\b|\b\d{4,}\b"),  # decimals and 4+ digit numbers
 )

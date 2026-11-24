@@ -118,6 +118,18 @@ REAL_LOOP_HALT = (
 )
 
 
+SHA256 = "2cb68261937d35d04a74bbe1a4a8c0f066be3a178ec4dc1a2572aab4cb4ff4cb"
+
+
+def test_sha256_digest_is_pinned_whole_and_survives():
+    snippet = f'"base_content_sha256": "{SHA256}"'
+    toks = extract_pinned_tokens(snippet)
+    assert SHA256 in toks
+    assert SHA256[:40] not in toks  # no half-match of a longer hex run
+    old = snippet + "\n" + FILLER + "\n" + "tail line\n" * 400
+    assert SHA256 in apply_integrity(old, "[Recent Context]\n" + old[-500:])
+
+
 def test_real_loop_halted_is_a_failed_action():
     assert extract_failed_actions("noise\n" + REAL_LOOP_HALT + "\nnoise") == [REAL_LOOP_HALT]
 
