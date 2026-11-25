@@ -1455,6 +1455,40 @@ def _timeout_contention_class_on() -> bool:
         return False
 
 
+def _server_log_crash_class_on() -> bool:
+    """server_log_crash_class flag read (default off; fails closed)."""
+    try:
+        from src.features import features as _features
+
+        return bool(_features().server_log_crash_class)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _server_log_scan_for(role: str, failure_time: float):
+    """Zero-arg crash-log scanner for ``role`` (None when the flag is off or role unknown).
+
+    Ports come from NUMA_CONFIG instances; logs are LOG_DIR/llama-server-<port>.log.
+    """
+    if not _server_log_crash_class_on() or not role:
+        return None
+
+    def _scan():
+        from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+        from scripts.server.stack_paths import LOG_DIR  # type: ignore[import-not-found]
+        from src.autopilot_core.server_log_crash import server_log_crash
+
+        ports = []
+        for entry in ((NUMA_CONFIG or {}).get(role) or {}).get("instances") or []:
+            try:
+                ports.append(int(entry[1]))
+            except (TypeError, ValueError, IndexError):
+                continue
+        return server_log_crash(ports, log_dir=LOG_DIR, failure_time=failure_time)
+
+    return _scan
+
+
 def _speed_analytics_ge_128(
     results: list["QuestionResult"],
     *,
@@ -5097,9 +5131,16 @@ class EvalTower:
             # answer came from a generation (non-blank text with a zero token counter
             # is not a wrong answer, it is no answer).
             _infra_reason = infra_failure_reason(
-                resp, error=error, require_generation_evidence=True
+                resp,
+                error=error,
+                require_generation_evidence=True,
+                server_log_scan=_server_log_scan_for(
+                    str(q.get("force_role") or resp.get("routed_to") or ""), time.time()
+                ),
             )
-            if _infra_reason is not None and not str(error or "").strip():
+            if _infra_reason == "candidate_crash" and not str(error or "").strip():
+                error = "candidate_crash: server log holds a crash marker"
+            elif _infra_reason is not None and not str(error or "").strip():
                 error = f"infra_failed: {_infra_reason}"
                 log.error(
                     "REL-1 infra failure with no error text "
@@ -5332,11 +5373,15 @@ class EvalTower:
         # 0.0 — or as an anonymous `error` indistinguishable from a broken
         # scorer — is what let a dead API report itself as a model scoring 0%
         # on 2026-08-03.
+        _crash_scan = _server_log_scan_for(
+            str(q.get("force_role") or resp.get("routed_to") or ""), time.time()
+        )
         disposition = measurement_disposition(
             resp,
             error=error,
             scoring_failed=scoring_failed,
             require_generation_evidence=True,  # ETR-3 (measurement path)
+            server_log_scan=_crash_scan,
         )
         infra_reason = (
             (

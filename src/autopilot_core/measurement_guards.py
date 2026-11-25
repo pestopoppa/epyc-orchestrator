@@ -26,9 +26,10 @@ outcome on either path.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 __all__ = [
+    "CANDIDATE_CRASH",
     "DISPOSITION_INFRA_FAILED",
     "DISPOSITION_SCORED",
     "DISPOSITION_SCORING_FAILED",
@@ -140,6 +141,7 @@ def forced_role_serving_mismatch(
 
 DISPOSITION_SCORED = "scored"
 DISPOSITION_INFRA_FAILED = "infra_failed"
+CANDIDATE_CRASH = "candidate_crash"  # server_log_crash_class: log holds a crash marker
 DISPOSITION_SCORING_FAILED = "scoring_failed"
 DISPOSITION_TASK_FAILED = "task_failed"
 
@@ -292,7 +294,7 @@ def _http_status_of(resp: Mapping[str, Any]) -> int | None:
     return None
 
 
-def infra_failure_reason(
+def _infra_failure_reason_base(
     resp: Mapping[str, Any] | None = None,
     *,
     error: Any = None,
@@ -414,12 +416,45 @@ def infra_failure_reason(
     return None
 
 
+def infra_failure_reason(
+    resp: Mapping[str, Any] | None = None,
+    *,
+    error: Any = None,
+    require_generation_evidence: bool = False,
+    server_log_scan: Callable[[], str | None] | None = None,
+) -> str | None:
+    """Infra-failure reason, optionally upgraded to ``candidate_crash`` from the server log.
+
+    ``server_log_scan`` (flag ``server_log_crash_class``; None = off, identical to
+    ``_infra_failure_reason_base``): a zero-arg callable returning a crash-marker line from
+    the role's llama-server log, or None. When the base reason is a connection drop,
+    ``connect_error`` or ``empty_response`` and the scan hits, the reason becomes
+    ``candidate_crash``: the server died under the request, which is a candidate fault.
+    """
+    reason = _infra_failure_reason_base(
+        resp, error=error, require_generation_evidence=require_generation_evidence
+    )
+    if server_log_scan is None:
+        return reason
+    from src.autopilot_core.server_log_crash import is_drop  # noqa: PLC0415
+
+    if is_drop(reason, "" if error is None else str(error)):
+        try:
+            hit = server_log_scan()
+        except Exception:  # noqa: BLE001 - classification must never raise
+            hit = None
+        if hit:
+            return CANDIDATE_CRASH
+    return reason
+
+
 def measurement_disposition(
     resp: Mapping[str, Any] | None = None,
     *,
     error: Any = None,
     scoring_failed: bool = False,
     require_generation_evidence: bool = False,
+    server_log_scan: Callable[[], str | None] | None = None,
 ) -> str:
     """Classify one response into a measurement disposition.
 
@@ -440,12 +475,16 @@ def measurement_disposition(
     # endpoint.
     if scoring_failed:
         return DISPOSITION_SCORING_FAILED
-    if (
-        infra_failure_reason(
-            resp, error=error, require_generation_evidence=require_generation_evidence
-        )
-        is not None
-    ):
+    _reason = infra_failure_reason(
+        resp,
+        error=error,
+        require_generation_evidence=require_generation_evidence,
+        server_log_scan=server_log_scan,
+    )
+    if _reason == CANDIDATE_CRASH:
+        # The server crashed under the candidate: counts against it, not excluded as infra.
+        return DISPOSITION_TASK_FAILED
+    if _reason is not None:
         return DISPOSITION_INFRA_FAILED
     if error is not None and str(error).strip():
         return DISPOSITION_TASK_FAILED
