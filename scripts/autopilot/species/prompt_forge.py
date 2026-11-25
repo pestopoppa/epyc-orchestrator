@@ -453,6 +453,19 @@ class CodeMutation:
     # Stamped by ``propose_code_mutation`` after screening and the risk gate; empty on a
     # hand-constructed mutation. Enforced at apply only under AUTOPILOT_MUTATION_REQUIRE_SCREEN=1.
     screen_stamp: str = ""
+    # HF-DEPLOY-ANCESTRY: sha256 of the content the apply wrote; revert_code_mutation compares it
+    # (under deploy_ancestry_guard) so it never overwrites a file that has since moved.
+    post_apply_hash: str = ""
+
+
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _deploy_ancestry_guard_on() -> bool:
+    from src.features import features as _features
+
+    return bool(_features().deploy_ancestry_guard)
 
 
 MUTATION_REQUIRE_SCREEN_ENV = "AUTOPILOT_MUTATION_REQUIRE_SCREEN"
@@ -1312,6 +1325,7 @@ class PromptForge:
 
         rel_path = abs_path.relative_to(PROJECT_ROOT).as_posix()
         ctx.apply_file(rel_path, mutation.mutated_content)
+        mutation.post_apply_hash = _content_hash(mutation.mutated_content)
         mutation.accepted = True
         return {
             "status": "applied_isolated",
@@ -1480,6 +1494,16 @@ class PromptForge:
     def revert_code_mutation(self, mutation: CodeMutation) -> None:
         """Revert a code mutation to original content and commit the revert."""
         abs_path = PROJECT_ROOT / mutation.file
+        if mutation.post_apply_hash and _deploy_ancestry_guard_on():
+            try:
+                current_hash = _content_hash(abs_path.read_text())
+            except FileNotFoundError:
+                current_hash = "<missing>"
+            if current_hash != mutation.post_apply_hash:
+                raise RuntimeError(
+                    f"revert refused: {mutation.file} no longer matches the mutation's post-apply hash "
+                    f"({current_hash[:12]} != {mutation.post_apply_hash[:12]}); the file moved since apply"
+                )
         if mutation.mutation_type == "new_file" and not mutation.original_content:
             abs_path.unlink(missing_ok=True)
         else:

@@ -3813,6 +3813,13 @@ def main() -> int:
         "as an ERROR again (default 5400 s, max 14400 s)",
     )
 
+    reload_parser.add_argument(
+        "--allow-rollback",
+        action="store_true",
+        help="with deploy_ancestry_guard on, allow reloading a code ref that is not a descendant "
+        "of the last-deployed ref",
+    )
+
     # Status command
     for _lifecycle_parser in (start_parser, stop_parser, reload_parser):
         _lifecycle_parser.add_argument(

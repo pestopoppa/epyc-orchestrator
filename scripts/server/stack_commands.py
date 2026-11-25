@@ -2306,6 +2306,56 @@ def _diag_override_target(component: str) -> tuple[int, list[str], str] | str:
     return port, roles, _diag_record_key(port, roles)
 
 
+def _deployed_ref_file() -> Path:
+    return _orchestrator_stack().STATE_FILE.with_name("deployed_code_ref.json")
+
+
+def _current_code_ref() -> str | None:
+    """Full HEAD sha of the orchestrator tree being deployed (None if unresolvable)."""
+    try:
+        r = subprocess.run(["git", "-C", str(_PATHS["project_root"]), "rev-parse", "HEAD"],
+                           text=True, capture_output=True, check=False, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() or None if r.returncode == 0 else None
+
+
+def _last_deployed_ref() -> str | None:
+    try:
+        value = json.loads(_deployed_ref_file().read_text()).get("code_ref")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return value or None
+
+
+def _record_deployed_ref(ref: str | None) -> None:
+    if not ref:
+        return
+    try:
+        path = _deployed_ref_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"code_ref": ref, "recorded_at": time.time()}, indent=2))
+    except OSError as exc:
+        print(f"  [WARN] could not record deployed code ref: {exc}")
+
+
+def _ancestry_refusal(ref: str | None, last: str | None) -> str | None:
+    """Reason a reload of ``ref`` must be refused, or None. Unknown history never refuses."""
+    if not ref or not last or ref == last:
+        return None
+    try:
+        r = subprocess.run(["git", "-C", str(_PATHS["project_root"]), "merge-base", "--is-ancestor", last, ref],
+                           capture_output=True, check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode == 0:
+        return None
+    if r.returncode == 1:
+        return (f"code ref {ref[:12]} is not a descendant of the last-deployed ref {last[:12]} "
+                "(rollback or divergent checkout); pass --allow-rollback to override")
+    return None  # ref unknown to this clone etc.: cannot prove a rollback
+
+
 def cmd_reload(args: argparse.Namespace) -> int:
     """Reload components."""
     if not _capacity_launch_gate():
@@ -2313,6 +2363,14 @@ def cmd_reload(args: argparse.Namespace) -> int:
     # SS-BENCH-GATE-b: same force plumbing as cmd_start — the reload that
     # spawned the incident's sidecar must honor --allow-during-bench per-spawn.
     bench_force = bool(getattr(args, "allow_during_bench", False))
+    code_ref = _current_code_ref()
+    from src.features import features as _features
+
+    if _features().deploy_ancestry_guard and not getattr(args, "allow_rollback", False):
+        refusal = _ancestry_refusal(code_ref, _last_deployed_ref())
+        if refusal:
+            print(f"[REFUSED] {refusal}")
+            return 2
     state = load_state()
     registry: RegistryLoader | None = None
 
@@ -2640,6 +2698,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 return 1
 
     save_state(state)
+    _record_deployed_ref(code_ref)
     # ESC-8 Fix 2: record the realized mode so the next reload reads a manifest
     # that matches the live fleet instead of carrying a poisoned "full" forward.
     _refresh_runtime_facts_manifest(

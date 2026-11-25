@@ -209,6 +209,7 @@ flags:
   empty_output_vacuity_guard: baseline
   server_log_crash_class: baseline
   test_result_skip_aware: baseline
+  deploy_ancestry_guard: baseline
   timeout_contention_class: baseline
   thinking_budget_headroom: baseline
   tool_denial_names_allowed: baseline
