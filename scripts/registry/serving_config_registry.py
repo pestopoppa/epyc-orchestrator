@@ -528,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--out", type=Path)
         p.add_argument("--validator", type=Path, default=None,
                        help="epyc-root scripts/champion/serving_config/validate_serving_config.py")
+        p.add_argument("--no-validate", action="store_true",
+                       help="explicitly skip the root validator (default: refuse when --validator is not given)")
         if name != "diff":
             p.add_argument("--scratch", type=Path)
             p.add_argument("--repo-root", type=Path, default=REPO_ROOT)
@@ -539,6 +541,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--master", help="master registry file (default: research origin/main)")
     p.add_argument("--out", required=True, type=Path, help="patched COPY (comments are not preserved)")
     args = ap.parse_args(argv)
+
+    if args.cmd in ("diff", "dryrun", "section"):
+        # N6 (final-gate audit): no validator used to mean NO validation, silently. Say it or refuse.
+        if args.validator is not None and args.no_validate:
+            print("FAIL: --validator and --no-validate are mutually exclusive", file=sys.stderr)
+            return 2
+        if args.validator is None and not args.no_validate:
+            print(f"FAIL: `{args.cmd}` needs --validator <validate_serving_config.py>; "
+                  "pass --no-validate to skip validation explicitly", file=sys.stderr)
+            return 2
+        if args.no_validate:
+            print("WARNING: --no-validate: the serving-config artifact is NOT validated", file=sys.stderr)
 
     master_path, cleanup = _load_master(args.master)
     try:
