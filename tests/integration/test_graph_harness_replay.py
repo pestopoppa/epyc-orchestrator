@@ -10,6 +10,7 @@ import uuid
 import pytest
 from pydantic_graph import End, GraphRunContext
 
+from src.config import reset_config
 from src.features import reset_features
 from src.graph.nodes import FrontdoorNode
 from src.graph.state import GraphConfig, TaskDeps, TaskState
@@ -22,6 +23,15 @@ from src.trace.replay.graph_harness import GraphHarness, ServedToolRegistry
 from src.trace.replay.model import load_run, verify_integrity
 
 pytestmark = pytest.mark.integration
+
+@pytest.fixture(autouse=True)
+def _session_log_file_writes_off(monkeypatch):
+    """``session_log._IN_PYTEST`` is frozen at IMPORT time. When another test module imports ``src.graph.session_log``
+    during collection (PYTEST_CURRENT_TEST unset) it is False, session.md gets written, ``Full log: peek(...)`` with
+    each REPL's random artifact nonce enters the prompt, and the byte-for-byte replay diverges. Pin it True."""
+    from src.graph import session_log
+    monkeypatch.setattr(session_log, "_IN_PYTEST", True)
+
 
 FLAGS = ("ORCHESTRATOR_REPLAY_RECORDING", "ORCHESTRATOR_STEP_EVENT_LOGGING", "ORCHESTRATOR_OBSERVED_DEPENDENCY_LOGGING")
 SCRIPT = [
@@ -63,6 +73,7 @@ def _env(monkeypatch, tmp_path, flags_on=True):
     for f in FLAGS:
         (monkeypatch.setenv(f, "1") if flags_on else monkeypatch.delenv(f, raising=False))
     reset_features()
+    reset_config()          # get_config() is lru_cached: drop any tmp_dir cached before the env above was set
     return db
 
 

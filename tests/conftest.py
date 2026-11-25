@@ -42,6 +42,7 @@ _TEST_PROGRESS_LOG_TEMP = tempfile.TemporaryDirectory(prefix="orchestrator-pytes
 os.environ[_PROGRESS_LOG_DIR_ENV] = _TEST_PROGRESS_LOG_TEMP.name
 
 from src.config import reset_config
+from src.config.validation import reset_validation_caches
 from src.api.state import AppState
 
 
@@ -312,9 +313,15 @@ def _reset_config_between_tests():
 
     Prevents env var leaks from one test affecting another.
     Uses reset_config() which clears the lru_cache on get_config().
+
+    reset_config() deliberately leaves ``_REGISTRY_TIMEOUTS_CACHE`` alone, so a test that loaded timeouts from a
+    temp/absent registry (or hit the load-failure ``{}`` fallback) poisoned every later ``_registry_timeout`` with
+    the hardcoded fallback (frontdoor 90 instead of 180). Reset the validation caches too.
     """
+    reset_validation_caches()
     reset_config()
     yield
+    reset_validation_caches()
     reset_config()
 
 
