@@ -9468,6 +9468,11 @@ def _run_loop_inner(
                     alert_degraded(str(_health.failure_reason), _escalation.consecutive)
                 except Exception:  # noqa: BLE001
                     pass
+            try:
+                from alert_push import check_escalations  # 15-min unacked re-push (flag-gated)
+                check_escalations()
+            except Exception:  # noqa: BLE001
+                pass
             log.error(
                 "Orchestrator unhealthy [%s]: %s — waiting %.1fs... "
                 "(consecutive failures: %d/%d%s)",
@@ -9495,6 +9500,11 @@ def _run_loop_inner(
         # None when there was no streak, so the healthy steady state is silent.
         _recovery = health_escalation.record_success()
         if _recovery is not None:
+            try:
+                from alert_push import clear_degraded  # auto-ack (flag-gated no-op state clear)
+                clear_degraded()
+            except Exception:  # noqa: BLE001
+                pass
             if _recovery.recovered:
                 log.warning("AUTOPILOT HEALTH RECOVERED: %s", _recovery.message)
             else:
