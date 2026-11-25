@@ -115,3 +115,66 @@ def test_hex_review_recovers_every_byte_across_chunks(tmp_path):
             assert int(offset, 16) == len(recovered)
             recovered.extend(bytes.fromhex(encoded))
         assert recovered == original
+
+
+# --- EV-DATE-PIN-1: template_reads_date + date pin warning ---------------------------------------------------
+
+DATE_TMPL = b"{%- set d = strftime_now('%Y-%m-%d') -%}Today is {{ d }}.{{ messages }}"
+PLAIN_TMPL = b"{% for m in messages %}{{ m.content }}{% endfor %}"
+
+
+@pytest.mark.parametrize(
+    "tmpl,expected",
+    [
+        (DATE_TMPL, True),
+        (b"Date: {{ date_string }}", True),
+        (b"{{ current_date }}", True),
+        (PLAIN_TMPL, False),
+        (b"", False),
+        (None, False),
+    ],
+)
+def test_template_reads_date(tmpl, expected):
+    assert tp.ai.template_reads_date(tmpl) is expected
+
+
+def test_plan_row_carries_template_reads_date(tmp_path):
+    for tmpl, expected in [(DATE_TMPL, True), (PLAIN_TMPL, False)]:
+        result, _ = row(tmp_path, tmpl, tmpl)
+        assert result["template_reads_date"] is expected
+    no_upstream = tp.build_row("r", DATE_TMPL, "fixture", None, {}, tmp_path, "reviews")
+    assert no_upstream["template_reads_date"] is True
+
+
+def test_date_pin_warning():
+    reg = {"server_mode": {"r": {"chat_template_kwargs": {"enable_thinking": False}}}}
+    assert "not pinned" in tp.ai.check_date_pin("r", DATE_TMPL, reg)[0]
+    assert tp.ai.check_date_pin("r", PLAIN_TMPL, reg) == []
+    pinned = {"server_mode": {"r": {"chat_template_kwargs": {"date_string": "2026-01-01"}}}}
+    assert tp.ai.date_pinned(pinned, "r") and tp.ai.check_date_pin("r", DATE_TMPL, pinned) == []
+
+
+def test_backfill_plan_rows_carry_flag(tmp_path):
+    spec = importlib.util.spec_from_file_location("bf", ROOT / "scripts/validate/backfill_template_pins.py")
+    bf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bf)
+    t = tmp_path / "t.jinja"
+    t.write_bytes(DATE_TMPL)
+    g = tmp_path / "m.gguf"
+    g.write_bytes(b"")
+    reg = {"server_mode": {"a": {"model": str(g), "chat_template_file": str(t)}}}
+    (r,) = bf.plan(reg)
+    assert r["template_reads_date"] is True and r["date_pinned"] is False and "date_pin_warning" in r
+
+
+def test_backfill_alias_row_inherits_host_flag(tmp_path):
+    spec = importlib.util.spec_from_file_location("bf2", ROOT / "scripts/validate/backfill_template_pins.py")
+    bf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bf)
+    t = tmp_path / "t.jinja"
+    t.write_bytes(DATE_TMPL)
+    g = tmp_path / "m.gguf"
+    g.write_bytes(b"")
+    reg = {"server_mode": {"a": {"model": str(g), "chat_template_file": str(t)}, "b": {"alias_of": "a"}}}
+    rows = {r["role"]: r for r in bf.plan(reg)}
+    assert rows["b"]["status"] == "alias" and rows["b"]["template_reads_date"] is True

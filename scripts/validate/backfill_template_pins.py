@@ -40,7 +40,7 @@ def plan(registry: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for role, cfg in sorted((registry.get("server_mode") or {}).items()):
         if not isinstance(cfg, dict) or cfg.get("alias_of"):
-            continue
+            continue  # aliases get an inheriting `status: alias` row below (never applied: only `pin` rows are)
         gguf = _server_model_path(cfg)
         if gguf is None:
             continue
@@ -62,6 +62,10 @@ def plan(registry: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         digest = ai.template_sha256(data)
         row.update(source=source, bytes=len(data), served_template_sha256=digest)
+        row["template_reads_date"] = ai.template_reads_date(data)
+        row["date_pinned"] = ai.date_pinned(registry, role)
+        if row["template_reads_date"] and not row["date_pinned"]:
+            row["date_pin_warning"] = ai.check_date_pin(role, data, registry)[0]
         block = cfg.get("chat_template") if isinstance(cfg.get("chat_template"), dict) else {}
         old = block.get("served_template_sha256_12")
         have = block.get("served_template_sha256")
@@ -73,6 +77,18 @@ def plan(registry: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             row["status"] = "pin"
         rows.append(row)
+    # EV-DATE-PIN-1: an alias is served by its host's template, so its row inherits the host's date flag.
+    by_role = {r["role"]: r for r in rows}
+    for role, cfg in sorted((registry.get("server_mode") or {}).items()):
+        if not (isinstance(cfg, dict) and cfg.get("alias_of")):
+            continue
+        host = by_role.get(cfg["alias_of"], {})
+        reads = host.get("template_reads_date")
+        alias_row: dict[str, Any] = {"role": role, "status": "alias", "alias_of": cfg["alias_of"],
+                                     "template_reads_date": reads, "date_pinned": ai.date_pinned(registry, role)}
+        if reads and not alias_row["date_pinned"] and not ai.date_pinned(registry, cfg["alias_of"]):
+            alias_row["date_pin_warning"] = ai.check_date_pin(role, b"date_string", registry)[0]
+        rows.append(alias_row)
     return rows
 
 

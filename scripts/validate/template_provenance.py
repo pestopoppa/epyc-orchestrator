@@ -79,6 +79,7 @@ def build_row(
     if served is None:
         return {**row, "status": "no_served_template"}
     row["served_template_sha256"] = ai.template_sha256(served)
+    row["template_reads_date"] = ai.template_reads_date(served)
     row["served_template_bytes"] = len(served)
     if upstream is None:
         return {**row, "status": "upstream_unavailable"}

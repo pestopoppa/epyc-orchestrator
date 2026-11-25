@@ -371,6 +371,35 @@ def template_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# A chat template "reads the date" when it references llama-server's wall-clock-filled date inputs.
+_DATE_READ_RE = re.compile(rb"strftime_now|date_string|current_date|today_date|datetime\.|\bnow\(\)")
+# The pin: `server_mode.<role>.chat_template_kwargs.date_string`. llama-server accepts it per request through
+# chat_template_kwargs, and backends auto-inject the role's kwargs (registry_loader.chat_template_kwargs_for_role).
+DATE_PIN_KEY = "date_string"
+
+
+def template_reads_date(data: bytes | None) -> bool:
+    """True when the template bytes reference the date (strftime_now, date_string, a datetime value...)."""
+    return bool(data) and _DATE_READ_RE.search(data) is not None
+
+
+def date_pinned(registry: dict[str, Any], role: str) -> bool:
+    """True when ``server_mode.<role>.chat_template_kwargs`` carries a non-empty ``date_string``."""
+    sm = (registry.get("server_mode") or {}).get(role)
+    ctk = sm.get("chat_template_kwargs") if isinstance(sm, dict) else None
+    return isinstance(ctk, dict) and bool(ctk.get(DATE_PIN_KEY))
+
+
+def check_date_pin(role: str, data: bytes | None, registry: dict[str, Any]) -> list[str]:
+    """EV-DATE-PIN-1: warn when the template reads the date and the role does not pin ``date_string``."""
+    if template_reads_date(data) and not date_pinned(registry, role):
+        return [
+            f"role {role!r}: chat template reads the date but server_mode.{role}.chat_template_kwargs."
+            f"{DATE_PIN_KEY} is not pinned; llama-server fills it from the wall clock (eval inputs drift)"
+        ]
+    return []
+
+
 def argv_value(argv: list[str], *flags: str) -> str | None:
     """Last value of any of ``flags`` on ``argv`` (handles ``--flag value`` and ``--flag=value``)."""
     found: str | None = None
@@ -467,6 +496,9 @@ def verify_launch_argv(
         warnings += check_template_pin(
             role, data, source, template_pin, strict=strict_enabled(TEMPLATE_PINS_STRICT, reg)
         )
+        # Logged only (not returned): the date pin is advisory and must not change callers' warning handling.
+        for w in check_date_pin(role, data, reg):
+            log.warning("artifact integrity: %s", w)
     for w in warnings:
         log.warning("artifact integrity: %s", w)
     return warnings
@@ -477,5 +509,5 @@ __all__ = [
     "TEMPLATE_PINS_STRICT", "strict_enabled", "load_registry", "pin_index", "sha256_file", "shard_paths",
     "stat_fingerprint", "load_ledger", "update_ledger", "register_gguf", "verify_gguf_for_launch",
     "read_gguf_chat_template", "template_sha256", "effective_template_bytes", "check_template_pin",
-    "verify_launch_argv", "argv_value",
+    "verify_launch_argv", "argv_value", "template_reads_date", "date_pinned", "check_date_pin", "DATE_PIN_KEY",
 ]
