@@ -1,9 +1,10 @@
 """progress_aware_retry_cap (default OFF): an attempt that advanced is not charged.
 
 Reference: rowflow 603fd7099 (a deadline end that made progress does not charge
-the auto-requeue cap).  "Advanced" here means the attempt scored rows that no
-earlier attempt in the same retry series had scored.  The first attempt of a
-series has nothing to advance past and is always charged.  Pure helpers; the
+the auto-requeue cap).  The exemption covers only an attempt that ended INCOMPLETE
+(infra, timeout, partial, unmeasured) AND scored rows no earlier attempt in the
+series had scored.  A completed evaluation that failed on quality is always
+charged.  The first attempt of a series is always charged.  Pure helpers; the
 caps themselves stay where they live.
 """
 
@@ -46,13 +47,42 @@ def advanced(prior_qids: Iterable[str] | None, attempt_qids: Iterable[str]) -> b
     return bool(set(attempt_qids) - set(prior_qids))
 
 
-def charged_attempts(attempt_qid_sets: Iterable[Iterable[str]]) -> int:
-    """Attempts charged against a cap when the flag is on."""
+def eval_incomplete(result: Any) -> bool:
+    """True iff the eval ended incomplete: rows lost to infra/timeout/partial, or unmeasured.
+
+    Derived from what EvalResult already records (infra_failed_count, partial_count,
+    n_exogenous_unrecovered, quality_measured).  A completed evaluation that failed
+    on quality is NOT incomplete and is always charged.
+    """
+    def _n(name: str) -> int:
+        try:
+            return int(getattr(result, name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return bool(
+        _n("infra_failed_count") > 0
+        or _n("partial_count") > 0
+        or _n("n_exogenous_unrecovered") > 0
+        or getattr(result, "quality_measured", True) is False
+    )
+
+
+def exempt(prior_qids: Iterable[str] | None, attempt_qids: Iterable[str], incomplete: bool) -> bool:
+    """Exempt from the cap only if the attempt ended incomplete AND scored new rows."""
+    return bool(incomplete) and advanced(prior_qids, attempt_qids)
+
+
+def charged_attempts(attempts: Iterable[tuple[Iterable[str], bool]]) -> int:
+    """Attempts charged against a cap when the flag is on.
+
+    ``attempts`` is (qids, incomplete) per attempt, in order.
+    """
     seen: set[str] | None = None
     charged = 0
-    for qids in attempt_qid_sets:
+    for qids, incomplete in attempts:
         qs = set(qids)
-        if not advanced(seen, qs):
+        if not exempt(seen, qs, incomplete):
             charged += 1
         seen = qs if seen is None else (seen | qs)
     return charged

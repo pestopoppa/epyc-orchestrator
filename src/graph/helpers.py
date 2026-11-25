@@ -1552,7 +1552,9 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         # Programmatic feedback uses the existing request-local StepEventLog. It is default-off
         # with step-event logging; consumed facts are bounded and carry evidence, not diagnoses.
         _step_events = getattr(deps.repl, "_step_events", None)
-        if _step_events is not None:
+        from src.features import features as _feat_fn
+
+        if _step_events is not None and _feat_fn().step_feedback_in_prompt:
             try:
                 _feedback = _step_events.take_feedback(max_facts=2)
             except Exception:

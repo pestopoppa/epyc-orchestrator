@@ -211,6 +211,7 @@ flags:
   server_log_crash_class: baseline
   progress_aware_retry_cap: baseline
   tool_process_cpu_pin: baseline
+  step_feedback_in_prompt: baseline
   test_result_skip_aware: baseline
   deploy_ancestry_guard: baseline
   timeout_contention_class: baseline

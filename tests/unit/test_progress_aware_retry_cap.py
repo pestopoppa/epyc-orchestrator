@@ -28,12 +28,16 @@ def test_pure_helpers():
     assert advanced(None, {"a"}) is False
     assert advanced({"a"}, {"a"}) is False
     assert advanced({"a"}, {"a", "b"}) is True
-    assert charged_attempts([{"a"}, {"a"}, {"a"}]) == 3
-    assert charged_attempts([{"a"}, {"a", "b"}, {"a", "b", "c"}]) == 1
+    assert charged_attempts([({"a"}, True), ({"a"}, True), ({"a"}, True)]) == 3
+    assert charged_attempts([({"a"}, True), ({"a", "b"}, True), ({"a", "b", "c"}, True)]) == 1
+    assert charged_attempts([({"a"}, False), ({"a", "b"}, False)]) == 2
 
 
-def _attempts(*qid_sets):
-    return [{"outcomes": {q: True for q in s}} for s in qid_sets]
+def _attempts(*qid_sets, incomplete=True):
+    return [
+        {"outcomes": {q: True for q in s}, **({"incomplete": True} if incomplete else {})}
+        for s in qid_sets
+    ]
 
 
 def test_multitier_charge(monkeypatch):
@@ -41,24 +45,27 @@ def test_multitier_charge(monkeypatch):
 
     prog = _attempts({"a"}, {"a", "b"}, {"a", "b", "c"})
     flat = _attempts({"a"}, {"a"}, {"a"})
+    completed = _attempts({"a"}, {"a", "b"}, {"a", "b", "c"}, incomplete=False)
     _flag(monkeypatch, False)
     assert ap._multitier_charged_attempts(prog) == 3
     assert ap._multitier_charged_attempts(flat) == 3
     _flag(monkeypatch, True)
-    assert ap._multitier_charged_attempts(prog) == 1
-    assert ap._multitier_charged_attempts(flat) == 3
+    assert ap._multitier_charged_attempts(prog) == 1       # incomplete + new qids: exempt
+    assert ap._multitier_charged_attempts(flat) == 3       # incomplete, no new qids: charged
+    assert ap._multitier_charged_attempts(completed) == 3  # completed failure: charged
 
 
-def _result(qids):
+def _result(qids, incomplete=True):
     from safety_gate import EvalResult
 
     return EvalResult(
         tier=1, quality=0.0, speed=1.0, cost=0.1, reliability=1.0,
+        infra_failed_count=1 if incomplete else 0,
         question_results=[{"qid": q, "correct": False} for q in qids],
     )
 
 
-def _gate_failures(monkeypatch, on, series):
+def _gate_failures(monkeypatch, on, series, incomplete=True):
     from safety_gate import SafetyGate
 
     _flag(monkeypatch, on)
@@ -66,17 +73,22 @@ def _gate_failures(monkeypatch, on, series):
     gate._consecutive_failures = 0
     gate._failure_streak_qids = None
     for qids in series:
-        if not gate._failure_streak_advanced(_result(qids), None):
+        if not gate._failure_streak_advanced(_result(qids, incomplete), None):
             gate._consecutive_failures += 1
     return gate._consecutive_failures
 
 
-def test_gate_streak_progress_not_charged(monkeypatch):
+def test_gate_incomplete_with_new_qids_not_charged(monkeypatch):
     assert _gate_failures(monkeypatch, True, [{"a"}, {"a", "b"}, {"a", "b", "c"}]) == 1
 
 
-def test_gate_streak_no_progress_charged(monkeypatch):
+def test_gate_incomplete_no_new_qids_charged(monkeypatch):
     assert _gate_failures(monkeypatch, True, [{"a"}, {"a"}, {"a"}]) == 3
+
+
+def test_gate_completed_failure_with_new_qids_charged(monkeypatch):
+    series = [{"a"}, {"a", "b"}, {"a", "b", "c"}]
+    assert _gate_failures(monkeypatch, True, series, incomplete=False) == 3
 
 
 def test_gate_flag_off_unchanged(monkeypatch):

@@ -228,6 +228,7 @@ from src.autopilot_core.multitier_decision import (
 )
 from src.autopilot_core.progress_retry import (
     charged_attempts,
+    eval_incomplete,
     progress_aware_retry_cap_enabled,
     qids_of,
 )
@@ -3292,7 +3293,11 @@ def _multitier_charged_attempts(attempts: list[Any]) -> int:
     if not progress_aware_retry_cap_enabled():
         return len(attempts)
     return charged_attempts(
-        qids_of(a.get("outcomes")) if isinstance(a, Mapping) else set() for a in attempts
+        (
+            qids_of(a.get("outcomes")) if isinstance(a, Mapping) else set(),
+            bool(a.get("incomplete")) if isinstance(a, Mapping) else False,
+        )
+        for a in attempts
     )
 
 
@@ -3349,7 +3354,10 @@ def _record_multitier_validation_result(
     tier = int(context.get("tier") or 0)
     attempts_by_tier = pending.setdefault("attempts_by_tier", {})
     attempts = attempts_by_tier.setdefault(str(tier), [])
-    attempts.append(build_tier_candidate_evidence(eval_result))
+    evidence = build_tier_candidate_evidence(eval_result)
+    if progress_aware_retry_cap_enabled() and eval_incomplete(eval_result):
+        evidence["incomplete"] = True  # flag on only; off keeps persisted state byte-identical
+    attempts.append(evidence)
     baseline = _multitier_baseline_for(state, tier)
     tier_verdict = evaluate_tier_validation(attempts, baseline, tier=tier)
     verdict_payload = tier_verdict.to_dict()

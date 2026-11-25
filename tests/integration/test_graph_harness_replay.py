@@ -202,7 +202,11 @@ async def test_prompt_bytes_identical_with_flags_on_and_off(monkeypatch, tmp_pat
         _, _, _, seen, _ = await _record(monkeypatch, d, flags_on=on, fixed=True)
         sets.append(seen)
     # only the per-run tmp dir may differ (get_config() caches the first run's tmp_dir, hence both spellings)
-    norm = lambda xs: [x.replace(str(tmp_path / "on"), "X").replace(str(tmp_path / "off"), "X") for x in xs]   # noqa: E731
+    import re
+
+    # get_config() caches the first run's tmp_dir process-wide, so under a shared pytest session the
+    # session.md path can be another test's directory: normalise any session.md path too.
+    norm = lambda xs: [re.sub(r"[^\s\"'(]*/session\.md", "X/session.md", x.replace(str(tmp_path / "on"), "X").replace(str(tmp_path / "off"), "X")) for x in xs]   # noqa: E731
     assert len(sets[0]) == len(SCRIPT) and norm(sets[0]) == norm(sets[1])
 
 

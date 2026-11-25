@@ -37,7 +37,8 @@ from src.autopilot_core.tier_specs import (
 from src.autopilot_core.action_identity import config_fingerprint_from_row, row_config_identity
 from src.autopilot_core.pareto_math import median_objectives
 from src.autopilot_core.progress_retry import (
-    advanced as _retry_advanced,
+    eval_incomplete as _retry_eval_incomplete,
+    exempt as _retry_exempt,
     progress_aware_retry_cap_enabled,
     qids_of as _retry_qids_of,
 )
@@ -3918,7 +3919,8 @@ class SafetyGate:
         self._failure_streak_qids = None
 
     def _failure_streak_advanced(self, result: EvalResult, question_results: Any) -> bool:
-        """True iff this failing attempt scored rows the streak had not (flag on only).
+        """True iff this failing attempt ended incomplete AND scored rows the streak had not
+        (flag on only); a completed failing attempt is always charged.
 
         Always records the attempt's rows into the streak. The first failure of a
         streak has nothing to advance past and is charged.
@@ -3930,7 +3932,7 @@ class SafetyGate:
         )
         prior = self._failure_streak_qids
         self._failure_streak_qids = set(qids) if prior is None else (prior | qids)
-        return _retry_advanced(prior, qids)
+        return _retry_exempt(prior, qids, _retry_eval_incomplete(result))
 
     @staticmethod
     def analyze_failure(result: EvalResult, verdict: SafetyVerdict) -> str:

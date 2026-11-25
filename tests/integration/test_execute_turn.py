@@ -116,6 +116,7 @@ async def test_programmatic_tool_facts_reach_next_prompt_once(graph_ctx, monkeyp
     from src.features import reset_features
 
     monkeypatch.setenv("ORCHESTRATOR_STEP_EVENT_LOGGING", "1")
+    monkeypatch.setenv("ORCHESTRATOR_STEP_FEEDBACK_IN_PROMPT", "1")
     reset_features()
     state, deps = graph_ctx(
         responses=[
