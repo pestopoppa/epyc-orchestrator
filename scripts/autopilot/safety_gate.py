@@ -36,6 +36,11 @@ from src.autopilot_core.tier_specs import (
 )
 from src.autopilot_core.action_identity import config_fingerprint_from_row, row_config_identity
 from src.autopilot_core.pareto_math import median_objectives
+from src.autopilot_core.progress_retry import (
+    advanced as _retry_advanced,
+    progress_aware_retry_cap_enabled,
+    qids_of as _retry_qids_of,
+)
 from src.autopilot_core.rlvr_tiers import rlvr_reward_from_result
 from src.autopilot_core.authority_consent import (
     SEQ_P0_2_BRIDGE_MODE,
@@ -2491,6 +2496,8 @@ class SafetyGate:
         self._rebaseline_hold_logged = False
         self._speed_rebaseline_hold_logged = False
         self._consecutive_failures = consecutive_failures
+        # progress_aware_retry_cap: rows scored by the failing streak so far (None = no streak).
+        self._failure_streak_qids: set[str] | None = None
         self._quality_history_by_tier: dict[int, deque[_QualityObs]] = {}
         # Precedence: provenance (rich, authoritative) > by_tier floats > flat floats. Legacy
         # bare floats decode with era="" (pre-boundary priors); a missing provenance key means
@@ -3189,9 +3196,13 @@ class SafetyGate:
                 # (violation above) without arming the auto-rollback.
                 pass
             elif not passed:
-                self._consecutive_failures += 1
+                if self._failure_streak_advanced(result, question_results):
+                    pass  # progress_aware_retry_cap: scored new rows, not charged
+                else:
+                    self._consecutive_failures += 1
             else:
                 self._consecutive_failures = 0
+                self._failure_streak_qids = None
 
         # Record this trial's quality in the rolling window (after the verdict
         # so the current measurement doesn't bias its own significance test).
@@ -3904,6 +3915,22 @@ class SafetyGate:
 
     def reset_failures(self) -> None:
         self._consecutive_failures = 0
+        self._failure_streak_qids = None
+
+    def _failure_streak_advanced(self, result: EvalResult, question_results: Any) -> bool:
+        """True iff this failing attempt scored rows the streak had not (flag on only).
+
+        Always records the attempt's rows into the streak. The first failure of a
+        streak has nothing to advance past and is charged.
+        """
+        if not progress_aware_retry_cap_enabled():
+            return False
+        qids = _retry_qids_of(
+            question_results if question_results is not None else result.question_results
+        )
+        prior = self._failure_streak_qids
+        self._failure_streak_qids = set(qids) if prior is None else (prior | qids)
+        return _retry_advanced(prior, qids)
 
     @staticmethod
     def analyze_failure(result: EvalResult, verdict: SafetyVerdict) -> str:

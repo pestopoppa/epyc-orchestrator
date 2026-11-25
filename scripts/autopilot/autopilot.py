@@ -226,6 +226,11 @@ from src.autopilot_core.multitier_decision import (
     build_tier_candidate_evidence,
     evaluate_tier_validation,
 )
+from src.autopilot_core.progress_retry import (
+    charged_attempts,
+    progress_aware_retry_cap_enabled,
+    qids_of,
+)
 from src.autopilot_core.planner_evidence import (
     DEFAULT_EVIDENCE_CORE_ID,
     format_planner_evidence_section,
@@ -3282,6 +3287,15 @@ def _maybe_force_multitier_due_action(
     )
 
 
+def _multitier_charged_attempts(attempts: list[Any]) -> int:
+    """Attempts charged against the per-tier cap (progress_aware_retry_cap, default off)."""
+    if not progress_aware_retry_cap_enabled():
+        return len(attempts)
+    return charged_attempts(
+        qids_of(a.get("outcomes")) if isinstance(a, Mapping) else set() for a in attempts
+    )
+
+
 def _reject_multitier_candidate(
     state: dict[str, Any], pending: dict[str, Any], *, reason: str, trial_counter: int
 ) -> None:
@@ -3358,9 +3372,9 @@ def _record_multitier_validation_result(
             pending.setdefault("higher_tier_improvements", []).append(tier)
         remaining = [required for required in REQUIRED_VALIDATION_TIERS if required > tier]
         pending["next_tier"] = remaining[0] if remaining else "final_t1"
-    elif verdict_payload["status"] == "inconclusive" and len(attempts) < max(
-        1, _multitier_attempt_cap()
-    ):
+    elif verdict_payload["status"] == "inconclusive" and _multitier_charged_attempts(
+        attempts
+    ) < max(1, _multitier_attempt_cap()):
         pending["next_tier"] = tier
     else:
         _reject_multitier_candidate(

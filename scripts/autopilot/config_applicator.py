@@ -77,7 +77,7 @@ HOT_SWAP_FEATURES = {
     "chat_finish_reason", "truncation_narrowing_hint", "usage_root_capture", "delegation_untrusted_data_field",
     "serving_calls_json_schema_capture", "empty_output_vacuity_guard",
     "server_log_crash_class", "autopilot_alert_push",
-    "test_result_skip_aware", "timeout_contention_class", "deploy_ancestry_guard",
+    "test_result_skip_aware", "timeout_contention_class", "deploy_ancestry_guard", "progress_aware_retry_cap",
     "thinking_budget_headroom", "tool_denial_names_allowed",
     # REPL harness-robustness guards (default off): see FeatureSpec comments in src/features.py.
     "repl_syntax_loop_breaker", "repl_plan_narration_nudge", "harness_failure_ratio_guard",
