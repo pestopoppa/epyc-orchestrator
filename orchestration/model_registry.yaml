@@ -2,8 +2,9 @@
 # AUTO-GENERATED — MASTER-COMPILED RUNTIME VIEW.
 #
 # This file is compiled at every `orchestrator_stack.py start` from the master
-# master registry materialized from research origin/main:orchestration/model_registry.yaml
-# with drafter selection from /mnt/raid0/llm/worktrees/sc27b-orch/orchestration/stack_topology.yaml
+# noncanonical master input at /mnt/raid0/llm/epyc-inference-research/.worktrees/sc-27b-ub2048-20261125/orchestration/model_registry.yaml
+# canonical source of truth: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
+# with drafter selection from /mnt/raid0/llm/epyc-orchestrator/.worktrees/sc-27b-ub2048-20261125/orchestration/stack_topology.yaml
 # by src/registry/registry_compiler.py.
 #
 # Runtime stack truth lives in the MASTER registry. The next start detects master
@@ -12,8 +13,8 @@
 # To temporarily skip the compile (e.g. during a master schema change), set
 # ORCHESTRATOR_REGISTRY_NO_COMPILE=1.
 #
-# Compiled at: 2026-11-24T20:37:52+00:00
-# Cache key:   1126a7f0a9dc4bd2...
+# Compiled at: 2026-11-25T13:07:03+00:00
+# Cache key:   6205236413eadc9f...
 # Active roles: architect_critic, architect_general, coder_escalation, embedder, embedder_1, embedder_2, embedder_3, embedder_4, embedder_5, embedder_bge_m3, embedder_granite_97m_r2, embedder_multilingual_e5_base, frontdoor, ingest_long_context, toolrunner, vision_escalation, worker, worker_explore, worker_fast, worker_general, worker_math, worker_summarize, worker_vision
 # =============================================================================
 
@@ -2026,16 +2027,16 @@ server_mode:
     ctx_checkpoints: 32
     serving_shape:
       n_ctx: 393216
-      batch: 512
-      ubatch: 512
+      batch: 2048
+      ubatch: 2048
       kv_unified: true
       kv_quant:
         k: q8_0
         v: q8_0
       kv_kib_per_token_f16: 64.0
-      vram_non_kv_gib: 38.03
+      vram_non_kv_gib: 39.15
       vram_non_kv_drafter: dflash2
-      vram_non_kv_ubatch: 512
+      vram_non_kv_ubatch: 2048
     chat_template_kwargs:
       enable_thinking: true
       reasoning_effort: medium

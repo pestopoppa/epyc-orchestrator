@@ -1654,8 +1654,8 @@ def _build_role_command(
     binary = _runtime_string(runtime, "binary_path", str(_resolve_binary_for_role(role_name)))
     ubatch = _runtime_positive_int(cache, "ubatch", DEFAULT_UBATCH_TOKENS)
     # `-b` only when the compiled record DECLARES it (serving_shape.batch,
-    # STACKCHG-8083BATCH-20261004: :8083 runs -b 512 -ub 512 so a prefill cannot
-    # pack 2048 prompt tokens into one server iteration beside the decode rows).
+    # STACKCHG-8083BATCH-20261004 set :8083 to -b 512 -ub 512; STACKCHG-27B-UB2048-20261125
+    # returned it to -b 2048 -ub 2048, declared, on Poisson-arrival evidence).
     batch_value = cache.get("batch")
     batch = (
         str(batch_value)
