@@ -9449,6 +9449,11 @@ def _run_loop_inner(
                 # Once per episode. Re-logging this every backoff would be noise,
                 # and noise is what taught everyone to ignore the last one.
                 log.critical("AUTOPILOT HEALTH ESCALATION: %s", _escalation.message)
+                try:
+                    from alert_push import alert_degraded  # flag autopilot_alert_push (default off)
+                    alert_degraded(str(_health.failure_reason), _escalation.consecutive)
+                except Exception:  # noqa: BLE001
+                    pass
             log.error(
                 "Orchestrator unhealthy [%s]: %s — waiting %.1fs... "
                 "(consecutive failures: %d/%d%s)",
@@ -12028,6 +12033,11 @@ def _run_loop_inner(
         state["last_invalid_reason"] = ""
         state["last_invalid_status"] = ""
         state["consecutive_failures"] = gate.consecutive_failures
+        try:
+            from alert_push import alert_consecutive_failures  # flag autopilot_alert_push (default off)
+            alert_consecutive_failures(gate.consecutive_failures)
+        except Exception:  # noqa: BLE001
+            pass
         state["quality_history"] = gate.quality_history
         state["quality_history_by_tier"] = gate.quality_history_by_tier
         # Defect #4: persist the provenance-bearing window (era/ts/core_id per sample) as the

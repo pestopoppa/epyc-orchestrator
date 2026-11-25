@@ -206,6 +206,7 @@ flags:
   serving_calls_json_schema_capture: baseline
   chat_finish_reason: baseline
   truncation_narrowing_hint: baseline
+  autopilot_alert_push: baseline
   empty_output_vacuity_guard: baseline
   server_log_crash_class: baseline
   test_result_skip_aware: baseline
