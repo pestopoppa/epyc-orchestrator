@@ -78,6 +78,10 @@ async def lifespan(app: FastAPI):
         for err in validation_errors:
             logger.error(f"Feature validation error: {err}")
 
+    from src.repl_environment.tool_pin import check_tool_cpu_overlap
+
+    check_tool_cpu_overlap()
+
     # Load feature flags and optional imports
     load_optional_imports()
 

@@ -54,6 +54,7 @@ import json
 import os
 import platform
 import subprocess
+from src.repl_environment.tool_pin import popen_kwargs as _tool_pin_kwargs
 import sys
 import threading
 import time
@@ -156,6 +157,7 @@ def _probe_child(mode: str) -> bool:
             capture_output=True,
             timeout=20,
             check=False,
+            **_tool_pin_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

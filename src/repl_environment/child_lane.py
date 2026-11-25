@@ -75,6 +75,7 @@ import shutil
 import signal
 import struct
 import subprocess
+from src.repl_environment.tool_pin import popen_kwargs as _tool_pin_kwargs
 import sys
 import tempfile
 import threading
@@ -451,6 +452,7 @@ class _ChildProc:
             self.popen = subprocess.Popen(
                 wrapped, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err_file,
                 cwd=self.scratch, env=env, close_fds=True, start_new_session=True,
+                **_tool_pin_kwargs(),
             )
             self.pid = self.popen.pid
             if self.cgroup is not None:

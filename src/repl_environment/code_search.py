@@ -34,6 +34,7 @@ import logging
 import os
 import shutil
 import subprocess
+from src.repl_environment.tool_pin import popen_kwargs as _tool_pin_kwargs
 import time
 from pathlib import Path
 from typing import Any
@@ -435,6 +436,7 @@ class _CodeSearchMixin:
                 text=True,
                 timeout=COLGREP_TIMEOUT_S,
                 check=False,
+                **_tool_pin_kwargs(),
             )
         except subprocess.TimeoutExpired:
             logger.warning(

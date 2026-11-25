@@ -210,6 +210,7 @@ class _FileMutationMixin:
             return f"[ERROR: {_scope_denial}]"
         self._exploration_calls += 1
         import subprocess
+        from src.repl_environment.tool_pin import popen_kwargs as _tool_pin_kwargs
         from datetime import datetime
 
         try:
@@ -227,6 +228,7 @@ class _FileMutationMixin:
                 capture_output=True,
                 text=True,
                 cwd=str(_get_project_root()),
+                **_tool_pin_kwargs(),
             )
 
             if not result.stdout.strip():
@@ -320,6 +322,7 @@ class _FileMutationMixin:
         self._exploration_calls += 1
         import shutil
         import subprocess
+        from src.repl_environment.tool_pin import popen_kwargs as _tool_pin_kwargs
         from datetime import datetime
 
         try:
@@ -336,6 +339,7 @@ class _FileMutationMixin:
                 capture_output=True,
                 text=True,
                 cwd=str(_get_project_root()),
+                **_tool_pin_kwargs(),
             )
 
             if result.returncode != 0:
@@ -347,6 +351,7 @@ class _FileMutationMixin:
                 capture_output=True,
                 text=True,
                 cwd=str(_get_project_root()),
+                **_tool_pin_kwargs(),
             )
 
             if result.returncode != 0:

@@ -76,7 +76,7 @@ HOT_SWAP_FEATURES = {
     # AEI-CHAT-FINISH-REASON / AEI-TRUNC-NOTICE. http_post_guard is a security flag: ABSENT, pinned observe-only.
     "chat_finish_reason", "truncation_narrowing_hint", "usage_root_capture", "delegation_untrusted_data_field",
     "serving_calls_json_schema_capture", "empty_output_vacuity_guard",
-    "server_log_crash_class", "autopilot_alert_push",
+    "server_log_crash_class", "tool_process_cpu_pin", "autopilot_alert_push",
     "test_result_skip_aware", "timeout_contention_class", "deploy_ancestry_guard", "progress_aware_retry_cap",
     "thinking_budget_headroom", "tool_denial_names_allowed",
     # REPL harness-robustness guards (default off): see FeatureSpec comments in src/features.py.

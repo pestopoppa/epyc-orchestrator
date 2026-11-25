@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import shlex
+from src.repl_environment.tool_pin import popen_kwargs as _tool_pin_kwargs
 
 from src.config import _registry_timeout
 
@@ -326,6 +327,7 @@ class _ExternalAccessMixin:
                     timeout=timeout,
                     cwd=_shell_cwd,  # task-root under A/B, else project root
                     env=shell_env,
+                    **_tool_pin_kwargs(),
                 )
             finally:
                 if shell_scratch is not None:
@@ -475,6 +477,7 @@ class _ExternalAccessMixin:
                         timeout=timeout,
                         cwd=tmp_dir,
                         env=_env,
+                        **_tool_pin_kwargs(),
                     )
                 else:
                     result = subprocess.run(
@@ -485,6 +488,7 @@ class _ExternalAccessMixin:
                         timeout=timeout,
                         cwd=script_dir,
                         env=fence_launch.env,
+                        **_tool_pin_kwargs(),
                     )
             except exec_sandbox.ContainmentUnavailable as exc:
                 reason = exec_sandbox.describe_refusal(exc)
