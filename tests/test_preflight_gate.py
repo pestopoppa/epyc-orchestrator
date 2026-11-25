@@ -112,23 +112,16 @@ def test_role_scoped_require_servers_uses_primary_role_ports(monkeypatch):
 
     assert att["overall"] == "PASS"
     assert seen["require_servers"] is True
-    assert seen["ports"] == [
-        8070,
-        8080,
-        8180,
-        8072,
-        8082,
-        8182,
-    ]
+    # worker_general is an alias of frontdoor (:8070 + halves :8080/:8180); the 8072/8082/8182 instances
+    # were dropped from stack_topology.yaml.
+    assert seen["ports"] == [8070, 8080, 8180]
 
 
 def test_role_scoped_live_only_ports_skip_nonlive_configured_ports(monkeypatch):
+    # 8082 is live but no longer a configured port of these roles; 8070/8180 are configured but not live.
     monkeypatch.setattr(pg, "_pid_on_port", lambda port: "123" if port in {8080, 8082} else None)
 
-    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [
-        8080,
-        8082,
-    ]
+    assert pg.ports_for_roles(["frontdoor", "worker_general"], live_only=True) == [8080]
 
 
 def test_server_health_only_skips_structural_health(monkeypatch):

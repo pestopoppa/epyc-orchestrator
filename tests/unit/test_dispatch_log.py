@@ -246,7 +246,9 @@ def test_served_model_in_config_echo_and_dispatch_record(monkeypatch, tmp_path):
     cfg, rec = _recs(path)
     sm = cfg["config"]["served_models"]
     assert sm["8070"]["model_path"] == "/m/A-Q8_0.gguf" and sm["8070"]["identity_source"] == "stack_sidecar"
-    assert sm["8180"] == {"identity_source": "absent"}  # absent is reported, never filled
+    # no sidecar for 8180, but the stack priors declare it: the declared fallback is labelled, never passed off as a launch
+    assert sm["8180"]["identity_source"] == "stack_priors_declared"
+    assert sm["8180"].get("launch_id") is None and sm["8180"].get("argv_sha256") is None
     assert rec["instance"]["model"]["launch_id"] == "L8070"
 
 
