@@ -997,6 +997,11 @@ class _ContextMixin:
             return rest if deferred else visible
         return tools
 
+    def _grep_history(self, pattern: str, context_lines: int = 0, offset: int = 0, count: bool = False, page_size: int = 10) -> str:
+        from src.repl_environment.history_search import search
+
+        return search(self, pattern, context_lines, offset, count, page_size)
+
     def _ms_search(self, text: str, scope: str = "session") -> dict[str, Any]:
         """UTM-B1 (flag ``trace_navigation_tools``): search THIS session's trace store."""
         from src.repl_environment.trace_navigation_tools import ms_search

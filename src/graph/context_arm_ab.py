@@ -248,6 +248,9 @@ async def boundary(ctx: Any, *, force: bool = False) -> None:
         state.history_digest_catalog, state.history_digest_stats = _digest_catalog(
             state, older, budget, count_tokens, sentences)
     state.history_boundaries.append(state.turns)
+    if ctx.deps.repl is not None:
+        from src.repl_environment.history_search import install
+        install(ctx.deps.repl, state)
     state.history_boundary_index = len(state.history_turns)
     after = _estimate_context_tokens(ctx, render(state, ctx.deps.repl, count_tokens))
     state.history_boundary_wall_s += time.monotonic() - started

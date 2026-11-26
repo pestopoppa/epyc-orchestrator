@@ -456,6 +456,9 @@ async def _maybe_compact_context(ctx: Any, *, force: bool = False) -> None:
             state.context = apply_integrity(old_context, state.context)
 
         state.compaction_count += 1
+        if repl is not None and getattr(state, "history_log_path", ""):
+            from src.repl_environment.history_search import install
+            install(repl, state)
         state.last_compaction_turn = state.turns
         new_tokens = _estimate_context_tokens(ctx, state.context)
         tokens_saved = max(0, old_tokens - new_tokens)
