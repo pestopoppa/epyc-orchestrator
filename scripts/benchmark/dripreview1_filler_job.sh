@@ -19,7 +19,7 @@ OUT="${OUT:-/mnt/raid0/llm/tmp/dripreview1-out-r2-20261109}"
 # string that names the v10 kernel. Both are checked before anything is launched; override only in tests (SKIP_LINKAGE).
 EXPECT_SHA="${EXPECT_SHA:-4483bcfc92c5c3bb0005df31e1c668cb565d49f7b40ba94f4df5a126cbbb648c}"
 EXPECT_VERSION="${EXPECT_VERSION:-10303}"
-RESULTS_JSONL="${RESULTS_JSONL:-}"   # row result_path (jsonl): the job appends one unit per milestone
+RESULTS_JSONL="${RESULTS_JSONL:-}" # row result_path (jsonl): the job appends one unit per milestone
 PY="${PY:-/workspace/repos/epyc-orchestrator/.venv/bin/python}"
 N="${N:-30}"
 : "${FILLER_CPUS:?}" "${FILLER_STOPFILE:?}" "${FILLER_DEADLINE:?}" "${FILLER_PIDFILE:?}"
@@ -48,7 +48,10 @@ if [ -z "${SKIP_LINKAGE:-}" ]; then
       exit 5
     }
 fi
-unit() { [ -n "$RESULTS_JSONL" ] && printf '%s\n' "$1" >>"$RESULTS_JSONL"; return 0; }
+unit() {
+  [ -n "$RESULTS_JSONL" ] && printf '%s\n' "$1" >>"$RESULTS_JSONL"
+  return 0
+}
 if [ -z "${SKIP_LINKAGE:-}" ]; then
   REAL_BIN="$(readlink -f "$LLAMA_SERVER")"
   GOT_SHA="$(sha256sum "$REAL_BIN" | cut -d' ' -f1)"
