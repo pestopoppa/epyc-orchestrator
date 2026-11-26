@@ -25,19 +25,6 @@ blacklist:
   added: '2026-06-05T01:56:28.232661+00:00'
   source_trial: 581
 - pattern:
-    type: prompt_mutation
-    file: frontdoor.md
-  reason: 'MANUAL FREEZE: prompt_forge _extract_mutation captured reply prose and
-    overwrote frontdoor.md repeatedly (commits 2bc46c4 / 81d0b0d), zeroing eval suites.
-    Root-cause fix is committed (2cb4096) but needs an autopilot restart to take effect
-    and clear the in-memory cached baseline. Blocks all prompt_mutation subtypes (compress
-    / targeted_fix / few_shot_evolution) on frontdoor.md.'
-  added: '2026-06-05T03:05:00Z'
-  severity: corruption
-  source_trial: -1
-  notes: Manual recovery entry — remove after restarting the autopilot (loads 2cb4096
-    and clears the cached baseline).
-- pattern:
     type: structural_experiment
     flags:
       generalized_interrupts: true
@@ -59,25 +46,11 @@ blacklist:
   added: '2026-06-05T13:25:12.455715+00:00'
   source_trial: 653
 - pattern:
-    type: structural_experiment
-    flags:
-      architect_delegation: true
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 655'
-  added: '2026-06-05T14:12:36.611610+00:00'
-  source_trial: 655
-- pattern:
     type: rollback
   reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Parsed action matches
     blacklisted rollback configuration and Ac'
   added: '2026-06-19T08:54:00.921791+00:00'
   source_trial: 863
-- pattern:
-    type: structural_experiment
-    flags:
-      specialist_routing: true
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 664'
-  added: '2026-06-05T17:32:53.917962+00:00'
-  source_trial: 664
 - pattern:
     type: structural_experiment
     flags:
@@ -131,13 +104,6 @@ blacklist:
   reason_class: critic_rejected
   ttl_days: 14
   expires_at: '2026-08-23T04:49:49.173144+00:00'
-- pattern:
-    type: structural_experiment
-    flags:
-      specialist_routing: false
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 864'
-  added: '2026-06-19T09:02:06.404868+00:00'
-  source_trial: 864
 - pattern:
     type: structural_experiment
     flags:
