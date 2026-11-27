@@ -66,6 +66,9 @@ from safety_gate import EvalResult
 
 log = logging.getLogger("autopilot.eval")
 
+# Opt-in path to serving-call receipts for advisory review of completed trials.
+_SERVING_PHASE_LOG_ENV = "AUTOPILOT_SERVING_PHASE_SHADOW_LOG"
+
 # RC-12 (audit 2026-09-08): suites that scored rubric questions without ever
 # declaring a pass threshold. Warned once per suite; the defaulted 0.60 is a
 # threshold nobody chose and must not be silent.
@@ -8502,12 +8505,12 @@ class EvalTower:
     def note_trial_batches(self, batch_ids: Sequence[str], started_at_s: float) -> None:
         """Record the eval batch ids dispatched under the current trial id (the whole-trajectory join key).
 
-        No-op unless ``autopilot_lh_whole_trajectory_capture`` is on, and when there is no trial id (the tap
-        events carry no trial id for eval traffic, so without one there is nothing to join the trial to).
+        Records IDs only for whole-trajectory capture or the serving-phase shadow observer.
+        The serving batch ID also joins eval traffic that carries no trial ID on the wire.
         """
         import whole_trajectory_capture
 
-        if not whole_trajectory_capture.flag_on():
+        if not (whole_trajectory_capture.flag_on() or os.environ.get(_SERVING_PHASE_LOG_ENV, "").strip()):
             return
         trial = self._resolve_trial_id()
         if trial is None:
@@ -8519,6 +8522,42 @@ class EvalTower:
         entry["start"] = min(entry["start"], float(started_at_s))
         while len(self._trial_batches) > self._TRIAL_BATCHES_KEEP:
             self._trial_batches.pop(next(iter(self._trial_batches)))
+
+    def observe_serving_phases(self, trial_id: int, result: EvalResult) -> dict | None:
+        """Join completed eval batches to a configured log for the shadow planner."""
+
+        log_path = os.environ.get(_SERVING_PHASE_LOG_ENV, "").strip()
+        if not log_path:
+            return None
+        from src.autopilot_core.serving_phase_evidence import (
+            phase_report,
+            plan_serving_phase,
+            serving_log_shards,
+        )
+
+        batches = set(self._trial_batches.get(trial_id, {}).get("ids", ()))
+        # Some trial paths deliberately leave their batch id absent. An empty
+        # join must report no evidence, never read another trial's traffic.
+        try:
+            paths = serving_log_shards(Path(log_path)) if batches else []
+            report = phase_report(paths, batch_ids=batches)
+        except (OSError, ValueError) as exc:
+            log.warning("Serving-phase shadow log unavailable for trial %s: %s", trial_id, exc)
+            report = phase_report([])
+        details = result.details
+        wall_measured = result.eval_wall_s > 0
+        goodput = {
+            "quality": result.quality if result.quality_measured else None,
+            "task_rate_qph": details.get("task_rate_qph") if wall_measured else None,
+            "scored_task_rate_qph": details.get("scored_task_rate_qph") if wall_measured else None,
+            "accepted_tasks_per_hour": (
+                details.get("goodput_qph") if result.quality_measured and wall_measured else None
+            ),
+        }
+        event = plan_serving_phase(report, quality_goodput=goodput)
+        event["source_trial_id"] = trial_id
+        event["eval_batch_ids"] = sorted(batches)
+        return event
 
     def capture_whole_trajectory(self, trial_id: int | None = None):
         """Join the trial's inference-tap events and REPL tap into one provably-whole (or honestly not) trace.

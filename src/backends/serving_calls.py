@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from src.backends.serving_phases import phase_breakdown
 from src.runtime.git_head import resolve_git_head
 
 try:  # pragma: no cover - fcntl exists on every supported host
@@ -1133,6 +1134,18 @@ def build_record(
             record.update(prompt_layout.fields_for_request(request, staged=staged))
         except Exception:
             pass
+    if record["dispatched"]:
+        caller = record["caller"]
+        record["phase_breakdown"] = phase_breakdown(
+            timings if isinstance(timings, dict) else {},
+            trial_id=caller.get("trial_id"),
+            batch_id=caller.get("batch_id"),
+            request_id=caller.get("request_id") or caller.get("parent_request_id"),
+            stream_id=record["record_id"],
+            streamed=notes.get("stream"),
+            wall_ms=record["wall_ms"],
+            delivered_first_ms=(record.get("result") or {}).get("first_token_ms"),
+        )
     if notes:
         record["notes"] = notes
     return record

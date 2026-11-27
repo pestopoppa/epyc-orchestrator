@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Non-production records in the production serving-call log (READ-ONLY).
+"""Report serving-call scope or versioned phase evidence (READ-ONLY).
 
 Until 2026-11-02 every process that imported ``src/backends/serving_calls.py`` appended to
 ``logs/serving_calls/serving_calls.jsonl`` whatever port it called, so private and
@@ -18,7 +18,7 @@ Nothing is written: the log and its rotated shards are only read.
 
 Usage:
   python3 scripts/analysis/serving_calls_nonprod_report.py [--log PATH] [--production-ports 8070,8083]
-      [--json] [--digests]
+      [--json] [--digests] [--phases] [--batch-id ID]
 
 ``--digests`` adds the ``record_sha256`` of every non-production record (the exclusion
 list); ``--json`` prints one JSON object instead of the table.
@@ -98,7 +98,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--production-ports", help="comma-separated; default: the writer's production_ports()")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--digests", action="store_true", help="include record_sha256 of each non-production record")
+    ap.add_argument("--phases", action="store_true", help="report native phase evidence as JSON")
+    ap.add_argument("--batch-id", action="append", help="include only these batches in the phase report")
     a = ap.parse_args(argv)
+    if a.phases:
+        from src.autopilot_core.serving_phase_evidence import phase_report
+
+        paths = shards(a.log)
+        if not paths:
+            ap.error(f"no log at {a.log}")
+        out = phase_report(paths, batch_ids=set(a.batch_id) if a.batch_id else None)
+        print(json.dumps(out, indent=1, sort_keys=True, allow_nan=False))
+        return 0
     production = resolve_production_ports(a.production_ports)
     if production is None:
         print("REFUSED: production ports unresolvable (stack priors missing?); pass --production-ports", file=sys.stderr)

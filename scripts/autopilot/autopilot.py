@@ -11980,6 +11980,12 @@ def _run_loop_inner(
             asdict(journal_entry),
             trial_counter,
         )
+        try:
+            phase_observation = tower.observe_serving_phases(trial_counter, eval_result)
+            if phase_observation is not None:
+                journal.append_ledger_event(phase_observation)
+        except Exception as exc:  # Advisory data does not interrupt the trial loop.
+            log.warning("Serving-phase shadow observation unavailable for trial %s: %s", trial_counter, exc)
         _record_reproposal_rate_windows(journal)  # VB-AP53-RATE
         # Evidence is the already-durable trial, supplied here rather than by the
         # planner, so a resolution can never cite a trial that did not run.
